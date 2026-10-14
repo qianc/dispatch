@@ -27,6 +27,8 @@
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
   --header-row: 52px;
+  /* extra room under the status bar; iOS 26 blurs a band a little below it */
+  --head-gap: 0px;
   /* Tab bar: 8px top, 48px row, and only part of the home-indicator inset. At the full
      ~34px inset the bar reads as having a hole at the bottom; the indicator needs ~22px. */
   --tab-pt: 8px;
@@ -35,6 +37,12 @@
   color-scheme: dark;
 }
 html { height: 100%; height: 100dvh; overflow: hidden; background: var(--color-panel); }
+/* iOS 26 regression: in an installed web app 100dvh/100% come out short by the status-bar height,
+   leaving an empty band under the tab bar. Only 100lvh gives the full screen there. */
+@media (display-mode: standalone) {
+  html { height: 100lvh; }
+  :root { --head-gap: 8px; }
+}
 body {
   margin: 0;
   height: 100%;
@@ -57,8 +65,8 @@ body {
 }
 .shell-head {
   flex-shrink: 0;
-  height: calc(var(--header-row) + var(--sat));
-  padding-top: var(--sat);
+  height: calc(var(--header-row) + var(--sat) + var(--head-gap));
+  padding-top: calc(var(--sat) + var(--head-gap));
   padding-left: var(--sal);
   padding-right: var(--sar);
   background: var(--color-panel);
