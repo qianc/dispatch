@@ -182,6 +182,7 @@ test('item links open files, images and other items; Discuss this chats about th
   await page.goto('/');
   await page.getByLabel('Password').fill('e2e-pass');
   await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
   // seed through the API with the browser's cookie
   const api = (path: string, data: unknown) => page.request.post(`/api${path}`, { data });
   await api('/projects', { key: 'LNK', name: 'Links' });
@@ -299,4 +300,31 @@ test('a session opened from another tab does not trap the Projects tab', async (
   await page.getByRole('link', { name: 'Inbox' }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+});
+
+test('a long chat offers a button back to the newest message', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'LONG', name: 'Long' } });
+  await page.request.post('/api/projects/LONG/repos', { data: { github_owner: 'me', github_name: 'long' } });
+  const s = await (await page.request.post('/api/projects/LONG/batches', { data: { prompt: 'go' } })).json();
+  await page.goto(`/s/${s.id}`);
+  await page.getByRole('button', { name: /Small fix/ }).click();
+  await page.getByRole('button', { name: 'Send answer' }).click();
+  for (let i = 0; i < 12; i++) {
+    await expect(page.getByLabel('Message')).toBeEnabled();
+    await page.getByLabel('Message').fill(`message ${i} ${'with some extra words to make it longer '.repeat(4)}`);
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByText(`(fake) You said: message ${i}`)).toBeVisible();
+  }
+  const area = page.locator('main.scroll-area');
+  const toBottom = page.getByRole('button', { name: 'Scroll to the newest message' });
+  await expect(toBottom).toHaveCount(0); // at the bottom: no button
+  await area.evaluate((el) => (el.scrollTop = 0));
+  await expect(toBottom).toBeVisible();
+  await toBottom.click();
+  await expect.poll(() => area.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(50);
+  await expect(toBottom).toHaveCount(0);
 });

@@ -48,10 +48,16 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   // keep the view pinned to the bottom while new events arrive, unless the user scrolled up
   const endRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [unseen, setUnseen] = useState(false);
   useEffect(() => {
     const el = endRef.current?.closest('.scroll-area');
     if (!el) return;
-    const onScroll = () => (pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120);
+    const onScroll = () => {
+      pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      setAwayFromBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 400);
+      if (pinned.current) setUnseen(false);
+    };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, [data?.session.id]);
@@ -60,6 +66,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     // which shifts the layout so taps on the tab bar land in the wrong place
     const el = endRef.current?.closest('.scroll-area');
     if (pinned.current && el) el.scrollTop = el.scrollHeight;
+    else if (el) setUnseen(true); // something new arrived below while you read further up
   }, [data?.events.length, data?.inputs.length]);
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
@@ -131,6 +138,23 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
       <ErrorText error={send.error} />
       <div ref={endRef} />
+      {awayFromBottom && (
+        // sticky at the bottom of the chat area: stays in view while you read further up
+        <div className="sticky bottom-3 flex justify-end pr-3 pointer-events-none">
+          <button
+            onClick={() => {
+              const el = endRef.current?.closest('.scroll-area');
+              el?.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+              setUnseen(false);
+            }}
+            className="pointer-events-auto relative size-10 rounded-full bg-raised border border-line shadow-lg flex items-center justify-center text-fg active:bg-line"
+            aria-label="Scroll to the newest message"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M6 13l6 6 6-6" /></svg>
+            {unseen && <span className="absolute -top-0.5 -right-0.5 size-3 rounded-full bg-accent border-2 border-bg" aria-label="New messages" />}
+          </button>
+        </div>
+      )}
 
       <Sheet open={menu} onClose={() => setMenu(false)} title="Session">
         <div className="space-y-2">
