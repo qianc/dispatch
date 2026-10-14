@@ -1,0 +1,152 @@
+// Worker: connects to the server, runs Claude sessions and git commands.
+import { randomUUID } from 'node:crypto';
+import WebSocket from 'ws';
+import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
+import { FakeRunner } from './fakeRunner.ts';
+import { ClaudeRunner, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
+import { Workspaces } from './workspace.ts';
+
+const env = process.env;
+const SERVER = env.SERVER_WS_URL ?? 'ws://localhost:3000/worker';
+const TOKEN = env.WORKER_TOKEN ?? '';
+const FAKE = env.RUNNER === 'fake';
+const opts: RunnerOptions = {
+  pluginDirs: (env.AGENT_PLUGIN_DIRS ?? '').split(':').filter(Boolean),
+  settingSources: (env.AGENT_SETTING_SOURCES ?? 'user,project').split(',').filter(Boolean) as RunnerOptions['settingSources'],
+  model: env.AGENT_MODEL || undefined,
+  idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
+};
+
+if (!TOKEN) throw new Error('Set WORKER_TOKEN');
+
+// Let git and gh (ours and the agent's) authenticate to GitHub with the token, without writing it to disk.
+if (env.GITHUB_TOKEN) {
+  env.GH_TOKEN ??= env.GITHUB_TOKEN;
+  const n = Number(env.GIT_CONFIG_COUNT ?? 0);
+  env[`GIT_CONFIG_KEY_${n}`] = 'credential.https://github.com.helper';
+  env[`GIT_CONFIG_VALUE_${n}`] = '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f';
+  env.GIT_CONFIG_COUNT = String(n + 1);
+}
+
+const workspaces = new Workspaces(env.WORKSPACES_DIR ?? './data/workspaces', env.GIT_REMOTE_BASE ?? 'https://github.com');
+const runners = new Map<number, AgentRunner>();
+const rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+let ws: WebSocket | null = null;
+
+function send(msg: WorkerToServer) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function rpcFor(sessionId: number) {
+  return (method: RpcMethod, params: unknown) =>
+    new Promise<unknown>((resolve, reject) => {
+      const req_id = randomUUID();
+      rpcWaiting.set(req_id, { resolve, reject });
+      send({ t: 'rpc', req_id, session_id: sessionId, method, params });
+      setTimeout(() => {
+        if (rpcWaiting.delete(req_id)) reject(new Error('Dispatch server did not answer in time'));
+      }, 60_000);
+    });
+}
+
+async function launch(spec: StartSpec, text: string) {
+  if (runners.has(spec.session_id)) {
+    runners.get(spec.session_id)!.push(text);
+    return;
+  }
+  try {
+    const cwd = FAKE ? process.cwd() : await workspaces.prepare(spec);
+    const deps: RunnerDeps = {
+      emit: send,
+      rpc: rpcFor(spec.session_id),
+      cwd,
+      onClosed: () => runners.delete(spec.session_id),
+    };
+    const runner = FAKE ? new FakeRunner(spec, deps) : new ClaudeRunner(spec, deps, opts);
+    runners.set(spec.session_id, runner);
+    runner.start(text);
+  } catch (e) {
+    console.error(`session ${spec.session_id} failed to start`, e);
+    send({ t: 'status', session_id: spec.session_id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
+  }
+}
+
+async function command(cmd: WorkerCommand): Promise<unknown> {
+  if (FAKE) return { ok: true };
+  switch (cmd.c) {
+    case 'push_branch':
+      await workspaces.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
+      return { ok: true };
+    case 'merge_local':
+      return workspaces.mergeLocal(cmd.repo, cmd.branch, cmd.message);
+    case 'branch_status':
+      return { ok: true };
+  }
+}
+
+async function onMessage(msg: ServerToWorker) {
+  switch (msg.t) {
+    case 'start':
+      return launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt);
+    case 'send':
+      return launch({ ...msg.spec, resume: msg.spec.resume }, msg.text);
+    case 'answer':
+      return runners.get(msg.session_id)?.answer(msg.local_id, msg.answer);
+    case 'interrupt':
+      return runners.get(msg.session_id)?.interrupt();
+    case 'close': {
+      const r = runners.get(msg.session_id);
+      r?.close();
+      if (msg.cleanup && !FAKE) await workspaces.cleanup(msg.session_id, msg.repos).catch((e) => console.warn('cleanup failed', e));
+      return;
+    }
+    case 'rpc_result': {
+      const p = rpcWaiting.get(msg.req_id);
+      if (!p) return;
+      rpcWaiting.delete(msg.req_id);
+      return msg.ok ? p.resolve(msg.data) : p.reject(new Error(msg.error));
+    }
+    case 'cmd':
+      try {
+        send({ t: 'cmd_result', req_id: msg.req_id, ok: true, data: await command(msg.cmd) });
+      } catch (e) {
+        send({ t: 'cmd_result', req_id: msg.req_id, ok: false, error: (e as Error).message });
+      }
+      return;
+  }
+}
+
+function connect(delay = 1000) {
+  const sock = new WebSocket(SERVER, { headers: { 'x-worker-token': TOKEN } });
+  sock.on('open', () => {
+    ws = sock;
+    delay = 1000;
+    console.log(`worker connected to ${SERVER}${FAKE ? ' (fake runner)' : ''}`);
+    send({ t: 'hello', live: [...runners.keys()] });
+  });
+  sock.on('message', (data) => {
+    let msg: ServerToWorker;
+    try {
+      msg = JSON.parse(String(data));
+    } catch {
+      return;
+    }
+    onMessage(msg).catch((e) => console.error('worker handler failed', msg.t, e));
+  });
+  sock.on('close', (code, reason) => {
+    if (ws === sock) ws = null;
+    if (code === 4001) console.error('server rejected the worker token');
+    else if (code !== 1000) console.warn(`worker disconnected (${code} ${reason}); retrying`);
+    setTimeout(() => connect(Math.min(delay * 2, 30_000)), delay);
+  });
+  sock.on('error', () => undefined);
+}
+
+connect();
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(sig, () => {
+    for (const r of runners.values()) r.close();
+    process.exit(0);
+  });
+}
