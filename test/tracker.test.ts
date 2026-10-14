@@ -80,3 +80,16 @@ describe('password hash', () => {
     await s.app.close();
   });
 });
+
+describe('auth bypass attempts', () => {
+  it('protects routes reached through percent-encoded paths', async () => {
+    const s = await startServer({ DISABLE_AUTH: '0', APP_PASSWORD: 'pw' });
+    for (const url of ['/%61pi/projects', '/%61pi/settings', '/api/%70rojects', '/%61%70%69/settings']) {
+      const r = await s.app.inject({ method: 'GET', url });
+      expect(r.statusCode, url).not.toBe(200);
+      expect(r.body).not.toContain(s.ctx.auth.apiToken);
+    }
+    expect((await s.app.inject({ method: 'GET', url: '/api/me' })).statusCode).toBe(200);
+    await s.app.close();
+  });
+});

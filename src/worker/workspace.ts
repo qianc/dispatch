@@ -30,6 +30,16 @@ async function git(args: string[], cwd?: string) {
 export class Workspaces {
   readonly root: string;
   private remoteBase: string;
+  /** git can't run fetch / worktree add / merge in parallel on one repo, so serialize per repo. */
+  private locks = new Map<string, Promise<unknown>>();
+
+  private withRepo<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
+    const key = `${repo.github_owner}/${repo.github_name}`;
+    const prev = this.locks.get(key) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(fn);
+    this.locks.set(key, next);
+    return next;
+  }
 
   constructor(root: string, remoteBase = 'https://github.com') {
     this.root = root;
@@ -64,20 +74,27 @@ export class Workspaces {
   async prepare(spec: StartSpec): Promise<string> {
     await mkdir(this.sessionDir(spec.session_id), { recursive: true });
     for (const repo of spec.repos) {
-      const cache = await this.ensureCache(repo);
-      const wt = this.repoDir(spec.session_id, repo);
-      const base = `origin/${repo.default_branch}`;
-      if (existsSync(wt)) {
-        if (!spec.branch) await git(['checkout', '--detach', base], wt);
-        continue;
-      }
-      if (!spec.branch) {
-        await git(['worktree', 'add', '--detach', wt, base], cache);
-      } else if ((await run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${spec.branch}`], cache)).code === 0) {
-        await git(['worktree', 'add', '-B', spec.branch, wt, `origin/${spec.branch}`], cache);
-      } else {
-        await git(['worktree', 'add', '-b', spec.branch, wt, base], cache);
-      }
+      await this.withRepo(repo, async () => {
+        const cache = await this.ensureCache(repo);
+        const wt = this.repoDir(spec.session_id, repo);
+        const base = `origin/${repo.default_branch}`;
+        if (existsSync(wt)) {
+          if (!spec.branch) await git(['checkout', '--detach', base], wt);
+          return;
+        }
+        await run('git', ['worktree', 'prune'], cache);
+        const has = async (ref: string) => (await run('git', ['rev-parse', '--verify', '--quiet', ref], cache)).code === 0;
+        if (!spec.branch) {
+          await git(['worktree', 'add', '--detach', wt, base], cache);
+        } else if (await has(`refs/heads/${spec.branch}`)) {
+          // reopened session: keep local (maybe unpushed) commits
+          await git(['worktree', 'add', wt, spec.branch], cache);
+        } else if (await has(`refs/remotes/origin/${spec.branch}`)) {
+          await git(['worktree', 'add', '-b', spec.branch, wt, `origin/${spec.branch}`], cache);
+        } else {
+          await git(['worktree', 'add', '-b', spec.branch, wt, base], cache);
+        }
+      });
     }
     return spec.repos.length === 1 ? this.repoDir(spec.session_id, spec.repos[0]) : this.sessionDir(spec.session_id);
   }
@@ -85,11 +102,15 @@ export class Workspaces {
   async pushBranch(repo: Repo, sessionId: number, branch: string) {
     const wt = this.repoDir(sessionId, repo);
     if (!existsSync(wt)) throw new Error(`No worktree for ${repo.github_name} in session ${sessionId}`);
-    await git(['push', '-u', 'origin', branch], wt);
+    await this.withRepo(repo, () => git(['push', '-u', 'origin', branch], wt));
   }
 
   /** Merge `branch` into the default branch locally, run the check command, push. */
-  async mergeLocal(repo: Repo, branch: string, message: string): Promise<{ ok: boolean; conflict?: boolean; output?: string }> {
+  mergeLocal(repo: Repo, branch: string, message: string): Promise<{ ok: boolean; conflict?: boolean; output?: string }> {
+    return this.withRepo(repo, () => this.mergeLocalUnlocked(repo, branch, message));
+  }
+
+  private async mergeLocalUnlocked(repo: Repo, branch: string, message: string): Promise<{ ok: boolean; conflict?: boolean; output?: string }> {
     const cache = await this.ensureCache(repo);
     const tmp = join(this.root, 'merge', randomUUID());
     await mkdir(join(this.root, 'merge'), { recursive: true });
@@ -114,7 +135,7 @@ export class Workspaces {
   async cleanup(sessionId: number, repos: Repo[]) {
     for (const repo of repos) {
       const wt = this.repoDir(sessionId, repo);
-      if (existsSync(wt)) await run('git', ['worktree', 'remove', '--force', wt], this.cacheDir(repo));
+      if (existsSync(wt)) await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', wt], this.cacheDir(repo)));
     }
     await rm(this.sessionDir(sessionId), { recursive: true, force: true });
   }

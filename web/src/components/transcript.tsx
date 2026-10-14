@@ -38,6 +38,8 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
     return m;
   }, [events]);
   const inputById = new Map(inputs.map((i) => [i.id, i]));
+  const proposalDone = new Map<number, string>();
+  for (const e of events) if (e.body.kind === 'proposal_done') proposalDone.set(e.body.event_id, e.body.note);
   return (
     <div className="px-4 py-3 space-y-2">
       {events.map((e) => {
@@ -73,7 +75,9 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
             return input ? <InputCard key={e.seq} input={input} /> : null;
           }
           case 'proposal':
-            return <ProposalCard key={e.seq} eventId={e.id} proposal={b.proposal} session={session} project={project} />;
+            return <ProposalCard key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
+          case 'proposal_done':
+            return null;
         }
       })}
     </div>
@@ -185,8 +189,6 @@ export function InputCard({ input }: { input: PendingInput }) {
 
 // ---------- proposals ----------
 
-const doneKey = (eventId: number) => `dispatch:proposal:${eventId}`;
-
 function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; project: Project; on: boolean; toggle: () => void }) {
   return (
     <button type="button" onClick={toggle} aria-pressed={on} className="w-full flex items-start gap-2 py-1.5 text-left">
@@ -202,10 +204,9 @@ function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; pr
   );
 }
 
-function ProposalCard({ eventId, proposal, session, project }: { eventId: number; proposal: Proposal; session: Session; project: Project }) {
+function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project }) {
   const qc = useQueryClient();
   const nav = useNavigate();
-  const [done, setDone] = useState(() => localStorage.getItem(doneKey(eventId)));
   const { data: items = [] } = useQuery({
     queryKey: ['items', project.id],
     queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),
@@ -218,17 +219,13 @@ function ProposalCard({ eventId, proposal, session, project }: { eventId: number
   const [prompt, setPrompt] = useState(proposal.type === 'batch' ? proposal.prompt : '');
   const [forcePlan, setForcePlan] = useState(proposal.type === 'batch' ? proposal.force_plan : false);
 
-  const finish = (note: string) => {
-    localStorage.setItem(doneKey(eventId), note);
-    setDone(note);
-  };
   const start = useMutation({
     mutationFn: () =>
       api.post<Session>(`/projects/${project.key}/batches`, {
         title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan,
+        proposal: { session_id: session.id, event_id: eventId },
       }),
     onSuccess: (s) => {
-      finish(`Started session #${s.id}`);
       qc.invalidateQueries({ queryKey: ['items', project.id] });
       nav(`/s/${s.id}`);
     },
@@ -238,9 +235,9 @@ function ProposalCard({ eventId, proposal, session, project }: { eventId: number
       api.post<Item[]>(`/sessions/${session.id}/accept-items`, {
         items: newItems.filter((_, i) => pickedNew.has(i)),
         source_id: proposal.type === 'items' ? proposal.source_id : null,
+        event_id: eventId,
       }),
-    onSuccess: (created) => {
-      finish(`Created ${created.map((i) => i.key).join(', ')}`);
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['items', project.id] });
     },
   });

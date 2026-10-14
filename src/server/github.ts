@@ -113,6 +113,12 @@ export class GitHub {
       for (const it of items) if (it.status === 'in_progress' || it.status === 'todo') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_review' }) });
       void this.notifier.send({ title: `${s.project_key}: PR ready`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id });
     }
+    if (pr.state === 'closed') {
+      const all = this.store.prs({ session_id: s.id });
+      if (!all.some((p) => p.state !== 'closed')) {
+        for (const it of items) if (it.status === 'in_review') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
+      }
+    }
     if (pr.state === 'merged') {
       const all = this.store.prs({ session_id: s.id });
       if (all.every((p) => p.state !== 'open')) {

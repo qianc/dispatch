@@ -61,7 +61,21 @@ export class Sessions {
 
   // ---------- creation ----------
 
-  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null }): Session {
+  /** Remember that a proposal card was acted on, so no device offers it again. */
+  assertProposalOpen(ref: { session_id: number; event_id: number } | undefined) {
+    if (ref && this.store.events(ref.session_id).some((e) => e.body.kind === 'proposal_done' && e.body.event_id === ref.event_id)) {
+      throw new SessionError('This proposal was already used.', 409);
+    }
+  }
+
+  markProposalDone(ref: { session_id: number; event_id: number } | undefined, note: string) {
+    if (!ref || !this.store.session(ref.session_id)) return;
+    this.assertProposalOpen(ref);
+    this.addEvent(ref.session_id, { kind: 'proposal_done', event_id: ref.event_id, note });
+  }
+
+  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; proposal?: { session_id: number; event_id: number } }): Session {
+    this.assertProposalOpen(input.proposal);
     const items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
@@ -81,6 +95,7 @@ export class Sessions {
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
+    this.markProposalDone(input.proposal, `Started session #${session.id}`);
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;
@@ -153,6 +168,13 @@ export class Sessions {
   // ---------- worker events ----------
 
   onWorkerHello(live: number[]) {
+    // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
+    for (const id of live) {
+      const s = this.store.session(id);
+      if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
+        this.hub.send({ t: 'close', session_id: id, cleanup: false, repos: s ? this.store.repos(s.project_id) : [] });
+      }
+    }
     // Anything we believe is live but the worker does not know about was lost (worker restart): resume it.
     const lost = this.store.sessions({ statuses: ['running', 'waiting_input'] }).filter((s) => !live.includes(s.id));
     for (const s of lost) {
@@ -172,20 +194,24 @@ export class Sessions {
   onWorkerMessage(msg: Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' }>) {
     const s = this.store.session(msg.session_id);
     if (!s) return;
+    if (FINAL_STATUSES.includes(s.status)) {
+      // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
+      if (msg.t !== 'status') this.hub.send({ t: 'close', session_id: s.id, cleanup: false, repos: this.store.repos(s.project_id) });
+      return;
+    }
     switch (msg.t) {
       case 'event': {
         this.addEvent(s.id, msg.body);
         if (msg.body.kind === 'assistant') this.emitSession(this.store.updateSession(s.id, { last_text: msg.body.text.slice(0, 300) }));
         if (msg.body.kind === 'result') {
           const u = s.usage ?? {};
-          // cost is cumulative per Claude session; turns are per turn
-          const usage = { ...u, cost_usd: msg.body.cost_usd ?? u.cost_usd, turns: (u.turns ?? 0) + (msg.body.turns ?? 0) };
+          // cost is a running total per Claude session (kept across resume); turns are per turn
+          const usage = { ...u, cost_usd: Math.max(u.cost_usd ?? 0, msg.body.cost_usd ?? 0), turns: (u.turns ?? 0) + (msg.body.turns ?? 0) };
           this.emitSession(this.store.updateSession(s.id, { usage }));
         }
         return;
       }
       case 'status': {
-        if (FINAL_STATUSES.includes(s.status) && msg.status !== 'failed') return; // closed by the user meanwhile
         const patch: Partial<Session> = {};
         if (msg.sdk_session_id) patch.sdk_session_id = msg.sdk_session_id;
         if (msg.status === 'failed') {

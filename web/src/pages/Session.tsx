@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
+import { withLive } from '../live.ts';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
@@ -12,7 +13,7 @@ export function SessionView() {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
-  const { data } = useQuery({ queryKey: ['session', id], queryFn: () => api.get<SessionDetail>(`/sessions/${id}`) });
+  const { data } = useQuery({ queryKey: ['session', id], queryFn: () => api.get<SessionDetail>(`/sessions/${id}`).then(withLive) });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
   const send = useMutation({ mutationFn: () => api.post(`/sessions/${id}/messages`, { text }), onSuccess: () => setText('') });
   const interrupt = useMutation({ mutationFn: () => api.post(`/sessions/${id}/interrupt`) });

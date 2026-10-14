@@ -96,8 +96,13 @@ describe('sessions with the fake runner', () => {
     const d = await waitFor(async () => { const x = await session(p.id); return x.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal') && x; }, 'proposal');
     const proposal = d.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal').body.proposal;
     expect(proposal).toMatchObject({ type: 'items', source_id: src.id });
-    const created = (await s.call('POST', `/sessions/${p.id}/accept-items`, { items: proposal.items, source_id: proposal.source_id })).data;
+    const eventId = d.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal').id;
+    const created = (await s.call('POST', `/sessions/${p.id}/accept-items`, { items: proposal.items, source_id: proposal.source_id, event_id: eventId })).data;
     expect(created).toHaveLength(2);
+    // the card is used up for every device
+    expect((await s.call('POST', `/sessions/${p.id}/accept-items`, { items: proposal.items, event_id: eventId })).status).toBe(409);
+    const after = await session(p.id);
+    expect(after.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal_done').body).toMatchObject({ event_id: eventId, note: expect.stringMatching(/^Created HC-\d+, HC-\d+$/) });
     expect(created.every((i: { source_id: number }) => i.source_id === src.id)).toBe(true);
     expect(s.ctx.notifier.sent.some((n) => n.title === 'HC: proposal ready')).toBe(true);
   });
@@ -109,5 +114,29 @@ describe('sessions with the fake runner', () => {
     expect(item.source).toMatchObject({ kind: 'agent_session', session_id: work.id });
     await s.ctx.sessions.rpc(work.id, 'add_comment', { key: r.key, body: 'Seen in logs' });
     expect((await s.call('GET', `/items/${r.id}`)).data.comments[0]).toMatchObject({ author: 'claude', body_md: 'Seen in logs' });
+  });
+});
+
+describe('worker reconnect edge cases', () => {
+  it('stops runners for sessions that were finished while the worker was disconnected', async () => {
+    const s = await startServer();
+    let worker = startWorker(s.port, { FAKE_DELAY_MS: '20' });
+    await s.call('POST', '/projects', { key: 'HC', name: 'HC' });
+    await s.call('POST', '/projects/HC/repos', { github_owner: 'me', github_name: 'hc' });
+    await waitFor(() => s.ctx.hub.connected, 'worker');
+    const a = (await s.call('POST', '/projects/HC/batches', { prompt: 'x' })).data;
+    await waitFor(async () => (await s.call('GET', `/sessions/${a.id}`)).data.session.status === 'waiting_input', 'waiting');
+    // simulate the close message being lost: mark it finished directly, then have the worker say hello again
+    const sent: unknown[] = [];
+    const orig = s.ctx.hub.send.bind(s.ctx.hub);
+    s.ctx.hub.send = (m) => { sent.push(m); return orig(m); };
+    s.ctx.store.updateSession(a.id, { status: 'completed', ended_at: new Date().toISOString() });
+    s.ctx.sessions.onWorkerHello([a.id]);
+    expect(sent).toContainEqual(expect.objectContaining({ t: 'close', session_id: a.id }));
+    // late messages from that runner do not reopen it
+    s.ctx.sessions.onWorkerMessage({ t: 'input_request', session_id: a.id, local_id: 'x', payload: { kind: 'plan_approval', plan: '' } });
+    expect((await s.call('GET', `/sessions/${a.id}`)).data.session.status).toBe('completed');
+    await stopWorker(worker);
+    await s.app.close();
   });
 });

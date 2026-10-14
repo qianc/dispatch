@@ -1,7 +1,17 @@
 // Server-sent events → React Query cache.
 import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
-import type { SessionDetail } from './api.ts';
+import type { SessionDetail, SessionEvent } from './api.ts';
+
+/** Recent live events per session, so a refetch that raced with them can't drop them. */
+const recent = new Map<number, SessionEvent[]>();
+
+export function withLive(d: SessionDetail): SessionDetail {
+  const extra = recent.get(d.session.id) ?? [];
+  const max = d.events.at(-1)?.seq ?? 0;
+  const missing = extra.filter((e) => e.seq > max);
+  return missing.length ? { ...d, events: [...d.events, ...missing] } : d;
+}
 
 export function connectLive(qc: QueryClient): () => void {
   let es: EventSource | null = null;
@@ -35,11 +45,16 @@ export function connectLive(qc: QueryClient): () => void {
 
 function apply(qc: QueryClient, e: LiveEvent) {
   switch (e.t) {
-    case 'session_event':
+    case 'session_event': {
+      const list = recent.get(e.event.session_id) ?? [];
+      list.push(e.event);
+      if (list.length > 300) list.shift();
+      recent.set(e.event.session_id, list);
       qc.setQueryData<SessionDetail>(['session', e.event.session_id], (d) =>
         d && !d.events.some((x) => x.seq === e.event.seq) ? { ...d, events: [...d.events, e.event] } : d,
       );
       return;
+    }
     case 'session':
       qc.setQueryData<SessionDetail>(['session', e.session.id], (d) => (d ? { ...d, session: e.session } : d));
       qc.invalidateQueries({ queryKey: ['sessions'] });

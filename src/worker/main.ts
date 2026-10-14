@@ -30,11 +30,16 @@ if (env.GITHUB_TOKEN) {
 
 const workspaces = new Workspaces(env.WORKSPACES_DIR ?? './data/workspaces', env.GIT_REMOTE_BASE ?? 'https://github.com');
 const runners = new Map<number, AgentRunner>();
+/** Sessions whose workspace is still being prepared; messages for them wait here. */
+const starting = new Map<number, string[]>();
+/** Messages produced while the server connection is down; flushed on reconnect so nothing is lost. */
+const outbox: WorkerToServer[] = [];
 const rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let ws: WebSocket | null = null;
 
 function send(msg: WorkerToServer) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  else if (msg.t !== 'rpc') outbox.push(msg); // rpc calls time out on their own and are retried by the agent
 }
 
 function rpcFor(sessionId: number) {
@@ -50,24 +55,32 @@ function rpcFor(sessionId: number) {
 }
 
 async function launch(spec: StartSpec, text: string) {
-  if (runners.has(spec.session_id)) {
-    runners.get(spec.session_id)!.push(text);
-    return;
-  }
+  const id = spec.session_id;
+  const live = runners.get(id);
+  if (live) return live.push(text);
+  const waiting = starting.get(id);
+  if (waiting) return void waiting.push(text); // still preparing: deliver after start
+  starting.set(id, []);
   try {
     const cwd = FAKE ? process.cwd() : await workspaces.prepare(spec);
     const deps: RunnerDeps = {
       emit: send,
-      rpc: rpcFor(spec.session_id),
+      rpc: rpcFor(id),
       cwd,
-      onClosed: () => runners.delete(spec.session_id),
+      onClosed: () => {
+        if (runners.get(id) === runner) runners.delete(id);
+      },
     };
-    const runner = FAKE ? new FakeRunner(spec, deps) : new ClaudeRunner(spec, deps, opts);
-    runners.set(spec.session_id, runner);
+    const runner: AgentRunner = FAKE ? new FakeRunner(spec, deps) : new ClaudeRunner(spec, deps, opts);
+    const queued = starting.get(id) ?? [];
+    starting.delete(id);
+    runners.set(id, runner);
     runner.start(text);
+    for (const t of queued) runner.push(t);
   } catch (e) {
-    console.error(`session ${spec.session_id} failed to start`, e);
-    send({ t: 'status', session_id: spec.session_id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
+    starting.delete(id);
+    console.error(`session ${id} failed to start`, e);
+    send({ t: 'status', session_id: id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
   }
 }
 
@@ -95,6 +108,7 @@ async function onMessage(msg: ServerToWorker) {
     case 'interrupt':
       return runners.get(msg.session_id)?.interrupt();
     case 'close': {
+      starting.delete(msg.session_id);
       const r = runners.get(msg.session_id);
       r?.close();
       if (msg.cleanup && !FAKE) await workspaces.cleanup(msg.session_id, msg.repos).catch((e) => console.warn('cleanup failed', e));
@@ -122,7 +136,8 @@ function connect(delay = 1000) {
     ws = sock;
     delay = 1000;
     console.log(`worker connected to ${SERVER}${FAKE ? ' (fake runner)' : ''}`);
-    send({ t: 'hello', live: [...runners.keys()] });
+    ws.send(JSON.stringify({ t: 'hello', live: [...runners.keys(), ...starting.keys()] } satisfies WorkerToServer));
+    for (const m of outbox.splice(0)) ws.send(JSON.stringify(m));
   });
   sock.on('message', (data) => {
     let msg: ServerToWorker;

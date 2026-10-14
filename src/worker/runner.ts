@@ -94,6 +94,8 @@ export class ClaudeRunner implements AgentRunner {
   private idleTimer: NodeJS.Timeout | null = null;
   private closed = false;
   private sentSdkId: string | null = null;
+  /** Set after a turn result; the next model output means a new turn started (e.g. a queued message). */
+  private betweenTurns = false;
 
   constructor(spec: StartSpec, deps: RunnerDeps, opts: RunnerOptions) {
     this.sessionId = spec.session_id;
@@ -126,6 +128,7 @@ export class ClaudeRunner implements AgentRunner {
 
   push(text: string) {
     this.clearIdle();
+    this.betweenTurns = false; // the server already marked the session running for this message
     this.input.push(text);
   }
 
@@ -198,6 +201,10 @@ export class ClaudeRunner implements AgentRunner {
       return;
     }
     if (m.type === 'assistant') {
+      if (this.betweenTurns) {
+        this.betweenTurns = false;
+        this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+      }
       if (m.parent_tool_use_id) return; // subagent internals stay out of the transcript
       for (const c of m.message.content) {
         if (c.type === 'text' && c.text.trim()) this.event({ kind: 'assistant', text: c.text });
@@ -222,6 +229,7 @@ export class ClaudeRunner implements AgentRunner {
         this.event({ kind: 'error', text: m.errors.join('\n') });
       }
       this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
+      this.betweenTurns = true;
       this.armIdle();
     }
   }

@@ -89,8 +89,11 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
   /** Accept an `items` proposal from a planner chat. */
   app.post('/api/sessions/:id/accept-items', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { items, source_id } = z.object({ items: z.array(proposedItemSchema).min(1), source_id: z.number().int().nullable().default(null) }).parse(req.body);
+    const { items, source_id, event_id } = z.object({ items: z.array(proposedItemSchema).min(1), source_id: z.number().int().nullable().default(null), event_id: z.number().int().optional() }).parse(req.body);
+    const ref = event_id === undefined ? undefined : { session_id: s.id, event_id };
+    sessions.assertProposalOpen(ref);
     const created = store.createProposedItems(s.project_id, items, source_id ?? s.source_id);
+    sessions.markProposalDone(ref, `Created ${created.map((i) => i.key).join(', ')}`);
     for (const item of created) bus.emit({ t: 'item', item });
     return created;
   });

@@ -16,12 +16,20 @@ export class WorkerHub {
   handlers!: HubHandlers;
 
   get connected() {
-    return this.ws !== null;
+    return this.ws?.readyState === 1;
   }
 
   attach(ws: WebSocket) {
     this.ws?.close(4000, 'replaced by a new worker connection');
     this.ws = ws;
+    let alive = true;
+    ws.on('pong', () => (alive = true));
+    const beat = setInterval(() => {
+      if (!alive) return ws.terminate();
+      alive = false;
+      ws.ping();
+    }, 20_000);
+    ws.on('close', () => clearInterval(beat));
     ws.on('message', (data) => {
       let msg: WorkerToServer;
       try {
@@ -44,7 +52,7 @@ export class WorkerHub {
   }
 
   send(msg: ServerToWorker): boolean {
-    if (!this.ws) return false;
+    if (this.ws?.readyState !== 1 /* OPEN */) return false;
     this.ws.send(JSON.stringify(msg));
     return true;
   }

@@ -56,9 +56,10 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return reply.status(status).send({ error: (err as Error).message });
   });
 
+  // Check the matched route pattern, not req.url: the router decodes %-escapes (/%61pi/… matches /api/…).
   app.addHook('onRequest', async (req, reply) => {
-    const path = req.url.split('?')[0];
-    if (!path.startsWith('/api/') || PUBLIC_API.has(path)) return;
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith('/api/') || PUBLIC_API.has(route)) return;
     if (!auth.isAuthed(req)) return reply.status(401).send({ error: 'Not signed in' });
   });
 

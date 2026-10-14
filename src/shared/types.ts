@@ -105,7 +105,8 @@ export type SessionEventBody =
   | { kind: 'system'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'input_request'; input_id: number }
-  | { kind: 'proposal'; proposal: Proposal };
+  | { kind: 'proposal'; proposal: Proposal }
+  | { kind: 'proposal_done'; event_id: number; note: string };
 
 export interface SessionEvent {
   id: number;
@@ -215,6 +216,8 @@ export const batchInput = z.object({
   new_items: z.array(proposedItemSchema).default([]),
   prompt: z.string().default(''),
   force_plan: z.boolean().optional(),
+  /** Set when the batch comes from a planner proposal card. */
+  proposal: z.object({ session_id: z.number().int(), event_id: z.number().int() }).optional(),
 });
 
 export const plannerInput = z.object({

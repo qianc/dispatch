@@ -97,3 +97,32 @@ describe('Workspaces (git)', () => {
     expect(git(cwd, 'branch', '--show-current')).toBe('');
   });
 });
+
+describe('Workspaces edge cases', () => {
+  it('reopens a cleaned-up session on its local branch without losing unpushed commits, and serializes parallel prepares', async () => {
+    const remoteRoot = mkdtempSync(join(tmpdir(), 'dsp-remote-'));
+    const bare = join(remoteRoot, 'me', 'hc.git');
+    execFileSync('git', ['init', '--bare', '-b', 'main', bare]);
+    const seed = mkdtempSync(join(tmpdir(), 'dsp-seed-'));
+    git(seed, 'init', '-b', 'main');
+    writeFileSync(join(seed, 'a.txt'), 'one\n');
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-m', 'init');
+    git(seed, 'push', bare, 'main');
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${remoteRoot}`);
+    const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null };
+    const spec = (branch: string, id: number): StartSpec => ({
+      session_id: id, kind: 'work', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
+      title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, resume: null, resume_note: null,
+    });
+    // first use of a repo by three sessions at once: one clone, three worktrees
+    const dirs = await Promise.all([ws.prepare(spec('b1', 1)), ws.prepare(spec('b2', 2)), ws.prepare(spec('b3', 3))]);
+    expect(dirs.map((d) => git(d, 'branch', '--show-current'))).toEqual(['b1', 'b2', 'b3']);
+    writeFileSync(join(dirs[0], 'local.txt'), 'unpushed\n');
+    git(dirs[0], 'add', '.');
+    git(dirs[0], 'commit', '-m', 'unpushed work');
+    await ws.cleanup(1, [repo]);
+    const again = await ws.prepare(spec('b1', 1));
+    expect(git(again, 'log', '-1', '--format=%s')).toBe('unpushed work');
+  });
+});
