@@ -76,6 +76,18 @@ function App() {
 
 (window as unknown as { __dispatchStarted: boolean }).__dispatchStarted = true;
 
+// The document is locked (only .scroll-area scrolls). If iOS scrolls it anyway (keyboard, focus),
+// the layout shifts and taps miss the tab bar: put it back.
+const unshift = () => {
+  if (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop) {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
+};
+window.addEventListener('scroll', unshift, { passive: true });
+document.addEventListener('focusout', () => setTimeout(unshift, 50));
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>

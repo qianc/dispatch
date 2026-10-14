@@ -25,7 +25,16 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
-  const { data } = useQuery({ queryKey: ['session', id], queryFn: () => api.get<SessionDetail>(`/sessions/${id}`).then(withLive) });
+  const { data } = useQuery({
+    queryKey: ['session', id],
+    queryFn: async () => {
+      // after the first load, ask only for new events and keep the ones we have
+      const prev = qc.getQueryData<SessionDetail>(['session', id]);
+      const after = prev?.events.at(-1)?.seq ?? 0;
+      const d = await api.get<SessionDetail>(`/sessions/${id}${after ? `?after=${after}` : ''}`);
+      return withLive(prev && after ? { ...d, events: [...prev.events, ...d.events.filter((e) => e.seq > after)] } : d);
+    },
+  });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
   const send = useMutation({ mutationFn: () => api.post(`/sessions/${id}/messages`, { text }), onSuccess: () => setText('') });
   const interrupt = useMutation({ mutationFn: () => api.post(`/sessions/${id}/interrupt`) });
@@ -47,7 +56,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     return () => el.removeEventListener('scroll', onScroll);
   }, [data?.session.id]);
   useLayoutEffect(() => {
-    if (pinned.current) endRef.current?.scrollIntoView({ block: 'end' });
+    // set the chat area's own scrollTop: scrollIntoView() also scrolls the locked page on iOS,
+    // which shifts the layout so taps on the tab bar land in the wrong place
+    const el = endRef.current?.closest('.scroll-area');
+    if (pinned.current && el) el.scrollTop = el.scrollHeight;
   }, [data?.events.length, data?.inputs.length]);
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;

@@ -69,9 +69,11 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
 
   app.get('/api/sessions/:id', async (req) => {
     const s = session((req.params as { id: string }).id);
+    // ?after=<seq>: only newer events (the phone polls this while live updates are held back)
+    const after = Number((req.query as { after?: string }).after ?? 0) || 0;
     return {
       session: s,
-      events: store.events(s.id),
+      events: store.events(s.id, after),
       inputs: store.inputs(s.id),
       items: store.itemsByIds(s.item_ids),
       prs: store.prs({ session_id: s.id }),

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../../src/shared/types.ts';
@@ -9,6 +9,11 @@ import { RichMd } from './RichMd.tsx';
 import { RunOptionsFields, runOptionsSummary, useRunOptions } from './batch.tsx';
 
 const HIDDEN_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+/** One assistant message. Memoized on primitives so a refetch does not re-parse every message's markdown. */
+const AssistantText = memo(function AssistantText({ text, projectId, projectKey, sourceId }: { text: string; projectId?: number; projectKey?: string; sourceId: number | null }) {
+  return projectId && projectKey ? <RichMd ctx={{ project: { id: projectId, key: projectKey }, sourceId }}>{text}</RichMd> : <Md>{text}</Md>;
+});
 
 type ToolUse = Extract<SessionEventBody, { kind: 'tool_use' }>;
 type ToolResult = Extract<SessionEventBody, { kind: 'tool_result' }>;
@@ -54,7 +59,7 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
               </div>
             );
           case 'assistant':
-            return project ? <RichMd key={e.seq} ctx={{ project, sourceId: session.source_id }}>{b.text}</RichMd> : <Md key={e.seq}>{b.text}</Md>;
+            return <AssistantText key={e.seq} text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />;
           case 'tool_use':
             return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
           case 'tool_result':

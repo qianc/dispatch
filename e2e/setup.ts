@@ -17,7 +17,8 @@ export default async function setup() {
   writeFileSync(`${E2E_SRC}/docs/pic.png`, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
   const common = { ...process.env, WORKER_TOKEN: 'e2e' };
   const procs: ChildProcess[] = [
-    spawn(process.execPath, ['src/server/main.ts'], { env: { ...common, DATA_DIR: '/tmp/dispatch-e2e', APP_PASSWORD: 'e2e-pass', PORT: String(PORT) }, stdio: 'inherit' }),
+    // E2E_WEB_DIST: test a build kept apart from the one a live server is serving
+    spawn(process.execPath, ['src/server/main.ts'], { env: { ...common, DATA_DIR: '/tmp/dispatch-e2e', APP_PASSWORD: 'e2e-pass', PORT: String(PORT), WEB_DIST: process.env.E2E_WEB_DIST ?? './dist/web' }, stdio: 'inherit' }),
   ];
   const end = Date.now() + 15_000;
   for (;;) {

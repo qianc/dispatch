@@ -50,6 +50,11 @@ describe('sessions with the fake runner', () => {
     await s.call('POST', `/sessions/${id}/messages`, { text: 'ship it' });
     d = await waitFor(async () => { const x = await session(id); return x.session.status === 'idle' && x.events.some((e: { body: { text?: string } }) => e.body.text === '(fake) You said: ship it') && x; }, 'follow-up');
 
+    // the phone's poll asks only for newer events
+    const all = (await s.call('GET', `/sessions/${id}`)).data.events;
+    const newer = (await s.call('GET', `/sessions/${id}?after=${all.at(-2).seq}`)).data.events;
+    expect(newer.map((e: { seq: number }) => e.seq)).toEqual([all.at(-1).seq]);
+
     const inbox = (await s.call('GET', '/inbox')).data;
     expect(inbox.idle.map((x: { id: number }) => x.id)).toContain(id);
 

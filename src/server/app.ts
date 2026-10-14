@@ -90,7 +90,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
 
   const webRoot = resolve(cfg.webDist);
   if (existsSync(webRoot)) {
-    await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+    // wildcard: files are looked up per request, so a new build is served without a restart
+    await app.register(fastifyStatic, { root: webRoot, wildcard: true });
     app.setNotFoundHandler((req, reply) => {
       // a missing file (e.g. an old build's script) must 404; answering with index.html would
       // hand the browser HTML as JavaScript and leave a blank app
