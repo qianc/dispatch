@@ -271,3 +271,32 @@ test('images Claude reads show as thumbnails that open full size', async ({ page
   await page.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('dialog', { name: 'Image' })).toHaveCount(0);
 });
+
+test('a session opened from another tab does not trap the Projects tab', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'NAV', name: 'Navproj' } });
+  await page.request.post('/api/projects/NAV/repos', { data: { github_owner: 'me', github_name: 'nav' } });
+  // start a batch from inside the project: the session screen belongs to the Projects tab
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('link', { name: /Navproj/ }).click();
+  const s = await (await page.request.post('/api/projects/NAV/batches', { data: { prompt: 'go' } })).json();
+  await page.goto(`/s/${s.id}`); // same as following the batch
+  await expect(page.getByText('Which approach should I take?')).toBeVisible();
+  // now open the same session from Activity
+  await page.getByRole('link', { name: 'Activity' }).click();
+  await page.locator(`a[href="/s/${s.id}"]`).first().click();
+  await expect(page).toHaveURL(new RegExp(`/s/${s.id}$`));
+  // Projects must respond: not the session again, and not stuck
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await expect(page).not.toHaveURL(new RegExp(`/s/${s.id}$`));
+  await expect(page.getByRole('heading', { name: /Projects|Navproj/ }).first()).toBeVisible();
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await expect(page).toHaveURL(/\/projects$/);
+  // Inbox shows the inbox, not the session log
+  await page.getByRole('link', { name: 'Inbox' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+});

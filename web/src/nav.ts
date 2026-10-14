@@ -27,18 +27,25 @@ export function rootTab(pathname: string): Tab | null {
 
 const state = read<{ current: Tab; last: Partial<Record<Tab, string>> }>('dispatch:tabs', { current: '/', last: {} });
 
-/** Call on every location change. Inner screens belong to whichever tab you were in. */
+/**
+ * Call on every navigation. Inner screens belong to whichever tab you were in, and to that tab
+ * only: if another tab still remembers the same screen, it forgets it (otherwise tapping that
+ * tab would "go" to the screen you are already on and seem dead).
+ */
 export function trackLocation(pathname: string, search: string): Tab {
+  const here = pathname + search;
   const tab = rootTab(pathname) ?? (pathname.startsWith('/p/') ? '/projects' : state.current);
   state.current = tab;
-  state.last[tab] = pathname + search;
+  state.last[tab] = here;
+  for (const t of TABS) if (t !== tab && state.last[t] === here) delete state.last[t];
   write('dispatch:tabs', state);
   return tab;
 }
 
-/** Where tapping a tab goes: back to where you were, or to its top when you are already in it. */
-export function tabTarget(tab: Tab): string {
-  return state.current === tab ? tab : state.last[tab] ?? tab;
+/** Where tapping a tab goes: back to where you were, or to its top when you are already in it or already there. */
+export function tabTarget(tab: Tab, here: string): string {
+  const last = state.last[tab];
+  return state.current === tab || !last || last === here ? tab : last;
 }
 
 const scroll = read<Record<string, number>>('dispatch:scroll', {});

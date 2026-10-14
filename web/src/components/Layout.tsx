@@ -16,13 +16,14 @@ const icons = {
 
 function TabLink({ tab, current, label, icon, badge }: { tab: Tab; current: Tab; label: string; icon: ReactNode; badge?: number }) {
   const nav = useNavigate();
+  const loc = useLocation();
   const active = tab === current;
   return (
     <a
       href={tab}
       onClick={(e) => {
         e.preventDefault();
-        nav(tabTarget(tab));
+        nav(tabTarget(tab, loc.pathname + loc.search));
       }}
       aria-current={active ? 'page' : undefined}
       className={cx('tab', active ? 'text-fg' : 'text-faint')}
@@ -40,7 +41,8 @@ export function Layout() {
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
   const waiting = (inbox?.inputs.length ?? 0) + (inbox?.idle.length ?? 0);
   const loc = useLocation();
-  const current = useMemo(() => trackLocation(loc.pathname, loc.search), [loc.pathname, loc.search]);
+  // keyed on loc.key too: navigating to the same path is still a navigation (tab change)
+  const current = useMemo(() => trackLocation(loc.pathname, loc.search), [loc.pathname, loc.search, loc.key]);
   return (
     <>
       <div className="flex-1 min-h-0 flex flex-col">
