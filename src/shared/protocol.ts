@@ -47,4 +47,4 @@ export type RpcMethod = 'list_items' | 'get_item' | 'create_item' | 'add_comment
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'add_repo' | 'remove_repo'
-  | 'list_items' | 'create_items' | 'update_item' | 'create_source' | 'list_sessions' | 'propose_session';
+  | 'list_items' | 'create_items' | 'update_item' | 'create_source' | 'list_sessions' | 'propose_session' | 'import_sections';

@@ -49,7 +49,7 @@ export function ItemDetail() {
         </select>
         {it.source && (
           <Link to={`/sources/${it.source.id}`} className="block mt-3 rounded-lg border border-line bg-panel px-3 py-2 active:bg-raised">
-            <div className="text-[12px] text-faint">From {it.source.kind.replace('_', ' ')}</div>
+            <div className="text-[12px] text-faint">From {it.source.kind === 'manual' ? 'document' : it.source.kind.replace('_', ' ')}</div>
             <div className="text-[14px] font-medium truncate">{it.source.title}</div>
             <div className="text-[12px] text-muted">{[it.source.reporter, it.source.version_tag, it.source.skill_name].filter(Boolean).join(' · ')}</div>
           </Link>

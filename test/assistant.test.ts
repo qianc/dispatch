@@ -104,3 +104,30 @@ describe('assistant tools (server side)', () => {
     await waitFor(async () => (await s.call('GET', '/projects/NOTES')).status === 200, 'fake assistant created NOTES');
   });
 });
+
+describe('import_sections', () => {
+  it('creates items with full text, detected scales and a linked source', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'SLD', name: 'slides', importance_scale: ['S1 a', 'S2 b', 'S3 c', 'New capability'], effort_scale: ['XS', 'S', 'M', 'L'] });
+    const chat = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'A', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const res = (await s.ctx.sessions.rpc(chat.id, 'import_sections', {
+      project_key: 'SLD',
+      source: { title: 'backlog.md', body_md: 'whole file' },
+      sections: [
+        { title: 'X1 — One', body: '**S2** · **L**\n\nLong description.', ancestors: ['Open work'] },
+        { title: 'X2 — Two', body: 'no labels', ancestors: ['Open work'] },
+      ],
+    })) as { created: number; source: { id: number }; importance_not_found_defaulted_to?: string };
+    expect(res.created).toBe(2);
+    expect(res.importance_not_found_defaulted_to).toMatch(/1 items/);
+    const x1 = (await s.call('GET', '/items/by-key/SLD-1')).data;
+    expect(x1).toMatchObject({ title: 'X1 — One', importance: 2, effort: 3, source_id: res.source.id });
+    expect(x1.body_md).toContain('Long description.');
+    expect((await s.call('GET', `/sources/${res.source.id}`)).data.body_md).toBe('whole file');
+    const again = (await s.ctx.sessions.rpc(chat.id, 'import_sections', {
+      project_key: 'SLD', source: { title: 'backlog.md', body_md: 'whole file' }, sections: [{ title: 'X3', body: '', ancestors: [] }],
+    })) as { source: { id: number } };
+    expect(again.source.id).toBe(res.source.id);
+    await s.app.close();
+  });
+});

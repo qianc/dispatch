@@ -6,6 +6,7 @@ import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } fro
 import { dispatchMcp, type Rpc } from './mcp.ts';
 import { assistantPrompt, plannerPrompt, workPrompt } from './prompts.ts';
 import { realpathSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -149,12 +150,20 @@ export class ClaudeRunner implements AgentRunner {
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc) },
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p)) },
         canUseTool: this.canUseTool,
         stderr: (d) => process.stderr.write(`[session ${this.sessionId}] ${d}`),
       },
     });
     void this.loop();
+  }
+
+  /** File reads for assistant tools, limited to ASSISTANT_READ_DIRS. */
+  private async readAllowed(path: string): Promise<string> {
+    if (!insideDirs(path, this.opts.assistantReadDirs, this.deps.cwd)) {
+      throw new Error(`Reading ${path} is not allowed. Allowed folders: ${this.opts.assistantReadDirs.join(', ') || 'none'}.`);
+    }
+    return readFile(resolve(this.deps.cwd, path.replace(/^~(?=$|\/)/, homedir())), 'utf8');
   }
 
   push(text: string) {

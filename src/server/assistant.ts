@@ -1,6 +1,7 @@
 // Tools for the assistant chat: manage projects, repos, items and sources across the whole app.
 // Creating and changing things happens at once; starting agent sessions goes through a proposal card.
 import { z } from 'zod';
+import { detectScales, type MdSection } from '../shared/markdownSections.ts';
 import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_KINDS, type Project, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
@@ -203,6 +204,38 @@ export class AssistantTools {
         }).parse(p);
         const source = this.store.createSource(project.id, input);
         return { id: source.id, title: source.title, link: `/sources/${source.id}` };
+      }
+
+      case 'import_sections': {
+        const project = this.project(p.project_key);
+        const sections = p.sections as MdSection[];
+        if (!Array.isArray(sections) || !sections.length) throw new Error('No sections to import');
+        const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null };
+        // several imports from one file (e.g. one per group) share one source
+        const source = this.store.sources(project.id).find((x) => x.title === src.title && x.body_md === src.body_md) ??
+          this.store.createSource(project.id, {
+            kind: 'manual', title: src.title, body_md: src.body_md, reporter: src.reporter ?? null, version_tag: src.version_tag ?? null, skill_name: null,
+          });
+        const type = p.type === 'bug' ? 'bug' : 'backlog';
+        const status = (ITEM_STATUSES as readonly string[]).includes(String(p.status)) ? (p.status as never) : type === 'bug' ? 'triage' : 'backlog';
+        let undetected = 0;
+        const perImportance: Record<string, number> = {};
+        const created = sections.map((sec) => {
+          const { importance, effort } = detectScales(sec, project.importance_scale, project.effort_scale);
+          if (importance === null) undetected++;
+          const imp = importance ?? 2;
+          perImportance[project.importance_scale[imp - 1]] = (perImportance[project.importance_scale[imp - 1]] ?? 0) + 1;
+          const item = this.store.createItem(project.id, {
+            type, title: sec.title.slice(0, 200), body_md: sec.body, status, importance: imp, effort, source_id: source.id, labels: [],
+          });
+          this.bus.emit({ t: 'item', item });
+          return item.key;
+        });
+        return {
+          created: created.length, first: created[0], last: created.at(-1), by_importance: perImportance,
+          importance_not_found_defaulted_to: undetected ? `${project.importance_scale[1]} (${undetected} items)` : undefined,
+          source: { id: source.id, link: `/sources/${source.id}` },
+        };
       }
 
       case 'list_sessions': {

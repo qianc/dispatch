@@ -1,6 +1,7 @@
 // The in-process `dispatch` MCP server: tracker tools for the agent, backed by server RPC.
 import { createSdkMcpServer, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
 import type { SessionKind } from '../shared/types.ts';
 
@@ -24,7 +25,7 @@ const itemShape = {
   effort: z.number().int().min(0).nullable().describe('Index into the project effort scale, or null if unknown'),
 };
 
-const assistantTools = (rpc: Rpc): SdkMcpToolDefinition<any>[] => {
+const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): SdkMcpToolDefinition<any>[] => {
   const label = z.union([z.number(), z.string()]);
   const newItem = z.object({
     type: z.enum(['backlog', 'bug']).default('backlog'),
@@ -89,6 +90,33 @@ const assistantTools = (rpc: Rpc): SdkMcpToolDefinition<any>[] => {
       version_tag: z.string().nullable().optional(),
       skill_name: z.string().nullable().optional(),
     }, call(rpc, 'create_source')),
+    tool('import_markdown', 'Import a markdown backlog/retro file: each heading at the item level becomes one item with its section text kept word for word, linked to a source holding the whole file. Importance and effort are read from the project scale labels in the text. Run with dry_run first to see the groups, then import the groups the owner wants. Never retype items by hand.', {
+      project_key: z.string(),
+      path: z.string().describe('File path, e.g. ~/projects/x/backlog.md'),
+      dry_run: z.boolean().default(false).describe('Only report heading level and item counts per group'),
+      only_under: z.array(z.string()).optional().describe('Import only sections under headings containing one of these texts, e.g. ["Open work"]'),
+      heading_level: z.number().int().min(1).max(6).optional().describe('Heading level of the items (default: detected)'),
+      type: z.enum(['backlog', 'bug']).default('backlog'),
+      status: z.string().optional().describe('Status for the items, e.g. canceled for a "won\'t fix" group'),
+      source_title: z.string().optional(),
+      reporter: z.string().optional(),
+      version_tag: z.string().optional(),
+    }, async (p) => {
+      try {
+        const text = await readFile(p.path);
+        const { level, sections } = parseSections(text, p.heading_level);
+        const filters = (p.only_under ?? []).map((f: string) => f.toLowerCase());
+        const picked = filters.length ? sections.filter((s) => s.ancestors.some((a) => filters.some((f: string) => a.toLowerCase().includes(f)))) : sections;
+        if (p.dry_run) return ok({ heading_level: level, total: sections.length, selected: picked.length, groups: groupCounts(sections), sample_titles: picked.slice(0, 5).map((s) => s.title) });
+        if (!picked.length) return fail(new Error('No sections matched'));
+        return ok(await rpc('import_sections', {
+          project_key: p.project_key, type: p.type, status: p.status, sections: picked,
+          source: { title: p.source_title ?? p.path, body_md: text, reporter: p.reporter ?? null, version_tag: p.version_tag ?? null },
+        }));
+      } catch (e) {
+        return fail(e);
+      }
+    }),
     tool('list_sessions', 'Show running and waiting agent sessions across projects.', {}, call(rpc, 'list_sessions')),
     tool('propose_session', 'Propose starting an agent session. The owner sees a card and starts it. type batch = work on items (one branch, one PR); planner = a planning chat for the project.', {
       type: z.enum(['batch', 'planner']),
@@ -101,8 +129,12 @@ const assistantTools = (rpc: Rpc): SdkMcpToolDefinition<any>[] => {
   ];
 };
 
-export function dispatchMcp(kind: SessionKind, rpc: Rpc) {
-  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc) });
+const noFiles = async () => {
+  throw new Error('File reading is not available here');
+};
+
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles) {
+  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile) });
   const tools: SdkMcpToolDefinition<any>[] = [
     tool('list_items', 'List open tracker items in this project (key, title, type, status, importance, effort).', {
       status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses'),

@@ -165,9 +165,12 @@ export function Field({ label, children, hint, group }: { label: string; childre
 
 export const inputCls = 'w-full rounded-lg bg-bg border border-line px-3 py-2 text-fg placeholder:text-faint focus:outline-none focus:border-accent';
 
+/** Pick one. Short labels sit in a row; long ones (or many) stack as a list so nothing overflows. */
 export function Segmented<T extends string | number>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+  const longest = Math.max(...options.map((o) => (typeof o.label === 'string' ? o.label.length : 6)));
+  const stacked = longest * options.length > 44;
   return (
-    <div className="flex rounded-lg bg-bg border border-line p-0.5 gap-0.5" role="radiogroup">
+    <div className={cx('flex rounded-lg bg-bg border border-line p-0.5 gap-0.5', stacked && 'flex-col')} role="radiogroup">
       {options.map((o) => (
         <button
           type="button"
@@ -175,7 +178,11 @@ export function Segmented<T extends string | number>({ value, options, onChange 
           aria-checked={o.value === value}
           key={String(o.value)}
           onClick={() => onChange(o.value)}
-          className={cx('flex-1 h-8 rounded-md text-[13px] font-medium px-1', o.value === value ? 'bg-raised text-fg' : 'text-muted')}
+          className={cx(
+            'rounded-md text-[13px] font-medium leading-tight',
+            stacked ? 'min-h-9 px-3 py-2 text-left' : 'flex-1 min-h-8 px-1 py-1',
+            o.value === value ? 'bg-raised text-fg' : 'text-muted',
+          )}
         >
           {o.label}
         </button>

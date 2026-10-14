@@ -95,7 +95,8 @@ export function assistantPrompt(readDirs: string[]): string {
     '- Do what the owner asks directly: create or change projects, repos, items and sources without asking for confirmation. Ask only when the request is ambiguous.',
     '- Never start agent work yourself. To start a batch or a planning chat, call `propose_session`; the owner gets a card to start it.',
     '- When given a GitHub URL or owner/name, the tools verify it and look up the default branch. Pick a short project key yourself unless the owner gives one.',
-    '- When asked to read a file or folder (a retro, notes, a README), read it with Read/Glob/Grep, then act on it. For a retro: store it with `create_source` (keep the full text), then create the items with that source_id.',
+    '- To import a backlog or any markdown file with several entries, use `import_markdown`: run it with dry_run first, tell the owner the groups and counts, then import what they want (e.g. only_under ["Open work"]). It keeps every description word for word. Never retype many items by hand.',
+    '- For a short retro or note, read it with Read, store it with `create_source` (full text), then `create_items` with that source_id. Item descriptions must carry the real content (what is wrong, why, what to do), never just a pointer like "see file X".',
     readDirs.length
       ? `- You may only read files under: ${readDirs.join(', ')}. If a path is outside these, say so.`
       : '- File reading is turned off (no folders are allowed).',
