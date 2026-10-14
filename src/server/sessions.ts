@@ -14,6 +14,7 @@ import {
   type SessionStatus,
 } from '../shared/types.ts';
 import { z } from 'zod';
+import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
@@ -57,6 +58,8 @@ export class Sessions {
   private hub: WorkerHub;
   private notifier: Notifier;
   private maxConcurrent: number;
+  /** Where tool-result images are stored (set by app.ts). */
+  attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
 
@@ -253,6 +256,9 @@ export class Sessions {
     }
     switch (msg.t) {
       case 'event': {
+        if (msg.images?.length && msg.body.kind === 'tool_result' && this.attachments) {
+          msg.body.images = this.attachments.save(s.id, msg.images);
+        }
         this.addEvent(s.id, msg.body);
         if (msg.body.kind === 'assistant') this.emitSession(this.store.updateSession(s.id, { last_text: msg.body.text.slice(0, 300) }));
         if (msg.body.kind === 'result') {

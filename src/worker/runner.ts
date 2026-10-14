@@ -115,6 +115,17 @@ function toolResultText(content: unknown): string {
   return '';
 }
 
+const MAX_IMAGE_B64 = 14_000_000; // ~10 MB decoded
+
+/** Base64 images in a tool result (Read of a png/jpg returns one), so the owner can see them too. */
+export function toolResultImages(content: unknown): { media_type: string; data: string }[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((c) => {
+    const src = c && typeof c === 'object' && c.type === 'image' ? (c as { source?: { type?: string; media_type?: string; data?: string } }).source : undefined;
+    return src?.type === 'base64' && src.data && src.media_type && src.data.length <= MAX_IMAGE_B64 ? [{ media_type: src.media_type, data: src.data }] : [];
+  });
+}
+
 export class ClaudeRunner implements AgentRunner {
   readonly sessionId: number;
   private spec: StartSpec;
@@ -281,7 +292,9 @@ export class ClaudeRunner implements AgentRunner {
     if (m.type === 'user' && !m.parent_tool_use_id && Array.isArray(m.message.content)) {
       for (const c of m.message.content) {
         if (typeof c === 'object' && c.type === 'tool_result') {
-          this.event({ kind: 'tool_result', tool_use_id: c.tool_use_id, is_error: !!c.is_error, text: toolResultText(c.content).slice(0, MAX_TOOL_TEXT) });
+          const body: SessionEventBody = { kind: 'tool_result', tool_use_id: c.tool_use_id, is_error: !!c.is_error, text: toolResultText(c.content).slice(0, MAX_TOOL_TEXT) };
+          const images = toolResultImages(c.content);
+          this.deps.emit({ t: 'event', session_id: this.sessionId, body, ...(images.length ? { images } : {}) });
         }
       }
       return;

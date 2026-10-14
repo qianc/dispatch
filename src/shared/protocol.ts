@@ -44,7 +44,8 @@ export type WorkerCommand =
 export type WorkerToServer =
   | { t: 'hello'; live: number[] }
   | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string }
-  | { t: 'event'; session_id: number; body: SessionEventBody }
+  /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
+  | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }
   | { t: 'rpc'; req_id: string; session_id: number; method: RpcMethod; params: unknown }
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string };

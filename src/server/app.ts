@@ -11,6 +11,7 @@ import { Bus } from './bus.ts';
 import type { Config } from './config.ts';
 import { Db } from './db.ts';
 import { AssistantTools } from './assistant.ts';
+import { Attachments } from './attachments.ts';
 import { GitHub } from './github.ts';
 import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
@@ -39,6 +40,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const sessions = new Sessions(store, bus, hub, notifier, cfg.maxConcurrent);
   const github = new GitHub(cfg.githubToken, store, bus, notifier, hub);
   const assistant = new AssistantTools(store, bus, github, sessions, hub);
+  const attachments = new Attachments(cfg.dataDir);
+  sessions.attachments = attachments;
   sessions.assistantRpc = (s, method, params) => assistant.call(s, method, params);
   // a finished turn often means a PR was just opened: link it (and auto-merge) without waiting for the poll
   sessions.onWorkIdle = (s) => {
@@ -87,6 +90,13 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   pushRoutes(app, ctx);
   streamRoutes(app, ctx);
   fileRoutes(app, ctx);
+  app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
+    const { id, name } = req.params as { id: string; name: string };
+    const file = await attachments.read(Number(id), name);
+    if (!file) return reply.status(404).send({ error: 'Not found' });
+    reply.header('cache-control', 'private, max-age=31536000, immutable');
+    return reply.type(file.type).send(file.data);
+  });
 
   const webRoot = resolve(cfg.webDist);
   if (existsSync(webRoot)) {

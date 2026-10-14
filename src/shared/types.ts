@@ -128,7 +128,7 @@ export type SessionEventBody =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; summary: string; input: unknown }
-  | { kind: 'tool_result'; tool_use_id: string; is_error: boolean; text: string }
+  | { kind: 'tool_result'; tool_use_id: string; is_error: boolean; text: string; images?: { url: string; media_type: string }[] }
   | { kind: 'result'; subtype: string; cost_usd?: number; turns?: number; duration_ms?: number }
   | { kind: 'system'; text: string }
   | { kind: 'error'; text: string }

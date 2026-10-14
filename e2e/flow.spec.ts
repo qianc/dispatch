@@ -249,3 +249,25 @@ test('tabs return to where you were; back keeps the list scrolled', async ({ pag
   await page.getByRole('link', { name: 'Projects' }).click();
   await expect(page).toHaveURL(/\/projects$/);
 });
+
+test('images Claude reads show as thumbnails that open full size', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'IMG', name: 'Images' } });
+  await page.request.post('/api/projects/IMG/repos', { data: { github_owner: 'me', github_name: 'img' } });
+  const s = await (await page.request.post('/api/projects/IMG/batches', { data: { prompt: 'go' } })).json();
+  await page.goto(`/s/${s.id}`);
+  await page.getByRole('button', { name: /Small fix/ }).click();
+  await page.getByRole('button', { name: 'Send answer' }).click();
+  await expect(page.getByText('Your turn')).toBeVisible();
+  await page.getByLabel('Message').fill('show me the image');
+  await page.getByRole('button', { name: 'Send' }).click();
+  const thumb = page.getByRole('button', { name: 'Show image' });
+  await expect(thumb.locator('img')).toHaveJSProperty('naturalWidth', 1);
+  await thumb.click();
+  await expect(page.getByRole('dialog', { name: 'Image' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('dialog', { name: 'Image' })).toHaveCount(0);
+});

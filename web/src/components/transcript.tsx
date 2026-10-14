@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../../src/shared/types.ts';
@@ -18,6 +19,36 @@ const AssistantText = memo(function AssistantText({ text, projectId, projectKey,
 type ToolUse = Extract<SessionEventBody, { kind: 'tool_use' }>;
 type ToolResult = Extract<SessionEventBody, { kind: 'tool_result' }>;
 
+/** Full-screen image, tap anywhere to close. */
+function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-black/95 flex flex-col pt-safe pb-safe" role="dialog" aria-label="Image" onClick={onClose}>
+      <div className="flex justify-between items-center px-3 h-12 shrink-0">
+        <a href={src} target="_blank" rel="noreferrer" className="text-[13px] text-accent" onClick={(e) => e.stopPropagation()}>Open original ↗</a>
+        <button className="text-fg text-xl px-2" aria-label="Close">✕</button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-2" style={{ touchAction: 'pinch-zoom' }}>
+        <img src={src} alt="" className="max-w-full max-h-full object-contain" onClick={(e) => e.stopPropagation()} />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Thumbs({ images }: { images: { url: string }[] }) {
+  const [full, setFull] = useState<string | null>(null);
+  return (
+    <div className="ml-3.5 mb-1 flex flex-wrap gap-2">
+      {images.map((img) => (
+        <button key={img.url} onClick={() => setFull(img.url)} className="rounded-lg overflow-hidden border border-line bg-raised" aria-label="Show image">
+          <img src={img.url} alt="" loading="lazy" className="h-24 max-w-[60vw] object-cover" />
+        </button>
+      ))}
+      {full && <Lightbox src={full} onClose={() => setFull(null)} />}
+    </div>
+  );
+}
+
 function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
   const [open, setOpen] = useState(false);
   const name = use.name.replace(/^mcp__dispatch__/, '');
@@ -28,6 +59,7 @@ function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
         <span className="font-medium text-fg/80 shrink-0">{name}</span>
         <span className="truncate font-mono text-[12px]">{use.summary}</span>
       </button>
+      {result?.images?.length ? <Thumbs images={result.images} /> : null}
       {open && (
         <div className="ml-3.5 mb-2 rounded-lg bg-raised p-2 text-[12px] font-mono whitespace-pre-wrap break-all max-h-80 overflow-y-auto">
           {JSON.stringify(use.input, null, 2)}

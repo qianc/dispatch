@@ -4,6 +4,8 @@ import type { StartSpec } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload } from '../shared/types.ts';
 import type { AgentRunner, RunnerDeps } from './runner.ts';
 
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class FakeRunner implements AgentRunner {
@@ -76,6 +78,11 @@ export class FakeRunner implements AgentRunner {
       return this.finishTurn();
     }
     if (this.turn > 1) {
+      if (/image/i.test(text)) {
+        // like Claude reading a png: the tool result carries the image
+        this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_use', tool_use_id: 'img1', name: 'Read', summary: '/tmp/shot.png', input: { file_path: '/tmp/shot.png' } } });
+        this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 'img1', is_error: false, text: '' }, images: [{ media_type: 'image/png', data: TINY_PNG }] });
+      }
       this.say(`(fake) You said: ${text}`);
       return this.finishTurn();
     }
