@@ -7,7 +7,7 @@ import { ClaudeRunner, expandDirs, insideDirs, type AgentRunner, type RunnerDeps
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { Workspaces } from './workspace.ts';
+import { run, Workspaces } from './workspace.ts';
 
 const env = process.env;
 const SERVER = env.SERVER_WS_URL ?? 'ws://localhost:3000/worker';
@@ -18,6 +18,7 @@ const opts: RunnerOptions = {
   settingSources: (env.AGENT_SETTING_SOURCES ?? 'user,project').split(',').filter(Boolean) as RunnerOptions['settingSources'],
   model: env.AGENT_MODEL || undefined,
   idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
+  // local-only repos (agents push branches into them): off unless LOCAL_REPO_DIRS is set
   assistantModel: env.ASSISTANT_MODEL || 'haiku',
   discussModel: env.DISCUSS_MODEL || env.ASSISTANT_MODEL || 'haiku',
   assistantReadDirs: expandDirs(env.ASSISTANT_READ_DIRS ?? ''),
@@ -34,6 +35,7 @@ if (env.GITHUB_TOKEN) {
   env.GIT_CONFIG_COUNT = String(n + 1);
 }
 
+const localRepoDirs = expandDirs(env.LOCAL_REPO_DIRS ?? '');
 const workspaces = new Workspaces(env.WORKSPACES_DIR ?? './data/workspaces', env.GIT_REMOTE_BASE ?? 'https://github.com');
 const runners = new Map<number, AgentRunner>();
 /** Sessions whose workspace is still being prepared; messages for them wait here. */
@@ -124,7 +126,9 @@ async function launch(spec: StartSpec, text: string) {
 }
 
 async function command(cmd: WorkerCommand): Promise<unknown> {
-  if (FAKE && cmd.c !== 'read_file') return { ok: true }; // the fake runner still serves real files
+  // the fake runner still does real git for files and local repos; it only skips GitHub pushes/merges
+  const local = 'repo' in cmd && !!cmd.repo?.local_path;
+  if (FAKE && !local && !['read_file', 'inspect_local_repo'].includes(cmd.c)) return { ok: true };
   switch (cmd.c) {
     case 'push_branch':
       await workspaces.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
@@ -132,7 +136,25 @@ async function command(cmd: WorkerCommand): Promise<unknown> {
     case 'merge_local':
       return workspaces.mergeLocal(cmd.repo, cmd.branch, cmd.message);
     case 'branch_status':
-      return { ok: true };
+      return workspaces.branchStatus(cmd.repo, cmd.branch);
+    case 'branch_diff':
+      return workspaces.branchDiff(cmd.repo, cmd.branch);
+    case 'inspect_local_repo': {
+      const path = resolve(cmd.path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
+      if (!localRepoDirs.length) throw new Error('Local repos are turned off. Set LOCAL_REPO_DIRS on the worker to the folders that may hold them.');
+      if (!insideDirs(path, localRepoDirs, '/')) throw new Error(`${path} is outside LOCAL_REPO_DIRS (${localRepoDirs.join(', ')})`);
+      const top = await run('git', ['rev-parse', '--show-toplevel'], path);
+      if (top.code !== 0) throw new Error(`${path} is not a git repository`);
+      // run() merges stdout and stderr, so only trust output from commands that succeeded
+      const ok = async (args: string[]) => {
+        const r = await run('git', args, path);
+        return r.code === 0 ? r.out.trim() : '';
+      };
+      const branch = (await ok(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(/^origin\//, '')
+        || (await ok(['branch', '--show-current'])) || 'main';
+      const deny = (await ok(['config', '--get', 'receive.denyCurrentBranch'])) || 'refuse';
+      return { path: top.out.trim(), name: top.out.trim().split('/').pop(), default_branch: branch.trim(), receive_deny_current_branch: deny };
+    }
     case 'read_file': {
       if (cmd.repo) return { base64: (await workspaces.readRepoFile(cmd.repo, cmd.path)).toString('base64') };
       if (!cmd.base_dir) throw new Error('read_file needs a repo or a base_dir');

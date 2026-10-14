@@ -33,9 +33,13 @@ export type ServerToWorker =
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string }
   | { c: 'merge_local'; repo: Repo; branch: string; message: string }
-  | { c: 'branch_status'; repo: Repo; session_id: number; branch: string }
+  | { c: 'branch_status'; repo: Repo; branch: string }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
-  | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string };
+  | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string }
+  /** check a folder is a git repo we may use (LOCAL_REPO_DIRS) and read its default branch */
+  | { c: 'inspect_local_repo'; path: string }
+  /** a local repo's session branch: diff against the default branch */
+  | { c: 'branch_diff'; repo: Repo; branch: string };
 
 export type WorkerToServer =
   | { t: 'hello'; live: number[] }

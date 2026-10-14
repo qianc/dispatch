@@ -58,7 +58,13 @@ export class Workspaces {
     this.remoteBase = remoteBase;
   }
 
+  /** Where to clone/fetch from: the local folder for local repos, GitHub otherwise. */
+  remoteUrl(repo: Repo) {
+    return repo.local_path ?? `${this.remoteBase}/${repo.github_owner}/${repo.github_name}.git`;
+  }
+
   cacheDir(repo: Repo) {
+    if (repo.local_path) return join(this.root, 'cache', 'local', `${repo.github_name}-${repo.id}`);
     return join(this.root, 'cache', repo.github_owner, repo.github_name);
   }
 
@@ -90,7 +96,7 @@ export class Workspaces {
     const dir = this.cacheDir(repo);
     if (!existsSync(join(dir, '.git'))) {
       await mkdir(join(dir, '..'), { recursive: true });
-      await git(['clone', '--filter=blob:none', `${this.remoteBase}/${repo.github_owner}/${repo.github_name}.git`, dir]);
+      await git(['clone', ...(repo.local_path ? [] : ['--filter=blob:none']), this.remoteUrl(repo), dir]);
     } else {
       await git(['fetch', 'origin', '--prune'], dir);
     }
@@ -152,11 +158,53 @@ export class Workspaces {
         const c = await run('sh', ['-c', repo.check_command], tmp, 30 * 60_000);
         if (c.code !== 0) return { ok: false, output: `Check failed (${repo.check_command}):\n${c.out.slice(-4000)}` };
       }
-      await git(['push', 'origin', `HEAD:${repo.default_branch}`], tmp);
+      const push = await run('git', ['push', 'origin', `HEAD:${repo.default_branch}`], tmp);
+      if (push.code !== 0) {
+        const why = repo.local_path && /denyCurrentBranch|checked out|working tree|would be overwritten|unstaged/i.test(push.out)
+          ? `Could not update ${repo.default_branch} in ${repo.local_path}: it is checked out there with uncommitted changes, or the repo refuses pushes to it. Commit or stash your changes (or run \`git config receive.denyCurrentBranch updateInstead\` in that repo) and merge again.\n\n`
+          : '';
+        return { ok: false, output: why + push.out };
+      }
       return { ok: true };
     } finally {
       await run('git', ['worktree', 'remove', '--force', tmp], cache);
     }
+  }
+
+  /** A session branch in a local repo, compared with the default branch (all from the folder's refs). */
+  branchStatus(repo: Repo, branch: string): Promise<import('../shared/types.ts').BranchStatus> {
+    return this.withRepo(repo, async () => {
+      const dir = await this.ensureCache(repo);
+      const base = `origin/${repo.default_branch}`;
+      const head = `origin/${branch}`;
+      const sha = await run('git', ['rev-parse', '--verify', '--quiet', head], dir);
+      if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, head_sha: null };
+      const counts = (await git(['rev-list', '--left-right', '--count', `${base}...${head}`], dir)).split(/\s+/).map(Number);
+      const merged = (await run('git', ['merge-base', '--is-ancestor', head, base], dir)).code === 0;
+      const conflicts = !merged && (await run('git', ['merge-tree', '--write-tree', base, head], dir)).code === 1;
+      return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, head_sha: sha.out.trim() };
+    });
+  }
+
+  /** Files changed on the branch since it left the default branch, with patches (like a PR's files). */
+  branchDiff(repo: Repo, branch: string): Promise<import('../shared/types.ts').BranchFile[]> {
+    return this.withRepo(repo, async () => {
+      const dir = await this.ensureCache(repo);
+      const range = `origin/${repo.default_branch}...origin/${branch}`;
+      const stat = await git(['diff', '--numstat', '--no-renames', range], dir);
+      const names = await git(['diff', '--name-status', '--no-renames', range], dir);
+      const status = new Map(names.split('\n').filter(Boolean).map((l) => {
+        const [s, f] = l.split('\t');
+        return [f, ({ A: 'added', D: 'removed', M: 'modified' } as Record<string, string>)[s[0]] ?? 'changed'];
+      }));
+      const files = [];
+      for (const line of stat.split('\n').filter(Boolean)) {
+        const [add, del, filename] = line.split('\t');
+        const patch = add === '-' ? null : (await git(['diff', '--no-renames', range, '--', filename], dir)).split('\n').slice(4).join('\n') || null;
+        files.push({ filename, status: status.get(filename) ?? 'modified', additions: Number(add) || 0, deletions: Number(del) || 0, patch: patch && patch.length > 200_000 ? null : patch });
+      }
+      return files;
+    });
   }
 
   async cleanup(sessionId: number, repos: Repo[]) {

@@ -36,7 +36,7 @@ export function PrView() {
   const [method, setMethod] = useState<'squash' | 'merge' | 'rebase'>('squash');
   const { data, error, refetch, isFetching } = useQuery({ queryKey: ['pr', id], queryFn: () => api.get<PrDetail>(`/prs/${id}`) });
   const merge = useMutation({
-    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, { how, method }),
+    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, { how: data?.pr.local ? 'local' : how, method }),
     onSuccess: () => {
       refetch();
       qc.invalidateQueries({ queryKey: ['inbox'] });
@@ -52,12 +52,12 @@ export function PrView() {
   const conflict = pr.mergeable === false || (result && !result.ok && result.conflict);
 
   return (
-    <Page title={pr.title} subtitle={`${pr.repo_full_name}#${pr.number} · ${pr.head_ref} → ${data.base_ref}`} back actions={<Button small variant="ghost" onClick={() => refetch()} disabled={isFetching}>↻</Button>}>
+    <Page title={pr.title} subtitle={pr.local ? `local branch ${pr.head_ref} → ${data.base_ref}` : `${pr.repo_full_name}#${pr.number} · ${pr.head_ref} → ${data.base_ref}`} back actions={<Button small variant="ghost" onClick={() => refetch()} disabled={isFetching}>↻</Button>}>
       <div className="px-4 pt-3 flex flex-wrap items-center gap-1.5">
         <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
         {pr.state === 'open' && pr.mergeable_state && <Chip tone={pr.mergeable ? 'ok' : 'wait'}>{pr.mergeable_state}</Chip>}
         <Chip><span className="text-ok">+{add}</span> <span className="text-bad">−{del}</span></Chip>
-        <a href={pr.url} target="_blank" rel="noreferrer" className="text-[13px] text-accent ml-auto">Open on GitHub ↗</a>
+        {!pr.local && <a href={pr.url} target="_blank" rel="noreferrer" className="text-[13px] text-accent ml-auto">Open on GitHub ↗</a>}
       </div>
 
       {data.checks.length > 0 && (
@@ -74,12 +74,12 @@ export function PrView() {
 
       {pr.state === 'open' && (
         <div className="mx-3 mt-4 rounded-xl border border-line bg-panel p-3 space-y-2">
-          <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />
-          {how === 'github' && (
+          {!pr.local && <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />}
+          {how === 'github' && !pr.local && (
             <Segmented value={method} onChange={setMethod} options={[{ value: 'squash', label: 'Squash' }, { value: 'merge', label: 'Merge commit' }, { value: 'rebase', label: 'Rebase' }]} />
           )}
-          {how === 'local' && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes.</p>}
-          <Button variant="primary" className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge #${pr.number} into ${data.base_ref}?`) && merge.mutate()}>
+          {(how === 'local' || pr.local) && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
+          <Button variant="primary" className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
             {merge.isPending ? 'Merging…' : 'Merge'}
           </Button>
           {result && !result.ok && <pre className="text-[12px] text-bad whitespace-pre-wrap max-h-40 overflow-y-auto">{result.output}</pre>}

@@ -335,13 +335,18 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch),
     onSuccess: refresh,
   });
-  const [repo, setRepo] = useState({ full: '', default_branch: 'main', check_command: '' });
+  const [repo, setRepo] = useState({ full: '', default_branch: '', check_command: '' });
+  const isPath = /^(\/|~\/|\.\.?\/)/.test(repo.full.trim());
+  const [repoNote, setRepoNote] = useState<string | null>(null);
   const addRepo = useMutation({
     mutationFn: () => {
+      if (isPath) {
+        return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { local_path: repo.full.trim(), default_branch: repo.default_branch || undefined, check_command: repo.check_command || null });
+      }
       const [github_owner, github_name] = repo.full.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '').split('/');
-      return api.post(`/projects/${project.key}/repos`, { github_owner, github_name, default_branch: repo.default_branch, check_command: repo.check_command || null });
+      return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { github_owner, github_name, default_branch: repo.default_branch || 'main', check_command: repo.check_command || null });
     },
-    onSuccess: () => { setRepo({ full: '', default_branch: 'main', check_command: '' }); refresh(); },
+    onSuccess: (r) => { setRepo({ full: '', default_branch: '', check_command: '' }); setRepoNote(r.note ?? null); refresh(); },
   });
   const delRepo = useMutation({ mutationFn: (r: Repo) => api.del(`/repos/${r.id}`), onSuccess: refresh });
   return (
@@ -351,19 +356,23 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           {project.repos.map((r) => (
             <div key={r.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line">
               <div className="flex-1 min-w-0">
-                <div className="truncate">{r.github_owner}/{r.github_name}</div>
+                <div className="truncate">
+                  {r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</> : `${r.github_owner}/${r.github_name}`}
+                </div>
                 <div className="text-[12px] text-muted truncate">base {r.default_branch}{r.check_command ? ` · check: ${r.check_command}` : ''}</div>
               </div>
               <Button small variant="ghost" onClick={() => confirm(`Remove ${r.github_name}?`) && delRepo.mutate(r)}>Remove</Button>
             </div>
           ))}
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
-            <input className={inputCls} placeholder="owner/repo" value={repo.full} onChange={(e) => setRepo({ ...repo, full: e.target.value })} aria-label="Repository" />
+            <input className={inputCls} placeholder="owner/repo, or a local folder like ~/projects/x" value={repo.full} onChange={(e) => setRepo({ ...repo, full: e.target.value })} aria-label="Repository" />
+            {isPath && <p className="text-[12px] text-muted">Local repo: agents push their branches into this folder, and you review and merge them here. No GitHub needed.</p>}
             <div className="grid grid-cols-2 gap-2">
-              <input className={inputCls} placeholder="base branch" value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
+              <input className={inputCls} placeholder={isPath ? 'base (auto)' : 'base branch (main)'} value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
               <input className={inputCls} placeholder="check cmd (optional)" value={repo.check_command} onChange={(e) => setRepo({ ...repo, check_command: e.target.value })} aria-label="Check command" />
             </div>
             <ErrorText error={addRepo.error} />
+            {repoNote && <p className="text-[12px] text-wait">{repoNote}</p>}
             <Button className="w-full" disabled={!repo.full.includes('/') || addRepo.isPending}>Add repo</Button>
           </form>
         </Card>

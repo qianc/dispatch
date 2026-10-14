@@ -21,6 +21,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
 - **Discuss this** on any item: a read-only Haiku chat (`DISCUSS_MODEL`) that knows the item and the
   repo's `CLAUDE.md`, and can read the code in the project's repos (or the folder an imported source
   came from). It never changes anything; starting work stays on the item page.
+- **Local repos** (no GitHub): add a project repo as a folder path (inside `LOCAL_REPO_DIRS`).
+  Agents push their branches into that folder; Dispatch shows the branch for review (diff on the
+  phone) and merges it by pushing the default branch back (the folder's working tree must be clean;
+  set `receive.denyCurrentBranch updateInstead` there if the branch is checked out).
 - Links in item text open in the app: repo files (markdown rendered, images shown), and `#anchor`
   links to other items imported from the same backlog.
 

@@ -1,6 +1,6 @@
 // GitHub: link PRs to sessions by branch, sync item status, show diffs, merge.
 import { Octokit } from '@octokit/rest';
-import type { PullRequest, Repo, Session } from '../shared/types.ts';
+import type { BranchFile, BranchStatus, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
@@ -49,7 +49,6 @@ export class GitHub {
   }
 
   startPolling(seconds: number) {
-    if (!this.octo) return;
     const tick = () => this.syncAll().catch((e) => console.warn('github sync failed:', (e as Error).message));
     this.timer = setInterval(tick, seconds * 1000);
     setTimeout(tick, 5000);
@@ -73,20 +72,41 @@ export class GitHub {
   }
 
   async syncSession(s: Session) {
-    if (!s.branch) return [];
+    if (!s.branch || !s.project_id) return [];
     const out: PullRequest[] = [];
-    if (!s.project_id) return [];
     for (const repo of this.store.repos(s.project_id)) {
+      if (repo.local_path) {
+        const pr = await this.syncLocal(s, repo);
+        if (pr) out.push(pr);
+        continue;
+      }
+      if (!this.octo) continue;
       const { data } = await this.gh().pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
       for (const p of data) out.push(await this.record(s, repo, p as GhPull));
     }
     return out;
   }
 
+  /**
+   * Local repos have no PRs: a session branch pushed into the folder, with commits the default
+   * branch lacks, is shown as a review entry (number = -session id) until it is merged.
+   */
+  private async syncLocal(s: Session, repo: Repo): Promise<PullRequest | null> {
+    const st = await this.hub.cmd<BranchStatus>({ c: 'branch_status', repo, branch: s.branch! }, 120_000);
+    const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id);
+    if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
+    if (st.merged && !known) return null; // nothing was ever offered for review
+    return this.recordRow(s, repo, {
+      number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
+      mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
+    });
+  }
+
   async syncPr(prId: number) {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
+    if (repo.local_path) return (await this.syncLocal(this.store.session(pr.session_id)!, repo)) ?? pr;
     const { data } = await this.gh().pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number });
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
@@ -105,17 +125,18 @@ export class GitHub {
     const how = s.options.auto_merge;
     if (how === 'off' || pr.state !== 'open') return;
     if (!['idle', 'completed'].includes(s.status) || this.store.openInputs().some((i) => i.session_id === s.id)) return;
+    const label = pr.local ? pr.head_ref : `#${pr.number}`;
     const note = (why: string) => {
       const key = `${pr.id}:${pr.head_sha}:${why}`;
       if (this.autoMergeNoted.has(key)) return;
       this.autoMergeNoted.add(key);
-      this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of #${pr.number} skipped: ${why}` });
-      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `#${pr.number}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
+      this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} skipped: ${why}` });
+      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `${label}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
     };
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
     const repo = this.store.repo(pr.repo_id)!;
-    const checks = pr.head_sha
+    const checks = pr.head_sha && !repo.local_path
       ? (await this.gh().checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
       : [];
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
@@ -130,22 +151,28 @@ export class GitHub {
       this.merging.delete(pr.id);
     }
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
-    this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged #${pr.number} (${how === 'github' ? 'squash on GitHub' : 'local merge'}).` });
-    void this.notifier.send({ title: `${s.project_key}: auto-merged`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
+    this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged ${label} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
+    void this.notifier.send({ title: `${s.project_key}: auto-merged`, body: `${label} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
   }
 
-  /** Store a PR and apply side effects of state changes. */
+  /** Store a GitHub PR and apply side effects of state changes. */
   private async record(s: Session, repo: Repo, p: GhPull): Promise<PullRequest> {
-    const before = this.store.prs({ session_id: s.id }).find((x) => x.repo_id === repo.id && x.number === p.number);
     let full = p;
     if (p.state === 'open' && p.mergeable === undefined) {
       full = (await this.gh().pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: p.number })).data as GhPull;
     }
     const state: PullRequest['state'] = full.merged_at || full.merged ? 'merged' : full.state === 'open' ? 'open' : 'closed';
-    const pr = this.store.upsertPr({
-      session_id: s.id, repo_id: repo.id, number: full.number, url: full.html_url, title: full.title, state,
+    return this.recordRow(s, repo, {
+      number: full.number, url: full.html_url, title: full.title, state,
       mergeable: full.mergeable ?? null, mergeable_state: full.mergeable_state ?? null, head_ref: full.head.ref, head_sha: full.head.sha,
     });
+  }
+
+  /** Store a PR / local review and apply side effects of state changes (items, notices, auto-merge). */
+  private async recordRow(s: Session, repo: Repo, row: Omit<Parameters<Store['upsertPr']>[0], 'session_id' | 'repo_id'>): Promise<PullRequest> {
+    const before = this.store.prs({ session_id: s.id }).find((x) => x.repo_id === repo.id && x.number === row.number);
+    const state = row.state;
+    const pr = this.store.upsertPr({ ...row, session_id: s.id, repo_id: repo.id });
     this.bus.emit({ t: 'pr', pr });
     if (before?.state !== state) this.onStateChange(s, pr, before?.state ?? null);
     if (state === 'open' && s.options.auto_merge !== 'off') {
@@ -159,7 +186,11 @@ export class GitHub {
     const items = this.store.itemsByIds(s.item_ids);
     if (pr.state === 'open' && was === null) {
       for (const it of items) if (it.status === 'in_progress' || it.status === 'todo') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_review' }) });
-      void this.notifier.send({ title: `${s.project_key}: PR ready`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
+      void this.notifier.send({
+        title: pr.local ? `${s.project_key}: branch ready for review` : `${s.project_key}: PR ready`,
+        body: pr.local ? `${pr.head_ref} · ${pr.title}` : `#${pr.number} ${pr.title}`,
+        url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined,
+      });
     }
     if (pr.state === 'closed') {
       const all = this.store.prs({ session_id: s.id });
@@ -178,6 +209,10 @@ export class GitHub {
   async detail(prId: number): Promise<PrDetail> {
     const pr = await this.syncPr(prId);
     const repo = this.store.repo(pr.repo_id)!;
+    if (repo.local_path) {
+      const files = await this.hub.cmd<BranchFile[]>({ c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
+      return { pr, body: '', base_ref: repo.default_branch, files, checks: [] };
+    }
     const o = { owner: repo.github_owner, repo: repo.github_name };
     const [{ data: p }, files, checks] = await Promise.all([
       this.gh().pulls.get({ ...o, pull_number: pr.number }),
@@ -200,11 +235,12 @@ export class GitHub {
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
     const repo = this.store.repo(pr.repo_id)!;
+    if (repo.local_path) how = 'local';
     if (how === 'github') {
       await this.gh().pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>({
-        c: 'merge_local', repo, branch: pr.head_ref, message: `Merge #${pr.number}: ${pr.title}`,
+        c: 'merge_local', repo, branch: pr.head_ref, message: pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`,
       });
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     }
@@ -222,6 +258,11 @@ export class GitHub {
     const repo = this.store.repo(repoId);
     if (!repo || repo.project_id !== s.project_id || !s.branch) throw new Error('Unknown repo for this session');
     await this.hub.cmd({ c: 'push_branch', repo, session_id: s.id, branch: s.branch });
+    if (repo.local_path) {
+      const pr = await this.syncLocal(s, repo);
+      if (!pr) throw new Error('The branch has no commits beyond the default branch yet');
+      return pr;
+    }
     const items = this.store.itemsByIds(s.item_ids);
     const body = [`Opened from Dispatch session #${s.id}.`, '', ...items.map((i) => `- ${i.key}: ${i.title}`)].join('\n');
     const { data } = await this.gh().pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });

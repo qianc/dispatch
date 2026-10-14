@@ -107,7 +107,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {data.prs.map((pr) => (
             <Link key={pr.id} to={`/pr/${pr.id}`} className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2.5 active:bg-raised">
               <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
-              <span className="text-[13px] text-faint">{pr.repo_full_name.split('/')[1]}#{pr.number}</span>
+              <span className="text-[13px] text-faint">{pr.local ? `${pr.repo_full_name.split('/')[1]} · local branch` : `${pr.repo_full_name.split('/')[1]}#${pr.number}`}</span>
               <span className="flex-1 truncate text-[14px]">{pr.title}</span>
               <span className="text-muted">›</span>
             </Link>
@@ -124,9 +124,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <div className="space-y-2">
           {s.kind === 'work' && (
             <>
-              <Button className="w-full" disabled={syncPrs.isPending} onClick={() => syncPrs.mutate()}>Check GitHub for PRs</Button>
+              <Button className="w-full" disabled={syncPrs.isPending} onClick={() => syncPrs.mutate()}>Check for PRs and branches</Button>
               {data.repos.filter((r) => !data.prs.some((p) => p.repo_id === r.id)).map((r) => (
-                <Button key={r.id} className="w-full" disabled={createPr.isPending} onClick={() => createPr.mutate(r.id)}>Push branch & open PR in {r.github_name}</Button>
+                <Button key={r.id} className="w-full" disabled={createPr.isPending} onClick={() => createPr.mutate(r.id)}>{r.local_path ? `Push branch for review in ${r.github_name}` : `Push branch & open PR in ${r.github_name}`}</Button>
               ))}
             </>
           )}

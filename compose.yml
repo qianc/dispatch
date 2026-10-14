@@ -34,12 +34,15 @@ services:
       RUNNER: ${RUNNER:-claude}
       ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
       DISCUSS_MODEL: ${DISCUSS_MODEL:-haiku}
+      LOCAL_REPO_DIRS: ${LOCAL_REPO_DIRS:-}
       ASSISTANT_READ_DIRS: ${ASSISTANT_READ_DIRS:-/host/projects}
     volumes:
       - workspaces:/workspaces
       - claude-home:/home/node/.claude
       # read-only folder the assistant may read (retros, notes, other repos)
       - ${ASSISTANT_HOST_DIR:-./}:/host/projects:ro
+      # local-only repos: mount read-write and set LOCAL_REPO_DIRS=/host/repos
+      # - ${HOME}/projects:/host/repos
     restart: unless-stopped
 
 volumes:

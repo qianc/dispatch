@@ -29,7 +29,7 @@ describe('Workspaces (git)', () => {
     git(seed, 'commit', '-m', 'init');
     git(seed, 'push', bare, 'main');
     ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${remoteRoot}`);
-    repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null };
+    repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null };
   });
 
   it('creates a worktree on the session branch and pushes it', async () => {
@@ -110,7 +110,7 @@ describe('Workspaces edge cases', () => {
     git(seed, 'commit', '-m', 'init');
     git(seed, 'push', bare, 'main');
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${remoteRoot}`);
-    const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null };
+    const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null };
     const spec = (branch: string, id: number): StartSpec => ({
       session_id: id, kind: 'work', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
       title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,

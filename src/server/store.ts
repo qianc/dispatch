@@ -48,6 +48,7 @@ function toRepo(r: Row): Repo {
     github_name: String(r.github_name),
     default_branch: String(r.default_branch),
     check_command: (r.check_command as string | null) ?? null,
+    local_path: (r.local_path as string | null) ?? null,
   };
 }
 
@@ -103,6 +104,7 @@ function toPr(r: Row): PullRequest {
     head_ref: String(r.head_ref),
     head_sha: (r.head_sha as string | null) ?? null,
     last_synced: (r.last_synced as string | null) ?? null,
+    local: r.local_path !== null && r.local_path !== undefined,
   };
 }
 
@@ -110,7 +112,7 @@ const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
   FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
-const PR_SELECT = 'SELECT pr.*, r.github_owner, r.github_name FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id';
+const PR_SELECT = 'SELECT pr.*, r.github_owner, r.github_name, r.local_path FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id';
 
 export interface Comment {
   id: number;
@@ -172,10 +174,10 @@ export class Store {
     const r = this.db.get('SELECT * FROM repos WHERE id = ?', id);
     return r && toRepo(r);
   }
-  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id'>): Repo {
+  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path'> & { local_path?: string | null }): Repo {
     const { lastId } = this.db.run(
-      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command) VALUES (?, ?, ?, ?, ?)',
-      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command,
+      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path) VALUES (?, ?, ?, ?, ?, ?)',
+      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null,
     );
     return this.repo(lastId)!;
   }

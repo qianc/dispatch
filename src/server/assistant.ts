@@ -7,6 +7,8 @@ import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
+import type { WorkerHub } from './workerHub.ts';
+import { addLocalRepo, looksLikePath, mergeNote } from './repos.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
 export function parseRepo(input: string): { owner: string; name: string } {
@@ -30,8 +32,10 @@ export class AssistantTools {
   private bus: Bus;
   private github: GitHub;
   private sessions: Sessions;
+  private hub: WorkerHub;
 
-  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions) {
+  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub) {
+    this.hub = hub;
     this.store = store;
     this.bus = bus;
     this.github = github;
@@ -88,7 +92,7 @@ export class AssistantTools {
     const open = this.store.items(p.id, { status: ['triage', 'backlog', 'todo', 'in_progress', 'in_review'] });
     return {
       key: p.key, name: p.name, description: p.description, link: `/p/${p.key}`,
-      repos: this.store.repos(p.id).map((r) => `${r.github_owner}/${r.github_name} (${r.default_branch})`),
+      repos: this.store.repos(p.id).map((r) => r.local_path ? `local: ${r.local_path} (${r.default_branch})` : `${r.github_owner}/${r.github_name} (${r.default_branch})`),
       importance_scale: p.importance_scale, effort_scale: p.effort_scale, plan_first_default: p.default_force_plan,
       open_backlog: open.filter((i) => i.type === 'backlog').length, open_bugs: open.filter((i) => i.type === 'bug').length,
     };
@@ -273,6 +277,11 @@ export class AssistantTools {
   }
 
   private async addRepo(project: Project, input: string, branch: string | undefined, check: string | null) {
+    if (looksLikePath(input)) {
+      const { repo, info, already } = await addLocalRepo(this.store, this.hub, project, input, { default_branch: branch, check_command: check });
+      if (already) return `${info.path} is already in ${project.key}`;
+      return { repo: `local: ${repo.local_path}`, default_branch: repo.default_branch, note: mergeNote(info) ?? undefined };
+    }
     const info = await this.inspectRepo(input);
     const default_branch = branch ?? ('default_branch' in info && info.default_branch ? info.default_branch : 'main');
     const exists = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === info.owner.toLowerCase() && r.github_name.toLowerCase() === info.name.toLowerCase());

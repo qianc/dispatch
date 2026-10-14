@@ -58,9 +58,9 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       effort_scale: z.array(z.string()).optional(),
       default_force_plan: z.boolean().optional(),
     }, call(rpc, 'update_project')),
-    tool('add_repo', 'Add a GitHub repo to a project (verified on GitHub; default branch looked up).', {
+    tool('add_repo', 'Add a repo to a project: a GitHub repo (verified, default branch looked up), or a local git folder on this machine (absolute or ~/ path; must be inside LOCAL_REPO_DIRS). Agents push their branches into a local repo and the owner reviews and merges them in Dispatch.', {
       project_key: z.string(),
-      repo: z.string().describe('owner/name or a github.com URL'),
+      repo: z.string().describe('owner/name, a github.com URL, or a local path like ~/projects/x'),
       default_branch: z.string().optional(),
       check_command: z.string().optional().describe('Command that must pass before a local merge, e.g. "npm test"'),
     }, call(rpc, 'add_repo')),

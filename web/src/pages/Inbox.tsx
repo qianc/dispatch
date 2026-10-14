@@ -46,11 +46,11 @@ export function Inbox() {
         </Section>
       )}
       {data.prs.length > 0 && (
-        <Section title="Pull requests to review">
+        <Section title="To review">
           <Card>
             {data.prs.map((pr) => (
               <Link key={pr.id} to={`/pr/${pr.id}`} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
-                <span className="text-[12px] text-faint shrink-0">{pr.repo_full_name.split('/')[1]}#{pr.number}</span>
+                <span className="text-[12px] text-faint shrink-0">{pr.local ? `${pr.repo_full_name.split('/')[1]} branch` : `${pr.repo_full_name.split('/')[1]}#${pr.number}`}</span>
                 <span className="flex-1 min-w-0 truncate">{pr.title}</span>
                 {pr.mergeable === false && <Chip tone="bad">Conflict</Chip>}
               </Link>

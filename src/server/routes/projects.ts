@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { projectInput, projectPatch, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
+import { addLocalRepo, mergeNote } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -49,6 +50,12 @@ export function projectRoutes(app: FastifyInstance, { store }: Ctx) {
 
   app.post('/api/projects/:key/repos', async (req) => {
     const p = project((req.params as { key: string }).key);
+    const body = (req.body ?? {}) as { local_path?: string };
+    if (body.local_path) {
+      const input = z.object({ local_path: z.string().min(1), default_branch: z.string().optional(), check_command: z.string().nullable().optional() }).parse(req.body);
+      const { repo, info } = await addLocalRepo(store, hub, p, input.local_path, input);
+      return { ...repo, note: mergeNote(info) };
+    }
     const input = repoInput.parse(req.body);
     return store.addRepo(p.id, input);
   });

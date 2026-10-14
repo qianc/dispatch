@@ -42,6 +42,8 @@ export interface Repo {
   github_name: string;
   default_branch: string;
   check_command: string | null;
+  /** set for a local-only repo: a git folder on the worker host (github_owner is then 'local') */
+  local_path: string | null;
 }
 
 export interface Source {
@@ -200,6 +202,8 @@ export interface PullRequest {
   head_ref: string;
   head_sha: string | null;
   last_synced: string | null;
+  /** a local repo's session branch (no GitHub PR): number is -session id, url is empty */
+  local: boolean;
 }
 
 // ---------- API inputs ----------
@@ -228,6 +232,7 @@ export const projectPatch = z.object({
 export const repoInput = z.object({
   github_owner: z.string().min(1),
   github_name: z.string().min(1),
+  local_path: z.string().nullable().default(null),
   default_branch: z.string().min(1).default('main'),
   check_command: z.string().nullable().default(null),
 });
@@ -272,6 +277,10 @@ export const sourcePatch = z.object({
   version_tag: z.string().nullable().optional(),
   skill_name: z.string().nullable().optional(),
 });
+
+export interface BranchFile { filename: string; status: string; additions: number; deletions: number; patch: string | null }
+/** State of a session branch in a local repo (the stand-in for a PR). */
+export interface BranchStatus { exists: boolean; ahead: number; behind: number; merged: boolean; conflicts: boolean; head_sha: string | null }
 
 export const sourceInput = z.object({
   kind: z.enum(SOURCE_KINDS).default('retro'),
