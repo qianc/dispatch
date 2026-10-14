@@ -14,6 +14,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   cards, with a **push notification** to your phone. **Activity** shows all running work across
   projects.
 - Review the PR diff on your phone and **merge** on GitHub, or merge locally on the worker and push.
+- An **Assistant** tab (Haiku by default) that runs the tracker for you: "new project Decks for
+  github.com/me/decks", "read ~/projects/notes/retro.md and file the issues under Decks". It changes
+  projects, repos, items and sources at once. To start agent work it shows a card you confirm. It
+  can read files only in `ASSISTANT_READ_DIRS` and cannot edit files or run commands.
 
 Design spec: [`docs/superpowers/specs/2026-10-14-dispatch-design.md`](docs/superpowers/specs/2026-10-14-dispatch-design.md).
 

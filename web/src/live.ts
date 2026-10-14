@@ -70,6 +70,7 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['projects'] });
+      if (e.session.kind === 'assistant') qc.invalidateQueries({ queryKey: ['assistant'] });
       return;
     case 'input':
       qc.setQueryData<SessionDetail>(['session', e.input.session_id], (d) =>

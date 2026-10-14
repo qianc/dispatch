@@ -53,7 +53,7 @@ export interface SessionDetail {
   prs: PullRequest[];
   repos: Repo[];
   source: Source | null;
-  project: Project;
+  project: Project | null;
 }
 
 export interface Inbox {

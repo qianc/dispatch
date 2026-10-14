@@ -24,7 +24,85 @@ const itemShape = {
   effort: z.number().int().min(0).nullable().describe('Index into the project effort scale, or null if unknown'),
 };
 
+const assistantTools = (rpc: Rpc): SdkMcpToolDefinition<any>[] => {
+  const label = z.union([z.number(), z.string()]);
+  const newItem = z.object({
+    type: z.enum(['backlog', 'bug']).default('backlog'),
+    title: z.string(),
+    body_md: z.string().default(''),
+    importance: label.optional().describe('1–4 or a label from the project importance scale'),
+    effort: label.nullable().optional().describe('A label from the project effort scale, e.g. "M"'),
+  });
+  return [
+    tool('inspect_github_repo', 'Check a GitHub repo exists and get its default branch and description.', {
+      repo: z.string().describe('owner/name or a github.com URL'),
+    }, call(rpc, 'inspect_github_repo')),
+    tool('list_projects', 'List all projects with key, repos, scales and open counts.', {}, call(rpc, 'list_projects')),
+    tool('create_project', 'Create a project. Key is generated from the name if omitted. Repos are verified on GitHub and added with their real default branch.', {
+      name: z.string(),
+      key: z.string().optional().describe('2–10 capitals/digits, starts with a letter'),
+      description: z.string().optional(),
+      importance_scale: z.array(z.string()).length(4).optional(),
+      effort_scale: z.array(z.string()).optional(),
+      default_force_plan: z.boolean().optional(),
+      repos: z.array(z.string()).optional().describe('owner/name or github.com URLs'),
+    }, call(rpc, 'create_project')),
+    tool('update_project', 'Change a project name, description, scales or plan-first default.', {
+      key: z.string(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      importance_scale: z.array(z.string()).length(4).optional(),
+      effort_scale: z.array(z.string()).optional(),
+      default_force_plan: z.boolean().optional(),
+    }, call(rpc, 'update_project')),
+    tool('add_repo', 'Add a GitHub repo to a project (verified on GitHub; default branch looked up).', {
+      project_key: z.string(),
+      repo: z.string().describe('owner/name or a github.com URL'),
+      default_branch: z.string().optional(),
+      check_command: z.string().optional().describe('Command that must pass before a local merge, e.g. "npm test"'),
+    }, call(rpc, 'add_repo')),
+    tool('remove_repo', 'Remove a repo from a project.', { project_key: z.string(), repo: z.string() }, call(rpc, 'remove_repo')),
+    tool('list_items', 'List open items in a project.', {
+      project_key: z.string(),
+      status: z.array(z.string()).optional(),
+      type: z.enum(['backlog', 'bug']).optional(),
+    }, call(rpc, 'list_items')),
+    tool('create_items', 'Create backlog items or bugs in a project, optionally linked to a source.', {
+      project_key: z.string(),
+      items: z.array(newItem).min(1),
+      source_id: z.number().int().optional().describe('From create_source, to link items to a retro/report'),
+    }, call(rpc, 'create_items')),
+    tool('update_item', 'Change an item: status, importance, effort, title or description.', {
+      key: z.string().describe('e.g. HC-42'),
+      status: z.string().optional(),
+      importance: label.optional(),
+      effort: label.nullable().optional(),
+      title: z.string().optional(),
+      body_md: z.string().optional(),
+    }, call(rpc, 'update_item')),
+    tool('create_source', 'Store a retro, skill-run report or user report (full text kept) so items can link to it.', {
+      project_key: z.string(),
+      kind: z.enum(['retro', 'skill_run', 'user_report', 'manual']).default('retro'),
+      title: z.string(),
+      body_md: z.string(),
+      reporter: z.string().nullable().optional(),
+      version_tag: z.string().nullable().optional(),
+      skill_name: z.string().nullable().optional(),
+    }, call(rpc, 'create_source')),
+    tool('list_sessions', 'Show running and waiting agent sessions across projects.', {}, call(rpc, 'list_sessions')),
+    tool('propose_session', 'Propose starting an agent session. The owner sees a card and starts it. type batch = work on items (one branch, one PR); planner = a planning chat for the project.', {
+      type: z.enum(['batch', 'planner']),
+      project_key: z.string(),
+      item_keys: z.array(z.string()).optional().describe('For batch: item keys like HC-3'),
+      title: z.string().optional(),
+      prompt: z.string().optional().describe('Extra instructions for the session'),
+      force_plan: z.boolean().optional(),
+    }, call(rpc, 'propose_session')),
+  ];
+};
+
 export function dispatchMcp(kind: SessionKind, rpc: Rpc) {
+  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc) });
   const tools: SdkMcpToolDefinition<any>[] = [
     tool('list_items', 'List open tracker items in this project (key, title, type, status, importance, effort).', {
       status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses'),

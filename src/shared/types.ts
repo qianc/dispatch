@@ -5,7 +5,7 @@ import { z } from 'zod';
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
 export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'canceled'] as const;
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
-export const SESSION_KINDS = ['work', 'planner'] as const;
+export const SESSION_KINDS = ['work', 'planner', 'assistant'] as const;
 export const SESSION_STATUSES = ['queued', 'running', 'waiting_input', 'idle', 'completed', 'failed', 'stopped'] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
@@ -76,8 +76,9 @@ export interface Item {
 
 export interface Session {
   id: number;
-  project_id: number;
-  project_key: string;
+  /** null for assistant chats, which span all projects */
+  project_id: number | null;
+  project_key: string | null;
   kind: SessionKind;
   title: string;
   status: SessionStatus;
@@ -147,7 +148,9 @@ export const proposedItemSchema = z.object({
 export type ProposedItem = z.infer<typeof proposedItemSchema>;
 
 export type Proposal =
-  | { type: 'batch'; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean }
+  /** project_key is set when the proposal comes from the assistant (not tied to one project) */
+  | { type: 'batch'; project_key?: string; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean }
+  | { type: 'planner'; project_key: string; prompt: string }
   | { type: 'items'; source_id: number | null; items: ProposedItem[] };
 
 export interface PullRequest {
@@ -223,6 +226,7 @@ export const batchInput = z.object({
 export const plannerInput = z.object({
   prompt: z.string().default(''),
   source_id: z.number().int().nullable().default(null),
+  proposal: z.object({ session_id: z.number().int(), event_id: z.number().int() }).optional(),
 });
 
 export const answerInput = z.union([

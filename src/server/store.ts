@@ -106,7 +106,7 @@ function toPr(r: Row): PullRequest {
 const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects p ON p.id = i.project_id';
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
-  FROM sessions s JOIN projects p ON p.id = s.project_id`;
+  FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
 const PR_SELECT = 'SELECT pr.*, r.github_owner, r.github_name FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id';
 
 export interface Comment {
@@ -273,8 +273,8 @@ export class Store {
   private toSession(r: Row): Session {
     return {
       id: Number(r.id),
-      project_id: Number(r.project_id),
-      project_key: String(r.project_key),
+      project_id: numOrNull(r.project_id),
+      project_key: (r.project_key as string | null) ?? null,
       kind: r.kind as SessionKind,
       title: String(r.title),
       status: r.status as SessionStatus,
@@ -292,11 +292,13 @@ export class Store {
       ended_at: (r.ended_at as string | null) ?? null,
     };
   }
+  /** Assistant chats are left out unless asked for by `kind`. */
   sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; limit?: number } = {}): Session[] {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (filter.project_id) { where.push('s.project_id = ?'); params.push(filter.project_id); }
     if (filter.kind) { where.push('s.kind = ?'); params.push(filter.kind); }
+    else where.push("s.kind != 'assistant'");
     if (filter.statuses?.length) { where.push(`s.status IN (${filter.statuses.map(() => '?').join(',')})`); params.push(...filter.statuses); }
     const sql = `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC LIMIT ?`;
     return this.db.all(sql, ...params, filter.limit ?? 200).map((r) => this.toSession(r));
@@ -310,7 +312,7 @@ export class Store {
       .all(`${SESSION_SELECT} WHERE s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, itemId)
       .map((r) => this.toSession(r));
   }
-  createSession(s: { project_id: number; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[] }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[] }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
         'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -330,11 +332,12 @@ export class Store {
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
   }
+  /** Agent sessions holding a worker slot. The assistant is light and never takes a slot. */
   countActive(): number {
-    return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input')")!.n);
+    return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind != 'assistant'")!.n);
   }
   nextQueued(): Session | undefined {
-    const r = this.db.get(`${SESSION_SELECT} WHERE s.status = 'queued' ORDER BY s.id LIMIT 1`);
+    const r = this.db.get(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind != 'assistant' ORDER BY s.id LIMIT 1`);
     return r && this.toSession(r);
   }
 

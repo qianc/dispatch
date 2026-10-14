@@ -92,3 +92,32 @@ test('retro capture and split into linked items', async ({ page }) => {
   await page.getByRole('link', { name: /Source: Slideshow/ }).click();
   await expect(page.getByText('Items from this source · 2')).toBeVisible();
 });
+
+test('assistant creates a project from a chat message', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  await page.getByLabel('Message').fill('create project Slides me/slides');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await page.getByRole('link', { name: 'SLIDE', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Slides' })).toBeVisible();
+  await page.getByRole('radio', { name: 'Settings' }).click();
+  await expect(page.getByText('me/slides')).toBeVisible();
+  // the thread is still there when coming back
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  await expect(page.getByText('create project Slides me/slides')).toBeVisible();
+});
+
+test('sheet buttons are not covered by the tab bar', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('button', { name: '+ New' }).click();
+  const create = page.getByRole('dialog').getByRole('button', { name: 'Create project' });
+  await create.scrollIntoViewIfNeeded();
+  const box = (await create.boundingBox())!;
+  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.textContent, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+  expect(hit).toBe('Create project');
+});

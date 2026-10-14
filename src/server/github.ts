@@ -75,6 +75,7 @@ export class GitHub {
   async syncSession(s: Session) {
     if (!s.branch) return [];
     const out: PullRequest[] = [];
+    if (!s.project_id) return [];
     for (const repo of this.store.repos(s.project_id)) {
       const { data } = await this.gh().pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
       for (const p of data) out.push(await this.record(s, repo, p as GhPull));
@@ -111,7 +112,7 @@ export class GitHub {
     const items = this.store.itemsByIds(s.item_ids);
     if (pr.state === 'open' && was === null) {
       for (const it of items) if (it.status === 'in_progress' || it.status === 'todo') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_review' }) });
-      void this.notifier.send({ title: `${s.project_key}: PR ready`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id });
+      void this.notifier.send({ title: `${s.project_key}: PR ready`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
     }
     if (pr.state === 'closed') {
       const all = this.store.prs({ session_id: s.id });

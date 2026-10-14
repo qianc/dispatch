@@ -35,6 +35,7 @@ export function branchName(projectKey: string, sessionId: number, title: string)
 const proposalSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('batch'),
+    project_key: z.string().optional(),
     title: z.string().min(1),
     item_ids: z.array(z.number().int()).default([]),
     new_items: z.array(proposedItemSchema).default([]),
@@ -42,7 +43,10 @@ const proposalSchema = z.discriminatedUnion('type', [
     force_plan: z.boolean().default(false),
   }),
   z.object({ type: z.literal('items'), source_id: z.number().int().nullable().default(null), items: z.array(proposedItemSchema).min(1) }),
+  z.object({ type: z.literal('planner'), project_key: z.string(), prompt: z.string().default('') }),
 ]);
+
+export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
 export class Sessions {
   private store: Store;
@@ -50,6 +54,8 @@ export class Sessions {
   private hub: WorkerHub;
   private notifier: Notifier;
   private maxConcurrent: number;
+  /** Tools for assistant chats (set by app.ts; see assistant.ts). */
+  assistantRpc: AssistantRpc | null = null;
 
   constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, maxConcurrent: number) {
     this.store = store;
@@ -101,7 +107,30 @@ export class Sessions {
     return this.store.session(session.id)!;
   }
 
-  startPlanner(project: Project, input: { prompt: string; source_id: number | null }): Session {
+  /** The assistant chat: one open thread at a time. Creates it on the first message. */
+  assistantSend(text: string): Session {
+    const open = this.store.sessions({ kind: 'assistant', limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
+    if (open) {
+      this.send(open.id, text);
+      return this.store.session(open.id)!;
+    }
+    if (!this.hub.connected) throw new SessionError('Worker is not connected.', 503);
+    const s = this.store.createSession({
+      project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
+      initial_prompt: text, source_id: null, item_ids: [],
+    });
+    this.addEvent(s.id, { kind: 'user', text });
+    this.hub.send({ t: 'start', spec: this.spec(s, text, null, null) });
+    this.setStatus(s.id, 'running');
+    return this.store.session(s.id)!;
+  }
+
+  currentAssistant(): Session | undefined {
+    return this.store.sessions({ kind: 'assistant', limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
+  }
+
+  startPlanner(project: Project, input: { prompt: string; source_id: number | null; proposal?: { session_id: number; event_id: number } }): Session {
+    this.assertProposalOpen(input.proposal);
     const source = input.source_id ? this.store.source(input.source_id) : null;
     if (input.source_id && (!source || source.project_id !== project.id)) throw new SessionError('Unknown source', 404);
     const title = source ? `Split: ${source.title}` : input.prompt.trim() ? `Plan: ${input.prompt.trim().slice(0, 60)}` : 'Plan next batch';
@@ -112,6 +141,7 @@ export class Sessions {
       project_id: project.id, kind: 'planner', title, status: 'queued', force_plan: false, branch: null,
       initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [],
     });
+    this.markProposalDone(input.proposal, `Started planning chat #${session.id}`);
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;
@@ -154,7 +184,7 @@ export class Sessions {
   /** End a session. `completed` = you are done with it; `stopped` = abandoned. */
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false) {
     const s = this.mustGet(sessionId);
-    this.hub.send({ t: 'close', session_id: sessionId, cleanup, repos: this.store.repos(s.project_id) });
+    this.hub.send({ t: 'close', session_id: sessionId, cleanup, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -172,7 +202,7 @@ export class Sessions {
     for (const id of live) {
       const s = this.store.session(id);
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
-        this.hub.send({ t: 'close', session_id: id, cleanup: false, repos: s ? this.store.repos(s.project_id) : [] });
+        this.hub.send({ t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
       }
     }
     // Anything we believe is live but the worker does not know about was lost (worker restart): resume it.
@@ -196,7 +226,7 @@ export class Sessions {
     if (!s) return;
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
-      if (msg.t !== 'status') this.hub.send({ t: 'close', session_id: s.id, cleanup: false, repos: this.store.repos(s.project_id) });
+      if (msg.t !== 'status') this.hub.send({ t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
       return;
     }
     switch (msg.t) {
@@ -224,7 +254,7 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
-        if (msg.status === 'idle' && was !== 'idle') {
+        if (msg.status === 'idle' && was !== 'idle' && s.kind !== 'assistant') {
           const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
           this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
         }
@@ -238,7 +268,7 @@ export class Sessions {
         this.bus.emit({ t: 'input', input });
         const reason = msg.payload.kind === 'plan_approval' ? 'Plan ready for approval' : msg.payload.questions[0]?.question ?? 'Question';
         this.setStatus(s.id, 'waiting_input', { waiting_reason: reason });
-        this.notify(s, `${s.project_key}: ${msg.payload.kind === 'plan_approval' ? 'approve plan?' : 'question'}`, reason, `input-${input.id}`);
+        this.notify(s, `${s.project_key ?? 'Assistant'}: ${msg.payload.kind === 'plan_approval' ? 'approve plan?' : 'question'}`, reason, `input-${input.id}`);
         return;
       }
     }
@@ -252,7 +282,11 @@ export class Sessions {
   async rpc(sessionId: number, method: string, params: unknown): Promise<unknown> {
     const s = this.mustGet(sessionId);
     const p = (params ?? {}) as Record<string, unknown>;
-    const project = this.store.project(s.project_id)!;
+    if (s.kind === 'assistant') {
+      if (!this.assistantRpc) throw new Error('Assistant tools are not available');
+      return this.assistantRpc(s, method, p);
+    }
+    const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => {
       const n = Number(String(key).split('-').pop());
       const it = this.store.itemByNumber(project.id, n);
@@ -281,19 +315,28 @@ export class Sessions {
         this.bus.emit({ t: 'item', item });
         return { key: item.key, id: item.id };
       }
-      case 'propose': {
-        const proposal = proposalSchema.parse(p);
-        if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
-        this.addEvent(s.id, { kind: 'proposal', proposal });
-        this.notify(s, `${s.project_key}: proposal ready`, proposal.type === 'batch' ? proposal.title : `${proposal.items.length} items`, `proposal-${s.id}`);
-        return 'The proposal is shown to the user as a card. They will edit and start it from there. Stop here and wait for their reply.';
-      }
+      case 'propose':
+        return this.propose(s, p);
       default:
         throw new Error(`Unknown method ${method}`);
     }
   }
 
+  /** Show a proposal card in the session's transcript. */
+  propose(s: Session, raw: unknown): string {
+    const proposal = proposalSchema.parse(raw);
+    if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
+    this.addEvent(s.id, { kind: 'proposal', proposal });
+    const what = proposal.type === 'items' ? `${proposal.items.length} items` : proposal.type === 'planner' ? `planning chat for ${proposal.project_key}` : proposal.title;
+    this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, what, `proposal-${s.id}`);
+    return 'The proposal is shown to the user as a card. They will edit and start it from there. Stop here and wait for their reply.';
+  }
+
   // ---------- internals ----------
+
+  private reposOf(s: Session) {
+    return s.project_id ? this.store.repos(s.project_id) : [];
+  }
 
   /** Start queued sessions while there are free slots. */
   dispatch() {
@@ -307,17 +350,17 @@ export class Sessions {
   }
 
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
-    const project = this.store.project(s.project_id)!;
+    const project = s.project_id ? this.store.project(s.project_id) : undefined;
     return {
       session_id: s.id,
       kind: s.kind,
-      project_key: project.key,
-      project_name: project.name,
-      importance_scale: project.importance_scale,
-      effort_scale: project.effort_scale,
+      project_key: project?.key ?? '',
+      project_name: project?.name ?? '',
+      importance_scale: project?.importance_scale ?? [],
+      effort_scale: project?.effort_scale ?? [],
       title: s.title,
       branch: s.branch,
-      repos: this.store.repos(project.id),
+      repos: this.reposOf(s),
       items: this.store.itemsByIds(s.item_ids),
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
@@ -328,8 +371,9 @@ export class Sessions {
   }
 
   private agentSource(s: Session) {
-    const existing = this.store.sources(s.project_id).find((src) => src.kind === 'agent_session' && src.session_id === s.id);
-    return existing ?? this.store.createSource(s.project_id, {
+    const projectId = s.project_id!;
+    const existing = this.store.sources(projectId).find((src) => src.kind === 'agent_session' && src.session_id === s.id);
+    return existing ?? this.store.createSource(projectId, {
       kind: 'agent_session', title: `Found during session #${s.id}: ${s.title}`, body_md: '', reporter: 'claude',
       version_tag: null, skill_name: null, session_id: s.id,
     });
@@ -354,7 +398,8 @@ export class Sessions {
   }
 
   private notify(s: Session, title: string, body: string, tag: string) {
-    void this.notifier.send({ title, body: body.slice(0, 180), url: `/s/${s.id}`, tag, project_id: s.project_id });
+    const url = s.kind === 'assistant' ? '/assistant' : `/s/${s.id}`;
+    void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined });
   }
 
   isActive(s: Session) {

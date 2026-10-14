@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { FakeRunner } from './fakeRunner.ts';
-import { ClaudeRunner, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
+import { ClaudeRunner, expandDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Workspaces } from './workspace.ts';
 
 const env = process.env;
@@ -15,6 +17,8 @@ const opts: RunnerOptions = {
   settingSources: (env.AGENT_SETTING_SOURCES ?? 'user,project').split(',').filter(Boolean) as RunnerOptions['settingSources'],
   model: env.AGENT_MODEL || undefined,
   idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
+  assistantModel: env.ASSISTANT_MODEL || 'haiku',
+  assistantReadDirs: expandDirs(env.ASSISTANT_READ_DIRS ?? ''),
 };
 
 if (!TOKEN) throw new Error('Set WORKER_TOKEN');
@@ -62,7 +66,13 @@ async function launch(spec: StartSpec, text: string) {
   if (waiting) return void waiting.push(text); // still preparing: deliver after start
   starting.set(id, []);
   try {
-    const cwd = FAKE ? process.cwd() : await workspaces.prepare(spec);
+    let cwd: string;
+    if (FAKE) cwd = process.cwd();
+    else if (spec.kind === 'assistant') {
+      // the assistant reads only allow-listed folders; give it an empty working dir
+      cwd = join(workspaces.root, 'assistant');
+      await mkdir(cwd, { recursive: true });
+    } else cwd = await workspaces.prepare(spec);
     const deps: RunnerDeps = {
       emit: send,
       rpc: rpcFor(id),

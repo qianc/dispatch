@@ -17,6 +17,7 @@ import { SessionView } from './pages/Session.tsx';
 import { SourceView } from './pages/Source.tsx';
 import { PrView } from './pages/Pr.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Assistant } from './pages/Assistant.tsx';
 
 registerSW({ immediate: true });
 
@@ -44,6 +45,7 @@ const router = createBrowserRouter([
       { path: '/sources/:id', element: <SourceView /> },
       { path: '/pr/:id', element: <PrView /> },
       { path: '/settings', element: <Settings /> },
+      { path: '/assistant', element: <Assistant /> },
     ],
   },
 ]);

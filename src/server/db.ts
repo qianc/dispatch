@@ -53,10 +53,18 @@ export class Db {
     const done = new Set(this.all<{ name: string }>('SELECT name FROM _migrations').map((r) => r.name));
     for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
       if (done.has(name)) continue;
-      this.tx(() => {
-        this.raw.exec(readFileSync(join(dir, name), 'utf8'));
-        this.run('INSERT INTO _migrations (name) VALUES (?)', name);
-      });
+      // foreign keys off so a migration can rebuild a referenced table (SQLite's ALTER is limited)
+      this.raw.exec('PRAGMA foreign_keys = OFF');
+      try {
+        this.tx(() => {
+          this.raw.exec(readFileSync(join(dir, name), 'utf8'));
+          const broken = this.all('PRAGMA foreign_key_check');
+          if (broken.length) throw new Error(`migration ${name} broke foreign keys: ${JSON.stringify(broken[0])}`);
+          this.run('INSERT INTO _migrations (name) VALUES (?)', name);
+        });
+      } finally {
+        this.raw.exec('PRAGMA foreign_keys = ON');
+      }
     }
   }
 }

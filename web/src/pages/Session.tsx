@@ -8,8 +8,11 @@ import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
-export function SessionView() {
-  const id = Number(useParams().id);
+/** A session screen. With `assistantId` it renders the assistant chat instead of a project session. */
+export function SessionView({ assistantId, onNewChat }: { assistantId?: number; onNewChat?: () => void } = {}) {
+  const params = useParams();
+  const id = assistantId ?? Number(params.id);
+  const isAssistant = assistantId !== undefined;
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
@@ -40,22 +43,24 @@ export function SessionView() {
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
+  if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   const canSend = s.status !== 'queued' && s.status !== 'waiting_input';
 
   return (
     <Page
-      title={s.title}
-      subtitle={<span className="flex items-center gap-1.5"><span>{project.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
-      back
+      title={isAssistant ? 'Assistant' : s.title}
+      subtitle={isAssistant ? 'Ask me to set up projects, repos and items' : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
+      back={isAssistant ? undefined : true}
       actions={
         <>
-          <SessionStatusChip status={s.status} />
-          <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>
+          {!isAssistant && <SessionStatusChip status={s.status} />}
+          {isAssistant && <Button small variant="ghost" onClick={onNewChat}>New chat</Button>}
+          {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }
       footer={
-        <form className="flex items-end gap-2 p-2 pb-safe" onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(); }}>
+        <form className="flex items-end gap-2 p-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(); }}>
           <textarea
             className={cx(inputCls, 'min-h-10 max-h-40 resize-none py-2')}
             rows={1}

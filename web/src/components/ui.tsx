@@ -1,5 +1,6 @@
 import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ItemStatus, SessionStatus } from '../../../src/shared/types.ts';
@@ -31,7 +32,10 @@ export function Button({ variant = 'secondary', small, className, ...rest }: But
 export function Md({ children, className }: { children: string; className?: string }) {
   return (
     <div className={cx('md', className)}>
-      <Markdown remarkPlugins={[remarkGfm]} components={{ a: (p) => <a {...p} target="_blank" rel="noreferrer" /> }}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{ a: ({ href = '', children: c }) => (href.startsWith('/') ? <Link to={href}>{c}</Link> : <a href={href} target="_blank" rel="noreferrer">{c}</a>) }}
+      >
         {children}
       </Markdown>
     </div>

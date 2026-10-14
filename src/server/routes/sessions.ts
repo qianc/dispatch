@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
-import { intParam, notFound, type Ctx } from './ctx.ts';
+import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, github, bus }: Ctx) {
   const project = (key: unknown) => {
@@ -40,6 +40,20 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
 
   app.post('/api/projects/:key/planner', async (req) => sessions.startPlanner(project((req.params as { key: string }).key), plannerInput.parse(req.body)));
 
+  /** The assistant chat: the open thread (or null), send a message, start a new thread. */
+  app.get('/api/assistant', async () => ({ session_id: sessions.currentAssistant()?.id ?? null }));
+
+  app.post('/api/assistant/messages', async (req) => {
+    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
+    return sessions.assistantSend(text);
+  });
+
+  app.post('/api/assistant/new', async () => {
+    const cur = sessions.currentAssistant();
+    if (cur) sessions.finish(cur.id, 'completed');
+    return { ok: true };
+  });
+
   app.get('/api/sessions/:id', async (req) => {
     const s = session((req.params as { id: string }).id);
     return {
@@ -48,9 +62,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
       inputs: store.inputs(s.id),
       items: store.itemsByIds(s.item_ids),
       prs: store.prs({ session_id: s.id }),
-      repos: store.repos(s.project_id),
+      repos: s.project_id ? store.repos(s.project_id) : [],
       source: s.source_id ? store.source(s.source_id) : null,
-      project: store.project(s.project_id),
+      project: s.project_id ? store.project(s.project_id) : null,
     };
   });
 
@@ -92,6 +106,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     const { items, source_id, event_id } = z.object({ items: z.array(proposedItemSchema).min(1), source_id: z.number().int().nullable().default(null), event_id: z.number().int().optional() }).parse(req.body);
     const ref = event_id === undefined ? undefined : { session_id: s.id, event_id };
     sessions.assertProposalOpen(ref);
+    if (!s.project_id) throw new HttpError(400, 'This session has no project');
     const created = store.createProposedItems(s.project_id, items, source_id ?? s.source_id);
     sessions.markProposalDone(ref, `Created ${created.map((i) => i.key).join(', ')}`);
     for (const item of created) bus.emit({ t: 'item', item });

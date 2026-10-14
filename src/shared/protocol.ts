@@ -43,4 +43,8 @@ export type WorkerToServer =
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
-export type RpcMethod = 'list_items' | 'get_item' | 'create_item' | 'add_comment' | 'propose';
+export type RpcMethod = 'list_items' | 'get_item' | 'create_item' | 'add_comment' | 'propose' | AssistantMethod;
+
+export type AssistantMethod =
+  | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'add_repo' | 'remove_repo'
+  | 'list_items' | 'create_items' | 'update_item' | 'create_source' | 'list_sessions' | 'propose_session';

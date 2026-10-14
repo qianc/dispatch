@@ -32,9 +32,13 @@ services:
       AGENT_MODEL: ${AGENT_MODEL:-}
       IDLE_CLOSE_MINUTES: ${IDLE_CLOSE_MINUTES:-10}
       RUNNER: ${RUNNER:-claude}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
+      ASSISTANT_READ_DIRS: ${ASSISTANT_READ_DIRS:-/host/projects}
     volumes:
       - workspaces:/workspaces
       - claude-home:/home/node/.claude
+      # read-only folder the assistant may read (retros, notes, other repos)
+      - ${ASSISTANT_HOST_DIR:-./}:/host/projects:ro
     restart: unless-stopped
 
 volumes:

@@ -70,6 +70,7 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     if (this.closed) return;
     if (this.spec.kind === 'planner') return this.plannerTurn();
+    if (this.spec.kind === 'assistant') return this.assistantTurn(text);
     if (this.turn > 1) {
       this.say(`(fake) You said: ${text}`);
       return this.finishTurn();
@@ -95,6 +96,19 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 't1', is_error: false, text: 'All tests passed' } });
     this.say(`(fake) Done with "${choice}". In a real session I would now push and open a PR.`);
+    this.finishTurn();
+  }
+
+  /** "create project <Name> <owner/repo>" creates it; anything else lists projects. */
+  private async assistantTurn(text: string) {
+    const m = text.match(/create project (\S+)(?: (\S+\/\S+))?/i);
+    if (m) {
+      const r = (await this.deps.rpc('create_project', { name: m[1], repos: m[2] ? [m[2]] : [] })) as { key: string; link: string };
+      this.say(`(fake) Created [${r.key}](${r.link}).`);
+    } else {
+      const list = (await this.deps.rpc('list_projects', {})) as { key: string }[];
+      this.say(`(fake) You have ${list.length} project(s): ${list.map((p) => p.key).join(', ') || 'none'}.`);
+    }
     this.finishTurn();
   }
 

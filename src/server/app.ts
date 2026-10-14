@@ -10,6 +10,7 @@ import { Auth } from './auth.ts';
 import { Bus } from './bus.ts';
 import type { Config } from './config.ts';
 import { Db } from './db.ts';
+import { AssistantTools } from './assistant.ts';
 import { GitHub } from './github.ts';
 import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
@@ -36,6 +37,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const notifier = new Notifier(cfg, db, store);
   const sessions = new Sessions(store, bus, hub, notifier, cfg.maxConcurrent);
   const github = new GitHub(cfg.githubToken, store, bus, notifier, hub);
+  const assistant = new AssistantTools(store, bus, github, sessions);
+  sessions.assistantRpc = (s, method, params) => assistant.call(s, method, params);
   hub.handlers = {
     onHello: (live) => sessions.onWorkerHello(live),
     onMessage: (m) => sessions.onWorkerMessage(m),

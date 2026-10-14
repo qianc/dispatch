@@ -31,7 +31,7 @@ function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
   );
 }
 
-export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project }) {
+export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
     for (const e of events) if (e.body.kind === 'tool_result') m.set(e.body.tool_use_id, e.body);
@@ -75,7 +75,7 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
             return input ? <InputCard key={e.seq} input={input} /> : null;
           }
           case 'proposal':
-            return <ProposalCard key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
+            return <ProposalLoader key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
           case 'proposal_done':
             return null;
         }
@@ -204,7 +204,40 @@ function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; pr
   );
 }
 
-function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project }) {
+/** Assistant proposals name their project; others belong to the session's project. */
+function ProposalLoader(props: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project | null }) {
+  const key = 'project_key' in props.proposal ? props.proposal.project_key : undefined;
+  const { data: loaded } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<Project>(`/projects/${key}`), enabled: !!key });
+  const project = key ? loaded : props.project;
+  if (!project) return null;
+  if (props.proposal.type === 'planner') return <PlannerProposalCard {...props} proposal={props.proposal} project={project} />;
+  return <ProposalCard {...props} proposal={props.proposal} project={project} />;
+}
+
+function PlannerProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'planner' }>; session: Session; project: Project }) {
+  const nav = useNavigate();
+  const [prompt, setPrompt] = useState(proposal.prompt);
+  const start = useMutation({
+    mutationFn: () => api.post<Session>(`/projects/${project.key}/planner`, { prompt, proposal: { session_id: session.id, event_id: eventId } }),
+    onSuccess: (s) => nav(`/s/${s.id}`),
+  });
+  return (
+    <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
+      <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">Planning chat · {project.name}</div>
+      {done ? (
+        <p className="text-[13px] text-ok">{done}</p>
+      ) : (
+        <>
+          <textarea className={cx(inputCls, 'min-h-16 text-[14px]')} placeholder="Focus (optional)" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          <Button variant="primary" className="w-full mt-3" disabled={start.isPending} onClick={() => start.mutate()}>Start planning chat</Button>
+        </>
+      )}
+      <ErrorText error={start.error} />
+    </div>
+  );
+}
+
+function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' }>; session: Session; project: Project }) {
   const qc = useQueryClient();
   const nav = useNavigate();
   const { data: items = [] } = useQuery({
@@ -253,7 +286,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   return (
     <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">
-        {proposal.type === 'batch' ? 'Proposed batch' : 'Proposed items'}
+        {proposal.type === 'batch' ? 'Proposed batch' : 'Proposed items'}{session.kind === 'assistant' && ` · ${project.name}`}
       </div>
       {proposal.type === 'batch' && (
         <input className={cx(inputCls, 'mb-2 font-medium')} value={title} onChange={(e) => setTitle(e.target.value)} disabled={!!done} aria-label="Batch title" />

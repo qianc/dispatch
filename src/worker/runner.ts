@@ -4,7 +4,10 @@ import { query, type CanUseTool, type Query, type SDKMessage, type SDKUserMessag
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, type Rpc } from './mcp.ts';
-import { plannerPrompt, workPrompt } from './prompts.ts';
+import { assistantPrompt, plannerPrompt, workPrompt } from './prompts.ts';
+import { realpathSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 
 export interface RunnerDeps {
   emit(msg: WorkerToServer): void;
@@ -27,7 +30,31 @@ export interface RunnerOptions {
   settingSources: ('user' | 'project' | 'local')[];
   model: string | undefined;
   idleCloseMs: number;
+  assistantModel: string;
+  /** Folders the assistant may read (absolute, ~ expanded). */
+  assistantReadDirs: string[];
 }
+
+export function expandDirs(list: string): string[] {
+  return list.split(':').filter(Boolean).map((d) => resolve(d.replace(/^~(?=$|\/)/, homedir())));
+}
+
+/** True if `path` (after resolving symlinks) is inside one of `dirs`. */
+export function insideDirs(path: string, dirs: string[], cwd: string): boolean {
+  let real: string;
+  try {
+    real = realpathSync(resolve(cwd, path.replace(/^~(?=$|\/)/, homedir())));
+  } catch {
+    real = resolve(cwd, path);
+  }
+  return dirs.some((d) => {
+    let root = d;
+    try { root = realpathSync(d); } catch { /* keep as given */ }
+    return real === root || real.startsWith(root + sep);
+  });
+}
+
+const ASSISTANT_TOOLS = ['Read', 'Glob', 'Grep'];
 
 const PLANNER_TOOLS_DENIED = ['Write', 'Edit', 'NotebookEdit', 'Bash', 'KillShell'];
 const MAX_TOOL_TEXT = 4000;
@@ -107,15 +134,19 @@ export class ClaudeRunner implements AgentRunner {
   start(text: string) {
     this.input.push(text);
     const planner = this.spec.kind === 'planner';
+    const assistant = this.spec.kind === 'assistant';
+    const append = assistant ? assistantPrompt(this.opts.assistantReadDirs) : planner ? plannerPrompt(this.spec) : workPrompt(this.spec);
     this.q = query({
       prompt: this.input,
       options: {
         cwd: this.deps.cwd,
         resume: this.spec.resume ?? undefined,
-        model: this.opts.model,
-        settingSources: this.opts.settingSources,
-        plugins: this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: planner ? plannerPrompt(this.spec) : workPrompt(this.spec) },
+        model: assistant ? this.opts.assistantModel : this.opts.model,
+        // the assistant is a small tracker helper: no project settings, no plugins, only read tools
+        settingSources: assistant ? [] : this.opts.settingSources,
+        plugins: assistant ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
+        ...(assistant ? { tools: ASSISTANT_TOOLS } : {}),
+        systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : [],
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc) },
@@ -157,6 +188,14 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   private canUseTool: CanUseTool = async (name, input, { signal }) => {
+    if (this.spec.kind === 'assistant' && ASSISTANT_TOOLS.includes(name)) {
+      const path = String(input.file_path ?? input.path ?? '');
+      if (path && !insideDirs(path, this.opts.assistantReadDirs, this.deps.cwd)) {
+        const allowed = this.opts.assistantReadDirs.join(', ') || 'none';
+        return { behavior: 'deny', message: `Reading ${path} is not allowed. Allowed folders: ${allowed}.` };
+      }
+      return { behavior: 'allow', updatedInput: input };
+    }
     if (name !== 'AskUserQuestion' && name !== 'ExitPlanMode') return { behavior: 'allow', updatedInput: input };
     const payload: PendingInputPayload = name === 'AskUserQuestion'
       ? { kind: 'question', questions: (input.questions as Question[]).map((q) => ({ ...q, multiSelect: !!q.multiSelect })) }
