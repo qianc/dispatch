@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ITEM_STATUSES, type ItemStatus } from '../../../src/shared/types.ts';
-import { api, type Item, type ItemDetail as Detail, type Session } from '../api.ts';
+import { api, type Item, type ItemDetail as Detail, type ProjectSummary, type Repo } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { RichMd } from '../components/RichMd.tsx';
+import { BatchForm } from '../components/batch.tsx';
 import { ItemFields, SessionRow, effortLabel } from '../components/items.tsx';
 import { Button, Card, Chip, Empty, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
@@ -22,10 +23,10 @@ export function ItemDetail() {
   };
   const patch = useMutation({ mutationFn: (p: Partial<Item>) => api.patch<Item>(`/items/${id}`, p), onSuccess: refresh });
   const addComment = useMutation({ mutationFn: () => api.post(`/items/${id}/comments`, { body_md: comment }), onSuccess: () => { setComment(''); refresh(); } });
-  const start = useMutation({
-    mutationFn: () => api.post<Session>(`/projects/${it!.project.key}/batches`, { item_ids: [id], prompt: '' }),
-    onSuccess: (s) => nav(`/s/${s.id}`),
-  });
+  const [starting, setStarting] = useState(false);
+  // same key and shape as the project page's query: the cache holds the whole project
+  const { data: projectFull } = useQuery({ queryKey: ['project', it?.project.key], queryFn: () => api.get<ProjectSummary>(`/projects/${it!.project.key}`), enabled: !!it });
+  const repos: Repo[] = projectFull?.repos ?? [];
   const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => nav(`/p/${it!.project.key}`) });
   if (!it) return <Page title="Item" back><Empty>Loading…</Empty></Page>;
   const p = it.project;
@@ -63,11 +64,11 @@ export function ItemDetail() {
         </Link>
         {!busy && (
           <div className="flex gap-2 mt-2">
-            <Button variant="primary" className="flex-1" disabled={start.isPending} onClick={() => start.mutate()}>Start agent on this</Button>
+            <Button variant="primary" className="flex-1" onClick={() => setStarting(true)}>Start agent on this</Button>
             <Button onClick={() => patch.mutate({ marked: !it.marked })}>{it.marked ? 'Unmark' : 'Mark'}</Button>
           </div>
         )}
-        <ErrorText error={start.error ?? patch.error} />
+        <ErrorText error={patch.error} />
       </div>
 
       {it.sessions.length > 0 && (
@@ -91,6 +92,9 @@ export function ItemDetail() {
         </div>
       </Section>
 
+      <Sheet open={starting} onClose={() => setStarting(false)} title={`Start agent on ${it.key}`}>
+        <BatchForm project={{ ...p, repos }} items={[it]} onStarted={(s) => nav(`/s/${s.id}`)} />
+      </Sheet>
       <Sheet open={editing} onClose={() => setEditing(false)} title={`Edit ${it.key}`}>
         <EditItem item={it} onDone={() => { setEditing(false); refresh(); }} onDelete={() => confirm(`Delete ${it.key}?`) && remove.mutate()} />
       </Sheet>

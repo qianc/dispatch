@@ -6,6 +6,7 @@ import { api, type Item, type PendingInput, type Project, type Session, type Ses
 import { Button, Chip, ErrorText, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
+import { RunOptionsFields, runOptionsSummary, useRunOptions } from './batch.tsx';
 
 const HIDDEN_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -252,11 +253,13 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   const [title, setTitle] = useState(proposal.type === 'batch' ? proposal.title : '');
   const [prompt, setPrompt] = useState(proposal.type === 'batch' ? proposal.prompt : '');
   const [forcePlan, setForcePlan] = useState(proposal.type === 'batch' ? proposal.force_plan : false);
+  const [options, setOptions] = useRunOptions(project.key);
+  const [showOptions, setShowOptions] = useState(false);
 
   const start = useMutation({
     mutationFn: () =>
       api.post<Session>(`/projects/${project.key}/batches`, {
-        title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan,
+        title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options,
         proposal: { session_id: session.id, event_id: eventId },
       }),
     onSuccess: (s) => {
@@ -312,6 +315,10 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
             <input type="checkbox" checked={forcePlan} onChange={(e) => setForcePlan(e.target.checked)} className="size-4 accent-[var(--color-accent-strong)]" />
             Plan first (spec + approval before code)
           </label>
+          <button type="button" className="mt-2 text-[13px] text-accent" onClick={() => setShowOptions(!showOptions)} aria-expanded={showOptions}>
+            Run options{runOptionsSummary(options).length ? `: ${runOptionsSummary(options).join(', ')}` : ' (defaults)'} {showOptions ? '▴' : '▾'}
+          </button>
+          {showOptions && <div className="mt-2"><RunOptionsFields value={options} set={setOptions} /></div>}
         </>
       )}
       {done ? (

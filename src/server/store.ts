@@ -10,6 +10,8 @@ import {
   type PendingInputPayload,
   type Project,
   type ProposedItem,
+  DEFAULT_RUN_OPTIONS,
+  type RunOptions,
   type PullRequest,
   type Repo,
   type Session,
@@ -299,6 +301,7 @@ export class Store {
       waiting_reason: (r.waiting_reason as string | null) ?? null,
       last_text: (r.last_text as string | null) ?? null,
       usage: json(r.usage, null),
+      options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       item_ids: json<number[]>(r.item_ids, []),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
@@ -326,11 +329,11 @@ export class Store {
       .all(`${SESSION_SELECT} WHERE ${k} AND s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, ...(kind ? [kind] : []), itemId)
       .map((r) => this.toSession(r));
   }
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[] }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id,
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS),
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
@@ -350,9 +353,15 @@ export class Store {
   countActive(): number {
     return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind NOT IN ('assistant', 'discuss')")!.n);
   }
-  nextQueued(): Session | undefined {
-    const r = this.db.get(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.id LIMIT 1`);
-    return r && this.toSession(r);
+  queued(): Session[] {
+    return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.id`).map((r) => this.toSession(r));
+  }
+  /** Earlier work in this project that is still working (not just waiting for its next message). */
+  busyBefore(s: Session): number {
+    return Number(this.db.get<{ n: number }>(
+      "SELECT count(*) AS n FROM sessions WHERE project_id = ? AND id < ? AND kind = 'work' AND status IN ('queued','running','waiting_input')",
+      s.project_id ?? -1, s.id,
+    )!.n);
   }
 
   // ---------- events ----------

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Workspaces } from '../src/worker/workspace.ts';
 import type { StartSpec } from '../src/shared/protocol.ts';
-import type { Repo } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
@@ -15,7 +15,7 @@ describe('Workspaces (git)', () => {
   let repo: Repo;
   const spec = (branch: string | null, id = 1): StartSpec => ({
     session_id: id, kind: branch ? 'work' : 'planner', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
-    title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, resume: null, resume_note: null,
+    title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,
   });
 
   beforeEach(() => {
@@ -113,7 +113,7 @@ describe('Workspaces edge cases', () => {
     const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null };
     const spec = (branch: string, id: number): StartSpec => ({
       session_id: id, kind: 'work', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
-      title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, resume: null, resume_note: null,
+      title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,
     });
     // first use of a repo by three sessions at once: one clone, three worktrees
     const dirs = await Promise.all([ws.prepare(spec('b1', 1)), ws.prepare(spec('b2', 2)), ws.prepare(spec('b3', 3))]);

@@ -6,6 +6,7 @@ import { api, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
+import { runOptionsSummary } from '../components/batch.tsx';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
 export interface ChatMode {
@@ -90,6 +91,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </form>
       }
     >
+      {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && (
+        <div className="px-4 pt-3 text-[12px] text-muted">{runOptionsSummary(s.options).join(' · ')}</div>
+      )}
       {(data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">
           {data.items.map((i) => (

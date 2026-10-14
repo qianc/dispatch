@@ -40,6 +40,10 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const github = new GitHub(cfg.githubToken, store, bus, notifier, hub);
   const assistant = new AssistantTools(store, bus, github, sessions);
   sessions.assistantRpc = (s, method, params) => assistant.call(s, method, params);
+  // a finished turn often means a PR was just opened: link it (and auto-merge) without waiting for the poll
+  sessions.onWorkIdle = (s) => {
+    if (github.octo) github.syncSession(s).catch((e) => console.warn('github sync failed:', (e as Error).message));
+  };
   hub.handlers = {
     onHello: (live) => sessions.onWorkerHello(live),
     onMessage: (m) => sessions.onWorkerMessage(m),

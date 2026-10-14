@@ -1,5 +1,5 @@
 // Messages on the internal WebSocket between server and worker.
-import type { InputAnswer, Item, PendingInputPayload, Repo, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
+import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
   session_id: number;
@@ -15,6 +15,7 @@ export interface StartSpec {
   source: Source | null;
   prompt: string; // first user message
   force_plan: boolean;
+  options: RunOptions;
   resume: string | null; // sdk session id
   /** Text sent right after resume, when a session is restarted rather than continued by the user. */
   resume_note: string | null;

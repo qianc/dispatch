@@ -91,6 +91,49 @@ export class GitHub {
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
+  /** PRs already reported as not auto-mergeable, per head sha, so the owner is told once. */
+  private autoMergeNoted = new Set<string>();
+  /** PRs being auto-merged now: merging re-syncs the PR, which must not start a second merge. */
+  private merging = new Set<number>();
+
+  /**
+   * Auto-merge (session option): merge an open PR once the agent is done (idle or completed, no
+   * open question), GitHub says it is mergeable, and every check has passed. Otherwise wait, or
+   * tell the owner once why it will not merge.
+   */
+  async maybeAutoMerge(s: Session, pr: PullRequest) {
+    const how = s.options.auto_merge;
+    if (how === 'off' || pr.state !== 'open') return;
+    if (!['idle', 'completed'].includes(s.status) || this.store.openInputs().some((i) => i.session_id === s.id)) return;
+    const note = (why: string) => {
+      const key = `${pr.id}:${pr.head_sha}:${why}`;
+      if (this.autoMergeNoted.has(key)) return;
+      this.autoMergeNoted.add(key);
+      this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of #${pr.number} skipped: ${why}` });
+      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `#${pr.number}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
+    };
+    if (pr.mergeable === null) return; // GitHub is still computing it
+    if (pr.mergeable === false) return note('it has merge conflicts');
+    const repo = this.store.repo(pr.repo_id)!;
+    const checks = pr.head_sha
+      ? (await this.gh().checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
+      : [];
+    if (checks.some((c) => c.status !== 'completed')) return; // wait for them
+    const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
+    if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
+    if (this.merging.has(pr.id)) return;
+    this.merging.add(pr.id);
+    let res: Awaited<ReturnType<GitHub['merge']>>;
+    try {
+      res = await this.merge(pr.id, how, 'squash');
+    } finally {
+      this.merging.delete(pr.id);
+    }
+    if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
+    this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged #${pr.number} (${how === 'github' ? 'squash on GitHub' : 'local merge'}).` });
+    void this.notifier.send({ title: `${s.project_key}: auto-merged`, body: `#${pr.number} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
+  }
+
   /** Store a PR and apply side effects of state changes. */
   private async record(s: Session, repo: Repo, p: GhPull): Promise<PullRequest> {
     const before = this.store.prs({ session_id: s.id }).find((x) => x.repo_id === repo.id && x.number === p.number);
@@ -105,6 +148,10 @@ export class GitHub {
     });
     this.bus.emit({ t: 'pr', pr });
     if (before?.state !== state) this.onStateChange(s, pr, before?.state ?? null);
+    if (state === 'open' && s.options.auto_merge !== 'off') {
+      await this.maybeAutoMerge(this.store.session(s.id)!, pr).catch((e) => console.warn('auto-merge failed:', (e as Error).message));
+      return this.store.pr(pr.id)!;
+    }
     return pr;
   }
 

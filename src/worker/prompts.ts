@@ -46,6 +46,15 @@ export function workPrompt(spec: StartSpec): string {
     '- Do not merge the PR yourself; the owner merges from Dispatch.',
     '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.',
   );
+  const exec = {
+    auto: '- Implementation: choose how to run the plan yourself (superpowers subagent-driven development when tasks are independent, inline execution otherwise). Do not ask the owner which execution method to use.',
+    prefer: '- Implementation: use subagent-driven development (superpowers:subagent-driven-development) to run the plan. Do not ask the owner which execution method to use.',
+    none: '- Implementation: do not use subagents. Run the plan inline yourself (superpowers:executing-plans). Do not ask the owner which execution method to use.',
+  }[spec.options.subagents];
+  lines.push(exec);
+  if (spec.options.auto_merge !== 'off') {
+    lines.push('- The owner chose auto-merge: when you open the PR and its checks pass, Dispatch merges it. Only open the PR when the work is complete and verified.');
+  }
   if (spec.force_plan) {
     lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval (ExitPlanMode or AskUserQuestion) before you change any code.');
   }

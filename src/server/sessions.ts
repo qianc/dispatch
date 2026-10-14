@@ -6,8 +6,10 @@ import {
   FINAL_STATUSES,
   proposedItemSchema,
   type InputAnswer,
+  DEFAULT_RUN_OPTIONS,
   type Project,
   type ProposedItem,
+  type RunOptions,
   type Session,
   type SessionStatus,
 } from '../shared/types.ts';
@@ -81,7 +83,7 @@ export class Sessions {
     this.addEvent(ref.session_id, { kind: 'proposal_done', event_id: ref.event_id, note });
   }
 
-  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; proposal?: { session_id: number; event_id: number } }): Session {
+  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; proposal?: { session_id: number; event_id: number } }): Session {
     this.assertProposalOpen(input.proposal);
     const items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
@@ -99,6 +101,7 @@ export class Sessions {
       initial_prompt: input.prompt,
       source_id: input.source_id ?? null,
       item_ids: all.map((i) => i.id),
+      options: input.options ?? DEFAULT_RUN_OPTIONS,
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
@@ -273,6 +276,7 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
+        if (msg.status === 'idle' && s.kind === 'work') this.onWorkIdle?.(this.store.session(s.id)!);
         if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
           this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
@@ -358,16 +362,23 @@ export class Sessions {
     return s.project_id ? this.store.repos(s.project_id) : [];
   }
 
-  /** Start queued sessions while there are free slots. */
+  /**
+   * Start queued sessions while slots are free (MAX_CONCURRENT_SESSIONS). `now` runs alongside
+   * whatever is running; `after` also waits until earlier work in the same project has stopped
+   * working (finished its turn, or ended).
+   */
   dispatch() {
     if (!this.hub.connected) return;
-    while (this.store.countActive() < this.maxConcurrent) {
-      const next = this.store.nextQueued();
-      if (!next) return;
+    for (const next of this.store.queued()) {
+      if (this.store.countActive() >= this.maxConcurrent) return;
+      if (next.kind === 'work' && next.options.start === 'after' && this.store.busyBefore(next) > 0) continue;
       this.hub.send({ t: 'start', spec: this.spec(next, next.initial_prompt, next.sdk_session_id, null) });
       this.setStatus(next.id, 'running');
     }
   }
+
+  /** Called when a work session finishes a turn (app.ts wires it to the GitHub sync). */
+  onWorkIdle: ((s: Session) => void) | null = null;
 
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;
@@ -385,6 +396,7 @@ export class Sessions {
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
+      options: s.options,
       resume,
       resume_note: resumeNote,
     };

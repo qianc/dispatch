@@ -78,6 +78,26 @@ export interface Item {
   updated_at: string;
 }
 
+export const MODELS = ['default', 'opus', 'sonnet', 'haiku'] as const;
+export const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const SUBAGENT_MODES = ['auto', 'prefer', 'none'] as const;
+export const START_MODES = ['now', 'after'] as const;
+export const AUTO_MERGE = ['off', 'github', 'local'] as const;
+
+export const runOptions = z.object({
+  /** Claude Code model alias; 'default' = the worker's AGENT_MODEL / Claude Code default */
+  model: z.enum(MODELS).default('default'),
+  effort: z.enum(EFFORTS).default('default'),
+  /** how superpowers should run the implementation plan: Claude decides, subagent-driven, or inline */
+  subagents: z.enum(SUBAGENT_MODES).default('auto'),
+  /** now = start at once, in parallel with anything running; after = wait for this project's running agents */
+  start: z.enum(START_MODES).default('now'),
+  /** merge the PR when the agent is done and checks pass */
+  auto_merge: z.enum(AUTO_MERGE).default('off'),
+});
+export type RunOptions = z.infer<typeof runOptions>;
+export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
+
 export interface Session {
   id: number;
   /** null for assistant chats, which span all projects */
@@ -94,6 +114,7 @@ export interface Session {
   waiting_reason: string | null;
   last_text: string | null;
   usage: { cost_usd?: number; turns?: number; input_tokens?: number; output_tokens?: number } | null;
+  options: RunOptions;
   item_ids: number[];
   created_at: string;
   updated_at: string;
@@ -269,6 +290,7 @@ export const batchInput = z.object({
   new_items: z.array(proposedItemSchema).default([]),
   prompt: z.string().default(''),
   force_plan: z.boolean().optional(),
+  options: runOptions.optional(),
   /** Set when the batch comes from a planner proposal card. */
   proposal: z.object({ session_id: z.number().int(), event_id: z.number().int() }).optional(),
 });

@@ -5,6 +5,7 @@ import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
 import { api, type Item, type ProjectSummary, type Repo, type Session, type SourceSummary } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
+import { BatchForm } from '../components/batch.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
@@ -244,33 +245,6 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode }: {
         </div>
       </Sheet>
     </>
-  );
-}
-
-function BatchForm({ project, items, onStarted }: { project: ProjectSummary; items: Item[]; onStarted: (s: Session) => void }) {
-  const [prompt, setPrompt] = useState('');
-  const [title, setTitle] = useState('');
-  const [forcePlan, setForcePlan] = useState(project.default_force_plan);
-  const start = useMutation({
-    mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan }),
-    onSuccess: onStarted,
-  });
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); start.mutate(); }}>
-      <p className="text-[13px] text-muted mb-3">One Claude session works through these items on one branch and opens one PR per changed repo.</p>
-      <ul className="mb-3 space-y-1">
-        {items.map((i) => <li key={i.id} className="text-[14px]"><span className="text-faint mr-2">{i.key}</span>{i.title}</li>)}
-      </ul>
-      <Field label="Title (optional)"><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={items.map((i) => i.key).join(', ')} /></Field>
-      <Field label="Extra instructions"><textarea className={cx(inputCls, 'min-h-20')} value={prompt} onChange={(e) => setPrompt(e.target.value)} /></Field>
-      <label className="flex items-center gap-2 mb-4 text-[14px]">
-        <input type="checkbox" checked={forcePlan} onChange={(e) => setForcePlan(e.target.checked)} className="size-4 accent-[var(--color-accent-strong)]" />
-        Plan first (Claude writes a plan and waits for approval)
-      </label>
-      {!project.repos.length && <p className="text-wait text-sm mb-2">Add a repo in Settings first.</p>}
-      <ErrorText error={start.error} />
-      <Button variant="primary" className="w-full" disabled={start.isPending || !project.repos.length}>Start session</Button>
-    </form>
   );
 }
 

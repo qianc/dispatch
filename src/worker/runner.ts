@@ -150,14 +150,16 @@ export class ClaudeRunner implements AgentRunner {
       options: {
         cwd: this.deps.cwd,
         resume: this.spec.resume ?? undefined,
-        model: assistant ? this.opts.assistantModel : discuss ? this.opts.discussModel : this.opts.model,
+        model: assistant ? this.opts.assistantModel : discuss ? this.opts.discussModel
+          : this.spec.options.model !== 'default' ? this.spec.options.model : this.opts.model,
+        ...(this.spec.options.effort !== 'default' && !chat ? { effort: this.spec.options.effort } : {}),
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
         settingSources: chat ? [] : this.opts.settingSources,
         plugins: chat ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
         ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
-        disallowedTools: planner ? PLANNER_TOOLS_DENIED : [],
+        disallowedTools: planner ? PLANNER_TOOLS_DENIED : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p)) },
         canUseTool: this.canUseTool,
         stderr: (d) => process.stderr.write(`[session ${this.sessionId}] ${d}`),

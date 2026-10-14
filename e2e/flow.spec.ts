@@ -42,7 +42,10 @@ test('phone flow: project → items → batch → answer → planner card → st
   await expect(page.getByText('2 marked for the agent')).toBeVisible();
   await page.getByRole('button', { name: 'Start batch' }).click();
   await page.getByRole('dialog').getByLabel(/Plan first/).check();
+  await page.getByRole('dialog').getByRole('radio', { name: 'Opus' }).click();
+  await page.getByRole('dialog').getByRole('radio', { name: 'No subagents' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Start session' }).click();
+  await expect(page.getByText('Opus · no subagents')).toBeVisible();
 
   // plan approval, then the question
   await expect(page.getByText('Plan for approval')).toBeVisible();
