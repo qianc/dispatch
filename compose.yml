@@ -1,0 +1,43 @@
+# Local test stack. Copy .env.example to .env first.
+services:
+  server:
+    build: { context: ., dockerfile: docker/Dockerfile.server }
+    ports: ["${PORT:-3000}:3000"]
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH:-}
+      DISABLE_AUTH: ${DISABLE_AUTH:-0}
+      WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN in .env}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-3}
+      GITHUB_POLL_SECONDS: ${GITHUB_POLL_SECONDS:-120}
+    volumes: [dispatch-data:/data]
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., dockerfile: docker/Dockerfile.worker }
+    depends_on: [server]
+    environment:
+      SERVER_WS_URL: ws://server:3000/worker
+      WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN in .env}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Dispatch Agent}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-dispatch@localhost}
+      GIT_COMMITTER_NAME: ${GIT_AUTHOR_NAME:-Dispatch Agent}
+      GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-dispatch@localhost}
+      AGENT_MODEL: ${AGENT_MODEL:-}
+      IDLE_CLOSE_MINUTES: ${IDLE_CLOSE_MINUTES:-10}
+      RUNNER: ${RUNNER:-claude}
+    volumes:
+      - workspaces:/workspaces
+      - claude-home:/home/node/.claude
+    restart: unless-stopped
+
+volumes:
+  dispatch-data:
+  workspaces:
+  claude-home:

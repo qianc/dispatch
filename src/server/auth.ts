@@ -6,10 +6,10 @@ import type { Db } from './db.ts';
 export const COOKIE = 'dispatch_session';
 const MAX_AGE_S = 60 * 60 * 24 * 90;
 
-/** `scrypt$<salt b64>$<hash b64>` — create with `node src/server/hash-password.ts <password>`. */
+/** `scrypt:<salt b64>:<hash b64>` — create with `node src/server/hash-password.ts <password>`. No `$`, so it is safe in compose .env files. */
 export function hashPassword(password: string) {
   const salt = randomBytes(16);
-  return `scrypt$${salt.toString('base64')}$${scryptSync(password, salt, 32).toString('base64')}`;
+  return `scrypt:${salt.toString('base64')}:${scryptSync(password, salt, 32).toString('base64')}`;
 }
 
 function eq(a: Buffer, b: Buffer) {
@@ -31,7 +31,7 @@ export class Auth {
 
   checkPassword(password: string): boolean {
     if (this.cfg.appPasswordHash) {
-      const [, salt, hash] = this.cfg.appPasswordHash.split('$');
+      const [, salt, hash] = this.cfg.appPasswordHash.split(':');
       return eq(scryptSync(password, Buffer.from(salt, 'base64'), 32), Buffer.from(hash, 'base64'));
     }
     return eq(Buffer.from(password), Buffer.from(this.cfg.appPassword ?? ''));

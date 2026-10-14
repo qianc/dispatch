@@ -1,0 +1,22 @@
+# Dispatch worker: runs Claude Code sessions (Agent SDK) and git. Agents get full tool access in here.
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates curl gnupg jq ripgrep python3 make g++ openssh-client \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG SUPERPOWERS_REF=v6.4.1
+RUN git clone --depth 1 --branch "$SUPERPOWERS_REF" https://github.com/obra/superpowers /opt/plugins/superpowers
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY src ./src
+
+ENV NODE_ENV=production WORKSPACES_DIR=/workspaces AGENT_PLUGIN_DIRS=/opt/plugins/superpowers
+RUN mkdir -p /workspaces /home/node/.claude && chown -R node:node /workspaces /home/node/.claude
+USER node
+VOLUME ["/workspaces", "/home/node/.claude"]
+CMD ["node", "src/worker/main.ts"]

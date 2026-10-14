@@ -25,7 +25,7 @@ export function sourceRoutes(app: FastifyInstance, { store, bus }: Ctx) {
   app.get('/api/sources/:id', async (req) => {
     const s = store.source(intParam((req.params as { id: string }).id));
     if (!s) throw notFound('Source');
-    return { ...s, items: store.items(s.project_id, { source_id: s.id }), project_key: store.project(s.project_id)!.key };
+    return { ...s, items: store.items(s.project_id, { source_id: s.id }), project_key: store.project(s.project_id)!.key, project: store.project(s.project_id) };
   });
 
   app.patch('/api/sources/:id', async (req) => {

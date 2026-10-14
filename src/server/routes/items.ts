@@ -46,6 +46,7 @@ export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
       comments: store.comments(it.id),
       source: it.source_id ? store.source(it.source_id) : null,
       sessions: store.sessionsForItem(it.id),
+      project: store.project(it.project_id),
     };
   });
 

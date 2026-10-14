@@ -1,0 +1,21 @@
+# Dispatch server: API + PWA + SQLite. Holds no Claude credentials.
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production DATA_DIR=/data WEB_DIST=/app/dist/web PORT=3000
+COPY package.json package-lock.json ./
+# no dev deps and no optional deps: the server does not run Claude, so skip the bundled CLI binary
+RUN npm ci --omit=dev --omit=optional && npm cache clean --force
+COPY src ./src
+COPY --from=build /app/dist/web ./dist/web
+RUN mkdir -p /data && chown node:node /data
+USER node
+VOLUME /data
+EXPOSE 3000
+CMD ["node", "src/server/main.ts"]

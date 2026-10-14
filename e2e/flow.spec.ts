@@ -1,0 +1,94 @@
+import { expect, test } from '@playwright/test';
+
+test('phone flow: project → items → batch → answer → planner card → start', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+
+  // project with a custom effort scale
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('button', { name: '+ New' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Name').fill('Homecontrol');
+  await dialog.getByLabel('Key').fill('HC');
+  await dialog.getByLabel('Effort scale').fill('1, 2, 3, 5, 8');
+  await dialog.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('heading', { name: 'Homecontrol' })).toBeVisible();
+
+  // repo
+  await page.getByRole('radio', { name: 'Settings' }).click();
+  await page.getByLabel('Repository').fill('me/homecontrol');
+  await page.getByRole('button', { name: 'Add repo' }).click();
+  await expect(page.getByText('me/homecontrol')).toBeVisible();
+
+  // two backlog items
+  await page.getByRole('radio', { name: 'Backlog' }).click();
+  for (const [title, effort] of [['Energy price chart', '5'], ['Dark mode', '2']]) {
+    await page.getByRole('button', { name: 'New item' }).click();
+    const d = page.getByRole('dialog');
+    await d.getByLabel('Title').fill(title);
+    await d.getByRole('radio', { name: 'High', exact: true }).click();
+    await d.getByRole('radio', { name: effort, exact: true }).click();
+    await d.getByRole('button', { name: 'Create' }).click();
+    await expect(page.getByText(title)).toBeVisible();
+  }
+
+  // mark both and start a batch with plan-first
+  await page.getByRole('button', { name: 'Mark HC-1 for the agent' }).click();
+  await page.getByRole('button', { name: 'Mark HC-2 for the agent' }).click();
+  await expect(page.getByText('2 marked for the agent')).toBeVisible();
+  await page.getByRole('button', { name: 'Start batch' }).click();
+  await page.getByRole('dialog').getByLabel(/Plan first/).check();
+  await page.getByRole('dialog').getByRole('button', { name: 'Start session' }).click();
+
+  // plan approval, then the question
+  await expect(page.getByText('Plan for approval')).toBeVisible();
+  await page.getByRole('button', { name: 'Approve' }).click();
+  await expect(page.getByText('Which approach should I take?')).toBeVisible();
+  await page.getByRole('button', { name: /Refactor/ }).click();
+  await page.getByRole('button', { name: 'Send answer' }).click();
+  await expect(page.getByText('(fake) Done with "Refactor"')).toBeVisible();
+  await expect(page.getByText('Your turn')).toBeVisible();
+
+  // follow-up message
+  await page.getByLabel('Message').fill('looks good');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('(fake) You said: looks good')).toBeVisible();
+
+  // inbox shows it, with a badge
+  await page.getByRole('link', { name: /Inbox/ }).click();
+  await expect(page.getByText('Your turn').first()).toBeVisible();
+
+  // planner chat proposes a batch; start it from the card
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('link', { name: /Homecontrol/ }).click();
+  await page.getByRole('button', { name: 'Plan with Claude' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Start planning chat' }).click();
+  await expect(page.getByText('Proposed batch')).toBeVisible();
+  await page.getByRole('button', { name: /Start batch/ }).click();
+  await expect(page.getByText('Which approach should I take?')).toBeVisible();
+});
+
+test('retro capture and split into linked items', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('link', { name: /Homecontrol/ }).click();
+  await page.getByRole('radio', { name: 'Sources' }).click();
+  await page.getByRole('button', { name: /Capture retro/ }).click();
+  const d = page.getByRole('dialog');
+  await d.getByLabel('Title').fill('Slideshow skill retro');
+  await d.getByLabel('Reporter').fill('alex');
+  await d.getByLabel('Version tag').fill('v6.4.1');
+  await d.getByLabel(/Retro \/ report text/).fill('- fonts wrong in Edge\n- slow export');
+  await d.getByRole('button', { name: 'Save source' }).click();
+  await expect(page.getByText('v6.4.1')).toBeVisible();
+  await page.getByRole('button', { name: 'Split into items with Claude' }).click();
+  await expect(page.getByText('Proposed items')).toBeVisible();
+  await page.getByRole('button', { name: /Create 2 items/ }).click();
+  await expect(page.getByText(/Created HC-\d+, HC-\d+/)).toBeVisible();
+  await page.getByRole('link', { name: /Source: Slideshow/ }).click();
+  await expect(page.getByText('Items from this source · 2')).toBeVisible();
+});

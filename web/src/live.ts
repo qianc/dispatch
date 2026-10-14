@@ -1,0 +1,66 @@
+// Server-sent events → React Query cache.
+import type { QueryClient } from '@tanstack/react-query';
+import type { LiveEvent } from '../../src/shared/types.ts';
+import type { SessionDetail } from './api.ts';
+
+export function connectLive(qc: QueryClient): () => void {
+  let es: EventSource | null = null;
+  let stopped = false;
+  let retry: number | undefined;
+
+  const open = () => {
+    es = new EventSource('/api/stream');
+    es.onmessage = (m) => apply(qc, JSON.parse(m.data) as LiveEvent);
+    es.onopen = () => qc.invalidateQueries(); // catch up on anything missed while offline
+    es.onerror = () => {
+      es?.close();
+      if (!stopped) retry = window.setTimeout(open, 3000);
+    };
+  };
+  open();
+  const onVisible = () => {
+    if (document.visibilityState === 'visible' && es?.readyState !== EventSource.OPEN) {
+      es?.close();
+      open();
+    }
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    stopped = true;
+    clearTimeout(retry);
+    es?.close();
+    document.removeEventListener('visibilitychange', onVisible);
+  };
+}
+
+function apply(qc: QueryClient, e: LiveEvent) {
+  switch (e.t) {
+    case 'session_event':
+      qc.setQueryData<SessionDetail>(['session', e.event.session_id], (d) =>
+        d && !d.events.some((x) => x.seq === e.event.seq) ? { ...d, events: [...d.events, e.event] } : d,
+      );
+      return;
+    case 'session':
+      qc.setQueryData<SessionDetail>(['session', e.session.id], (d) => (d ? { ...d, session: e.session } : d));
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      return;
+    case 'input':
+      qc.setQueryData<SessionDetail>(['session', e.input.session_id], (d) =>
+        d ? { ...d, inputs: [...d.inputs.filter((i) => i.id !== e.input.id), e.input].sort((a, b) => a.id - b.id) } : d,
+      );
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      return;
+    case 'item':
+      qc.invalidateQueries({ queryKey: ['items', e.item.project_id] });
+      qc.invalidateQueries({ queryKey: ['item', e.item.id] });
+      if (e.item.source_id) qc.invalidateQueries({ queryKey: ['source', e.item.source_id] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      return;
+    case 'pr':
+      qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      return;
+  }
+}
