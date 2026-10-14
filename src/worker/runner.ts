@@ -139,6 +139,11 @@ export class ClaudeRunner implements AgentRunner {
   private sentSdkId: string | null = null;
   /** Set after a turn result; the next model output means a new turn started (e.g. a queued message). */
   private betweenTurns = false;
+  /** Live background tasks (shell, subagents) that are real work; the turn can end while they run. */
+  private bgTasks = 0;
+  /** A ScheduleWakeup the agent set: keep the process alive until then. */
+  private wakeAt = 0;
+  private bgIdleTimer: NodeJS.Timeout | null = null;
 
   constructor(spec: StartSpec, deps: RunnerDeps, opts: RunnerOptions) {
     this.sessionId = spec.session_id;
@@ -267,6 +272,21 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   private handle(m: SDKMessage) {
+    if (m.type === 'system' && m.subtype === 'background_tasks_changed') {
+      const before = this.bgTasks;
+      this.bgTasks = m.tasks.filter((t) => !t.ambient).length;
+      if (this.betweenTurns && before > 0 && this.bgTasks === 0) {
+        // tasks done; Claude normally starts a new turn on their notification. If it does not, it is idle.
+        if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
+        this.bgIdleTimer = setTimeout(() => {
+          if (this.betweenTurns && this.bgTasks === 0) {
+            this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
+            this.armIdle();
+          }
+        }, 30_000);
+      }
+      return;
+    }
     if (m.type === 'system' && m.subtype === 'init') {
       if (this.sentSdkId !== m.session_id) {
         this.sentSdkId = m.session_id;
@@ -275,6 +295,7 @@ export class ClaudeRunner implements AgentRunner {
       return;
     }
     if (m.type === 'assistant') {
+      if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
       if (this.betweenTurns) {
         this.betweenTurns = false;
         this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
@@ -284,6 +305,7 @@ export class ClaudeRunner implements AgentRunner {
         if (c.type === 'text' && c.text.trim()) this.event({ kind: 'assistant', text: c.text });
         if (c.type === 'tool_use') {
           const input = (c.input ?? {}) as Record<string, unknown>;
+          if (c.name === 'ScheduleWakeup' && typeof input.delaySeconds === 'number') this.wakeAt = Date.now() + input.delaySeconds * 1000;
           this.event({ kind: 'tool_use', tool_use_id: c.id, name: c.name, summary: summarizeToolInput(c.name, input), input: c.name === 'Write' ? { file_path: input.file_path } : input });
         }
       }
@@ -304,15 +326,26 @@ export class ClaudeRunner implements AgentRunner {
       if (m.subtype !== 'success' && 'errors' in m && Array.isArray(m.errors) && m.errors.length) {
         this.event({ kind: 'error', text: m.errors.join('\n') });
       }
-      this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
       this.betweenTurns = true;
+      if (this.bgTasks > 0) {
+        // the turn ended but work goes on in the background: not the owner's turn yet, and never idle-close
+        this.event({ kind: 'system', text: `Waiting for ${this.bgTasks} background task${this.bgTasks === 1 ? '' : 's'} to finish.` });
+        this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+        return;
+      }
+      this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
       this.armIdle();
     }
   }
 
   private armIdle() {
     this.clearIdle();
-    this.idleTimer = setTimeout(() => this.close(), this.opts.idleCloseMs);
+    const until = Math.max(this.opts.idleCloseMs, this.wakeAt ? this.wakeAt - Date.now() + 60_000 : 0);
+    this.idleTimer = setTimeout(() => {
+      // never close under running background work or before a scheduled wakeup
+      if (this.bgTasks > 0 || this.wakeAt > Date.now()) return this.armIdle();
+      this.close();
+    }, until);
   }
 
   private clearIdle() {

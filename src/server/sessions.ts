@@ -277,6 +277,7 @@ export class Sessions {
           if (msg.error) this.addEvent(s.id, { kind: 'error', text: msg.error });
         }
         if (msg.status === 'idle') patch.waiting_reason = 'Turn finished';
+        if (msg.status === 'running') patch.waiting_reason = null;
         if (msg.status === 'idle' || msg.status === 'failed') {
           for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
         }
