@@ -5,6 +5,7 @@ import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../.
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
 import { Button, Chip, ErrorText, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
+import { RichMd } from './RichMd.tsx';
 
 const HIDDEN_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -52,7 +53,7 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
               </div>
             );
           case 'assistant':
-            return <Md key={e.seq}>{b.text}</Md>;
+            return project ? <RichMd key={e.seq} ctx={{ project, sourceId: session.source_id }}>{b.text}</RichMd> : <Md key={e.seq}>{b.text}</Md>;
           case 'tool_use':
             return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
           case 'tool_result':

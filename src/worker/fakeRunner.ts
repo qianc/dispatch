@@ -71,6 +71,10 @@ export class FakeRunner implements AgentRunner {
     if (this.closed) return;
     if (this.spec.kind === 'planner') return this.plannerTurn();
     if (this.spec.kind === 'assistant') return this.assistantTurn(text);
+    if (this.spec.kind === 'discuss') {
+      this.say(`(fake) About ${this.spec.items[0]?.key}: ${this.spec.items[0]?.title}. You asked: ${text}`);
+      return this.finishTurn();
+    }
     if (this.turn > 1) {
       this.say(`(fake) You said: ${text}`);
       return this.finishTurn();

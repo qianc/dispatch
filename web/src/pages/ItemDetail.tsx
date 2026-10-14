@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ITEM_STATUSES, type ItemStatus } from '../../../src/shared/types.ts';
 import { api, type Item, type ItemDetail as Detail, type Session } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
+import { RichMd } from '../components/RichMd.tsx';
 import { ItemFields, SessionRow, effortLabel } from '../components/items.tsx';
 import { Button, Card, Chip, Empty, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
@@ -56,9 +57,12 @@ export function ItemDetail() {
             <div className="text-[12px] text-muted">{[it.source.reporter, it.source.version_tag, it.source.skill_name].filter(Boolean).join(' · ')}</div>
           </Link>
         )}
-        <div className="mt-4">{it.body_md ? <Md>{it.body_md}</Md> : <p className="text-muted text-sm">No description.</p>}</div>
+        <div className="mt-4">{it.body_md ? <RichMd ctx={{ project: p, sourceId: it.source_id }}>{it.body_md}</RichMd> : <p className="text-muted text-sm">No description.</p>}</div>
+        <Link to={`/items/${it.id}/discuss`} className="mt-4 flex items-center justify-center gap-1.5 h-10 rounded-lg border border-line bg-raised font-medium active:bg-line">
+          💬 Discuss this
+        </Link>
         {!busy && (
-          <div className="flex gap-2 mt-4">
+          <div className="flex gap-2 mt-2">
             <Button variant="primary" className="flex-1" disabled={start.isPending} onClick={() => start.mutate()}>Start agent on this</Button>
             <Button onClick={() => patch.mutate({ marked: !it.marked })}>{it.marked ? 'Unmark' : 'Mark'}</Button>
           </div>
@@ -77,7 +81,7 @@ export function ItemDetail() {
           {it.comments.map((c) => (
             <div key={c.id}>
               <div className="text-[12px] text-faint">{c.author} · {timeAgo(c.created_at)}</div>
-              <Md className="text-[14px]">{c.body_md}</Md>
+              <RichMd className="text-[14px]" ctx={{ project: p, sourceId: it.source_id }}>{c.body_md}</RichMd>
             </div>
           ))}
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); addComment.mutate(); }}>

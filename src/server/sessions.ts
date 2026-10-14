@@ -2,6 +2,7 @@
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import {
   ACTIVE_STATUSES,
+  CHAT_KINDS,
   FINAL_STATUSES,
   proposedItemSchema,
   type InputAnswer,
@@ -107,26 +108,44 @@ export class Sessions {
     return this.store.session(session.id)!;
   }
 
-  /** The assistant chat: one open thread at a time. Creates it on the first message. */
-  assistantSend(text: string): Session {
-    const open = this.store.sessions({ kind: 'assistant', limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
+  /** A chat (assistant or discuss): continue the open thread, or start one on the first message. */
+  private chatSend(open: Session | undefined, create: () => Session, text: string): Session {
     if (open) {
       this.send(open.id, text);
       return this.store.session(open.id)!;
     }
     if (!this.hub.connected) throw new SessionError('Worker is not connected.', 503);
-    const s = this.store.createSession({
-      project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: null, item_ids: [],
-    });
+    const s = create();
     this.addEvent(s.id, { kind: 'user', text });
     this.hub.send({ t: 'start', spec: this.spec(s, text, null, null) });
     this.setStatus(s.id, 'running');
     return this.store.session(s.id)!;
   }
 
+  /** The assistant chat: one open thread at a time. */
+  assistantSend(text: string): Session {
+    return this.chatSend(this.currentAssistant(), () => this.store.createSession({
+      project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
+      initial_prompt: text, source_id: null, item_ids: [],
+    }), text);
+  }
+
   currentAssistant(): Session | undefined {
     return this.store.sessions({ kind: 'assistant', limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
+  }
+
+  /** "Discuss this" on an item: a read-only chat about it, one open thread per item. */
+  discussSend(itemId: number, text: string): Session {
+    const item = this.store.item(itemId);
+    if (!item) throw new SessionError('Unknown item', 404);
+    return this.chatSend(this.currentDiscuss(itemId), () => this.store.createSession({
+      project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
+      initial_prompt: text, source_id: item.source_id, item_ids: [item.id],
+    }), text);
+  }
+
+  currentDiscuss(itemId: number): Session | undefined {
+    return this.store.sessionsForItem(itemId, 'discuss').find((s) => !FINAL_STATUSES.includes(s.status));
   }
 
   startPlanner(project: Project, input: { prompt: string; source_id: number | null; proposal?: { session_id: number; event_id: number } }): Session {
@@ -254,7 +273,7 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
-        if (msg.status === 'idle' && was !== 'idle' && s.kind !== 'assistant') {
+        if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
           this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
         }
@@ -286,6 +305,7 @@ export class Sessions {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
     }
+    if (s.kind === 'discuss' && method !== 'get_item' && method !== 'list_items') throw new Error('A discussion is read-only.');
     const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => {
       const n = Number(String(key).split('-').pop());
@@ -398,7 +418,7 @@ export class Sessions {
   }
 
   private notify(s: Session, title: string, body: string, tag: string) {
-    const url = s.kind === 'assistant' ? '/assistant' : `/s/${s.id}`;
+    const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
     void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined });
   }
 

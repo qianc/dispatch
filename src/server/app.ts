@@ -25,6 +25,7 @@ import { sessionRoutes } from './routes/sessions.ts';
 import { prRoutes } from './routes/prs.ts';
 import { pushRoutes } from './routes/push.ts';
 import { streamRoutes } from './routes/stream.ts';
+import { fileRoutes } from './routes/files.ts';
 
 const PUBLIC_API = new Set(['/api/login', '/api/me']);
 
@@ -81,6 +82,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   prRoutes(app, ctx);
   pushRoutes(app, ctx);
   streamRoutes(app, ctx);
+  fileRoutes(app, ctx);
 
   const webRoot = resolve(cfg.webDist);
   if (existsSync(webRoot)) {

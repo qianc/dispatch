@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Session, type SourceDetail } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
+import { RichMd } from '../components/RichMd.tsx';
 import { ItemRow, NewItemForm } from '../components/items.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Md, Section, Sheet, timeAgo } from '../components/ui.tsx';
 
@@ -39,7 +40,7 @@ export function SourceView() {
       </Section>
       <Section title="Text">
         <div className="px-4">
-          {s.body_md ? <Md>{full || s.body_md.length <= PREVIEW ? s.body_md : `${s.body_md.slice(0, PREVIEW)}…`}</Md> : <p className="text-muted text-sm">Empty.</p>}
+          {s.body_md ? <RichMd ctx={{ project: s.project, sourceId: s.id }}>{full || s.body_md.length <= PREVIEW ? s.body_md : `${s.body_md.slice(0, PREVIEW)}…`}</RichMd> : <p className="text-muted text-sm">Empty.</p>}
           {s.body_md.length > PREVIEW && !full && (
             <Button className="w-full mt-3" onClick={() => setFull(true)}>Show all ({Math.round(s.body_md.length / 1000)} kB)</Button>
           )}

@@ -21,6 +21,18 @@ export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 
   });
 }
 
+const MAX_FILE = 10 * 1024 * 1024;
+
+/** Run git and get raw stdout bytes (for files that may be binary). */
+function gitBytes(args: string[], cwd: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: MAX_FILE + 1024, env: process.env }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`git ${args.join(' ')} failed: ${String(stderr).trim()}`));
+      else resolve(stdout);
+    });
+  });
+}
+
 async function git(args: string[], cwd?: string) {
   const r = await run('git', args, cwd);
   if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.out}`);
@@ -56,6 +68,21 @@ export class Workspaces {
 
   repoDir(sessionId: number, repo: Repo) {
     return join(this.sessionDir(sessionId), repo.github_name);
+  }
+
+  private fetchedAt = new Map<string, number>();
+
+  /** A file as it is on the repo's default branch (fetched at most every 5 minutes). */
+  readRepoFile(repo: Repo, path: string): Promise<Buffer> {
+    return this.withRepo(repo, async () => {
+      const key = `${repo.github_owner}/${repo.github_name}`;
+      const dir = this.cacheDir(repo);
+      if (!existsSync(join(dir, '.git')) || Date.now() - (this.fetchedAt.get(key) ?? 0) > 5 * 60_000) {
+        await this.ensureCache(repo);
+        this.fetchedAt.set(key, Date.now());
+      }
+      return gitBytes(['show', `origin/${repo.default_branch}:${path}`], dir);
+    });
   }
 
   /** Clone on first use, fetch afterwards. */

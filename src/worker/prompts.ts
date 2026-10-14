@@ -107,3 +107,22 @@ export function assistantPrompt(readDirs: string[]): string {
     'Reply briefly. After a change, confirm what you did in one or two lines and include the in-app link the tool returned, as a markdown link (e.g. [DECK](/p/DECK)).',
   ].join('\n');
 }
+
+export function discussPrompt(spec: StartSpec, context: { label: string; text: string }[]): string {
+  const item = spec.items[0];
+  const lines = [
+    '# Dispatch: discuss an item',
+    `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`,
+    '',
+    'Rules:',
+    '- You are read-only. Never change files, run commands or claim to have done work. You can read files in the project folders with Read, Glob and Grep, and read tracker items with get_item / list_items.',
+    '- If the owner wants the work done, tell them to use "Start agent on this" on the item page. You cannot start it.',
+    '- Answer briefly and concretely. Quote file paths you looked at. Say when you are unsure.',
+    '',
+  ];
+  if (item) lines.push('## The item', itemBlock(spec, item), '');
+  if (spec.source) lines.push(`It comes from: ${sourceLine(spec.source)}.`, '');
+  if (spec.repos.length) lines.push('Repositories (read-only checkouts of the default branch):', repoLines(spec), '');
+  for (const c of context) lines.push(`## ${c.label}`, '', c.text, '');
+  return lines.join('\n');
+}

@@ -32,7 +32,9 @@ export type ServerToWorker =
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string }
   | { c: 'merge_local'; repo: Repo; branch: string; message: string }
-  | { c: 'branch_status'; repo: Repo; session_id: number; branch: string };
+  | { c: 'branch_status'; repo: Repo; session_id: number; branch: string }
+  /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
+  | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string };
 
 export type WorkerToServer =
   | { t: 'hello'; live: number[] }

@@ -54,6 +54,19 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     return { ok: true };
   });
 
+  app.get('/api/items/:id/discuss', async (req) => ({ session_id: sessions.currentDiscuss(intParam((req.params as { id: string }).id))?.id ?? null }));
+
+  app.post('/api/items/:id/discuss', async (req) => {
+    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
+    return sessions.discussSend(intParam((req.params as { id: string }).id), text);
+  });
+
+  app.post('/api/items/:id/discuss/new', async (req) => {
+    const cur = sessions.currentDiscuss(intParam((req.params as { id: string }).id));
+    if (cur) sessions.finish(cur.id, 'completed');
+    return { ok: true };
+  });
+
   app.get('/api/sessions/:id', async (req) => {
     const s = session((req.params as { id: string }).id);
     return {

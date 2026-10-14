@@ -18,6 +18,11 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   github.com/me/decks", "read ~/projects/notes/retro.md and file the issues under Decks". It changes
   projects, repos, items and sources at once. To start agent work it shows a card you confirm. It
   can read files only in `ASSISTANT_READ_DIRS` and cannot edit files or run commands.
+- **Discuss this** on any item: a read-only Haiku chat (`DISCUSS_MODEL`) that knows the item and the
+  repo's `CLAUDE.md`, and can read the code in the project's repos (or the folder an imported source
+  came from). It never changes anything; starting work stays on the item page.
+- Links in item text open in the app: repo files (markdown rendered, images shown), and `#anchor`
+  links to other items imported from the same backlog.
 
 Design spec: [`docs/superpowers/specs/2026-10-14-dispatch-design.md`](docs/superpowers/specs/2026-10-14-dispatch-design.md).
 

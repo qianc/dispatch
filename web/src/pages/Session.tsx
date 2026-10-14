@@ -8,11 +8,19 @@ import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
-/** A session screen. With `assistantId` it renders the assistant chat instead of a project session. */
-export function SessionView({ assistantId, onNewChat }: { assistantId?: number; onNewChat?: () => void } = {}) {
+export interface ChatMode {
+  id: number;
+  title: string;
+  subtitle: string;
+  back?: string;
+  onNew: () => void;
+}
+
+/** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
+export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const params = useParams();
-  const id = assistantId ?? Number(params.id);
-  const isAssistant = assistantId !== undefined;
+  const id = chat?.id ?? Number(params.id);
+  const isAssistant = !!chat;
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
@@ -49,13 +57,13 @@ export function SessionView({ assistantId, onNewChat }: { assistantId?: number; 
 
   return (
     <Page
-      title={isAssistant ? 'Assistant' : s.title}
-      subtitle={isAssistant ? 'Ask me to set up projects, repos and items' : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
-      back={isAssistant ? undefined : true}
+      title={chat ? chat.title : s.title}
+      subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
+      back={chat ? chat.back : true}
       actions={
         <>
           {!isAssistant && <SessionStatusChip status={s.status} />}
-          {isAssistant && <Button small variant="ghost" onClick={onNewChat}>New chat</Button>}
+          {chat && <Button small variant="ghost" onClick={chat.onNew}>New chat</Button>}
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }

@@ -33,6 +33,7 @@ services:
       IDLE_CLOSE_MINUTES: ${IDLE_CLOSE_MINUTES:-10}
       RUNNER: ${RUNNER:-claude}
       ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
+      DISCUSS_MODEL: ${DISCUSS_MODEL:-haiku}
       ASSISTANT_READ_DIRS: ${ASSISTANT_READ_DIRS:-/host/projects}
     volumes:
       - workspaces:/workspaces

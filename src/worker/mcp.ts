@@ -139,6 +139,16 @@ const noFiles = async () => {
 
 export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles) {
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile) });
+  if (kind === 'discuss') {
+    return createSdkMcpServer({
+      name: 'dispatch',
+      version: '1.0.0',
+      tools: [
+        tool('get_item', 'Read one item with its description, comments and source.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
+        tool('list_items', 'List open items in this project.', { status: z.array(z.string()).optional(), type: z.enum(['backlog', 'bug']).optional() }, call(rpc, 'list_items')),
+      ],
+    });
+  }
   const tools: SdkMcpToolDefinition<any>[] = [
     tool('list_items', 'List open tracker items in this project (key, title, type, status, importance, effort).', {
       status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses'),

@@ -305,13 +305,13 @@ export class Store {
       ended_at: (r.ended_at as string | null) ?? null,
     };
   }
-  /** Assistant chats are left out unless asked for by `kind`. */
+  /** Chats (assistant, discuss) are left out unless asked for by `kind`. */
   sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; limit?: number } = {}): Session[] {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (filter.project_id) { where.push('s.project_id = ?'); params.push(filter.project_id); }
     if (filter.kind) { where.push('s.kind = ?'); params.push(filter.kind); }
-    else where.push("s.kind != 'assistant'");
+    else where.push("s.kind NOT IN ('assistant', 'discuss')");
     if (filter.statuses?.length) { where.push(`s.status IN (${filter.statuses.map(() => '?').join(',')})`); params.push(...filter.statuses); }
     const sql = `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC LIMIT ?`;
     return this.db.all(sql, ...params, filter.limit ?? 200).map((r) => this.toSession(r));
@@ -320,9 +320,10 @@ export class Store {
     const r = this.db.get(`${SESSION_SELECT} WHERE s.id = ?`, id);
     return r && this.toSession(r);
   }
-  sessionsForItem(itemId: number): Session[] {
+  sessionsForItem(itemId: number, kind?: SessionKind): Session[] {
+    const k = kind ? 's.kind = ?' : "s.kind != 'discuss'";
     return this.db
-      .all(`${SESSION_SELECT} WHERE s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, itemId)
+      .all(`${SESSION_SELECT} WHERE ${k} AND s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, ...(kind ? [kind] : []), itemId)
       .map((r) => this.toSession(r));
   }
   createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[] }): Session {
@@ -347,10 +348,10 @@ export class Store {
   }
   /** Agent sessions holding a worker slot. The assistant is light and never takes a slot. */
   countActive(): number {
-    return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind != 'assistant'")!.n);
+    return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind NOT IN ('assistant', 'discuss')")!.n);
   }
   nextQueued(): Session | undefined {
-    const r = this.db.get(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind != 'assistant' ORDER BY s.id LIMIT 1`);
+    const r = this.db.get(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.id LIMIT 1`);
     return r && this.toSession(r);
   }
 

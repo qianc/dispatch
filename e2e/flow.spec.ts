@@ -175,3 +175,35 @@ test('tags and modules with suggestions, filters, and long-press select', async 
   // on a phone the key shows as its number
   await expect(page.getByLabel('TG-2', { exact: true })).toHaveText('2');
 });
+
+test('item links open files, images and other items; Discuss this chats about the item', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  // seed through the API with the browser's cookie
+  const api = (path: string, data: unknown) => page.request.post(`/api${path}`, { data });
+  await api('/projects', { key: 'LNK', name: 'Links' });
+  const src = await (await api('/projects/LNK/sources', { kind: 'manual', title: '/tmp/dispatch-e2e-src/backlog.md', body_md: 'x' })).json();
+  await api('/projects/LNK/items', { title: 'B9 — The plan builds the deck' });
+  const item = await (await api('/projects/LNK/items', {
+    title: 'X1 — Linked item', source_id: src.id,
+    body_md: 'Read [the triage](docs/triage.md) and see [B9](#b9--the-plan-builds-the-deck).',
+  })).json();
+
+  await page.goto(`/items/${item.id}`);
+  await page.getByRole('link', { name: 'the triage' }).click();
+  await expect(page.getByRole('heading', { name: 'Triage notes' })).toBeVisible();
+  await expect(page.getByRole('img', { name: 'diagram' })).toHaveJSProperty('naturalWidth', 1);
+  await page.getByRole('link', { name: 'the pic' }).click();
+  await expect(page.getByRole('img', { name: 'pic.png' })).toHaveJSProperty('naturalWidth', 1);
+
+  await page.goto(`/items/${item.id}`);
+  await page.getByRole('link', { name: 'B9', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'B9 — The plan builds the deck' })).toBeVisible();
+
+  await page.goto(`/items/${item.id}`);
+  await page.getByRole('link', { name: /Discuss this/ }).click();
+  await page.getByRole('button', { name: 'Explain this item in plain words' }).click();
+  await expect(page.getByText('(fake) About LNK-2: X1 — Linked item')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Discuss LNK-2' })).toBeVisible();
+});

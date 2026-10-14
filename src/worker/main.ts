@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { FakeRunner } from './fakeRunner.ts';
-import { ClaudeRunner, expandDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
-import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { ClaudeRunner, expandDirs, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { Workspaces } from './workspace.ts';
 
 const env = process.env;
@@ -18,6 +19,7 @@ const opts: RunnerOptions = {
   model: env.AGENT_MODEL || undefined,
   idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
   assistantModel: env.ASSISTANT_MODEL || 'haiku',
+  discussModel: env.DISCUSS_MODEL || env.ASSISTANT_MODEL || 'haiku',
   assistantReadDirs: expandDirs(env.ASSISTANT_READ_DIRS ?? ''),
 };
 
@@ -58,6 +60,27 @@ function rpcFor(sessionId: number) {
     });
 }
 
+/** Folders an item's discussion may read: repo checkouts, plus the folder its imported source came from. */
+async function discussContext(spec: StartSpec) {
+  const dirs: string[] = [];
+  if (spec.repos.length) {
+    await workspaces.prepare(spec); // read-only detached checkouts (branch is null)
+    dirs.push(...spec.repos.map((r) => workspaces.repoDir(spec.session_id, r)));
+  }
+  const src = spec.source?.title;
+  if (src && isAbsolute(src) && insideDirs(src, opts.assistantReadDirs, '/')) dirs.push(dirname(src));
+  const context: { label: string; text: string }[] = [];
+  for (const d of dirs) {
+    for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+      const f = resolve(d, name);
+      if (existsSync(f)) context.push({ label: `${name} from ${d}`, text: (await readFile(f, 'utf8')).slice(0, 30_000) });
+    }
+  }
+  const cwd = dirs[0] ?? join(workspaces.root, 'assistant');
+  await mkdir(cwd, { recursive: true });
+  return { dirs, context, cwd };
+}
+
 async function launch(spec: StartSpec, text: string) {
   const id = spec.session_id;
   const live = runners.get(id);
@@ -67,8 +90,13 @@ async function launch(spec: StartSpec, text: string) {
   starting.set(id, []);
   try {
     let cwd: string;
+    let extra: Pick<RunnerDeps, 'readDirs' | 'context'> = {};
     if (FAKE) cwd = process.cwd();
-    else if (spec.kind === 'assistant') {
+    else if (spec.kind === 'discuss') {
+      const c = await discussContext(spec);
+      cwd = c.cwd;
+      extra = { readDirs: c.dirs, context: c.context };
+    } else if (spec.kind === 'assistant') {
       // the assistant reads only allow-listed folders; give it an empty working dir
       cwd = join(workspaces.root, 'assistant');
       await mkdir(cwd, { recursive: true });
@@ -80,6 +108,7 @@ async function launch(spec: StartSpec, text: string) {
       onClosed: () => {
         if (runners.get(id) === runner) runners.delete(id);
       },
+      ...extra,
     };
     const runner: AgentRunner = FAKE ? new FakeRunner(spec, deps) : new ClaudeRunner(spec, deps, opts);
     const queued = starting.get(id) ?? [];
@@ -95,7 +124,7 @@ async function launch(spec: StartSpec, text: string) {
 }
 
 async function command(cmd: WorkerCommand): Promise<unknown> {
-  if (FAKE) return { ok: true };
+  if (FAKE && cmd.c !== 'read_file') return { ok: true }; // the fake runner still serves real files
   switch (cmd.c) {
     case 'push_branch':
       await workspaces.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
@@ -104,6 +133,15 @@ async function command(cmd: WorkerCommand): Promise<unknown> {
       return workspaces.mergeLocal(cmd.repo, cmd.branch, cmd.message);
     case 'branch_status':
       return { ok: true };
+    case 'read_file': {
+      if (cmd.repo) return { base64: (await workspaces.readRepoFile(cmd.repo, cmd.path)).toString('base64') };
+      if (!cmd.base_dir) throw new Error('read_file needs a repo or a base_dir');
+      const full = resolve(cmd.base_dir, cmd.path);
+      if (!insideDirs(full, opts.assistantReadDirs, '/')) throw new Error(`${full} is outside ASSISTANT_READ_DIRS`);
+      const buf = await readFile(full);
+      if (buf.length > 10 * 1024 * 1024) throw new Error('File is larger than 10 MB');
+      return { base64: buf.toString('base64') };
+    }
   }
 }
 

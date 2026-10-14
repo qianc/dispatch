@@ -18,6 +18,8 @@ import { SourceView } from './pages/Source.tsx';
 import { PrView } from './pages/Pr.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Assistant } from './pages/Assistant.tsx';
+import { Discuss } from './pages/Discuss.tsx';
+import { FileView } from './pages/FileView.tsx';
 
 registerSW({
   immediate: true,
@@ -52,6 +54,8 @@ const router = createBrowserRouter([
       { path: '/pr/:id', element: <PrView /> },
       { path: '/settings', element: <Settings /> },
       { path: '/assistant', element: <Assistant /> },
+      { path: '/items/:id/discuss', element: <Discuss /> },
+      { path: '/files/:key', element: <FileView /> },
     ],
   },
 ]);

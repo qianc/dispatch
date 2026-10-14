@@ -4,7 +4,7 @@ import { query, type CanUseTool, type Query, type SDKMessage, type SDKUserMessag
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, type Rpc } from './mcp.ts';
-import { assistantPrompt, plannerPrompt, workPrompt } from './prompts.ts';
+import { assistantPrompt, discussPrompt, plannerPrompt, workPrompt } from './prompts.ts';
 import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
@@ -15,6 +15,9 @@ export interface RunnerDeps {
   rpc: Rpc;
   cwd: string;
   onClosed(): void;
+  /** discuss chats: folders it may read, and CLAUDE.md-style context to put in its prompt */
+  readDirs?: string[];
+  context?: { label: string; text: string }[];
 }
 
 export interface AgentRunner {
@@ -32,6 +35,7 @@ export interface RunnerOptions {
   model: string | undefined;
   idleCloseMs: number;
   assistantModel: string;
+  discussModel: string;
   /** Folders the assistant may read (absolute, ~ expanded). */
   assistantReadDirs: string[];
 }
@@ -136,17 +140,21 @@ export class ClaudeRunner implements AgentRunner {
     this.input.push(text);
     const planner = this.spec.kind === 'planner';
     const assistant = this.spec.kind === 'assistant';
-    const append = assistant ? assistantPrompt(this.opts.assistantReadDirs) : planner ? plannerPrompt(this.spec) : workPrompt(this.spec);
+    const discuss = this.spec.kind === 'discuss';
+    const chat = assistant || discuss;
+    const append = assistant ? assistantPrompt(this.opts.assistantReadDirs)
+      : discuss ? discussPrompt(this.spec, this.deps.context ?? [])
+      : planner ? plannerPrompt(this.spec) : workPrompt(this.spec);
     this.q = query({
       prompt: this.input,
       options: {
         cwd: this.deps.cwd,
         resume: this.spec.resume ?? undefined,
-        model: assistant ? this.opts.assistantModel : this.opts.model,
-        // the assistant is a small tracker helper: no project settings, no plugins, only read tools
-        settingSources: assistant ? [] : this.opts.settingSources,
-        plugins: assistant ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
-        ...(assistant ? { tools: ASSISTANT_TOOLS } : {}),
+        model: assistant ? this.opts.assistantModel : discuss ? this.opts.discussModel : this.opts.model,
+        // chats are small helpers: no project settings or hooks, no plugins, only read tools
+        settingSources: chat ? [] : this.opts.settingSources,
+        plugins: chat ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
+        ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : [],
@@ -158,10 +166,14 @@ export class ClaudeRunner implements AgentRunner {
     void this.loop();
   }
 
-  /** File reads for assistant tools, limited to ASSISTANT_READ_DIRS. */
+  private readDirs() {
+    return this.spec.kind === 'discuss' ? this.deps.readDirs ?? [] : this.opts.assistantReadDirs;
+  }
+
+  /** File reads for chat tools, limited to the chat's folders. */
   private async readAllowed(path: string): Promise<string> {
-    if (!insideDirs(path, this.opts.assistantReadDirs, this.deps.cwd)) {
-      throw new Error(`Reading ${path} is not allowed. Allowed folders: ${this.opts.assistantReadDirs.join(', ') || 'none'}.`);
+    if (!insideDirs(path, this.readDirs(), this.deps.cwd)) {
+      throw new Error(`Reading ${path} is not allowed. Allowed folders: ${this.readDirs().join(', ') || 'none'}.`);
     }
     return readFile(resolve(this.deps.cwd, path.replace(/^~(?=$|\/)/, homedir())), 'utf8');
   }
@@ -197,10 +209,11 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   private canUseTool: CanUseTool = async (name, input, { signal }) => {
-    if (this.spec.kind === 'assistant' && ASSISTANT_TOOLS.includes(name)) {
+    if ((this.spec.kind === 'assistant' || this.spec.kind === 'discuss') && ASSISTANT_TOOLS.includes(name)) {
+      const dirs = this.readDirs();
       const path = String(input.file_path ?? input.path ?? '');
-      if (path && !insideDirs(path, this.opts.assistantReadDirs, this.deps.cwd)) {
-        const allowed = this.opts.assistantReadDirs.join(', ') || 'none';
+      if ((path || this.spec.kind === 'discuss') && !insideDirs(path || this.deps.cwd, dirs, this.deps.cwd)) {
+        const allowed = dirs.join(', ') || 'none';
         return { behavior: 'deny', message: `Reading ${path} is not allowed. Allowed folders: ${allowed}.` };
       }
       return { behavior: 'allow', updatedInput: input };

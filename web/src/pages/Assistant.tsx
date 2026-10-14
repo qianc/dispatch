@@ -20,7 +20,9 @@ export function Assistant() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assistant'] }),
   });
   if (!data) return <Page title="Assistant">{null}</Page>;
-  if (data.session_id) return <SessionView key={data.session_id} assistantId={data.session_id} onNewChat={() => newChat.mutate()} />;
+  if (data.session_id) {
+    return <SessionView key={data.session_id} chat={{ id: data.session_id, title: 'Assistant', subtitle: 'Ask me to set up projects, repos and items', onNew: () => newChat.mutate() }} />;
+  }
   return <EmptyChat />;
 }
 
