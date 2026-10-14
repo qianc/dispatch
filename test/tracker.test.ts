@@ -44,6 +44,17 @@ describe('tracker API', () => {
     expect(item.data.source.title).toBe('Skill retro');
   });
 
+  it('stores tags and modules, de-duplicated, and suggests them per project', async () => {
+    const a = (await s.call('POST', '/projects/HC/items', { title: 'Tagged', labels: ['UX', ' ux ', 'perf', ''], modules: ['charts'] })).data;
+    expect(a).toMatchObject({ labels: ['UX', 'perf'], modules: ['charts'] });
+    await s.call('POST', '/projects/HC/items', { title: 'Also', labels: ['ux'], modules: ['charts', 'export'] });
+    const f = (await s.call('GET', '/projects/HC/facets')).data;
+    expect(f.modules).toEqual([{ name: 'charts', count: 2 }, { name: 'export', count: 1 }]);
+    expect(f.tags[0]).toMatchObject({ count: 2 }); // UX and ux count as one
+    const patched = (await s.call('PATCH', `/items/${a.id}`, { modules: [] })).data;
+    expect(patched.modules).toEqual([]);
+  });
+
   it('refuses to start a batch without a repo', async () => {
     const r = await s.call('POST', '/projects/HC/batches', { item_ids: [1] });
     expect(r.status).toBe(400);

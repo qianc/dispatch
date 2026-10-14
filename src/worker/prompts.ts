@@ -13,7 +13,8 @@ function sourceLine(s: Source) {
 function itemBlock(spec: StartSpec, it: Item) {
   const importance = spec.importance_scale[it.importance - 1] ?? it.importance;
   const effort = it.effort === null ? '' : ` · effort ${spec.effort_scale[it.effort] ?? it.effort}`;
-  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, '', it.body_md.trim() || '(no description)'].join('\n');
+  const meta = [it.modules.length ? `modules: ${it.modules.join(', ')}` : '', it.labels.length ? `tags: ${it.labels.join(', ')}` : ''].filter(Boolean).join(' · ');
+  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, ...(meta ? [meta] : []), '', it.body_md.trim() || '(no description)'].join('\n');
 }
 
 function repoLines(spec: StartSpec) {
@@ -100,6 +101,7 @@ export function assistantPrompt(readDirs: string[]): string {
     readDirs.length
       ? `- You may only read files under: ${readDirs.join(', ')}. If a path is outside these, say so.`
       : '- File reading is turned off (no folders are allowed).',
+    '- Importance scales run from least to most important: the LAST label is the most severe. If the owner lists severities most-severe-first (S1, S2, …), reverse them.',
     '- You cannot edit files or run commands.',
     '',
     'Reply briefly. After a change, confirm what you did in one or two lines and include the in-app link the tool returned, as a markdown link (e.g. [DECK](/p/DECK)).',

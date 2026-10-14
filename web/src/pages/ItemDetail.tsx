@@ -17,6 +17,7 @@ export function ItemDetail() {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['item', id] });
     if (it) qc.invalidateQueries({ queryKey: ['items', it.project_id] });
+    if (it) qc.invalidateQueries({ queryKey: ['facets', it.project.key] });
   };
   const patch = useMutation({ mutationFn: (p: Partial<Item>) => api.patch<Item>(`/items/${id}`, p), onSuccess: refresh });
   const addComment = useMutation({ mutationFn: () => api.post(`/items/${id}/comments`, { body_md: comment }), onSuccess: () => { setComment(''); refresh(); } });
@@ -37,7 +38,8 @@ export function ItemDetail() {
           {it.type === 'bug' && <Chip tone="bad">Bug</Chip>}
           <Chip><ImportanceIcon value={it.importance} /> {p.importance_scale[it.importance - 1]}</Chip>
           {effortLabel(p, it.effort) && <Chip>Effort {effortLabel(p, it.effort)}</Chip>}
-          {it.labels.map((l) => <Chip key={l}>{l}</Chip>)}
+          {it.modules.map((m) => <Chip key={`m-${m}`} tone="accent">{m}</Chip>)}
+          {it.labels.map((l) => <Chip key={`t-${l}`}>#{l}</Chip>)}
         </div>
         <select
           className={cx(inputCls, 'mt-3')}
@@ -93,7 +95,7 @@ export function ItemDetail() {
 }
 
 function EditItem({ item, onDone, onDelete }: { item: Detail; onDone: () => void; onDelete: () => void }) {
-  const [draft, setDraft] = useState({ type: item.type, title: item.title, body_md: item.body_md, importance: item.importance, effort: item.effort, status: item.status });
+  const [draft, setDraft] = useState({ type: item.type, title: item.title, body_md: item.body_md, importance: item.importance, effort: item.effort, status: item.status, labels: item.labels, modules: item.modules });
   const save = useMutation({ mutationFn: () => api.patch(`/items/${item.id}`, draft), onSuccess: onDone });
   return (
     <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>

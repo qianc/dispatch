@@ -67,7 +67,9 @@ export interface Item {
   importance: number; // 1..4
   effort: number | null; // index into project effort_scale
   source_id: number | null;
+  /** tags */
   labels: string[];
+  modules: string[];
   marked: boolean;
   sort_order: number;
   created_at: string;
@@ -138,12 +140,20 @@ export interface PendingInput {
   created_at: string;
 }
 
+/** Tags/modules: trimmed, no empties, no case-insensitive duplicates. */
+export const tagList = z.array(z.string()).default([]).transform((xs) => {
+  const seen = new Set<string>();
+  return xs.map((x) => x.trim().slice(0, 40)).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+});
+
 export const proposedItemSchema = z.object({
   type: z.enum(ITEM_TYPES).default('backlog'),
   title: z.string().min(1).max(200),
   body_md: z.string().default(''),
   importance: z.number().int().min(1).max(4).default(2),
   effort: z.number().int().min(0).nullable().default(null),
+  labels: tagList,
+  modules: tagList,
 });
 export type ProposedItem = z.infer<typeof proposedItemSchema>;
 
@@ -198,7 +208,8 @@ export const itemInput = z.object({
   importance: z.number().int().min(1).max(4).default(2),
   effort: z.number().int().min(0).nullable().default(null),
   source_id: z.number().int().nullable().default(null),
-  labels: z.array(z.string()).default([]),
+  labels: tagList,
+  modules: tagList,
 });
 export const itemPatch = itemInput.partial().extend({ marked: z.boolean().optional(), sort_order: z.number().optional() });
 

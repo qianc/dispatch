@@ -33,6 +33,8 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
     body_md: z.string().default(''),
     importance: label.optional().describe('1–4 or a label from the project importance scale'),
     effort: label.nullable().optional().describe('A label from the project effort scale, e.g. "M"'),
+    tags: z.array(z.string()).optional().describe('Reuse the project\'s existing tags where they fit (see list_projects)'),
+    modules: z.array(z.string()).optional().describe('Areas of the code/product, e.g. "charts"; reuse existing ones'),
   });
   return [
     tool('inspect_github_repo', 'Check a GitHub repo exists and get its default branch and description.', {
@@ -43,7 +45,7 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       name: z.string(),
       key: z.string().optional().describe('2–10 capitals/digits, starts with a letter'),
       description: z.string().optional(),
-      importance_scale: z.array(z.string()).length(4).optional(),
+      importance_scale: z.array(z.string()).length(4).optional().describe('Exactly 4 labels, LEAST important first, most severe/urgent last (e.g. ["Low","Medium","High","Critical"])'),
       effort_scale: z.array(z.string()).optional(),
       default_force_plan: z.boolean().optional(),
       repos: z.array(z.string()).optional().describe('owner/name or github.com URLs'),
@@ -52,7 +54,7 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       key: z.string(),
       name: z.string().optional(),
       description: z.string().optional(),
-      importance_scale: z.array(z.string()).length(4).optional(),
+      importance_scale: z.array(z.string()).length(4).optional().describe('Exactly 4 labels, LEAST important first, most severe/urgent last (e.g. ["Low","Medium","High","Critical"])'),
       effort_scale: z.array(z.string()).optional(),
       default_force_plan: z.boolean().optional(),
     }, call(rpc, 'update_project')),
@@ -80,6 +82,8 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       effort: label.nullable().optional(),
       title: z.string().optional(),
       body_md: z.string().optional(),
+      tags: z.array(z.string()).optional().describe('Replaces the item\'s tags'),
+      modules: z.array(z.string()).optional().describe('Replaces the item\'s modules'),
     }, call(rpc, 'update_item')),
     tool('create_source', 'Store a retro, skill-run report or user report (full text kept) so items can link to it.', {
       project_key: z.string(),

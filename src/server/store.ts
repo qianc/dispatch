@@ -78,6 +78,7 @@ function toItem(r: Row): Item {
     effort: numOrNull(r.effort),
     source_id: numOrNull(r.source_id),
     labels: json(r.labels, []),
+    modules: json(r.modules, []),
     marked: bool(r.marked),
     sort_order: Number(r.sort_order),
     created_at: String(r.created_at),
@@ -233,31 +234,43 @@ export class Store {
     if (!ids.length) return [];
     return this.db.all(`${ITEM_SELECT} WHERE i.id IN (${ids.map(() => '?').join(',')}) ORDER BY i.number`, ...ids).map(toItem);
   }
-  createItem(projectId: number, it: { type: Item['type']; title: string; body_md: string; status: ItemStatus; importance: number; effort: number | null; source_id: number | null; labels: string[] }): Item {
+  createItem(projectId: number, it: { type: Item['type']; title: string; body_md: string; status: ItemStatus; importance: number; effort: number | null; source_id: number | null; labels: string[]; modules?: string[] }): Item {
     return this.db.tx(() => {
       const { n } = this.db.get<{ n: number }>('SELECT next_item_number AS n FROM projects WHERE id = ?', projectId)!;
       this.db.run('UPDATE projects SET next_item_number = next_item_number + 1 WHERE id = ?', projectId);
       const min = this.db.get<{ m: number | null }>('SELECT min(sort_order) AS m FROM items WHERE project_id = ?', projectId)?.m ?? 0;
       const { lastId } = this.db.run(
-        'INSERT INTO items (project_id, number, type, title, body_md, status, importance, effort, source_id, labels, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        projectId, Number(n), it.type, it.title, it.body_md, it.status, it.importance, it.effort, it.source_id, JSON.stringify(it.labels), Number(min) - 1,
+        'INSERT INTO items (project_id, number, type, title, body_md, status, importance, effort, source_id, labels, modules, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        projectId, Number(n), it.type, it.title, it.body_md, it.status, it.importance, it.effort, it.source_id, JSON.stringify(it.labels), JSON.stringify(it.modules ?? []), Number(min) - 1,
       );
       return this.item(lastId)!;
     });
   }
   createProposedItems(projectId: number, items: ProposedItem[], sourceId: number | null): Item[] {
     return items.map((p) =>
-      this.createItem(projectId, { ...p, status: p.type === 'bug' ? 'triage' : 'backlog', source_id: sourceId, labels: [] }),
+      this.createItem(projectId, { ...p, status: p.type === 'bug' ? 'triage' : 'backlog', source_id: sourceId, labels: p.labels ?? [], modules: p.modules ?? [] }),
     );
   }
   updateItem(id: number, patch: Partial<Omit<Item, 'id' | 'project_id' | 'number' | 'key' | 'created_at' | 'updated_at'>>): Item {
     const n = { ...this.item(id)!, ...patch };
     this.db.run(
-      'UPDATE items SET type = ?, title = ?, body_md = ?, status = ?, importance = ?, effort = ?, source_id = ?, labels = ?, marked = ?, sort_order = ?, updated_at = ? WHERE id = ?',
-      n.type, n.title, n.body_md, n.status, n.importance, n.effort, n.source_id, JSON.stringify(n.labels), n.marked ? 1 : 0, n.sort_order, now(), id,
+      'UPDATE items SET type = ?, title = ?, body_md = ?, status = ?, importance = ?, effort = ?, source_id = ?, labels = ?, modules = ?, marked = ?, sort_order = ?, updated_at = ? WHERE id = ?',
+      n.type, n.title, n.body_md, n.status, n.importance, n.effort, n.source_id, JSON.stringify(n.labels), JSON.stringify(n.modules), n.marked ? 1 : 0, n.sort_order, now(), id,
     );
     return this.item(id)!;
   }
+  /** Tags and modules used in a project, most used first — suggestions for the item form. */
+  facets(projectId: number): { tags: { name: string; count: number }[]; modules: { name: string; count: number }[] } {
+    const count = (col: 'labels' | 'modules') =>
+      this.db
+        .all<{ name: string; count: number }>(
+          `SELECT j.value AS name, count(*) AS count FROM items i, json_each(i.${col}) j WHERE i.project_id = ? GROUP BY lower(j.value) ORDER BY count DESC, name`,
+          projectId,
+        )
+        .map((r) => ({ name: String(r.name), count: Number(r.count) }));
+    return { tags: count('labels'), modules: count('modules') };
+  }
+
   deleteItem(id: number) {
     this.db.run('DELETE FROM items WHERE id = ?', id);
   }

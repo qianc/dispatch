@@ -30,6 +30,8 @@ export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
     return created;
   });
 
+  app.get('/api/projects/:key/facets', async (req) => store.facets(project((req.params as { key: string }).key).id));
+
   /** Item by human key, e.g. /api/items/by-key/HC-42 */
   app.get('/api/items/by-key/:key', async (req) => {
     const [pk, n] = String((req.params as { key: string }).key).toUpperCase().split(/-(?=\d+$)/);

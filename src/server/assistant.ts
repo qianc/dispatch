@@ -2,7 +2,7 @@
 // Creating and changing things happens at once; starting agent sessions goes through a proposal card.
 import { z } from 'zod';
 import { detectScales, type MdSection } from '../shared/markdownSections.ts';
-import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_KINDS, type Project, type Session } from '../shared/types.ts';
+import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Sessions } from './sessions.ts';
@@ -100,7 +100,7 @@ export class AssistantTools {
         return this.inspectRepo(String(p.repo ?? ''));
 
       case 'list_projects':
-        return this.store.projects().map((x) => this.projectSummary(x));
+        return this.store.projects().map((x) => ({ ...this.projectSummary(x), ...this.store.facets(x.id) }));
 
       case 'create_project': {
         const input = z.object({
@@ -150,6 +150,7 @@ export class AssistantTools {
         return this.store.items(project.id, { status, type: p.type ? String(p.type) : undefined }).map((i) => ({
           key: i.key, type: i.type, title: i.title, status: i.status,
           importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
+          tags: i.labels, modules: i.modules,
         }));
       }
 
@@ -161,13 +162,16 @@ export class AssistantTools {
           body_md: z.string().default(''),
           importance: z.union([z.number(), z.string()]).optional(),
           effort: z.union([z.number(), z.string()]).nullable().optional(),
+          tags: tagList,
+          modules: tagList,
         })).min(1).parse(p.items);
         const sourceId = p.source_id ? Number(p.source_id) : null;
         if (sourceId && this.store.source(sourceId)?.project_id !== project.id) throw new Error(`Source ${sourceId} is not in ${project.key}`);
         const created = items.map((it) => {
           const item = this.store.createItem(project.id, {
             type: it.type, title: it.title, body_md: it.body_md, status: it.type === 'bug' ? 'triage' : 'backlog',
-            importance: this.importance(project, it.importance), effort: this.effort(project, it.effort), source_id: sourceId, labels: [],
+            importance: this.importance(project, it.importance), effort: this.effort(project, it.effort), source_id: sourceId,
+            labels: it.tags, modules: it.modules,
           });
           this.bus.emit({ t: 'item', item });
           return { key: item.key, title: item.title, link: `/items/${item.id}` };
@@ -187,6 +191,8 @@ export class AssistantTools {
         }
         if (p.importance !== undefined) patch.importance = this.importance(project, p.importance);
         if (p.effort !== undefined) patch.effort = this.effort(project, p.effort);
+        if (p.tags !== undefined) patch.labels = tagList.parse(p.tags);
+        if (p.modules !== undefined) patch.modules = tagList.parse(p.modules);
         const updated = this.store.updateItem(it.id, patch);
         this.bus.emit({ t: 'item', item: updated });
         return { key: updated.key, status: updated.status };

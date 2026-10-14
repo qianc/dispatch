@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
 import { api, type Item, type ProjectSummary, type Repo, type Session, type SourceSummary } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
-import { ItemRow, NewItemForm, SessionRow } from '../components/items.tsx';
+import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
@@ -16,6 +16,7 @@ export function Project() {
   const tab = (params.get('tab') as Tab) ?? 'backlog';
   const nav = useNavigate();
   const [sheet, setSheet] = useState<null | 'item' | 'batch' | 'planner'>(null);
+  const [selectMode, setSelectMode] = useState(false);
   const { data: project } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
   const { data: items = [] } = useQuery({
     queryKey: ['items', project?.id],
@@ -31,6 +32,7 @@ export function Project() {
 
   const marked = items.filter((i) => i.marked);
   const type: ItemType = tab === 'bugs' ? 'bug' : 'backlog';
+  const selecting = selectMode || marked.length > 0;
 
   return (
     <Page
@@ -46,7 +48,7 @@ export function Project() {
       footer={marked.length > 0 && (tab === 'backlog' || tab === 'bugs') ? (
         <div className="flex items-center gap-2 px-3 py-2">
           <span className="flex-1 text-[14px]">{marked.length} marked for the agent</span>
-          <Button small onClick={() => marked.forEach((m) => toggle.mutate(m))}>Clear</Button>
+          <Button small onClick={() => { marked.forEach((m) => toggle.mutate(m)); setSelectMode(false); }}>Clear</Button>
           <Button small variant="primary" onClick={() => setSheet('batch')}>Start batch</Button>
         </div>
       ) : undefined}
@@ -65,7 +67,18 @@ export function Project() {
         />
       </div>
 
-      {(tab === 'backlog' || tab === 'bugs') && <ItemList items={items.filter((i) => i.type === type)} project={project} onToggle={(it) => toggle.mutate(it)} />}
+      {(tab === 'backlog' || tab === 'bugs') && (
+        <ItemList
+          items={items.filter((i) => i.type === type)}
+          project={project}
+          onToggle={(it) => toggle.mutate(it)}
+          selectMode={selecting}
+          setSelectMode={(v) => {
+            setSelectMode(v);
+            if (!v) marked.forEach((m) => toggle.mutate(m));
+          }}
+        />
+      )}
       {tab === 'sessions' && <ProjectSessions project={project} />}
       {tab === 'sources' && <Sources project={project} />}
       {tab === 'settings' && <ProjectSettings project={project} />}
@@ -83,10 +96,80 @@ export function Project() {
   );
 }
 
-function ItemList({ items, project, onToggle }: { items: Item[]; project: ProjectSummary; onToggle: (it: Item) => void }) {
+interface ListFilter { q: string; tags: string[]; modules: string[]; importance: number[]; wrap: boolean }
+const NO_FILTER: ListFilter = { q: '', tags: [], modules: [], importance: [], wrap: false };
+
+/** Filter + display settings, remembered per project on this device. */
+function useListFilter(projectKey: string) {
+  const storageKey = `dispatch:list:${projectKey}`;
+  const [f, setF] = useState<ListFilter>(() => {
+    try {
+      return { ...NO_FILTER, ...JSON.parse(localStorage.getItem(storageKey) ?? '{}') };
+    } catch {
+      return NO_FILTER;
+    }
+  });
+  const update = (patch: Partial<ListFilter>) => {
+    const next = { ...f, ...patch };
+    setF(next);
+    localStorage.setItem(storageKey, JSON.stringify(next));
+  };
+  return [f, update] as const;
+}
+
+function matches(it: Item, f: ListFilter) {
+  const lower = (xs: string[]) => xs.map((x) => x.toLowerCase());
+  if (f.q.trim()) {
+    const words = f.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hay = [it.key, it.title, it.body_md, ...it.labels, ...it.modules].join(' ').toLowerCase();
+    if (!words.every((w) => hay.includes(w))) return false;
+  }
+  if (f.tags.length && !lower(it.labels).some((t) => lower(f.tags).includes(t))) return false;
+  if (f.modules.length && !lower(it.modules).some((m) => lower(f.modules).includes(m))) return false;
+  if (f.importance.length && !f.importance.includes(it.importance)) return false;
+  return true;
+}
+
+function ToggleChips({ label, options, value, onChange }: { label: string; options: { value: string | number; label: string }[]; value: (string | number)[]; onChange: (v: (string | number)[]) => void }) {
+  if (!options.length) return null;
+  return (
+    <div className="mb-4" role="group" aria-label={label}>
+      <div className="text-[13px] text-muted mb-1.5">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => {
+          const on = value.includes(o.value);
+          return (
+            <button
+              key={String(o.value)}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onChange(on ? value.filter((v) => v !== o.value) : [...value, o.value])}
+              className={cx('rounded-md border text-[13px] min-h-8 px-2.5 py-1 text-left', on ? 'border-accent bg-accent/15 text-fg' : 'border-line text-muted')}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ItemList({ items, project, onToggle, selectMode, setSelectMode }: {
+  items: Item[];
+  project: ProjectSummary;
+  onToggle: (it: Item) => void;
+  selectMode: boolean;
+  setSelectMode: (v: boolean) => void;
+}) {
   const [showClosed, setShowClosed] = useState(false);
-  const open = items.filter((i) => OPEN.includes(i.status));
-  const closed = items.filter((i) => !OPEN.includes(i.status));
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [f, setF] = useListFilter(project.key);
+  const { data: facets } = useFacets(project.key);
+  const active = f.tags.length + f.modules.length + f.importance.length;
+  const shown = items.filter((i) => matches(i, f));
+  const open = shown.filter((i) => OPEN.includes(i.status));
+  const closed = shown.filter((i) => !OPEN.includes(i.status));
   const groups = [
     { title: 'In review', items: open.filter((i) => i.status === 'in_review') },
     { title: 'In progress', items: open.filter((i) => i.status === 'in_progress') },
@@ -94,19 +177,72 @@ function ItemList({ items, project, onToggle }: { items: Item[]; project: Projec
     { title: 'Triage', items: open.filter((i) => i.status === 'triage') },
     { title: 'Backlog', items: open.filter((i) => i.status === 'backlog').sort((a, b) => b.importance - a.importance || b.number - a.number) },
   ].filter((g) => g.items.length);
+  const row = (it: Item, markable = true) => (
+    <ItemRow
+      key={it.id}
+      item={it}
+      project={project}
+      wrap={f.wrap}
+      selectMode={markable && selectMode}
+      onToggle={onToggle}
+      onLongPress={markable ? (x) => { setSelectMode(true); if (!x.marked) onToggle(x); } : undefined}
+    />
+  );
   return (
     <>
-      {!open.length && <Empty>Nothing open. Tap + to add one.</Empty>}
+      <div className="flex items-center gap-2 px-3 pt-3">
+        <div className="relative flex-1">
+          <input
+            type="search"
+            className={cx(inputCls, 'h-9 py-1 pl-8')}
+            placeholder="Search"
+            value={f.q}
+            onChange={(e) => setF({ q: e.target.value })}
+            aria-label="Search items"
+          />
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+        </div>
+        <Button small onClick={() => setFilterOpen(true)} aria-label="Filter and view">
+          Filter{active > 0 && <span className="ml-0.5 min-w-4 h-4 px-1 rounded-full bg-accent-strong text-white text-[10px] leading-4">{active}</span>}
+        </Button>
+        <Button small variant={selectMode ? 'primary' : 'secondary'} onClick={() => setSelectMode(!selectMode)}>{selectMode ? 'Done' : 'Select'}</Button>
+      </div>
+      {(active > 0 || f.q) && (
+        <div className="px-4 pt-2 text-[12px] text-muted flex items-center gap-2">
+          {shown.length} of {items.length} shown
+          <button className="text-accent" onClick={() => setF({ ...NO_FILTER, wrap: f.wrap })}>Clear</button>
+        </div>
+      )}
+      {!open.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
       {groups.map((g) => (
         <Section key={g.title} title={`${g.title} · ${g.items.length}`}>
-          <Card>{g.items.map((it) => <ItemRow key={it.id} item={it} project={project} selectable onToggle={onToggle} />)}</Card>
+          <Card>{g.items.map((it) => row(it))}</Card>
         </Section>
       ))}
       {closed.length > 0 && (
         <Section title={`Closed · ${closed.length}`} action={<button className="text-[12px] text-accent" onClick={() => setShowClosed(!showClosed)}>{showClosed ? 'Hide' : 'Show'}</button>}>
-          {showClosed && <Card>{closed.map((it) => <ItemRow key={it.id} item={it} project={project} />)}</Card>}
+          {showClosed && <Card>{closed.map((it) => row(it, false))}</Card>}
         </Section>
       )}
+      <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter and view">
+        <ToggleChips
+          label="Importance"
+          options={project.importance_scale.map((l, i) => ({ value: i + 1, label: l })).reverse()}
+          value={f.importance}
+          onChange={(v) => setF({ importance: v as number[] })}
+        />
+        <ToggleChips label="Modules" options={(facets?.modules ?? []).map((m) => ({ value: m.name, label: `${m.name} · ${m.count}` }))} value={f.modules} onChange={(v) => setF({ modules: v as string[] })} />
+        <ToggleChips label="Tags" options={(facets?.tags ?? []).map((t) => ({ value: t.name, label: `#${t.name} · ${t.count}` }))} value={f.tags} onChange={(v) => setF({ tags: v as string[] })} />
+        {!facets?.tags.length && !facets?.modules.length && <p className="text-[13px] text-faint mb-4">No tags or modules yet. Add them on an item, or ask the assistant to tag the backlog.</p>}
+        <label className="flex items-center justify-between text-[14px] py-2 border-t border-line">
+          Show full titles, tags and modules
+          <input type="checkbox" checked={f.wrap} onChange={(e) => setF({ wrap: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
+        </label>
+        <div className="flex gap-2 mt-3">
+          <Button className="flex-1" onClick={() => setF({ ...NO_FILTER, wrap: f.wrap })}>Clear filters</Button>
+          <Button variant="primary" className="flex-1" onClick={() => setFilterOpen(false)}>Show {shown.length}</Button>
+        </div>
+      </Sheet>
     </>
   );
 }

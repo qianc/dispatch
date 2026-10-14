@@ -34,7 +34,9 @@ test('phone flow: project → items → batch → answer → planner card → st
     await expect(page.getByText(title)).toBeVisible();
   }
 
-  // mark both and start a batch with plan-first
+  // checkboxes are hidden until Select; mark both and start a batch with plan-first
+  await expect(page.getByRole('button', { name: 'Mark HC-1 for the agent' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('button', { name: 'Mark HC-1 for the agent' }).click();
   await page.getByRole('button', { name: 'Mark HC-2 for the agent' }).click();
   await expect(page.getByText('2 marked for the agent')).toBeVisible();
@@ -120,4 +122,56 @@ test('sheet buttons are not covered by the tab bar', async ({ page }) => {
   const box = (await create.boundingBox())!;
   const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.textContent, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
   expect(hit).toBe('Create project');
+});
+
+test('tags and modules with suggestions, filters, and long-press select', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('button', { name: '+ New' }).click();
+  await page.getByRole('dialog').getByLabel('Name').fill('Tagged');
+  await page.getByRole('dialog').getByLabel('Key').fill('TG');
+  await page.getByRole('dialog').getByRole('button', { name: 'Create project' }).click();
+
+  const add = async (title: string, modules: string[], tags: string[], suggested?: string) => {
+    await page.getByRole('button', { name: 'New item' }).click();
+    const d = page.getByRole('dialog');
+    await d.getByLabel('Title').fill(title);
+    for (const m of modules) {
+      await d.getByLabel('Add modules').fill(m);
+      await d.getByLabel('Add modules').press('Enter');
+    }
+    if (suggested) await d.getByRole('button', { name: suggested, exact: true }).click(); // a suggestion from the project
+    for (const t of tags) await d.getByLabel('Add tags').fill(`${t},`);
+    await d.getByRole('button', { name: 'Create' }).click();
+    await expect(page.getByText(title)).toBeVisible();
+  };
+  await add('Chart labels overlap', ['charts'], ['ux']);
+  await add('Export is slow', ['export'], ['perf'], 'ux');
+  await add('Waterfall chart', [], [], 'charts');
+
+  // search
+  await page.getByLabel('Search items').fill('export');
+  await expect(page.getByText('1 of 3 shown')).toBeVisible();
+  await page.getByLabel('Search items').fill('');
+
+  // filter by module, then show full titles with tags
+  await page.getByRole('button', { name: 'Filter and view' }).click();
+  await page.getByRole('group', { name: 'Modules' }).getByRole('button', { name: /charts · 2/ }).click();
+  await page.getByLabel('Show full titles, tags and modules').check();
+  await page.getByRole('button', { name: /Show 2/ }).click();
+  await expect(page.getByText('Export is slow')).toHaveCount(0);
+  await expect(page.getByText('#ux')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear', exact: true }).first().click();
+
+  // long press marks an item and enters select mode
+  const row = page.getByRole('link', { name: /Export is slow/ });
+  await row.dispatchEvent('pointerdown');
+  await page.waitForTimeout(600);
+  await row.dispatchEvent('pointerup');
+  await expect(page.getByText('1 marked for the agent')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible();
+  // on a phone the key shows as its number
+  await expect(page.getByLabel('TG-2', { exact: true })).toHaveText('2');
 });
