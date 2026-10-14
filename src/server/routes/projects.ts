@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { projectInput, projectPatch, repoInput } from '../../shared/types.ts';
+import { projectInput, projectPatch, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 export function projectRoutes(app: FastifyInstance, { store }: Ctx) {
@@ -56,7 +56,7 @@ export function projectRoutes(app: FastifyInstance, { store }: Ctx) {
   app.patch('/api/repos/:id', async (req) => {
     const id = intParam((req.params as { id: string }).id);
     if (!store.repo(id)) throw notFound('Repo');
-    return store.updateRepo(id, repoInput.partial().parse(req.body));
+    return store.updateRepo(id, repoPatch.parse(req.body));
   });
 
   app.delete('/api/repos/:id', async (req) => {

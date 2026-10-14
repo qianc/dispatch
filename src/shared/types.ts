@@ -143,7 +143,7 @@ export interface PendingInput {
 }
 
 /** Tags/modules: trimmed, no empties, no case-insensitive duplicates. */
-export const tagList = z.array(z.string()).default([]).transform((xs) => {
+export const tagList = z.array(z.string()).transform((xs) => {
   const seen = new Set<string>();
   return xs.map((x) => x.trim().slice(0, 40)).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
 });
@@ -154,8 +154,8 @@ export const proposedItemSchema = z.object({
   body_md: z.string().default(''),
   importance: z.number().int().min(1).max(4).default(2),
   effort: z.number().int().min(0).nullable().default(null),
-  labels: tagList,
-  modules: tagList,
+  labels: tagList.default([]),
+  modules: tagList.default([]),
 });
 export type ProposedItem = z.infer<typeof proposedItemSchema>;
 
@@ -193,7 +193,16 @@ export const projectInput = z.object({
   importance_scale: scale(4).default(DEFAULT_IMPORTANCE_SCALE),
   effort_scale: scale().default(DEFAULT_EFFORT_SCALE),
 });
-export const projectPatch = projectInput.omit({ key: true }).partial();
+// PATCH schemas are written out on purpose: every field optional, no defaults. Zod 4 applies
+// .default() even inside .partial(), so a partial of a create schema would reset every field a
+// request leaves out (marking an item wiped its description, scales, tags and source).
+export const projectPatch = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  default_force_plan: z.boolean().optional(),
+  importance_scale: scale(4).optional(),
+  effort_scale: scale().optional(),
+});
 
 export const repoInput = z.object({
   github_owner: z.string().min(1),
@@ -210,10 +219,38 @@ export const itemInput = z.object({
   importance: z.number().int().min(1).max(4).default(2),
   effort: z.number().int().min(0).nullable().default(null),
   source_id: z.number().int().nullable().default(null),
-  labels: tagList,
-  modules: tagList,
+  labels: tagList.default([]),
+  modules: tagList.default([]),
 });
-export const itemPatch = itemInput.partial().extend({ marked: z.boolean().optional(), sort_order: z.number().optional() });
+export const itemPatch = z.object({
+  type: z.enum(ITEM_TYPES).optional(),
+  title: z.string().min(1).max(200).optional(),
+  body_md: z.string().optional(),
+  status: z.enum(ITEM_STATUSES).optional(),
+  importance: z.number().int().min(1).max(4).optional(),
+  effort: z.number().int().min(0).nullable().optional(),
+  source_id: z.number().int().nullable().optional(),
+  labels: tagList.optional(),
+  modules: tagList.optional(),
+  marked: z.boolean().optional(),
+  sort_order: z.number().optional(),
+});
+
+export const repoPatch = z.object({
+  github_owner: z.string().min(1).optional(),
+  github_name: z.string().min(1).optional(),
+  default_branch: z.string().min(1).optional(),
+  check_command: z.string().nullable().optional(),
+});
+
+export const sourcePatch = z.object({
+  kind: z.enum(SOURCE_KINDS).optional(),
+  title: z.string().min(1).optional(),
+  body_md: z.string().optional(),
+  reporter: z.string().nullable().optional(),
+  version_tag: z.string().nullable().optional(),
+  skill_name: z.string().nullable().optional(),
+});
 
 export const sourceInput = z.object({
   kind: z.enum(SOURCE_KINDS).default('retro'),

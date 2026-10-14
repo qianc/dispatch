@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { proposedItemSchema, sourceInput } from '../../shared/types.ts';
+import { proposedItemSchema, sourceInput, sourcePatch } from '../../shared/types.ts';
 import { z } from 'zod';
 import { intParam, notFound, type Ctx } from './ctx.ts';
 
@@ -31,7 +31,7 @@ export function sourceRoutes(app: FastifyInstance, { store, bus }: Ctx) {
   app.patch('/api/sources/:id', async (req) => {
     const id = intParam((req.params as { id: string }).id);
     if (!store.source(id)) throw notFound('Source');
-    return store.updateSource(id, sourceInput.omit({ items: true }).partial().parse(req.body));
+    return store.updateSource(id, sourcePatch.parse(req.body));
   });
 
   /** Create items from a source (manual split, or accepting an `items` proposal card). */

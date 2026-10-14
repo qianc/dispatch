@@ -120,3 +120,22 @@ describe('static files', () => {
     await s.app.close();
   });
 });
+
+describe('partial updates leave other fields alone', () => {
+  it('marking an item, editing a project/repo/source changes only what was sent', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'PT', name: 'Patch', description: 'keep me', importance_scale: ['a', 'b', 'c', 'd'], effort_scale: ['1', '2', '3'] });
+    const src = (await s.call('POST', '/projects/PT/sources', { kind: 'user_report', title: 'Src', body_md: 'text', reporter: 'alex', version_tag: 'v1' })).data;
+    const it = (await s.call('POST', '/projects/PT/items', {
+      type: 'bug', title: 'T', body_md: 'Full description', status: 'todo', importance: 4, effort: 2, source_id: src.id, labels: ['ux'], modules: ['charts'],
+    })).data;
+    const marked = (await s.call('PATCH', `/items/${it.id}`, { marked: true })).data;
+    expect(marked).toMatchObject({ marked: true, type: 'bug', body_md: 'Full description', status: 'todo', importance: 4, effort: 2, source_id: src.id, labels: ['ux'], modules: ['charts'] });
+    const p = (await s.call('PATCH', '/projects/PT', { default_force_plan: true })).data;
+    expect(p).toMatchObject({ description: 'keep me', importance_scale: ['a', 'b', 'c', 'd'], effort_scale: ['1', '2', '3'], default_force_plan: true });
+    const repo = (await s.call('POST', '/projects/PT/repos', { github_owner: 'me', github_name: 'r', default_branch: 'develop' })).data;
+    expect((await s.call('PATCH', `/repos/${repo.id}`, { check_command: 'npm test' })).data).toMatchObject({ default_branch: 'develop', check_command: 'npm test' });
+    expect((await s.call('PATCH', `/sources/${src.id}`, { title: 'Renamed' })).data).toMatchObject({ kind: 'user_report', body_md: 'text', reporter: 'alex', version_tag: 'v1' });
+    await s.app.close();
+  });
+});

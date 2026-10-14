@@ -162,8 +162,8 @@ export class AssistantTools {
           body_md: z.string().default(''),
           importance: z.union([z.number(), z.string()]).optional(),
           effort: z.union([z.number(), z.string()]).nullable().optional(),
-          tags: tagList,
-          modules: tagList,
+          tags: tagList.default([]),
+          modules: tagList.default([]),
         })).min(1).parse(p.items);
         const sourceId = p.source_id ? Number(p.source_id) : null;
         if (sourceId && this.store.source(sourceId)?.project_id !== project.id) throw new Error(`Source ${sourceId} is not in ${project.key}`);
