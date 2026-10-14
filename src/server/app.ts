@@ -88,7 +88,13 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   if (existsSync(webRoot)) {
     await app.register(fastifyStatic, { root: webRoot, wildcard: false });
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/')) return reply.status(404).send({ error: 'Not found' });
+      // a missing file (e.g. an old build's script) must 404; answering with index.html would
+      // hand the browser HTML as JavaScript and leave a blank app
+      const path = req.url.split('?')[0];
+      if (path.startsWith('/api/') || path.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(path)) {
+        return reply.status(404).send({ error: 'Not found' });
+      }
+      reply.header('cache-control', 'no-cache');
       return reply.sendFile('index.html');
     });
   }

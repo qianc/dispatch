@@ -74,6 +74,8 @@ function App() {
   return <RouterProvider router={router} />;
 }
 
+(window as unknown as { __dispatchStarted: boolean }).__dispatchStarted = true;
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>

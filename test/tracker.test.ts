@@ -104,3 +104,19 @@ describe('auth bypass attempts', () => {
     await s.app.close();
   });
 });
+
+describe('static files', () => {
+  it('404s missing assets instead of answering with index.html', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(`${tmpdir()}/dsp-web-`);
+    writeFileSync(`${dir}/index.html`, '<!doctype html><title>x</title>');
+    const s = await startServer({ WEB_DIST: dir });
+    expect((await s.app.inject({ url: '/assets/index-OLD.js' })).statusCode).toBe(404);
+    expect((await s.app.inject({ url: '/icon-old.png' })).statusCode).toBe(404);
+    const page = await s.app.inject({ url: '/items/3' });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers['content-type']).toMatch(/text\/html/);
+    await s.app.close();
+  });
+});
