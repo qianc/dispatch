@@ -1,4 +1,5 @@
 import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ItemStatus, SessionStatus } from '../../../src/shared/types.ts';
@@ -118,7 +119,8 @@ export function ItemStatusIcon({ status }: { status: ItemStatus }) {
   );
 }
 
-/** Bottom sheet on phones, centered dialog on wide screens. */
+/** Bottom sheet on phones, centered dialog on wide screens. Portaled to <body>: iOS traps fixed
+ *  elements inside the scroll container's stacking context, under the bottom bar. */
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
   useEffect(() => {
     if (!open) return;
@@ -127,7 +129,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
   if (!open) return null;
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative w-full sm:max-w-lg max-h-[88dvh] flex flex-col rounded-t-2xl sm:rounded-2xl bg-panel border border-line pb-safe">
@@ -135,9 +137,10 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
           <h2 className="font-semibold">{title}</h2>
           <button onClick={onClose} className="text-muted px-2 h-8" aria-label="Close">✕</button>
         </div>
-        <div className="overflow-y-auto p-4">{children}</div>
+        <div className="overflow-y-auto overscroll-contain p-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
