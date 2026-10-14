@@ -19,7 +19,13 @@ import { PrView } from './pages/Pr.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Assistant } from './pages/Assistant.tsx';
 
-registerSW({ immediate: true });
+registerSW({
+  immediate: true,
+  onRegisteredSW(_url, reg) {
+    // installed iOS apps rarely navigate, so look for a new version whenever the app is brought back
+    if (reg) document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update());
+  },
+});
 
 const qc = new QueryClient({
   defaultOptions: {

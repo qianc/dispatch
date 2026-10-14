@@ -52,6 +52,7 @@ export function Settings() {
         <Card className="p-3 text-sm text-muted space-y-1">
           <div>GitHub token: {settings?.github ? 'configured' : 'missing (PR sync and merge are off)'}</div>
           <div>Installed as app: {standalone ? 'yes' : 'no'}</div>
+          <div>Build: {__BUILD__} UTC</div>
         </Card>
       </Section>
       {!me?.auth_disabled && (

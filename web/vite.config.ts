@@ -9,6 +9,7 @@ const api = process.env.API_URL ?? 'http://localhost:3000';
 
 export default defineConfig({
   root,
+  define: { __BUILD__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' ')) },
   build: { outDir: fileURLToPath(new URL('../dist/web', import.meta.url)), emptyOutDir: true },
   server: {
     port: 5173,
@@ -30,7 +31,7 @@ export default defineConfig({
         name: 'Dispatch',
         short_name: 'Dispatch',
         description: 'Projects, backlog and Claude agents',
-        theme_color: '#111113',
+        theme_color: '#19191c',
         background_color: '#111113',
         display: 'standalone',
         start_url: '/',

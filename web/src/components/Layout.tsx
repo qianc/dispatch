@@ -14,12 +14,16 @@ const icons = {
 
 function Tab({ to, label, icon, badge }: { to: string; label: string; icon: ReactNode; badge?: number }) {
   return (
-    <NavLink to={to} end={to === '/'} className={({ isActive }) => cx('flex-1 flex flex-col items-center justify-center gap-0.5 h-14 text-[11px]', isActive ? 'text-fg' : 'text-faint')}>
+    <NavLink to={to} end={to === '/'} className={({ isActive }) => cx('tab', isActive ? 'text-fg' : 'text-faint')}>
+      {({ isActive }) => (
+      <>
       <span className="relative">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round">{icon}</svg>
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={isActive ? 1.9 : 1.6} strokeLinejoin="round" strokeLinecap="round">{icon}</svg>
         {!!badge && <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full bg-wait text-black text-[10px] font-bold leading-4 text-center">{badge}</span>}
       </span>
       {label}
+      </>
+      )}
     </NavLink>
   );
 }
@@ -32,7 +36,7 @@ export function Layout() {
       <div className="flex-1 min-h-0 flex flex-col">
         <Outlet />
       </div>
-      <nav className="bottom-bar shrink-0 flex border-t border-line bg-panel pb-safe" aria-label="Main">
+      <nav className="tabbar" aria-label="Main">
         <Tab to="/" label="Inbox" icon={icons.inbox} badge={waiting} />
         <Tab to="/activity" label="Activity" icon={icons.activity} />
         <Tab to="/assistant" label="Assistant" icon={icons.assistant} />
@@ -48,8 +52,8 @@ export function Page({ title, subtitle, back, actions, children, footer }: { tit
   const nav = useNavigate();
   return (
     <>
-      <header className="pt-safe shrink-0 border-b border-line bg-bg">
-        <div className="flex items-center gap-1 h-12 px-2">
+      <header className="shell-head">
+        <div className="flex items-center gap-1 h-full px-2">
           {back && (
             <button
               onClick={() => (back === true ? nav(-1) : nav(back))}
