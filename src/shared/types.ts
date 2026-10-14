@@ -238,6 +238,7 @@ export const mergeInput = z.object({
 // ---------- live events (server → browser over SSE) ----------
 
 export type LiveEvent =
+  | { t: 'hello' }
   | { t: 'session'; session: Session }
   | { t: 'session_event'; event: SessionEvent }
   | { t: 'input'; input: PendingInput }

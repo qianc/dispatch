@@ -10,7 +10,8 @@ export function streamRoutes(app: FastifyInstance, { bus }: Ctx) {
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     });
-    reply.raw.write('retry: 3000\n\n');
+    // the hello event lets the client tell a working stream from one a proxy is holding back
+    reply.raw.write(`retry: 3000\n\ndata: ${JSON.stringify({ t: 'hello' })}\n\n`);
     const off = bus.on((e) => reply.raw.write(`data: ${JSON.stringify(e)}\n\n`));
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
     req.raw.on('close', () => {

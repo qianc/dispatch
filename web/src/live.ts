@@ -13,6 +13,9 @@ export function withLive(d: SessionDetail): SessionDetail {
   return missing.length ? { ...d, events: [...d.events, ...missing] } : d;
 }
 
+/** False until the stream has delivered an event; queries poll while it is false (see main.tsx). */
+export let liveHealthy = false;
+
 export function connectLive(qc: QueryClient): () => void {
   let es: EventSource | null = null;
   let stopped = false;
@@ -20,9 +23,13 @@ export function connectLive(qc: QueryClient): () => void {
 
   const open = () => {
     es = new EventSource('/api/stream');
-    es.onmessage = (m) => apply(qc, JSON.parse(m.data) as LiveEvent);
+    es.onmessage = (m) => {
+      liveHealthy = true;
+      apply(qc, JSON.parse(m.data) as LiveEvent);
+    };
     es.onopen = () => qc.invalidateQueries(); // catch up on anything missed while offline
     es.onerror = () => {
+      liveHealthy = false;
       es?.close();
       if (!stopped) retry = window.setTimeout(open, 3000);
     };
@@ -37,6 +44,7 @@ export function connectLive(qc: QueryClient): () => void {
   document.addEventListener('visibilitychange', onVisible);
   return () => {
     stopped = true;
+    liveHealthy = false;
     clearTimeout(retry);
     es?.close();
     document.removeEventListener('visibilitychange', onVisible);
@@ -45,6 +53,8 @@ export function connectLive(qc: QueryClient): () => void {
 
 function apply(qc: QueryClient, e: LiveEvent) {
   switch (e.t) {
+    case 'hello':
+      return;
     case 'session_event': {
       const list = recent.get(e.event.session_id) ?? [];
       list.push(e.event);

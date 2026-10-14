@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { registerSW } from 'virtual:pwa-register';
 import './styles.css';
 import { api, type Me } from './api.ts';
-import { connectLive } from './live.ts';
+import { connectLive, liveHealthy } from './live.ts';
 import { Layout } from './components/Layout.tsx';
 import { Login } from './pages/Login.tsx';
 import { Inbox } from './pages/Inbox.tsx';
@@ -21,7 +21,14 @@ import { Settings } from './pages/Settings.tsx';
 registerSW({ immediate: true });
 
 const qc = new QueryClient({
-  defaultOptions: { queries: { staleTime: 10_000, retry: (n, e) => (e as { status?: number }).status !== 401 && n < 2 } },
+  defaultOptions: {
+    queries: {
+      staleTime: 10_000,
+      retry: (n, e) => (e as { status?: number }).status !== 401 && n < 2,
+      // live updates come over SSE; if a proxy holds the stream back, poll instead
+      refetchInterval: () => (liveHealthy ? false : 4000),
+    },
+  },
 });
 
 const router = createBrowserRouter([
