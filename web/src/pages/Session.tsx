@@ -60,6 +60,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       title={chat ? chat.title : s.title}
       subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
       back={chat ? chat.back : true}
+      keepScroll={false}
       actions={
         <>
           {!isAssistant && <SessionStatusChip status={s.status} />}

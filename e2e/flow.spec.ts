@@ -63,8 +63,7 @@ test('phone flow: project → items → batch → answer → planner card → st
   await expect(page.getByText('Your turn').first()).toBeVisible();
 
   // planner chat proposes a batch; start it from the card
-  await page.getByRole('link', { name: 'Projects' }).click();
-  await page.getByRole('link', { name: /Homecontrol/ }).click();
+  await page.goto('/p/HC');
   await page.getByRole('button', { name: 'Plan with Claude' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Start planning chat' }).click();
   await expect(page.getByText('Proposed batch')).toBeVisible();
@@ -206,4 +205,44 @@ test('item links open files, images and other items; Discuss this chats about th
   await page.getByRole('button', { name: 'Explain this item in plain words' }).click();
   await expect(page.getByText('(fake) About LNK-2: X1 — Linked item')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Discuss LNK-2' })).toBeVisible();
+});
+
+test('tabs return to where you were; back keeps the list scrolled', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'SCR', name: 'Scroll' } });
+  for (let i = 1; i <= 40; i++) await page.request.post('/api/projects/SCR/items', { data: { title: `Item number ${i}` } });
+
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await page.getByRole('link', { name: /Scroll/ }).click();
+  await expect(page.getByText('Item number 40')).toBeVisible();
+  const area = page.locator('main.scroll-area');
+  await area.evaluate((el) => (el.scrollTop = 900));
+  await page.waitForTimeout(300);
+
+  // open an item deep in the list, then back: same scroll position
+  // (Playwright scrolls a row into view before clicking it, so read the position after that)
+  const row = page.getByText('Item number 10', { exact: true });
+  await row.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  const before = await area.evaluate((el) => el.scrollTop);
+  await row.click();
+  await expect(page.getByRole('heading', { name: 'Item number 10' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.getByText('Item number 10', { exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(Math.abs((await area.evaluate((el) => el.scrollTop)) - before)).toBeLessThan(5);
+
+  // another tab and back: the project, not the project list
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  await expect(page.getByRole('heading', { name: 'Assistant' })).toBeVisible();
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await expect(page).toHaveURL(/\/p\/SCR/);
+  await page.waitForTimeout(300);
+  expect(Math.abs((await area.evaluate((el) => el.scrollTop)) - before)).toBeLessThan(5);
+  // tapping the tab you are in goes to its top
+  await page.getByRole('link', { name: 'Projects' }).click();
+  await expect(page).toHaveURL(/\/projects$/);
 });
