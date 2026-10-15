@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ItemDetail } from '../api.ts';
+import { ChatInput } from '../components/ChatInput.tsx';
 import { Page } from '../components/Layout.tsx';
-import { Button, ErrorText, cx, inputCls } from '../components/ui.tsx';
+import { ErrorText } from '../components/ui.tsx';
 import { SessionView } from './Session.tsx';
 
 const STARTERS = ['Explain this item in plain words', 'Which files and parts of the code are involved?', 'How big is this, and what is the risk?', 'What would a good first step be?'];
@@ -43,10 +44,7 @@ function EmptyDiscuss({ id, title, subtitle }: { id: number; title: string; subt
       subtitle={subtitle}
       back={`/items/${id}`}
       footer={
-        <form className="flex items-end gap-2 p-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(text); }}>
-          <textarea className={cx(inputCls, 'min-h-10 max-h-40 resize-none py-2')} rows={1} placeholder="Ask about this item" value={text} onChange={(e) => setText(e.target.value)} aria-label="Message" />
-          <Button variant="primary" disabled={!text.trim() || send.isPending} aria-label="Send">↑</Button>
-        </form>
+        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending} placeholder="Ask about this item" />
       }
     >
       <div className="px-4 pt-5 space-y-2">

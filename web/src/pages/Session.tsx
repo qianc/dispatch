@@ -4,13 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
+import { ChatInput } from '../components/ChatInput.tsx';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { claudeLabel, useAccounts } from '../accounts.ts';
-import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
+import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet } from '../components/ui.tsx';
 
 export interface ChatMode {
   id: number;
@@ -101,25 +102,15 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </>
       }
       footer={
-        <form className="flex items-end gap-2 p-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(); }}>
-          <textarea
-            className={cx(inputCls, 'min-h-10 max-h-40 resize-none py-2')}
-            rows={1}
-            placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
-            disabled={!canSend}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) send.mutate();
-            }}
-            aria-label="Message"
-          />
-          {s.status === 'running' && !text ? (
-            <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button>
-          ) : (
-            <Button variant="primary" disabled={!canSend || !text.trim() || send.isPending} aria-label="Send">↑</Button>
-          )}
-        </form>
+        <ChatInput
+          value={text}
+          onChange={setText}
+          onSubmit={() => send.mutate()}
+          canSubmit={canSend && !send.isPending}
+          disabled={!canSend}
+          placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
+          action={s.status === 'running' && !text ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
+        />
       }
     >
       {(s.kind === 'work' || (accounts?.claude.length ?? 0) > 1) && (

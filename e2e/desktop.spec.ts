@@ -97,3 +97,49 @@ test('appearance: light, dark and auto', async ({ page }) => {
   await page.getByRole('radio', { name: 'Auto' }).click();
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /./);
 });
+
+test.describe('with a keyboard and mouse', () => {
+  test.use({ isMobile: false, hasTouch: false, viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+
+test('desktop chat box: grows with its lines; Enter sends, Shift+Enter adds a line', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'KEY', name: 'Keys' } });
+  await page.request.post('/api/projects/KEY/repos', { data: { github_owner: 'me', github_name: 'keys' } });
+  const it = await (await page.request.post('/api/projects/KEY/items', { data: { title: 'Keys item' } })).json();
+  const s = await (await page.request.post('/api/projects/KEY/batches', { data: { item_ids: [it.id], prompt: '', force_plan: false } })).json();
+  await page.goto(`/s/${s.id}`);
+  await page.getByRole('button', { name: /Refactor/ }).click();
+  await page.getByRole('button', { name: 'Send answer' }).click();
+  await expect(page.getByText('(fake) Done with "Refactor"')).toBeVisible();
+
+  const box = page.getByLabel('Message');
+  const h1 = (await box.boundingBox())!.height;
+  await box.click();
+  await page.keyboard.type('first line');
+  for (const l of ['second', 'third', 'fourth']) {
+    await page.keyboard.press('Shift+Enter');
+    await page.keyboard.type(l);
+  }
+  await expect(box).toHaveValue('first line\nsecond\nthird\nfourth');
+  expect((await box.boundingBox())!.height).toBeGreaterThan(h1 * 2);
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('(fake) You said: first line')).toBeVisible();
+  await expect(box).toHaveValue('');
+  // back to one line
+  expect((await box.boundingBox())!.height).toBeLessThan(h1 + 4);
+  await box.fill('with control');
+  await page.keyboard.press('Control+Enter');
+  await expect(page.getByText('(fake) You said: with control')).toBeVisible();
+});
+});
+
+test('phone chat box: Enter adds a line, the button sends', async ({ page }) => {
+  await login(page);
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  const box = page.getByLabel('Message');
+  await box.click();
+  await page.keyboard.type('one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('two');
+  await expect(box).toHaveValue('one\ntwo');
+});

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Session } from '../api.ts';
+import { ChatInput } from '../components/ChatInput.tsx';
 import { Page } from '../components/Layout.tsx';
-import { Button, ErrorText, cx, inputCls } from '../components/ui.tsx';
+import { ErrorText } from '../components/ui.tsx';
 import { SessionView } from './Session.tsx';
 
 const EXAMPLES = [
@@ -38,10 +39,7 @@ function EmptyChat() {
       title="Assistant"
       subtitle="Ask me to set up projects, repos and items"
       footer={
-        <form className="flex items-end gap-2 p-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(text); }}>
-          <textarea className={cx(inputCls, 'min-h-10 max-h-40 resize-none py-2')} rows={1} placeholder="Tell me what to do" value={text} onChange={(e) => setText(e.target.value)} aria-label="Message" />
-          <Button variant="primary" disabled={!text.trim() || send.isPending} aria-label="Send">↑</Button>
-        </form>
+        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending} placeholder="Tell me what to do" />
       }
     >
       <div className="px-4 pt-6 space-y-2">
