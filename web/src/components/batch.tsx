@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions } from '../../../src/shared/types.ts';
 import { api, type Item, type Project, type Repo, type Session } from '../api.ts';
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
+import { projectClaude, useAccounts } from '../accounts.ts';
 
 const LABELS = {
   model: { default: 'Default', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' },
@@ -33,9 +34,21 @@ export function useRunOptions(projectKey: string) {
   return [o, update] as const;
 }
 
-export function RunOptionsFields({ value, set }: { value: RunOptions; set: (p: Partial<RunOptions>) => void }) {
+export function RunOptionsFields({ value, set, project }: { value: RunOptions; set: (p: Partial<RunOptions>) => void; project?: Pick<Project, 'claude_account' | 'claude_allowed'> }) {
+  const { data: accounts } = useAccounts();
+  const { allowed, def } = project ? projectClaude(accounts, project) : { allowed: [], def: undefined };
+  const chosen = value.claude_account && allowed.some((a) => a.name === value.claude_account) ? value.claude_account : '';
   return (
     <>
+      {allowed.length > 1 && (
+        <Field label="Claude account" group hint="Which subscription pays for this batch. Locked once the session starts.">
+          <Segmented
+            value={chosen}
+            onChange={(v) => set({ claude_account: v || null })}
+            options={[{ value: '', label: `Default · ${def?.label ?? ''}` }, ...allowed.filter((a) => a.name !== def?.name).map((a) => ({ value: a.name, label: a.label }))]}
+          />
+        </Field>
+      )}
       <Field label="Model" group><Segmented value={value.model} onChange={(model) => set({ model })} options={opts('model')} /></Field>
       <Field label="Effort" group><Segmented value={value.effort} onChange={(effort) => set({ effort })} options={opts('effort')} /></Field>
       <Field label="Subagents for the implementation" group><Segmented value={value.subagents} onChange={(subagents) => set({ subagents })} options={opts('subagents')} /></Field>
@@ -88,7 +101,7 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
         <input type="checkbox" checked={forcePlan} onChange={(e) => setForcePlan(e.target.checked)} className="size-4 accent-[var(--color-accent-strong)]" />
         Plan first (Claude writes a plan and waits for approval)
       </label>
-      <RunOptionsFields value={options} set={setOptions} />
+      <RunOptionsFields value={options} set={setOptions} project={project} />
       {!project.repos.length && <p className="text-wait text-sm mb-2">Add a repo in Settings first.</p>}
       <ErrorText error={start.error} />
       <Button variant="primary" className="w-full" disabled={start.isPending || !project.repos.length}>Start session</Button>

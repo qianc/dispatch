@@ -4,7 +4,7 @@ import { projectInput, projectPatch, repoInput, repoPatch } from '../../shared/t
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { addLocalRepo, mergeNote } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -44,6 +44,16 @@ export function projectRoutes(app: FastifyInstance, { store, hub }: Ctx) {
     const p = project((req.params as { key: string }).key);
     const patch = projectPatch.extend({ muted: z.boolean().optional() }).parse(req.body);
     const { muted, ...rest } = patch;
+    if (rest.github_account && !github.accounts.some((a) => a.name === rest.github_account)) {
+      throw new HttpError(400, `Unknown GitHub account "${rest.github_account}" (configured: ${github.accounts.map((a) => a.name).join(', ') || 'none'})`);
+    }
+    const known = hub.claudeAccounts.map((a) => a.name);
+    for (const n of [rest.claude_account, ...(rest.claude_allowed ?? [])]) {
+      if (n && known.length && !known.includes(n)) throw new HttpError(400, `Unknown Claude account "${n}" (the worker has: ${known.join(', ')})`);
+    }
+    const allowed = rest.claude_allowed === undefined ? p.claude_allowed : rest.claude_allowed;
+    const def = rest.claude_account === undefined ? p.claude_account : rest.claude_account;
+    if (def && allowed?.length && !allowed.includes(def)) throw new HttpError(400, `The default Claude account "${def}" must be one of the allowed accounts`);
     if (muted !== undefined) store.setMuted(p.id, muted);
     return { ...store.updateProject(p.id, rest), muted: store.isMuted(p.id), repos: store.repos(p.id) };
   });

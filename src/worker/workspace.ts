@@ -1,4 +1,5 @@
 // Git clones and per-session worktrees under WORKSPACES_DIR.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -7,6 +8,16 @@ import { join, resolve, sep } from 'node:path';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 
+/**
+ * Extra environment for commands run on behalf of a repo (its GitHub account's token and commit
+ * identity). Set by Workspaces.withRepo, so every git call inside it uses the right account.
+ */
+const repoEnv = new AsyncLocalStorage<Record<string, string | undefined>>();
+const procEnv = () => {
+  const extra = repoEnv.getStore();
+  return extra ? { ...process.env, ...extra } : process.env;
+};
+
 export interface RunResult {
   code: number;
   out: string;
@@ -14,7 +25,7 @@ export interface RunResult {
 
 export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 60_000): Promise<RunResult> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, env: procEnv() }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       resolve({ code, out: `${stdout}${stderr}`.trim() });
     });
@@ -26,7 +37,7 @@ const MAX_FILE = 10 * 1024 * 1024;
 /** Run git and get raw stdout bytes (for files that may be binary). */
 function gitBytes(args: string[], cwd: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: MAX_FILE + 1024, env: process.env }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: MAX_FILE + 1024, env: procEnv() }, (err, stdout, stderr) => {
       if (err) reject(new Error(`git ${args.join(' ')} failed: ${String(stderr).trim()}`));
       else resolve(stdout);
     });
@@ -48,14 +59,18 @@ export class Workspaces {
   private withRepo<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
     const key = `${repo.github_owner}/${repo.github_name}`;
     const prev = this.locks.get(key) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(fn);
+    const next = prev.catch(() => undefined).then(() => repoEnv.run(this.gitEnv(repo), fn));
     this.locks.set(key, next);
     return next;
   }
 
-  constructor(root: string, remoteBase = 'https://github.com') {
+  /** git environment for a repo (its project's GitHub account); empty = the worker's own */
+  private gitEnv: (repo: Repo) => Record<string, string | undefined>;
+
+  constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({})) {
     this.root = root;
     this.remoteBase = remoteBase;
+    this.gitEnv = gitEnv;
   }
 
   /** Where to clone/fetch from: the local folder for local repos, GitHub otherwise. */
@@ -173,7 +188,7 @@ export class Workspaces {
 
   /** Run a repo's setup command in a new worktree. */
   async setup(repo: Repo, wt: string): Promise<{ ok: boolean; output: string }> {
-    const r = await run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000);
+    const r = await repoEnv.run(this.gitEnv(repo), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
   }
 

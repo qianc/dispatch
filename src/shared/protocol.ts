@@ -1,4 +1,5 @@
 // Messages on the internal WebSocket between server and worker.
+import type { ClaudeAccountInfo } from './accounts.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
@@ -16,6 +17,10 @@ export interface StartSpec {
   prompt: string; // first user message
   force_plan: boolean;
   options: RunOptions;
+  /** Claude account to run on (null = legacy default); the worker holds the credentials */
+  claude_account: string | null;
+  /** the project's GitHub account: token for git/gh and the commit identity */
+  github_account: string | null;
   resume: string | null; // sdk session id
   /** Text sent right after resume, when a session is restarted rather than continued by the user. */
   resume_note: string | null;
@@ -42,7 +47,9 @@ export type WorkerCommand =
   | { c: 'branch_diff'; repo: Repo; branch: string };
 
 export type WorkerToServer =
-  | { t: 'hello'; live: number[] }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[] }
+  /** something the owner should know now (login needed, rate limit): shown in the session and pushed */
+  | { t: 'notice'; session_id: number; title: string; body: string }
   | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string }
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }

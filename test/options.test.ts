@@ -7,7 +7,7 @@ import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
 const spec = (o: Partial<typeof DEFAULT_RUN_OPTIONS>): StartSpec => ({
   session_id: 1, kind: 'work', project_key: 'P', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b',
-  repos: [], items: [], source: null, prompt: '', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, ...o }, resume: null, resume_note: null,
+  repos: [], items: [], source: null, prompt: '', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, ...o }, claude_account: null, github_account: null, resume: null, resume_note: null,
 });
 
 describe('run options in the agent prompt', () => {

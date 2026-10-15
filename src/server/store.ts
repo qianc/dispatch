@@ -36,6 +36,9 @@ function toProject(r: Row): Project {
     default_force_plan: bool(r.default_force_plan),
     importance_scale: json(r.importance_scale, []),
     effort_scale: json(r.effort_scale, []),
+    github_account: (r.github_account as string | null) ?? null,
+    claude_account: (r.claude_account as string | null) ?? null,
+    claude_allowed: json<string[] | null>(r.claude_allowed, null),
     created_at: String(r.created_at),
   };
 }
@@ -51,6 +54,7 @@ function toRepo(r: Row): Repo {
     local_path: (r.local_path as string | null) ?? null,
     worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
     setup_command: (r.setup_command as string | null) ?? null,
+    github_account: (r.project_github_account as string | null) ?? null,
   };
 }
 
@@ -110,6 +114,8 @@ function toPr(r: Row): PullRequest {
   };
 }
 
+// repos carry their project's GitHub account, so every git/GitHub call knows which token to use
+const REPO_SELECT = 'SELECT r.*, p.github_account AS project_github_account FROM repos r JOIN projects p ON p.id = r.project_id';
 const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects p ON p.id = i.project_id';
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
@@ -144,7 +150,7 @@ export class Store {
     const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at'>): Project {
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
@@ -155,8 +161,9 @@ export class Store {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(
-      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ? WHERE id = ?',
-      n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale), id,
+      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ? WHERE id = ?',
+      n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
+      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, id,
     );
     return this.project(id)!;
   }
@@ -170,10 +177,10 @@ export class Store {
 
   // ---------- repos ----------
   repos(projectId: number): Repo[] {
-    return this.db.all('SELECT * FROM repos WHERE project_id = ? ORDER BY id', projectId).map(toRepo);
+    return this.db.all(`${REPO_SELECT} WHERE r.project_id = ? ORDER BY r.id`, projectId).map(toRepo);
   }
   repo(id: number): Repo | undefined {
-    const r = this.db.get('SELECT * FROM repos WHERE id = ?', id);
+    const r = this.db.get(`${REPO_SELECT} WHERE r.id = ?`, id);
     return r && toRepo(r);
   }
   addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command'>>): Repo {
@@ -306,6 +313,7 @@ export class Store {
       last_text: (r.last_text as string | null) ?? null,
       usage: json(r.usage, null),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
+      claude_account: (r.claude_account as string | null) ?? null,
       item_ids: json<number[]>(r.item_ids, []),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
@@ -333,11 +341,11 @@ export class Store {
       .all(`${SESSION_SELECT} WHERE ${k} AND s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, ...(kind ? [kind] : []), itemId)
       .map((r) => this.toSession(r));
   }
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS),
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;

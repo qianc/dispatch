@@ -38,7 +38,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store);
   const sessions = new Sessions(store, bus, hub, notifier, cfg.maxConcurrent);
-  const github = new GitHub(cfg.githubToken, store, bus, notifier, hub);
+  const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub);
   const assistant = new AssistantTools(store, bus, github, sessions, hub);
   const attachments = new Attachments(cfg.dataDir);
   sessions.attachments = attachments;

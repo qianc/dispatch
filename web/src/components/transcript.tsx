@@ -355,7 +355,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
           <button type="button" className="mt-2 text-[13px] text-accent" onClick={() => setShowOptions(!showOptions)} aria-expanded={showOptions}>
             Run options{runOptionsSummary(options).length ? `: ${runOptionsSummary(options).join(', ')}` : ' (defaults)'} {showOptions ? '▴' : '▾'}
           </button>
-          {showOptions && <div className="mt-2"><RunOptionsFields value={options} set={setOptions} /></div>}
+          {showOptions && <div className="mt-2"><RunOptionsFields value={options} set={setOptions} project={project} /></div>}
         </>
       )}
       {done ? (

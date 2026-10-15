@@ -328,3 +328,33 @@ test('a long chat offers a button back to the newest message', async ({ page }) 
   await expect.poll(() => area.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(50);
   await expect(toBottom).toHaveCount(0);
 });
+
+test('two Claude accounts: settings, project limits, batch picker', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'ACC', name: 'Accproj' } });
+  await page.request.post('/api/projects/ACC/repos', { data: { github_owner: 'me', github_name: 'acc' } });
+
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await expect(page.getByText('Private', { exact: true })).toBeVisible();
+  await expect(page.getByText('needs login')).toBeVisible(); // the work folder has no login
+  await page.getByRole('group', { name: 'Assistant runs on' }).getByRole('radio', { name: 'Work' }).click();
+  await expect(page.getByRole('group', { name: 'Assistant runs on' }).getByRole('radio', { name: 'Work' })).toHaveAttribute('aria-checked', 'true');
+
+  await page.goto('/p/ACC?tab=settings');
+  await page.getByRole('group', { name: 'Allowed Claude accounts' }).getByRole('button', { name: 'Private' }).click(); // only Work left
+  await expect(page.getByRole('group', { name: 'Default Claude account' }).getByRole('radio')).toHaveCount(1);
+  await page.getByRole('group', { name: 'Allowed Claude accounts' }).getByRole('button', { name: 'Private' }).click(); // both again
+
+  await page.request.post('/api/projects/ACC/items', { data: { title: 'Do it' } });
+  await page.goto('/p/ACC');
+  await page.getByText('Do it').click();
+  await page.getByRole('button', { name: 'Start agent on this' }).click();
+  const picker = page.getByRole('dialog').getByRole('group', { name: 'Claude account' });
+  await expect(picker.getByRole('radio')).toHaveCount(2);
+  await picker.getByRole('radio', { name: 'Work' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Start session' }).click();
+  await expect(page.getByText('Claude: Work')).toBeVisible();
+});

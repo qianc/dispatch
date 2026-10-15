@@ -1,5 +1,6 @@
 // GitHub: link PRs to sessions by branch, sync item status, show diffs, merge.
 import { Octokit } from '@octokit/rest';
+import type { GithubAccount } from '../shared/accounts.ts';
 import type { BranchFile, BranchStatus, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
@@ -35,17 +36,40 @@ export class GitHub {
   private notifier: Notifier;
   private hub: WorkerHub;
 
-  constructor(token: string | null, store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub) {
+  readonly accounts: GithubAccount[];
+  private clients = new Map<string, Octokit>();
+
+  constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub) {
+    this.accounts = accounts;
+    for (const a of accounts) this.clients.set(a.name, new Octokit({ auth: a.token, userAgent: 'dispatch' }));
     this.store = store;
     this.bus = bus;
     this.notifier = notifier;
     this.hub = hub;
-    this.octo = token ? new Octokit({ auth: token, userAgent: 'dispatch' }) : null;
+    // the first account is the default (also what older code and tests use)
+    this.octo = accounts.length ? this.clients.get(accounts[0].name)! : null;
   }
 
-  private gh() {
-    if (!this.octo) throw new Error('GITHUB_TOKEN is not set');
-    return this.octo;
+  /** The client for a repo: its project's GitHub account, else the first account. */
+  clientFor(repo: Pick<Repo, 'github_account'> | null): Octokit | null {
+    return (repo?.github_account && this.clients.get(repo.github_account)) || this.octo;
+  }
+
+  private gh(repo: Pick<Repo, 'github_account'> | null) {
+    const c = this.clientFor(repo);
+    if (!c) throw new Error(repo?.github_account ? `GitHub account "${repo.github_account}" is not configured` : 'No GitHub account is configured (GITHUB_ACCOUNTS or GITHUB_TOKEN)');
+    return c;
+  }
+
+  /** Configured accounts with the GitHub login each token belongs to (checked once). */
+  private logins = new Map<string, Promise<string | null>>();
+  async accountsInfo() {
+    return Promise.all(this.accounts.map(async (a) => {
+      if (!this.logins.has(a.name)) {
+        this.logins.set(a.name, this.clients.get(a.name)!.users.getAuthenticated().then((r) => r.data.login, () => null));
+      }
+      return { name: a.name, login: await this.logins.get(a.name)!, git_name: a.git_name, git_email: a.git_email };
+    }));
   }
 
   startPolling(seconds: number) {
@@ -80,8 +104,8 @@ export class GitHub {
         if (pr) out.push(pr);
         continue;
       }
-      if (!this.octo) continue;
-      const { data } = await this.gh().pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
+      if (!this.clientFor(repo)) continue;
+      const { data } = await this.gh(repo).pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
       for (const p of data) out.push(await this.record(s, repo, p as GhPull));
     }
     return out;
@@ -107,7 +131,7 @@ export class GitHub {
     if (!pr) throw new Error('Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) return (await this.syncLocal(this.store.session(pr.session_id)!, repo)) ?? pr;
-    const { data } = await this.gh().pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number });
+    const { data } = await this.gh(repo).pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number });
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
@@ -120,7 +144,7 @@ export class GitHub {
       const st = await this.hub.cmd<BranchStatus>({ c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
       return st.behind;
     }
-    const { data } = await this.gh().repos.compareCommits({ owner: repo.github_owner, repo: repo.github_name, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    const { data } = await this.gh(repo).repos.compareCommits({ owner: repo.github_owner, repo: repo.github_name, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
     return data.behind_by;
   }
 
@@ -163,7 +187,7 @@ export class GitHub {
       }
     }
     const checks = pr.head_sha && !repo.local_path
-      ? (await this.gh().checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
+      ? (await this.gh(repo).checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
       : [];
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
@@ -185,7 +209,7 @@ export class GitHub {
   private async record(s: Session, repo: Repo, p: GhPull): Promise<PullRequest> {
     let full = p;
     if (p.state === 'open' && p.mergeable === undefined) {
-      full = (await this.gh().pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: p.number })).data as GhPull;
+      full = (await this.gh(repo).pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: p.number })).data as GhPull;
     }
     const state: PullRequest['state'] = full.merged_at || full.merged ? 'merged' : full.state === 'open' ? 'open' : 'closed';
     return this.recordRow(s, repo, {
@@ -241,10 +265,10 @@ export class GitHub {
     }
     const o = { owner: repo.github_owner, repo: repo.github_name };
     const [{ data: p }, files, checks] = await Promise.all([
-      this.gh().pulls.get({ ...o, pull_number: pr.number }),
-      this.gh().paginate(this.gh().pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
+      this.gh(repo).pulls.get({ ...o, pull_number: pr.number }),
+      this.gh(repo).paginate(this.gh(repo).pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
       pr.head_sha
-        ? this.gh().checks.listForRef({ ...o, ref: pr.head_sha, per_page: 50 }).then((r) => r.data.check_runs).catch(() => [])
+        ? this.gh(repo).checks.listForRef({ ...o, ref: pr.head_sha, per_page: 50 }).then((r) => r.data.check_runs).catch(() => [])
         : Promise.resolve([]),
     ]);
     return {
@@ -263,7 +287,7 @@ export class GitHub {
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) how = 'local';
     if (how === 'github') {
-      await this.gh().pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
+      await this.gh(repo).pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>({
         c: 'merge_local', repo, branch: pr.head_ref, message: pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`,
@@ -291,7 +315,7 @@ export class GitHub {
     }
     const items = this.store.itemsByIds(s.item_ids);
     const body = [`Opened from Dispatch session #${s.id}.`, '', ...items.map((i) => `- ${i.key}: ${i.title}`)].join('\n');
-    const { data } = await this.gh().pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
+    const { data } = await this.gh(repo).pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
     return this.record(s, repo, data as GhPull);
   }
 }

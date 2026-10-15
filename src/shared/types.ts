@@ -32,6 +32,12 @@ export interface Project {
   default_force_plan: boolean;
   importance_scale: string[];
   effort_scale: string[];
+  /** GitHub account its repos use (null = the first configured) */
+  github_account: string | null;
+  /** default Claude account for its sessions (null = the first configured) */
+  claude_account: string | null;
+  /** Claude accounts its sessions may use (null = any) */
+  claude_allowed: string[] | null;
   created_at: string;
 }
 
@@ -50,6 +56,8 @@ export interface Repo {
   setup_command: string | null;
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
   attached?: boolean;
+  /** the project's GitHub account (filled in by the server; tokens stay in env) */
+  github_account?: string | null;
 }
 
 export interface Source {
@@ -104,6 +112,8 @@ export const runOptions = z.object({
   auto_merge: z.enum(AUTO_MERGE).default('off'),
   /** before auto-merge: if the branch is behind the default branch, ask the agent to update it first */
   base_check: z.boolean().default(true),
+  /** Claude account for this batch; null = the project's default */
+  claude_account: z.string().nullable().default(null),
 });
 export type RunOptions = z.infer<typeof runOptions>;
 export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
@@ -125,6 +135,8 @@ export interface Session {
   last_text: string | null;
   usage: { cost_usd?: number; turns?: number; input_tokens?: number; output_tokens?: number } | null;
   options: RunOptions;
+  /** Claude account this session runs on; fixed once started (null = legacy default) */
+  claude_account: string | null;
   item_ids: number[];
   created_at: string;
   updated_at: string;
@@ -230,6 +242,9 @@ export const projectInput = z.object({
 // .default() even inside .partial(), so a partial of a create schema would reset every field a
 // request leaves out (marking an item wiped its description, scales, tags and source).
 export const projectPatch = z.object({
+  github_account: z.string().nullable().optional(),
+  claude_account: z.string().nullable().optional(),
+  claude_allowed: z.array(z.string()).nullable().optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   default_force_plan: z.boolean().optional(),

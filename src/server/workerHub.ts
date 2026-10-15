@@ -1,6 +1,7 @@
 // Server side of the internal worker WebSocket: one worker connection at a time.
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
+import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 
 export interface HubHandlers {
@@ -12,6 +13,8 @@ export interface HubHandlers {
 
 export class WorkerHub {
   private ws: WebSocket | null = null;
+  /** Claude accounts the worker has (names, labels, login state; never credentials) */
+  claudeAccounts: ClaudeAccountInfo[] = [];
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   handlers!: HubHandlers;
 
@@ -73,6 +76,7 @@ export class WorkerHub {
   private async handle(msg: WorkerToServer) {
     switch (msg.t) {
       case 'hello':
+        if (msg.claude_accounts) this.claudeAccounts = msg.claude_accounts;
         return this.handlers.onHello(msg.live);
       case 'cmd_result': {
         const p = this.pending.get(msg.req_id);

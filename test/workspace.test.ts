@@ -15,7 +15,7 @@ describe('Workspaces (git)', () => {
   let repo: Repo;
   const spec = (branch: string | null, id = 1): StartSpec => ({
     session_id: id, kind: branch ? 'work' : 'planner', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
-    title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,
+    title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null,
   });
 
   beforeEach(() => {
@@ -113,7 +113,7 @@ describe('Workspaces edge cases', () => {
     const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null };
     const spec = (branch: string, id: number): StartSpec => ({
       session_id: id, kind: 'work', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
-      title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,
+      title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null,
     });
     // first use of a repo by three sessions at once: one clone, three worktrees
     const dirs = await Promise.all([ws.prepare(spec('b1', 1)), ws.prepare(spec('b2', 2)), ws.prepare(spec('b3', 3))]);

@@ -25,6 +25,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   Agents push their branches into that folder; Dispatch shows the branch for review (diff on the
   phone) and merges it by pushing the default branch back (the folder's working tree must be clean;
   set `receive.denyCurrentBranch updateInstead` there if the branch is checked out).
+- **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
+  Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
+  session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
+  has its own account setting. Secrets stay in env; see `.env.example`.
 - Links in item text open in the app: repo files (markdown rendered, images shown), and `#anchor`
   links to other items imported from the same backlog.
 

@@ -72,3 +72,9 @@ export interface PrDetail {
 }
 
 export interface Me { authed: boolean; auth_disabled: boolean; vapid_public_key: string }
+
+export interface Accounts {
+  claude: { name: string; label: string; kind: string; logged_in: boolean | null; config_dir: string | null }[];
+  github: { name: string; login: string | null; git_name: string | null; git_email: string | null }[];
+  assistant_claude_account: string | null;
+}

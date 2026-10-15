@@ -75,11 +75,12 @@ export class AssistantTools {
     return it;
   }
 
-  async inspectRepo(input: string) {
+  async inspectRepo(input: string, account: string | null = null) {
     const { owner, name } = parseRepo(input);
-    if (!this.github.octo) return { owner, name, verified: false, note: 'No GitHub token: could not check the repo. Assume branch "main" unless the user says otherwise.' };
+    const client = this.github.clientFor({ github_account: account });
+    if (!client) return { owner, name, verified: false, note: 'No GitHub token: could not check the repo. Assume branch "main" unless the user says otherwise.' };
     try {
-      const { data } = await this.github.octo.repos.get({ owner, repo: name });
+      const { data } = await client.repos.get({ owner, repo: name });
       return { owner: data.owner.login, name: data.name, verified: true, default_branch: data.default_branch, description: data.description, private: data.private, url: data.html_url };
     } catch (e) {
       const status = (e as { status?: number }).status;
@@ -101,7 +102,7 @@ export class AssistantTools {
   async call(s: Session, method: string, p: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case 'inspect_github_repo':
-        return this.inspectRepo(String(p.repo ?? ''));
+        return this.inspectRepo(String(p.repo ?? ''), p.project_key ? this.project(p.project_key).github_account : null);
 
       case 'list_projects':
         return this.store.projects().map((x) => ({ ...this.projectSummary(x), ...this.store.facets(x.id) }));
@@ -282,7 +283,7 @@ export class AssistantTools {
       if (already) return `${info.path} is already in ${project.key}`;
       return { repo: `local: ${repo.local_path}`, default_branch: repo.default_branch, note: mergeNote(info) ?? undefined };
     }
-    const info = await this.inspectRepo(input);
+    const info = await this.inspectRepo(input, project.github_account);
     const default_branch = branch ?? ('default_branch' in info && info.default_branch ? info.default_branch : 'main');
     const exists = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === info.owner.toLowerCase() && r.github_name.toLowerCase() === info.name.toLowerCase());
     if (exists) return `${info.owner}/${info.name} is already in ${project.key}`;

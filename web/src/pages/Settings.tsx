@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Me } from '../api.ts';
+import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
-import { Button, Card, ErrorText, Section } from '../components/ui.tsx';
+import { Button, Card, Chip, ErrorText, Field, Section, Segmented } from '../components/ui.tsx';
 import { currentSubscription, disablePush, enablePush, pushSupported } from '../push.ts';
 
 export function Settings() {
@@ -41,6 +42,7 @@ export function Settings() {
           )}
         </Card>
       </Section>
+      <AccountsSection />
       <Section title="API token">
         <Card className="p-3 space-y-2">
           <p className="text-sm text-muted">For skills and scripts that post retros: <code className="text-[12px]">POST /api/projects/KEY/sources</code> with <code className="text-[12px]">Authorization: Bearer …</code></p>
@@ -59,5 +61,63 @@ export function Settings() {
         <div className="px-3 mt-6"><Button variant="danger" className="w-full" onClick={() => logout.mutate()}>Sign out</Button></div>
       )}
     </Page>
+  );
+}
+
+function AccountsSection() {
+  const qc = useQueryClient();
+  const { data } = useAccounts();
+  const setAssistant = useMutation({
+    mutationFn: (name: string | null) => api.patch('/settings', { assistant_claude_account: name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
+  });
+  if (!data) return null;
+  return (
+    <>
+      <Section title="Claude accounts">
+        <Card>
+          {data.claude.map((a) => (
+            <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
+              <div className="flex items-center gap-2">
+                <span className="flex-1 font-medium">{a.label}</span>
+                <Chip tone={a.logged_in === false ? 'bad' : a.logged_in ? 'ok' : 'neutral'}>{a.logged_in === false ? 'needs login' : a.logged_in ? 'logged in' : a.kind}</Chip>
+              </div>
+              <div className="text-[12px] text-muted break-all">
+                {a.name} · {a.kind === 'config_dir' ? `login in ${a.config_dir}` : a.kind === 'oauth_token' ? 'setup-token' : a.kind === 'api_key' ? 'API key' : `this machine (${a.config_dir ?? '~/.claude'})`}
+              </div>
+              {a.logged_in === false && a.config_dir && (
+                <div className="text-[12px] text-wait mt-1">On the worker machine: <code>CLAUDE_CONFIG_DIR={a.config_dir} claude</code>, then /login</div>
+              )}
+            </div>
+          ))}
+          {!data.claude.length && <p className="p-3 text-[13px] text-muted">The worker has not connected yet.</p>}
+        </Card>
+        {data.claude.length > 1 && (
+          <div className="mx-3 mt-3">
+            <Field label="Assistant runs on" group hint="The Assistant only manages the tracker; it does not read project code.">
+              <Segmented
+                value={data.assistant_claude_account ?? ''}
+                onChange={(v) => setAssistant.mutate(v || null)}
+                options={[{ value: '', label: `Default · ${data.claude[0]?.label}` }, ...data.claude.slice(1).map((a) => ({ value: a.name, label: a.label }))]}
+              />
+            </Field>
+          </div>
+        )}
+      </Section>
+      <Section title="GitHub accounts">
+        <Card>
+          {data.github.map((a) => (
+            <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
+              <div className="flex items-center gap-2">
+                <span className="flex-1 font-medium">{a.name}</span>
+                <Chip tone={a.login ? 'ok' : 'bad'}>{a.login ? `@${a.login}` : 'token not working'}</Chip>
+              </div>
+              <div className="text-[12px] text-muted">{[a.git_name, a.git_email].filter(Boolean).join(' · ') || 'commits use the worker default identity'}</div>
+            </div>
+          ))}
+          {!data.github.length && <p className="p-3 text-[13px] text-muted">No GitHub account configured (GITHUB_ACCOUNTS or GITHUB_TOKEN).</p>}
+        </Card>
+      </Section>
+    </>
   );
 }

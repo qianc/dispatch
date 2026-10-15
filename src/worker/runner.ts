@@ -36,6 +36,11 @@ export interface RunnerOptions {
   idleCloseMs: number;
   assistantModel: string;
   discussModel: string;
+  /** environment for a session's Claude process (its Claude account, its project's GitHub account) */
+  sessionEnv?: (spec: StartSpec) => Record<string, string | undefined>;
+  accountLabel?: (name: string | null) => string;
+  /** how to fix a login for an account (shown in the notice) */
+  loginHint?: (name: string | null) => string;
   /** Folders the assistant may read (absolute, ~ expanded). */
   assistantReadDirs: string[];
 }
@@ -117,6 +122,17 @@ function toolResultText(content: unknown): string {
 
 const MAX_IMAGE_B64 = 14_000_000; // ~10 MB decoded
 
+/** Assistant-message errors that mean the account itself needs the owner (log in, org, billing). */
+export const LOGIN_ERRORS = new Set(['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error', 'cloud_credential_error']);
+
+export function rateLimitNotice(label: string, info: { status: string; resetsAt?: number; rateLimitType?: string; utilization?: number }) {
+  const when = info.resetsAt ? new Date(info.resetsAt * (info.resetsAt < 1e12 ? 1000 : 1)).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : null;
+  const kind = info.rateLimitType ? info.rateLimitType.replace(/_/g, ' ') : 'usage';
+  return info.status === 'rejected'
+    ? { title: `${label}: ${kind} limit reached`, body: `The session waits until the limit resets${when ? ` (${when})` : ''}. To continue sooner, start the remaining work as a new batch on another allowed Claude account.` }
+    : { title: `${label}: close to the ${kind} limit`, body: `${info.utilization ? `${Math.round(info.utilization * 100)}% used. ` : ''}${when ? `Resets ${when}.` : ''}` };
+}
+
 /** Base64 images in a tool result (Read of a png/jpg returns one), so the owner can see them too. */
 export function toolResultImages(content: unknown): { media_type: string; data: string }[] {
   if (!Array.isArray(content)) return [];
@@ -178,6 +194,7 @@ export class ClaudeRunner implements AgentRunner {
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p)) },
         canUseTool: this.canUseTool,
+        ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
         stderr: (d) => process.stderr.write(`[session ${this.sessionId}] ${d}`),
       },
     });
@@ -256,6 +273,15 @@ export class ClaudeRunner implements AgentRunner {
     return { behavior: 'deny', message: `The owner did not approve the plan.${answer.feedback ? ` Feedback: ${answer.feedback}` : ''}` };
   };
 
+  private noticed = new Set<string>();
+
+  /** Tell the owner once per kind: shown in the session and sent as a push. */
+  private noticeOnce(key: string, n: { title: string; body: string }) {
+    if (this.noticed.has(key)) return;
+    this.noticed.add(key);
+    this.deps.emit({ t: 'notice', session_id: this.sessionId, ...n });
+  }
+
   private event(body: SessionEventBody) {
     this.deps.emit({ t: 'event', session_id: this.sessionId, body });
   }
@@ -302,7 +328,19 @@ export class ClaudeRunner implements AgentRunner {
       }
       return;
     }
+    if (m.type === 'rate_limit_event') {
+      const info = m.rate_limit_info;
+      if (info.status !== 'allowed') this.noticeOnce(`rate-${info.status}-${info.rateLimitType ?? ''}`, rateLimitNotice(this.opts.accountLabel?.(this.spec.claude_account) ?? 'Claude', info));
+      return;
+    }
     if (m.type === 'assistant') {
+      if (m.error && LOGIN_ERRORS.has(m.error)) {
+        const label = this.opts.accountLabel?.(this.spec.claude_account) ?? 'Claude';
+        this.noticeOnce(`login-${m.error}`, {
+          title: `${label} account needs attention (${m.error.replace(/_/g, ' ')})`,
+          body: this.opts.loginHint?.(this.spec.claude_account) ?? 'Log in again on the worker machine.',
+        });
+      }
       if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
       if (this.betweenTurns) {
         this.betweenTurns = false;

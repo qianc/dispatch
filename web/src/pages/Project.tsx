@@ -6,6 +6,7 @@ import { api, type Item, type ProjectSummary, type Repo, type Session, type Sour
 import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
+import { useAccounts } from '../accounts.ts';
 import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
@@ -392,6 +393,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           />
         )}
       </Sheet>
+      <ProjectAccounts project={project} onSaved={refresh} />
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
           <label className="flex items-center justify-between text-[14px]">
@@ -466,5 +468,51 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>
       <Button type="button" variant="danger" className="w-full mt-2" onClick={onRemove}>Remove repo</Button>
     </form>
+  );
+}
+
+function ProjectAccounts({ project, onSaved }: { project: ProjectSummary; onSaved: () => void }) {
+  const { data: accounts } = useAccounts();
+  const save = useMutation({ mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch), onSuccess: onSaved });
+  if (!accounts || (accounts.claude.length < 2 && accounts.github.length < 2)) return null;
+  const allowed = project.claude_allowed ?? accounts.claude.map((a) => a.name);
+  const toggle = (name: string) => {
+    const next = allowed.includes(name) ? allowed.filter((n) => n !== name) : [...allowed, name];
+    if (!next.length) return;
+    const all = accounts.claude.every((a) => next.includes(a.name));
+    save.mutate({ claude_allowed: all ? null : next, ...(project.claude_account && !next.includes(project.claude_account) ? { claude_account: next[0] } : {}) });
+  };
+  return (
+    <Section title="Accounts">
+      <Card className="p-3">
+        {accounts.github.length > 1 && (
+          <Field label="GitHub account" group hint="Its repos are cloned, pushed and merged with this account, and commits carry its identity.">
+            <Segmented value={project.github_account ?? accounts.github[0].name} onChange={(v) => save.mutate({ github_account: v })} options={accounts.github.map((a) => ({ value: a.name, label: a.login ? `${a.name} (@${a.login})` : a.name }))} />
+          </Field>
+        )}
+        {accounts.claude.length > 1 && (
+          <>
+            <Field label="Allowed Claude accounts" group hint="A sensitive project can be limited to the work account; batches cannot start on others.">
+              <div className="flex flex-wrap gap-1.5">
+                {accounts.claude.map((a) => (
+                  <button key={a.name} type="button" aria-pressed={allowed.includes(a.name)} onClick={() => toggle(a.name)}
+                    className={cx('rounded-md border text-[13px] h-8 px-2.5', allowed.includes(a.name) ? 'border-accent bg-accent/15 text-fg' : 'border-line text-muted')}>
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Default Claude account" group>
+              <Segmented
+                value={project.claude_account && allowed.includes(project.claude_account) ? project.claude_account : allowed[0]}
+                onChange={(v) => save.mutate({ claude_account: v })}
+                options={accounts.claude.filter((a) => allowed.includes(a.name)).map((a) => ({ value: a.name, label: a.label }))}
+              />
+            </Field>
+          </>
+        )}
+        <ErrorText error={save.error} />
+      </Card>
+    </Section>
   );
 }

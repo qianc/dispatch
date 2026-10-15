@@ -23,7 +23,7 @@ function ownerRepo() {
 const localRepo = (dir: string, extra: Partial<Repo> = {}): Repo => ({ id: 3, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: null, local_path: dir, worktree_from: null, setup_command: null, ...extra });
 const spec = (repo: Repo, id: number, branch: string | null = `dispatch/t-${id}`): StartSpec => ({
   session_id: id, kind: branch ? 'work' : 'planner', project_key: 'T', project_name: 'T', importance_scale: [], effort_scale: [], title: 't', branch,
-  repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null,
+  repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null,
 });
 
 describe('worktrees of the owner\'s repo (local repos, default)', () => {

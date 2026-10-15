@@ -35,6 +35,8 @@ services:
       ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
       DISCUSS_MODEL: ${DISCUSS_MODEL:-haiku}
       LOCAL_REPO_DIRS: ${LOCAL_REPO_DIRS:-}
+    # accounts (see .env.example): pass the GITHUB_ACCOUNT_* / CLAUDE_ACCOUNT_* variables you use
+    env_file: [{ path: .env, required: false }]
       ASSISTANT_READ_DIRS: ${ASSISTANT_READ_DIRS:-/host/projects}
     volumes:
       - workspaces:/workspaces

@@ -1,3 +1,5 @@
+import { githubAccounts, type GithubAccount } from '../shared/accounts.ts';
+
 export interface Config {
   port: number;
   dataDir: string;
@@ -7,6 +9,7 @@ export interface Config {
   disableAuth: boolean;
   workerToken: string;
   githubToken: string | null;
+  githubAccounts: GithubAccount[];
   maxConcurrent: number;
   pollSeconds: number;
   publicUrl: string;
@@ -23,6 +26,7 @@ export function loadConfig(env = process.env): Config {
     disableAuth: env.DISABLE_AUTH === '1',
     workerToken: env.WORKER_TOKEN ?? '',
     githubToken: env.GITHUB_TOKEN || null,
+    githubAccounts: githubAccounts(env),
     maxConcurrent: Number(env.MAX_CONCURRENT_SESSIONS ?? 3),
     pollSeconds: Number(env.GITHUB_POLL_SECONDS ?? 120),
     publicUrl: env.PUBLIC_URL ?? 'http://localhost:3000',

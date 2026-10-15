@@ -7,6 +7,7 @@ import { withLive } from '../live.ts';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
+import { claudeLabel, useAccounts } from '../accounts.ts';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
 export interface ChatMode {
@@ -25,6 +26,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
+  const { data: accounts } = useAccounts();
   const { data } = useQuery({
     queryKey: ['session', id],
     queryFn: async () => {
@@ -118,8 +120,12 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </form>
       }
     >
-      {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && (
-        <div className="px-4 pt-3 text-[12px] text-muted">{runOptionsSummary(s.options).join(' · ')}</div>
+      {(s.kind === 'work' || (accounts?.claude.length ?? 0) > 1) && (
+        <div className="px-4 pt-3 text-[12px] text-muted flex flex-wrap gap-x-2">
+          {(accounts?.claude.length ?? 0) > 1 && <span>Claude: {claudeLabel(accounts, s.claude_account)}</span>}
+          {(accounts?.github.length ?? 0) > 1 && project?.github_account && <span>GitHub: {project.github_account}</span>}
+          {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
+        </div>
       )}
       {(data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">

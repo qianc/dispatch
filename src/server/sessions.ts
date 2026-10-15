@@ -73,6 +73,26 @@ export class Sessions {
 
   // ---------- creation ----------
 
+  /**
+   * The Claude account a new session runs on: the requested one (batch override) or the project's
+   * default, checked against the project's allowed list and, when the worker has said which accounts
+   * it has, against those. null = the legacy default (one unnamed login).
+   */
+  claudeAccountFor(project: Project | null, requested: string | null | undefined, chat?: 'assistant'): string | null {
+    const known = this.hub.claudeAccounts.map((a) => a.name);
+    const name = chat === 'assistant'
+      ? requested ?? this.store.db.setting('assistant_claude_account') ?? null
+      : requested ?? project?.claude_account ?? null;
+    const fallback = known.length && !known.includes('default') ? known[0] : null;
+    const chosen = name ?? (project?.claude_allowed?.length ? project.claude_allowed[0] : fallback);
+    if (!chosen) return null;
+    if (known.length && !known.includes(chosen)) throw new SessionError(`Unknown Claude account "${chosen}". The worker has: ${known.join(', ')}.`);
+    if (project?.claude_allowed && !project.claude_allowed.includes(chosen)) {
+      throw new SessionError(`Project ${project.key} does not allow the Claude account "${chosen}" (allowed: ${project.claude_allowed.join(', ')}).`);
+    }
+    return chosen === 'default' ? null : chosen;
+  }
+
   /** Remember that a proposal card was acted on, so no device offers it again. */
   assertProposalOpen(ref: { session_id: number; event_id: number } | undefined) {
     if (ref && this.store.events(ref.session_id).some((e) => e.body.kind === 'proposal_done' && e.body.event_id === ref.event_id)) {
@@ -88,6 +108,7 @@ export class Sessions {
 
   startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; proposal?: { session_id: number; event_id: number } }): Session {
     this.assertProposalOpen(input.proposal);
+    const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account);
     const items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
@@ -105,6 +126,7 @@ export class Sessions {
       source_id: input.source_id ?? null,
       item_ids: all.map((i) => i.id),
       options: input.options ?? DEFAULT_RUN_OPTIONS,
+      claude_account: claudeAccount,
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
@@ -132,7 +154,7 @@ export class Sessions {
   assistantSend(text: string): Session {
     return this.chatSend(this.currentAssistant(), () => this.store.createSession({
       project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: null, item_ids: [],
+      initial_prompt: text, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant'),
     }), text);
   }
 
@@ -146,7 +168,7 @@ export class Sessions {
     if (!item) throw new SessionError('Unknown item', 404);
     return this.chatSend(this.currentDiscuss(itemId), () => this.store.createSession({
       project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: item.source_id, item_ids: [item.id],
+      initial_prompt: text, source_id: item.source_id, item_ids: [item.id], claude_account: this.claudeAccountFor(this.store.project(item.project_id)!, null),
     }), text);
   }
 
@@ -164,7 +186,7 @@ export class Sessions {
       : 'Look at the open backlog, bugs and the code, and propose the next batch of work. Call propose_batch with your suggestion.');
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [],
+      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null),
     });
     this.markProposalDone(input.proposal, `Started planning chat #${session.id}`);
     this.emitSession(session);
@@ -255,6 +277,11 @@ export class Sessions {
       return;
     }
     switch (msg.t) {
+      case 'notice': {
+        this.addEvent(s.id, { kind: 'error', text: `${msg.title}\n${msg.body}` });
+        this.notify(s, `${s.project_key ?? 'Dispatch'}: ${msg.title}`, msg.body, `notice-${s.id}`);
+        return;
+      }
       case 'event': {
         if (msg.images?.length && msg.body.kind === 'tool_result' && this.attachments) {
           msg.body.images = this.attachments.save(s.id, msg.images);
@@ -404,6 +431,8 @@ export class Sessions {
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
       options: s.options,
+      claude_account: s.claude_account,
+      github_account: project?.github_account ?? null,
       resume,
       resume_note: resumeNote,
     };

@@ -28,7 +28,7 @@ describe('local repos in the worker', () => {
     const dir = localRepo(root);
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
     const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: 'test -f b.txt', local_path: dir, worktree_from: null, setup_command: null };
-    const spec = { session_id: 5, kind: 'work' as const, project_key: 'L', project_name: 'L', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/l-5-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null };
+    const spec = { session_id: 5, kind: 'work' as const, project_key: 'L', project_name: 'L', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/l-5-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
     const wt = await ws.prepare(spec);
     writeFileSync(join(wt, 'b.txt'), 'two\n');
     git(wt, 'add', '.');
