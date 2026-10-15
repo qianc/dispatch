@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Item, type ItemDetail as Detail, type ProjectSummary, type Repo } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
@@ -7,7 +7,9 @@ import { RichMd } from '../components/RichMd.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { ItemFields, SessionRow, StatusPicker, effortLabel } from '../components/items.tsx';
 import { noteProject } from '../nav.ts';
-import { Button, Card, Chip, Empty, ErrorText, ImportanceIcon, Section, Sheet, inputCls, timeAgo } from '../components/ui.tsx';
+import { useVeryWide, useWide } from '../wide.ts';
+import { Discuss } from './Discuss.tsx';
+import { Button, Card, Chip, CloseButton, Empty, ErrorText, ImportanceIcon, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 /** An item. With `itemId` + `onClose` it renders as the desktop drawer next to the project list. */
 export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () => void } = {}) {
@@ -32,16 +34,23 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   const repos: Repo[] = projectFull?.repos ?? [];
   const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => (onClose ? onClose() : nav(`/p/${it!.project.key}`)) });
   useEffect(() => { if (it) noteProject(it.project.key); }, [it?.project.key]);
-  const closeBtn = drawer && (
-    <button onClick={onClose} className="h-10 w-9 flex items-center justify-center text-muted" aria-label="Close item">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-    </button>
-  );
+  const closeBtn = drawer && <CloseButton onClick={onClose} label="Close item" />;
+  // desktop: Discuss opens beside the item (?discuss=1), not on its own screen
+  const wide = useWide();
+  const veryWide = useVeryWide();
+  const [search, setSearch] = useSearchParams();
+  const discussing = wide && search.get('discuss') === '1';
+  const setDiscuss = (on: boolean) => {
+    const next = new URLSearchParams(search);
+    if (on) next.set('discuss', '1');
+    else next.delete('discuss');
+    setSearch(next, { replace: true });
+  };
   if (!it) return <Page title="Item" back={drawer ? undefined : true} keepScroll={!drawer} actions={closeBtn}><Empty>Loading…</Empty></Page>;
   const p = it.project;
   const busy = it.status === 'in_progress' || it.status === 'in_review';
 
-  return (
+  const page = (
     <Page
       title={it.key}
       subtitle={p.name}
@@ -71,9 +80,15 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
           </Link>
         )}
         <div className="mt-4">{it.body_md ? <RichMd ctx={{ project: p, sourceId: it.source_id }}>{it.body_md}</RichMd> : <p className="text-muted text-sm">No description.</p>}</div>
-        <Link to={`/items/${it.id}/discuss`} className="mt-4 flex items-center justify-center gap-1.5 h-10 rounded-lg border border-line bg-raised font-medium active:bg-line">
-          💬 Discuss this
-        </Link>
+        {wide ? (
+          <button onClick={() => setDiscuss(!discussing)} aria-pressed={discussing} className={cx('mt-4 w-full flex items-center justify-center gap-1.5 h-10 rounded-lg border font-medium', discussing ? 'border-accent bg-accent/15' : 'border-line bg-raised hover:bg-line')}>
+            💬 {discussing ? 'Hide the discussion' : 'Discuss this'}
+          </button>
+        ) : (
+          <Link to={`/items/${it.id}/discuss`} className="mt-4 flex items-center justify-center gap-1.5 h-10 rounded-lg border border-line bg-raised font-medium active:bg-line">
+            💬 Discuss this
+          </Link>
+        )}
         {!busy && (
           <div className="flex gap-2 mt-2">
             <Button variant="primary" className="flex-1" onClick={() => setStarting(true)}>Start agent on this</Button>
@@ -111,6 +126,16 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
         <EditItem item={it} onDone={() => { setEditing(false); refresh(); }} onDelete={() => confirm(`Delete ${it.key}?`) && remove.mutate()} />
       </Sheet>
     </Page>
+  );
+  if (!discussing) return page;
+  const chat = <Discuss key={it.id} itemId={it.id} onClose={() => setDiscuss(false)} />;
+  // a drawer next to the list without room for a third column: the chat takes the drawer, ✕ goes back
+  if (drawer && !veryWide) return chat;
+  return (
+    <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-w-0 flex flex-col">{page}</div>
+      <aside className="w-[420px] max-w-[50%] shrink-0 min-h-0 flex flex-col border-l border-line bg-bg" aria-label="Discussion">{chat}</aside>
+    </div>
   );
 }
 

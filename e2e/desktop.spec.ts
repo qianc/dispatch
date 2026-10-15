@@ -108,6 +108,42 @@ test('appearance: light, dark and auto', async ({ page }) => {
 test.describe('with a keyboard and mouse', () => {
   test.use({ isMobile: false, hasTouch: false, viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
 
+test('desktop: Discuss opens beside the item, on its page and in the drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 860 });
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'DIS', name: 'Discussing' } });
+  const it = await (await page.request.post('/api/projects/DIS/items', { data: { title: 'Talk about me', body_md: 'The item body stays in view' } })).json();
+  await page.request.post('/api/projects/DIS/items', { data: { title: 'Another one' } });
+
+  // the item page: item left, chat right
+  await page.goto(`/items/${it.id}`);
+  await page.getByRole('button', { name: /Discuss this/ }).click();
+  const panel = page.getByRole('complementary', { name: 'Discussion' });
+  await panel.getByRole('button', { name: 'Explain this item in plain words' }).click();
+  await expect(panel.getByText('(fake) About DIS-1: Talk about me')).toBeVisible();
+  await expect(page.getByText('The item body stays in view')).toBeVisible();
+  await expect(page).toHaveURL(/discuss=1/);
+  await page.reload();
+  await expect(panel.getByText('(fake) About DIS-1: Talk about me')).toBeVisible();
+  await panel.getByRole('button', { name: 'Close chat' }).click();
+  await expect(panel).toHaveCount(0);
+
+  // the drawer: item | chat, with the list still there
+  await page.goto('/p/DIS');
+  await page.getByRole('main').getByRole('link', { name: /Talk about me/ }).click();
+  await page.getByRole('complementary', { name: 'Item' }).getByRole('button', { name: /Discuss this/ }).click();
+  await expect(panel.getByText('(fake) About DIS-1: Talk about me')).toBeVisible();
+  await expect(page.getByText('The item body stays in view')).toBeVisible();
+  await expect(page.getByRole('main').getByRole('link', { name: /Another one/ })).toBeVisible();
+
+  // narrower: the chat takes the drawer, closing it goes back to the item
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await expect(page.getByText('(fake) About DIS-1: Talk about me')).toBeVisible();
+  await expect(page.getByText('The item body stays in view')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close chat' }).click();
+  await expect(page.getByText('The item body stays in view')).toBeVisible();
+});
+
 test('desktop chat box: grows with its lines; Enter sends, Shift+Enter adds a line', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'KEY', name: 'Keys' } });

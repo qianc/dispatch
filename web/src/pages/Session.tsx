@@ -11,7 +11,7 @@ import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { claudeLabel, useAccounts } from '../accounts.ts';
-import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet } from '../components/ui.tsx';
+import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet } from '../components/ui.tsx';
 
 export interface ChatMode {
   id: number;
@@ -19,6 +19,8 @@ export interface ChatMode {
   subtitle: string;
   back?: string;
   onNew: () => void;
+  /** in a side panel: a close button instead of back */
+  onClose?: () => void;
 }
 
 /** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
@@ -98,6 +100,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <>
           {!isAssistant && <SessionStatusChip status={s.status} />}
           {chat && <Button small variant="ghost" onClick={chat.onNew}>New chat</Button>}
+          {chat?.onClose && <CloseButton onClick={chat.onClose} label="Close chat" />}
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }

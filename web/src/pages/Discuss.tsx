@@ -4,14 +4,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ItemDetail } from '../api.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { Page } from '../components/Layout.tsx';
-import { ErrorText } from '../components/ui.tsx';
+import { CloseButton, ErrorText } from '../components/ui.tsx';
 import { SessionView } from './Session.tsx';
 
 const STARTERS = ['Explain this item in plain words', 'Which files and parts of the code are involved?', 'How big is this, and what is the risk?', 'What would a good first step be?'];
 
-/** "Discuss this": a read-only chat about one item. Doing the work stays on the item page. */
-export function Discuss() {
-  const id = Number(useParams().id);
+/**
+ * "Discuss this": a read-only chat about one item. Doing the work stays on the item page.
+ * Its own screen on phones; on desktop a panel beside the item (`itemId` + `onClose`).
+ */
+export function Discuss({ itemId, onClose }: { itemId?: number; onClose?: () => void } = {}) {
+  const params = useParams();
+  const id = itemId ?? Number(params.id);
   const qc = useQueryClient();
   const { data: item } = useQuery({ queryKey: ['item', id], queryFn: () => api.get<ItemDetail>(`/items/${id}`) });
   const { data } = useQuery({ queryKey: ['discuss', id], queryFn: () => api.get<{ session_id: number | null }>(`/items/${id}/discuss`) });
@@ -24,14 +28,14 @@ export function Discuss() {
     return (
       <SessionView
         key={data.session_id}
-        chat={{ id: data.session_id, title, subtitle: item?.title ?? '', back: `/items/${id}`, onNew: () => newChat.mutate() }}
+        chat={{ id: data.session_id, title, subtitle: item?.title ?? '', back: onClose ? undefined : `/items/${id}`, onNew: () => newChat.mutate(), onClose }}
       />
     );
   }
-  return <EmptyDiscuss id={id} title={title} subtitle={item?.title ?? ''} />;
+  return <EmptyDiscuss id={id} title={title} subtitle={item?.title ?? ''} onClose={onClose} />;
 }
 
-function EmptyDiscuss({ id, title, subtitle }: { id: number; title: string; subtitle: string }) {
+function EmptyDiscuss({ id, title, subtitle, onClose }: { id: number; title: string; subtitle: string; onClose?: () => void }) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const send = useMutation({
@@ -42,7 +46,9 @@ function EmptyDiscuss({ id, title, subtitle }: { id: number; title: string; subt
     <Page
       title={title}
       subtitle={subtitle}
-      back={`/items/${id}`}
+      back={onClose ? undefined : `/items/${id}`}
+      keepScroll={!onClose}
+      actions={onClose && <CloseButton onClick={onClose} label="Close chat" />}
       footer={
         <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending} placeholder="Ask about this item" />
       }

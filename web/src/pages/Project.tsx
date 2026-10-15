@@ -8,7 +8,7 @@ import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items
 import { BatchForm } from '../components/batch.tsx';
 import { useAccounts } from '../accounts.ts';
 import { noteProject } from '../nav.ts';
-import { useWide } from '../wide.ts';
+import { useVeryWide, useWide } from '../wide.ts';
 import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
@@ -23,11 +23,15 @@ export function Project() {
   const [sheet, setSheet] = useState<null | 'item' | 'batch' | 'planner'>(null);
   const [selectMode, setSelectMode] = useState(false);
   const wide = useWide();
+  const veryWide = useVeryWide();
   const openItem = Number(params.get('item')) || null;
   const setOpenItem = (id: number | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set('item', String(id));
-    else next.delete('item');
+    else {
+      next.delete('item');
+      next.delete('discuss');
+    }
     setParams(next, { replace: true });
   };
   useEffect(() => noteProject(key), [key]);
@@ -50,6 +54,8 @@ export function Project() {
   const selecting = wide || selectMode || marked.length > 0;
   const listTab = tab === 'backlog' || tab === 'bugs';
   const drawer = wide && listTab && openItem;
+  // item | chat side by side in the drawer when there is room; the list gets narrower
+  const discussing = veryWide && params.get('discuss') === '1';
 
   return (
     <div className="flex-1 min-h-0 flex">
@@ -117,7 +123,7 @@ export function Project() {
     </Page>
     </div>
     {drawer && (
-      <aside className="w-[min(560px,46%)] shrink-0 min-h-0 flex flex-col border-l border-line bg-bg" aria-label="Item">
+      <aside className={cx('shrink-0 min-h-0 flex flex-col border-l border-line bg-bg', discussing ? 'w-[min(1000px,68%)]' : 'w-[min(560px,46%)]')} aria-label="Item">
         <ItemDetail key={openItem} itemId={openItem} onClose={() => setOpenItem(null)} />
       </aside>
     )}
