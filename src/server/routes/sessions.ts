@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
+import { attentionOf } from '../../shared/attention.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, github, bus }: Ctx) {
@@ -18,8 +19,10 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
   /** Everything waiting on you, across projects. */
   app.get('/api/inbox', async () => {
     const inputs = store.openInputs();
-    const idle = store.sessions({ statuses: ['idle'] });
-    const prs = store.prs({ open_only: true });
+    const idle = store.sessions({ statuses: ['idle'] }).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id })) }));
+    const idleIds = new Set(idle.map((s) => s.id));
+    // PRs of idle sessions are shown on their session's card
+    const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id));
     const sessionIds = new Set([...inputs.map((i) => i.session_id), ...prs.map((p) => p.session_id)]);
     const related = [...sessionIds].map((id) => store.session(id)).filter((s) => !!s);
     return { inputs, idle, prs, sessions: related };

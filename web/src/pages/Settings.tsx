@@ -4,6 +4,7 @@ import { api, type Me } from '../api.ts';
 import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
 import { Button, Card, Chip, ErrorText, Field, Section, Segmented } from '../components/ui.tsx';
+import { getTheme, setTheme, type Theme } from '../theme.ts';
 import { currentSubscription, disablePush, enablePush, pushSupported } from '../push.ts';
 
 export function Settings() {
@@ -23,6 +24,7 @@ export function Settings() {
 
   return (
     <Page title="Settings">
+      <AppearanceSection />
       <Section title="Notifications">
         <Card className="p-3 space-y-2">
           {!pushSupported() ? (
@@ -61,6 +63,22 @@ export function Settings() {
         <div className="px-3 mt-6"><Button variant="danger" className="w-full" onClick={() => logout.mutate()}>Sign out</Button></div>
       )}
     </Page>
+  );
+}
+
+function AppearanceSection() {
+  const [theme, set] = useState<Theme>(getTheme);
+  return (
+    <Section title="Appearance">
+      <div className="mx-3">
+        <Segmented<Theme>
+          value={theme}
+          onChange={(t) => { setTheme(t); set(t); }}
+          options={[{ value: 'auto', label: 'Auto' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
+        />
+        <p className="text-[12px] text-faint mt-1">Auto follows the device setting. Saved on this device.</p>
+      </div>
+    </Section>
   );
 }
 

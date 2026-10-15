@@ -106,6 +106,8 @@ describe('auto-merge', () => {
     await failed.s.ctx.github.syncSession(failed.session);
     expect(failed.merges).toHaveLength(0);
     expect(failed.s.ctx.notifier.sent.filter((n) => n.body.includes('checks failed (lint)'))).toHaveLength(1);
+    const failedCard = (await failed.s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === failed.session.id);
+    expect(failedCard.attention).toMatchObject({ kind: 'merge_blocked', text: expect.stringContaining('checks failed (lint)') });
     await failed.s.app.close();
 
     const pending = await setup([{ name: 'test', status: 'in_progress', conclusion: null, html_url: null }]);
@@ -118,6 +120,10 @@ describe('auto-merge', () => {
     await conflict.s.ctx.github.syncSession(conflict.session);
     expect(conflict.merges).toHaveLength(0);
     expect(conflict.s.ctx.notifier.sent.some((n) => n.body.includes('merge conflicts'))).toBe(true);
+    // the inbox card says so plainly
+    const card = (await conflict.s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === conflict.session.id);
+    expect(card.attention).toMatchObject({ kind: 'merge_blocked' });
+    expect(card.attention.text).toMatch(/Auto-merge stopped: PR #\d+ — it has merge conflicts/);
     await conflict.s.app.close();
   });
 

@@ -111,6 +111,8 @@ function toPr(r: Row): PullRequest {
     head_sha: (r.head_sha as string | null) ?? null,
     last_synced: (r.last_synced as string | null) ?? null,
     local: r.local_path !== null && r.local_path !== undefined,
+    // only while open and for the commit it was checked at
+    blocked: r.state === 'open' && r.blocked && (r.blocked_sha ?? null) === (r.head_sha ?? null) ? String(r.blocked) : null,
   };
 }
 
@@ -449,6 +451,11 @@ export class Store {
       p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, now(),
     );
     return toPr(this.db.get(`${PR_SELECT} WHERE pr.repo_id = ? AND pr.number = ?`, p.repo_id, p.number)!);
+  }
+
+  /** Remember why auto-merge stopped on this PR (at its current head commit). */
+  setPrBlocked(id: number, why: string | null) {
+    this.db.run('UPDATE pull_requests SET blocked = ?, blocked_sha = head_sha WHERE id = ?', why, id);
   }
 
   // ---------- push ----------

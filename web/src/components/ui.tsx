@@ -106,7 +106,7 @@ export const ITEM_STATUS_LABEL: Record<ItemStatus, string> = {
   triage: 'Triage', backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review', done: 'Done', canceled: 'Canceled',
 };
 
-export function ItemStatusIcon({ status }: { status: ItemStatus }) {
+export function ItemStatusIcon({ status, size = 14 }: { status: ItemStatus; size?: number }) {
   const c = {
     triage: 'var(--color-faint)', backlog: 'var(--color-faint)', todo: 'var(--color-muted)', in_progress: 'var(--color-wait)',
     in_review: 'var(--color-run)', done: 'var(--color-accent)', canceled: 'var(--color-faint)',
@@ -115,7 +115,7 @@ export function ItemStatusIcon({ status }: { status: ItemStatus }) {
   const r = 5.5;
   const circ = 2 * Math.PI * 3;
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0" aria-label={ITEM_STATUS_LABEL[status]} role="img">
+    <svg width={size} height={size} viewBox="0 0 14 14" className="shrink-0" aria-label={ITEM_STATUS_LABEL[status]} role="img">
       <circle cx="7" cy="7" r={r} fill="none" stroke={c} strokeWidth="1.5" strokeDasharray={status === 'backlog' || status === 'triage' ? '2 1.6' : undefined} />
       {fill > 0 && <circle cx="7" cy="7" r="3" fill="none" stroke={c} strokeWidth="6" strokeDasharray={`${circ * fill} ${circ}`} transform="rotate(-90 7 7)" />}
       {status === 'canceled' && <path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke={c} strokeWidth="1.5" />}

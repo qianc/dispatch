@@ -1,8 +1,8 @@
 import type {
-  InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source,
+  Attention, InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 
-export type { InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
+export type { Attention, InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
 
 export class ApiError extends Error {
   status: number;
@@ -58,7 +58,7 @@ export interface SessionDetail {
 
 export interface Inbox {
   inputs: PendingInput[];
-  idle: Session[];
+  idle: (Session & { attention: Attention })[];
   prs: PullRequest[];
   sessions: Session[];
 }

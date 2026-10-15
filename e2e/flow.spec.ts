@@ -234,7 +234,7 @@ test('tabs return to where you were; back keeps the list scrolled', async ({ pag
   const before = await area.evaluate((el) => el.scrollTop);
   await row.click();
   await expect(page.getByRole('heading', { name: 'Item number 10' })).toBeVisible();
-  await page.getByRole('button', { name: 'Back' }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(page.getByText('Item number 10', { exact: true })).toBeVisible();
   await page.waitForTimeout(300);
   expect(Math.abs((await area.evaluate((el) => el.scrollTop)) - before)).toBeLessThan(5);

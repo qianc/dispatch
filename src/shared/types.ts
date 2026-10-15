@@ -224,7 +224,16 @@ export interface PullRequest {
   last_synced: string | null;
   /** a local repo's session branch (no GitHub PR): number is -session id, url is empty */
   local: boolean;
+  /** why auto-merge stopped, while that still holds (open, same head commit) */
+  blocked: string | null;
 }
+
+/** What an idle session in the inbox needs from you. */
+export type Attention =
+  | { kind: 'merge_blocked'; text: string; pr_id: number }
+  | { kind: 'review'; text: string; pr_id: number }
+  | { kind: 'merged'; text: string }
+  | { kind: 'turn'; text: string };
 
 // ---------- API inputs ----------
 

@@ -7,6 +7,8 @@ import { withLive } from '../live.ts';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
+import { NextSteps } from '../components/nextSteps.tsx';
+import { attentionOf } from '../../../src/shared/attention.ts';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { Button, Chip, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
@@ -150,6 +152,11 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       <Transcript session={s} events={data.events} inputs={data.inputs} project={project} />
       {s.status === 'queued' && <p className="text-center text-sm text-muted">Waiting for a free worker slot…</p>}
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
+      {s.status === 'idle' && s.kind === 'work' && (
+        <div className="px-4 pt-2 pb-1">
+          <NextSteps sessionId={s.id} attention={attentionOf(s, data.prs)} compact />
+        </div>
+      )}
       <ErrorText error={send.error} />
       <div ref={endRef} />
       {awayFromBottom && (

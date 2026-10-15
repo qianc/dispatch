@@ -5,7 +5,7 @@ import { TokenInput } from './TokenInput.tsx';
 import { ITEM_STATUSES, type ItemStatus, type ItemType, type ProposedItem } from '../../../src/shared/types.ts';
 import { api, type Item, type Project, type Session } from '../api.ts';
 import {
-  Button, Chip, ErrorText, Field, ITEM_STATUS_LABEL, ImportanceIcon, ItemStatusIcon, Segmented, SessionStatusChip, cx, inputCls, timeAgo,
+  Button, Chip, ErrorText, Field, ITEM_STATUS_LABEL, ImportanceIcon, ItemStatusIcon, Segmented, SessionStatusChip, Sheet, cx, inputCls, timeAgo,
 } from './ui.tsx';
 
 export function effortLabel(p: Pick<Project, 'effort_scale'>, effort: number | null) {
@@ -15,15 +15,19 @@ export function effortLabel(p: Pick<Project, 'effort_scale'>, effort: number | n
 const LONG_PRESS_MS = 450;
 
 /**
- * One item in a list. Checkboxes only in select mode; a long press anywhere on the row
- * enters select mode and marks that item. On phones the key shows as its number only.
+ * One item in a list. Checkboxes only in select mode (always on desktop); a long press anywhere on
+ * the row enters select mode and marks that item. Tapping the text always opens the item; the
+ * checkbox column marks it. On phones the key shows as its number only. `onOpen` replaces
+ * navigation (the desktop drawer).
  */
-export function ItemRow({ item, project, selectMode, onToggle, onLongPress, wrap }: {
+export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOpen, active, wrap }: {
   item: Item;
   project: Project;
   selectMode?: boolean;
   onToggle?: (it: Item) => void;
   onLongPress?: (it: Item) => void;
+  onOpen?: (it: Item) => void;
+  active?: boolean;
   wrap?: boolean;
 }) {
   const effort = effortLabel(project, item.effort);
@@ -42,27 +46,28 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, wrap
   const cancel = () => window.clearTimeout(timer.current);
   const meta = [...item.modules, ...item.labels];
   return (
-    <div className="flex items-stretch border-b border-line last:border-b-0 select-none [-webkit-touch-callout:none]">
+    <div className={cx('flex items-stretch border-b border-line last:border-b-0 select-none [-webkit-touch-callout:none]', active && 'bg-raised')}>
       {selectMode && (
         markable ? (
           <button
             onClick={() => onToggle?.(item)}
-            className="pl-3 pr-1 flex items-center shrink-0"
+            className="pl-3 pr-2 flex items-center shrink-0 active:bg-raised"
             aria-label={item.marked ? `Unmark ${item.key}` : `Mark ${item.key} for the agent`}
             aria-pressed={item.marked}
           >
-            <span className={cx('size-5 rounded-md border flex items-center justify-center', item.marked ? 'bg-accent-strong border-accent-strong' : 'border-line')}>
+            <span className={cx('size-5 rounded-md border flex items-center justify-center', item.marked ? 'bg-accent-strong border-accent-strong' : 'border-faint/60')}>
               {item.marked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2"><path d="M2.5 6.5l2.5 2.5 4.5-6" /></svg>}
             </span>
           </button>
-        ) : <span className="w-9 shrink-0" />
+        ) : <span className="w-10 shrink-0" />
       )}
       <Link
         to={`/items/${item.id}`}
         onClick={(e) => {
-          if (pressed.current || selectMode) {
+          if (pressed.current) e.preventDefault(); // the long press already marked it
+          else if (onOpen) {
             e.preventDefault();
-            if (selectMode && !pressed.current && markable) onToggle?.(item);
+            onOpen(item);
           }
           pressed.current = false;
         }}
@@ -71,7 +76,7 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, wrap
         onPointerLeave={cancel}
         onPointerCancel={cancel}
         onContextMenu={(e) => onLongPress && e.preventDefault()}
-        className={cx('flex-1 min-w-0 flex gap-2.5 px-3 py-2.5 active:bg-raised', wrap ? 'items-start' : 'items-center')}
+        className={cx('flex-1 min-w-0 flex gap-2.5 px-3 py-2.5 active:bg-raised', selectMode && 'pl-1', wrap ? 'items-start' : 'items-center')}
       >
         <span className={cx('flex items-center gap-2 shrink-0', wrap && 'pt-0.5')}>
           <ImportanceIcon value={item.importance} label={project.importance_scale[item.importance - 1]} />
@@ -113,6 +118,43 @@ export function SessionRow({ s, showProject }: { s: Session; showProject?: boole
   );
 }
 
+/** Status as icon + label; tap for the list of statuses, each with its icon. */
+export function StatusPicker({ value, onChange, disabled }: { value: ItemStatus; onChange: (s: ItemStatus) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-2.5 h-10 px-3 rounded-lg bg-bg border border-line text-left active:bg-raised disabled:opacity-50"
+        aria-label={`Status: ${ITEM_STATUS_LABEL[value]}. Change status`}
+      >
+        <ItemStatusIcon status={value} size={18} />
+        <span className="flex-1 font-medium">{ITEM_STATUS_LABEL[value]}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-faint"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)} title="Status">
+        <div className="-mx-1">
+          {ITEM_STATUSES.map((st) => (
+            <button
+              key={st}
+              type="button"
+              onClick={() => { onChange(st); setOpen(false); }}
+              aria-pressed={st === value}
+              className={cx('w-full flex items-center gap-3 h-12 px-3 rounded-lg text-left active:bg-raised', st === value && 'bg-raised')}
+            >
+              <ItemStatusIcon status={st} size={20} />
+              <span className="flex-1">{ITEM_STATUS_LABEL[st]}</span>
+              {st === value && <span className="text-accent">✓</span>}
+            </button>
+          ))}
+        </div>
+      </Sheet>
+    </>
+  );
+}
+
 type Draft = { type: ItemType; title: string; body_md: string; importance: number; effort: number | null; status: ItemStatus; labels: string[]; modules: string[] };
 
 export interface Facets { tags: { name: string; count: number }[]; modules: { name: string; count: number }[] }
@@ -142,10 +184,8 @@ export function ItemFields({ project, draft, set, showStatus }: { project: Proje
       <TokenInput label="Modules" value={draft.modules ?? []} onChange={(modules) => set({ modules })} suggestions={facets?.modules.map((m) => m.name) ?? []} placeholder="e.g. charts, export" />
       <TokenInput label="Tags" value={draft.labels ?? []} onChange={(labels) => set({ labels })} suggestions={facets?.tags.map((t) => t.name) ?? []} placeholder="e.g. ux, quick-win" />
       {showStatus && 'status' in draft && (
-        <Field label="Status">
-          <select className={inputCls} value={draft.status} onChange={(e) => set({ status: e.target.value as ItemStatus })}>
-            {ITEM_STATUSES.map((s) => <option key={s} value={s}>{ITEM_STATUS_LABEL[s]}</option>)}
-          </select>
+        <Field label="Status" group>
+          <StatusPicker value={draft.status} onChange={(status) => set({ status })} />
         </Field>
       )}
     </>

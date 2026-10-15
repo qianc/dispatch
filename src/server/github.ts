@@ -167,6 +167,8 @@ export class GitHub {
       const key = `${pr.id}:${pr.head_sha}:${why}`;
       if (this.autoMergeNoted.has(key)) return;
       this.autoMergeNoted.add(key);
+      this.store.setPrBlocked(pr.id, why);
+      this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
       this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} skipped: ${why}` });
       void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `${label}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
     };

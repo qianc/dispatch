@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useQuery } from '@tanstack/react-query';
-import { api, type Inbox, type Session } from '../api.ts';
+import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { useWide } from '../wide.ts';
 import { cx } from './ui.tsx';
 
 const icons = {
@@ -53,19 +54,95 @@ export function Layout() {
   const loc = useLocation();
   // keyed on loc.key too: navigating to the same path is still a navigation (tab change)
   const current = useMemo(() => trackLocation(loc.pathname, loc.search), [loc.pathname, loc.search, loc.key]);
+  const tabs = (
+    <>
+      <TabLink tab="/" current={current} label="Inbox" icon={icons.inbox} badge={waiting} />
+      <TabLink tab="/activity" current={current} label="Activity" icon={icons.activity} badge={running} badgeTone="run" />
+      <TabLink tab="/assistant" current={current} label="Assistant" icon={icons.assistant} />
+      <TabLink tab="/projects" current={current} label="Projects" icon={icons.projects} />
+      <TabLink tab="/settings" current={current} label="Settings" icon={icons.settings} />
+    </>
+  );
   return (
     <>
-      <div className="flex-1 min-h-0 flex flex-col">
-        <Outlet />
+      <div className="flex-1 min-h-0 flex">
+        <Sidebar inbox={inbox} live={live} tabs={tabs} />
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+          <Outlet />
+        </div>
       </div>
-      <nav className="tabbar" aria-label="Main">
-        <TabLink tab="/" current={current} label="Inbox" icon={icons.inbox} badge={waiting} />
-        <TabLink tab="/activity" current={current} label="Activity" icon={icons.activity} badge={running} badgeTone="run" />
-        <TabLink tab="/assistant" current={current} label="Assistant" icon={icons.assistant} />
-        <TabLink tab="/projects" current={current} label="Projects" icon={icons.projects} />
-        <TabLink tab="/settings" current={current} label="Settings" icon={icons.settings} />
-      </nav>
+      <nav className="tabbar" aria-label="Main">{tabs}</nav>
     </>
+  );
+}
+
+/** Desktop: the tabs as a left menu, with what waits on you, what runs, and recent projects. */
+function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: ReactNode }) {
+  const loc = useLocation();
+  const wide = useWide();
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects'), enabled: wide });
+  const [recent, setRecent] = useState(recentProjects);
+  useEffect(() => {
+    const on = () => setRecent(recentProjects());
+    window.addEventListener('dispatch:recent', on);
+    return () => window.removeEventListener('dispatch:recent', on);
+  }, []);
+  if (!wide) return null;
+  const sessions = new Map((inbox?.sessions ?? []).map((s) => [s.id, s]));
+  const needs = [
+    ...(inbox?.inputs ?? []).map((i) => ({ id: i.session_id, key: sessions.get(i.session_id)?.project_key ?? null, title: sessions.get(i.session_id)?.title ?? 'Question', tone: 'wait' as const })),
+    ...(inbox?.idle ?? []).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: (s.attention.kind === 'merge_blocked' ? 'bad' : s.attention.kind === 'merged' ? 'ok' : 'wait') as 'wait' | 'bad' | 'ok' })),
+  ];
+  const runningNow = live.filter((s) => s.status === 'running' || s.status === 'queued');
+  const byKey = new Map(projects.map((p) => [p.key, p]));
+  const recentList = [...recent.filter((k) => byKey.has(k)), ...projects.map((p) => p.key).filter((k) => !recent.includes(k))].slice(0, 6).map((k) => byKey.get(k)!);
+  const here = loc.pathname;
+  const row = (to: string, children: ReactNode, key: string | number) => (
+    <Link key={key} to={to} className={cx('flex items-center gap-2 h-8 px-2 rounded-md text-[13px] hover:bg-raised', here === to ? 'bg-raised text-fg' : 'text-muted')}>{children}</Link>
+  );
+  return (
+    <aside className="sidebar" aria-label="Menu">
+      <div className="px-4 h-[52px] flex items-center font-semibold tracking-tight">Dispatch</div>
+      <nav className="side-tabs px-2" aria-label="Main">{tabs}</nav>
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
+        {needs.length > 0 && (
+          <SideGroup title="Needs you">
+            {needs.slice(0, 10).map((n) => row(`/s/${n.id}`, <>
+              <span className={cx('size-1.5 rounded-full shrink-0', n.tone === 'bad' ? 'bg-bad' : n.tone === 'ok' ? 'bg-ok' : 'bg-wait')} />
+              {n.key && <span className="text-[11px] font-semibold text-accent shrink-0">{n.key}</span>}
+              <span className="truncate">{n.title}</span>
+            </>, `n-${n.id}`))}
+          </SideGroup>
+        )}
+        {runningNow.length > 0 && (
+          <SideGroup title="Running">
+            {runningNow.slice(0, 10).map((s) => row(`/s/${s.id}`, <>
+              <span className={cx('size-1.5 rounded-full shrink-0', s.status === 'running' ? 'bg-run animate-pulse' : 'bg-faint')} />
+              {s.project_key && <span className="text-[11px] font-semibold text-accent shrink-0">{s.project_key}</span>}
+              <span className="truncate">{s.title}</span>
+            </>, `r-${s.id}`))}
+          </SideGroup>
+        )}
+        {recentList.length > 0 && (
+          <SideGroup title="Projects">
+            {recentList.map((p) => row(`/p/${p.key}`, <>
+              <span className="text-[11px] font-semibold text-accent w-9 shrink-0">{p.key}</span>
+              <span className="truncate flex-1">{p.name}</span>
+              {!!p.counts?.waiting && <span className="text-[11px] text-wait">{p.counts.waiting}</span>}
+            </>, `p-${p.key}`))}
+          </SideGroup>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function SideGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="mt-4">
+      <div className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{title}</div>
+      {children}
+    </div>
   );
 }
 

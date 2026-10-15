@@ -113,7 +113,9 @@ describe('local repos end to end on the server', () => {
     expect(review).toMatchObject({ local: true, number: -session.id, state: 'open', mergeable: true, head_ref: 'dispatch/loc-1-add-b' });
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('in_review');
     expect(s.ctx.notifier.sent.some((n) => n.title === 'LOC: branch ready for review')).toBe(true);
-    expect((await s.call('GET', '/inbox')).data.prs.map((p: { id: number }) => p.id)).toContain(review.id);
+    // the idle session's inbox card says what it needs, and carries the review
+    const card = () => s.call('GET', '/inbox').then((r) => r.data.idle.find((x: { id: number }) => x.id === session.id));
+    expect((await card()).attention).toMatchObject({ kind: 'review', pr_id: review.id });
 
     const detail = (await s.call('GET', `/prs/${review.id}`)).data;
     expect(detail.files).toEqual([expect.objectContaining({ filename: 'b.txt', additions: 1 })]);
@@ -123,5 +125,6 @@ describe('local repos end to end on the server', () => {
     expect(merged).toMatchObject({ ok: true, pr: { state: 'merged' } });
     expect(readFileSync(join(repo.local_path, 'b.txt'), 'utf8')).toBe('two\n');
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
+    expect((await card()).attention.kind).toBe('merged');
   });
 });

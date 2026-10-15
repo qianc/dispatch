@@ -58,3 +58,24 @@ export function saveScroll(key: string, top: number) {
 export function savedScroll(key: string): number {
   return scroll[key] ?? 0;
 }
+
+// Recently opened projects (for the desktop sidebar), newest first. Kept on this device.
+const RECENT = 'dispatch:recent-projects';
+
+export function recentProjects(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
+export function noteProject(key: string) {
+  const next = [key, ...recentProjects().filter((k) => k !== key)].slice(0, 8);
+  try {
+    localStorage.setItem(RECENT, JSON.stringify(next));
+  } catch {
+    // storage blocked: no recents
+  }
+  window.dispatchEvent(new Event('dispatch:recent'));
+}

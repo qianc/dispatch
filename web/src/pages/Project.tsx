@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
@@ -7,6 +7,9 @@ import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { useAccounts } from '../accounts.ts';
+import { noteProject } from '../nav.ts';
+import { useWide } from '../wide.ts';
+import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
@@ -19,6 +22,15 @@ export function Project() {
   const nav = useNavigate();
   const [sheet, setSheet] = useState<null | 'item' | 'batch' | 'planner'>(null);
   const [selectMode, setSelectMode] = useState(false);
+  const wide = useWide();
+  const openItem = Number(params.get('item')) || null;
+  const setOpenItem = (id: number | null) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set('item', String(id));
+    else next.delete('item');
+    setParams(next, { replace: true });
+  };
+  useEffect(() => noteProject(key), [key]);
   const { data: project } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
   const { data: items = [] } = useQuery({
     queryKey: ['items', project?.id],
@@ -34,9 +46,14 @@ export function Project() {
 
   const marked = items.filter((i) => i.marked);
   const type: ItemType = tab === 'bugs' ? 'bug' : 'backlog';
-  const selecting = selectMode || marked.length > 0;
+  // desktop has room for the checkboxes all the time
+  const selecting = wide || selectMode || marked.length > 0;
+  const listTab = tab === 'backlog' || tab === 'bugs';
+  const drawer = wide && listTab && openItem;
 
   return (
+    <div className="flex-1 min-h-0 flex">
+    <div className="flex-1 min-w-0 flex flex-col">
     <Page
       title={project.name}
       subtitle={project.key}
@@ -58,7 +75,7 @@ export function Project() {
       <div className="px-3 pt-3 overflow-x-auto">
         <Segmented<Tab>
           value={tab}
-          onChange={(t) => setParams({ tab: t }, { replace: true })}
+          onChange={(t) => setParams(openItem ? { tab: t, item: String(openItem) } : { tab: t }, { replace: true })}
           options={[
             { value: 'backlog', label: 'Backlog' },
             { value: 'bugs', label: 'Bugs' },
@@ -75,6 +92,9 @@ export function Project() {
           project={project}
           onToggle={(it) => toggle.mutate(it)}
           selectMode={selecting}
+          wide={wide}
+          openItem={drawer ? openItem : null}
+          onOpen={wide ? (it) => setOpenItem(it.id) : undefined}
           setSelectMode={(v) => {
             setSelectMode(v);
             if (!v) marked.forEach((m) => toggle.mutate(m));
@@ -95,6 +115,13 @@ export function Project() {
         <PlannerForm project={project} onStarted={(s) => nav(`/s/${s.id}`)} />
       </Sheet>
     </Page>
+    </div>
+    {drawer && (
+      <aside className="w-[min(560px,46%)] shrink-0 min-h-0 flex flex-col border-l border-line bg-bg" aria-label="Item">
+        <ItemDetail key={openItem} itemId={openItem} onClose={() => setOpenItem(null)} />
+      </aside>
+    )}
+    </div>
   );
 }
 
@@ -157,12 +184,15 @@ function ToggleChips({ label, options, value, onChange }: { label: string; optio
   );
 }
 
-function ItemList({ items, project, onToggle, selectMode, setSelectMode }: {
+function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, openItem, onOpen }: {
   items: Item[];
   project: ProjectSummary;
   onToggle: (it: Item) => void;
   selectMode: boolean;
   setSelectMode: (v: boolean) => void;
+  wide: boolean;
+  openItem: number | null;
+  onOpen?: (it: Item) => void;
 }) {
   const [showClosed, setShowClosed] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -187,6 +217,8 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode }: {
       wrap={f.wrap}
       selectMode={markable && selectMode}
       onToggle={onToggle}
+      onOpen={onOpen}
+      active={it.id === openItem}
       onLongPress={markable ? (x) => { setSelectMode(true); if (!x.marked) onToggle(x); } : undefined}
     />
   );
@@ -207,7 +239,7 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode }: {
         <Button small onClick={() => setFilterOpen(true)} aria-label="Filter and view">
           Filter{active > 0 && <span className="ml-0.5 min-w-4 h-4 px-1 rounded-full bg-accent-strong text-white text-[10px] leading-4">{active}</span>}
         </Button>
-        <Button small variant={selectMode ? 'primary' : 'secondary'} onClick={() => setSelectMode(!selectMode)}>{selectMode ? 'Done' : 'Select'}</Button>
+        {!wide && <Button small variant={selectMode ? 'primary' : 'secondary'} onClick={() => setSelectMode(!selectMode)}>{selectMode ? 'Done' : 'Select'}</Button>}
       </div>
       {(active > 0 || f.q) && (
         <div className="px-4 pt-2 text-[12px] text-muted flex items-center gap-2">

@@ -18,6 +18,42 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
+/* Light theme: chosen in Settings (data-theme="light"), or Auto (no attribute) with a light system setting */
+:root[data-theme='light'] {
+  --color-bg: #f4f4f6;
+  --color-panel: #ffffff;
+  --color-raised: #ececf0;
+  --color-line: #dedee3;
+  --color-fg: #1b1b1f;
+  --color-muted: #5d5d66;
+  --color-faint: #8b8b94;
+  --color-accent: #5557e8;
+  --color-accent-strong: #4f50e6;
+  --color-wait: #b8700c;
+  --color-ok: #1b8f5a;
+  --color-bad: #d23445;
+  --color-run: #2276c9;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --color-bg: #f4f4f6;
+    --color-panel: #ffffff;
+    --color-raised: #ececf0;
+    --color-line: #dedee3;
+    --color-fg: #1b1b1f;
+    --color-muted: #5d5d66;
+    --color-faint: #8b8b94;
+    --color-accent: #5557e8;
+    --color-accent-strong: #4f50e6;
+    --color-wait: #b8700c;
+    --color-ok: #1b8f5a;
+    --color-bad: #d23445;
+    --color-run: #2276c9;
+    color-scheme: light;
+  }
+}
+
 /* iOS standalone shell (same pattern as the family apps): the document never scrolls.
    html/body/#root are locked to the viewport, the shell is a flex column, and only
    .scroll-area scrolls. Header and tab bar are opaque flex children, not fixed. */
@@ -34,8 +70,8 @@
   --tab-pt: 8px;
   --tab-row: 48px;
   --tab-pb: max(6px, calc(var(--sab) - 12px));
-  color-scheme: dark;
 }
+:root:not([data-theme='light']) { color-scheme: dark; }
 /* --app-h follows the visible area (set from visualViewport in main.tsx), so the shell sits above
    the on-screen keyboard instead of under it */
 html { height: 100%; height: var(--app-h, 100dvh); overflow: hidden; background: var(--color-panel); }
@@ -95,6 +131,33 @@ body {
   gap: 4px;
   font-size: 10px;
   font-weight: 600;
+}
+/* Desktop: the tab bar becomes a left menu (Sidebar in Layout.tsx); keep in step with wide.ts */
+.sidebar { display: none; }
+@media (min-width: 1024px) {
+  .tabbar { display: none; }
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 248px;
+    flex-shrink: 0;
+    min-height: 0;
+    background: var(--color-panel);
+    border-right: 1px solid var(--color-line);
+    padding-top: var(--sat);
+  }
+  .side-tabs .tab {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .side-tabs .tab:hover { background: var(--color-raised); }
+  .side-tabs .tab[aria-current='page'] { background: var(--color-raised); }
 }
 .pt-safe { padding-top: var(--sat); }
 .pb-safe { padding-bottom: var(--sab); }

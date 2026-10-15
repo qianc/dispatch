@@ -1,16 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ITEM_STATUSES, type ItemStatus } from '../../../src/shared/types.ts';
 import { api, type Item, type ItemDetail as Detail, type ProjectSummary, type Repo } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { RichMd } from '../components/RichMd.tsx';
 import { BatchForm } from '../components/batch.tsx';
-import { ItemFields, SessionRow, effortLabel } from '../components/items.tsx';
-import { Button, Card, Chip, Empty, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
+import { ItemFields, SessionRow, StatusPicker, effortLabel } from '../components/items.tsx';
+import { noteProject } from '../nav.ts';
+import { Button, Card, Chip, Empty, ErrorText, ImportanceIcon, Section, Sheet, inputCls, timeAgo } from '../components/ui.tsx';
 
-export function ItemDetail() {
-  const id = Number(useParams().id);
+/** An item. With `itemId` + `onClose` it renders as the desktop drawer next to the project list. */
+export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () => void } = {}) {
+  const params = useParams();
+  const id = itemId ?? Number(params.id);
+  const drawer = !!onClose;
   const nav = useNavigate();
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -27,13 +30,29 @@ export function ItemDetail() {
   // same key and shape as the project page's query: the cache holds the whole project
   const { data: projectFull } = useQuery({ queryKey: ['project', it?.project.key], queryFn: () => api.get<ProjectSummary>(`/projects/${it!.project.key}`), enabled: !!it });
   const repos: Repo[] = projectFull?.repos ?? [];
-  const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => nav(`/p/${it!.project.key}`) });
-  if (!it) return <Page title="Item" back><Empty>Loading…</Empty></Page>;
+  const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => (onClose ? onClose() : nav(`/p/${it!.project.key}`)) });
+  useEffect(() => { if (it) noteProject(it.project.key); }, [it?.project.key]);
+  const closeBtn = drawer && (
+    <button onClick={onClose} className="h-10 w-9 flex items-center justify-center text-muted" aria-label="Close item">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+    </button>
+  );
+  if (!it) return <Page title="Item" back={drawer ? undefined : true} keepScroll={!drawer} actions={closeBtn}><Empty>Loading…</Empty></Page>;
   const p = it.project;
   const busy = it.status === 'in_progress' || it.status === 'in_review';
 
   return (
-    <Page title={it.key} subtitle={p.name} back={`/p/${p.key}${it.type === 'bug' ? '?tab=bugs' : ''}`} actions={<Button small variant="ghost" onClick={() => setEditing(true)}>Edit</Button>}>
+    <Page
+      title={it.key}
+      subtitle={p.name}
+      back={drawer ? undefined : `/p/${p.key}${it.type === 'bug' ? '?tab=bugs' : ''}`}
+      keepScroll={!drawer}
+      actions={<>
+        {drawer && <Link to={`/items/${it.id}`} className="text-[13px] text-muted px-2" aria-label="Open full page">Open</Link>}
+        <Button small variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
+        {closeBtn}
+      </>}
+    >
       <div className="px-4 pt-4">
         <h2 className="text-lg font-semibold leading-snug">{it.title}</h2>
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
@@ -43,14 +62,7 @@ export function ItemDetail() {
           {it.modules.map((m) => <Chip key={`m-${m}`} tone="accent">{m}</Chip>)}
           {it.labels.map((l) => <Chip key={`t-${l}`}>#{l}</Chip>)}
         </div>
-        <select
-          className={cx(inputCls, 'mt-3')}
-          value={it.status}
-          onChange={(e) => patch.mutate({ status: e.target.value as ItemStatus })}
-          aria-label="Status"
-        >
-          {ITEM_STATUSES.map((s) => <option key={s} value={s}>{ITEM_STATUS_LABEL[s]}</option>)}
-        </select>
+        <div className="mt-3"><StatusPicker value={it.status} onChange={(status) => patch.mutate({ status })} /></div>
         {it.source && (
           <Link to={`/sources/${it.source.id}`} className="block mt-3 rounded-lg border border-line bg-panel px-3 py-2 active:bg-raised">
             <div className="text-[12px] text-faint">From {it.source.kind === 'manual' ? 'document' : it.source.kind.replace('_', ' ')}</div>

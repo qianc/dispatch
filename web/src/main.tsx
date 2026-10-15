@@ -6,6 +6,7 @@ import { registerSW } from 'virtual:pwa-register';
 import './styles.css';
 import { api, type Me } from './api.ts';
 import { connectLive, liveHealthy } from './live.ts';
+import { initTheme } from './theme.ts';
 import { Layout } from './components/Layout.tsx';
 import { Login } from './pages/Login.tsx';
 import { Inbox } from './pages/Inbox.tsx';
@@ -75,6 +76,7 @@ function App() {
 }
 
 (window as unknown as { __dispatchStarted: boolean }).__dispatchStarted = true;
+initTheme();
 
 // Fit the app to the visible area: when the iOS keyboard opens only the visual viewport shrinks, so
 // without this the message box and the newest messages sit under the keyboard. Also mark
