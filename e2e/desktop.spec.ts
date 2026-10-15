@@ -73,6 +73,12 @@ test('inbox: a finished turn says what it needs and can be marked complete', asy
   await page.getByRole('button', { name: /Refactor/ }).click();
   await page.getByRole('button', { name: 'Send answer' }).click();
   await expect(page.getByText('(fake) Done with "Refactor"')).toBeVisible();
+  // the finished turn's tool calls fold into one line; the answer stays out
+  const fold = page.getByRole('button', { name: /Worked · 1 step/ });
+  await expect(fold).toBeVisible();
+  await expect(page.getByText('npm test')).toHaveCount(0);
+  await fold.click();
+  await expect(page.getByText('npm test')).toBeVisible();
 
   await page.getByRole('link', { name: /waiting Inbox/ }).click();
   const card = page.locator('div.rounded-xl', { hasText: 'Turn work' });

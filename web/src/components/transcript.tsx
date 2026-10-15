@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -70,55 +70,116 @@ function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
   );
 }
 
+type Unit = { t: 'event'; e: SessionEvent } | { t: 'work'; key: number; events: SessionEvent[]; live: boolean };
+
+const isWork = (e: SessionEvent) => e.body.kind === 'tool_use' || e.body.kind === 'tool_result' || e.body.kind === 'assistant';
+
+/**
+ * Fold each stretch of work (tool calls and in-between notes) into one "Worked · N steps" line, so
+ * Claude's answer stands out: the last message before a turn ends, a question, or your next message
+ * stays outside the fold. The stretch still running stays open, so you can follow along.
+ */
+function groupWork(events: SessionEvent[], running: boolean): Unit[] {
+  const out: Unit[] = [];
+  let buf: SessionEvent[] = [];
+  const flush = (live: boolean) => {
+    if (!buf.length) return;
+    let lastText = -1;
+    for (let i = buf.length - 1; i >= 0; i--) if (buf[i].body.kind === 'assistant') { lastText = i; break; }
+    // live: fold nothing yet; finished: fold what came before the answer, if it holds any tool call
+    const cut = live ? buf.length : lastText < 0 ? buf.length : lastText;
+    const work = buf.slice(0, cut);
+    const steps = work.filter((e) => e.body.kind === 'tool_use' && !HIDDEN_TOOLS.has(e.body.name)).length;
+    if (steps > 0) out.push({ t: 'work', key: work[0].seq, events: work, live });
+    else for (const e of work) out.push({ t: 'event', e });
+    for (const e of buf.slice(cut)) out.push({ t: 'event', e });
+    buf = [];
+  };
+  for (const e of events) {
+    if (isWork(e)) buf.push(e);
+    else if (e.body.kind === 'proposal_done') continue;
+    else {
+      flush(false);
+      out.push({ t: 'event', e });
+    }
+  }
+  flush(running);
+  return out;
+}
+
+function WorkGroup({ events, live, render, results }: { events: SessionEvent[]; live: boolean; render: (e: SessionEvent) => ReactNode; results: Map<string, ToolResult> }) {
+  const [open, setOpen] = useState(live);
+  useEffect(() => { if (!live) setOpen(false); }, [live]);
+  const uses = events.flatMap((e) => (e.body.kind === 'tool_use' && !HIDDEN_TOOLS.has(e.body.name) ? [e.body] : []));
+  const failed = uses.filter((u) => results.get(u.tool_use_id)?.is_error).length;
+  const names = [...new Set(uses.map((u) => u.name.replace(/^mcp__dispatch__/, '')))].slice(0, 4).join(', ');
+  const images = uses.flatMap((u) => results.get(u.tool_use_id)?.images ?? []);
+  return (
+    <div className="rounded-lg border border-line/70">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-muted" aria-expanded={open}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={cx('shrink-0 transition-transform', open && 'rotate-90')}><path d="M9 6l6 6-6 6" /></svg>
+        <span className="font-medium shrink-0">{live ? 'Working' : 'Worked'} · {uses.length} step{uses.length === 1 ? '' : 's'}</span>
+        <span className="truncate text-faint">{names}</span>
+        {failed > 0 && <span className="text-bad shrink-0">{failed} failed</span>}
+      </button>
+      {open ? (
+        <div className="px-2.5 pb-2 space-y-2 border-t border-line/70 pt-2 text-[14px] text-muted">{events.map(render)}</div>
+      ) : images.length > 0 && <div className="pb-2"><Thumbs images={images} /></div>}
+    </div>
+  );
+}
+
 export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
     for (const e of events) if (e.body.kind === 'tool_result') m.set(e.body.tool_use_id, e.body);
     return m;
   }, [events]);
+  const units = useMemo(() => groupWork(events, session.status === 'running'), [events, session.status]);
   const inputById = new Map(inputs.map((i) => [i.id, i]));
   const proposalDone = new Map<number, string>();
   for (const e of events) if (e.body.kind === 'proposal_done') proposalDone.set(e.body.event_id, e.body.note);
+  const render = (e: SessionEvent): ReactNode => {
+    const b = e.body;
+    switch (b.kind) {
+      case 'user':
+        return (
+          <div key={e.seq} className="flex justify-end">
+            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-strong/25 border border-accent/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
+          </div>
+        );
+      case 'assistant':
+        return <AssistantText key={e.seq} text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />;
+      case 'tool_use':
+        return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
+      case 'tool_result':
+        return null;
+      case 'result':
+        return (
+          <div key={e.seq} className="flex items-center gap-2 text-[11px] text-faint py-1">
+            <div className="h-px flex-1 bg-line" />
+            {b.subtype === 'success' ? 'turn finished' : b.subtype.replace(/_/g, ' ')}
+            {typeof b.cost_usd === 'number' && b.cost_usd > 0 && ` · $${b.cost_usd.toFixed(2)}`}
+            <div className="h-px flex-1 bg-line" />
+          </div>
+        );
+      case 'system':
+        return <div key={e.seq} className="text-[12px] text-faint text-center">{b.text}</div>;
+      case 'error':
+        return <div key={e.seq} className="text-[13px] text-bad rounded-lg bg-bad/10 border border-bad/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>;
+      case 'input_request': {
+        const input = inputById.get(b.input_id);
+        return input ? <InputCard key={e.seq} input={input} /> : null;
+      }
+      case 'proposal':
+        return <ProposalLoader key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
+      case 'proposal_done':
+        return null;
+    }
+  };
   return (
     <div className="px-4 py-3 space-y-2">
-      {events.map((e) => {
-        const b = e.body;
-        switch (b.kind) {
-          case 'user':
-            return (
-              <div key={e.seq} className="flex justify-end">
-                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-strong/25 border border-accent/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
-              </div>
-            );
-          case 'assistant':
-            return <AssistantText key={e.seq} text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />;
-          case 'tool_use':
-            return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
-          case 'tool_result':
-            return null;
-          case 'result':
-            return (
-              <div key={e.seq} className="flex items-center gap-2 text-[11px] text-faint py-1">
-                <div className="h-px flex-1 bg-line" />
-                {b.subtype === 'success' ? 'turn finished' : b.subtype.replace(/_/g, ' ')}
-                {typeof b.cost_usd === 'number' && b.cost_usd > 0 && ` · $${b.cost_usd.toFixed(2)}`}
-                <div className="h-px flex-1 bg-line" />
-              </div>
-            );
-          case 'system':
-            return <div key={e.seq} className="text-[12px] text-faint text-center">{b.text}</div>;
-          case 'error':
-            return <div key={e.seq} className="text-[13px] text-bad rounded-lg bg-bad/10 border border-bad/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>;
-          case 'input_request': {
-            const input = inputById.get(b.input_id);
-            return input ? <InputCard key={e.seq} input={input} /> : null;
-          }
-          case 'proposal':
-            return <ProposalLoader key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
-          case 'proposal_done':
-            return null;
-        }
-      })}
+      {units.map((u) => (u.t === 'event' ? render(u.e) : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} render={render} results={results} />))}
     </div>
   );
 }
