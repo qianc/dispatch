@@ -59,7 +59,15 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       if (pinned.current) setUnseen(false);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    // keyboard opening/closing resizes the chat area: stay at the newest message if we were there
+    const onViewport = () => {
+      if (pinned.current) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
+    };
+    window.addEventListener('dispatch:viewport', onViewport);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('dispatch:viewport', onViewport);
+    };
   }, [data?.session.id]);
   useLayoutEffect(() => {
     // set the chat area's own scrollTop: scrollIntoView() also scrolls the locked page on iOS,

@@ -76,6 +76,22 @@ function App() {
 
 (window as unknown as { __dispatchStarted: boolean }).__dispatchStarted = true;
 
+// Fit the app to the visible area: when the iOS keyboard opens only the visual viewport shrinks, so
+// without this the message box and the newest messages sit under the keyboard. Also mark
+// "keyboard open" (the tab bar hides) and announce the change so chats can stay pinned to the bottom.
+const vv = window.visualViewport;
+const fitViewport = () => {
+  const h = vv ? vv.height : window.innerHeight;
+  document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
+  document.documentElement.classList.toggle('kb-open', !!vv && window.innerHeight - vv.height > 120);
+  if (vv?.offsetTop) window.scrollTo(0, 0);
+  window.dispatchEvent(new Event('dispatch:viewport'));
+};
+vv?.addEventListener('resize', fitViewport);
+vv?.addEventListener('scroll', fitViewport);
+window.addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
+fitViewport();
+
 // The document is locked (only .scroll-area scrolls). If iOS scrolls it anyway (keyboard, focus),
 // the layout shifts and taps miss the tab bar: put it back.
 const unshift = () => {

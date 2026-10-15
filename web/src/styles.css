@@ -36,7 +36,11 @@
   --tab-pb: max(6px, calc(var(--sab) - 12px));
   color-scheme: dark;
 }
-html { height: 100%; height: 100dvh; overflow: hidden; background: var(--color-panel); }
+/* --app-h follows the visible area (set from visualViewport in main.tsx), so the shell sits above
+   the on-screen keyboard instead of under it */
+html { height: 100%; height: var(--app-h, 100dvh); overflow: hidden; background: var(--color-panel); }
+/* while typing, the tab bar makes room for the chat (as chat apps do) */
+.kb-open .tabbar { display: none; }
 /* Installed app: extra room so iOS 26's blur under the status bar does not cover the title.
    Height stays 100dvh: the short-viewport bug (fixed with 100lvh elsewhere) only hits apps with a
    black-translucent status bar, which this app does not use; 100lvh here pushes the tab bar off-screen. */
