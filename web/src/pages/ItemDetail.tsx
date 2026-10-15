@@ -1,3 +1,4 @@
+import { Icon } from '../components/icons.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -82,11 +83,11 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
         <div className="mt-4">{it.body_md ? <RichMd ctx={{ project: p, sourceId: it.source_id }}>{it.body_md}</RichMd> : <p className="text-muted text-sm">No description.</p>}</div>
         {wide ? (
           <button onClick={() => setDiscuss(!discussing)} aria-pressed={discussing} className={cx('mt-4 w-full flex items-center justify-center gap-1.5 h-10 rounded-lg border font-medium', discussing ? 'border-accent bg-accent/15' : 'border-line bg-raised hover:bg-line')}>
-            💬 {discussing ? 'Hide the discussion' : 'Discuss this'}
+            <Icon name="discuss" size={20} /> {discussing ? 'Hide the discussion' : 'Discuss this'}
           </button>
         ) : (
           <Link to={`/items/${it.id}/discuss`} className="mt-4 flex items-center justify-center gap-1.5 h-10 rounded-lg border border-line bg-raised font-medium active:bg-line">
-            💬 Discuss this
+            <Icon name="discuss" size={20} /> Discuss this
           </Link>
         )}
         {!busy && (

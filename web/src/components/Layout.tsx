@@ -5,15 +5,9 @@ import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type
 import { useQuery } from '@tanstack/react-query';
 import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { useWide } from '../wide.ts';
+import { icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 
-const icons = {
-  inbox: <path d="M3 12h4l2 3h6l2-3h4M5 5h14l2 7v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z" />,
-  activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
-  projects: <path d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z" />,
-  assistant: <path d="M4 5h16v11H9l-5 4zM8 9.5h8M8 12.5h5" />,
-  settings: <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm8 3-2-.6-.6-1.5 1-1.9-1.4-1.4-1.9 1-1.5-.6L13 4h-2l-.6 2-1.5.6-1.9-1L5.6 7l1 1.9L6 10.4 4 11v2l2 .6.6 1.5-1 1.9L7 18.4l1.9-1 1.5.6.6 2h2l.6-2 1.5-.6 1.9 1 1.4-1.4-1-1.9.6-1.5 2-.6z" />,
-};
 
 function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab: Tab; current: Tab; label: string; icon: ReactNode; badge?: number; badgeTone?: 'wait' | 'run' }) {
   const nav = useNavigate();

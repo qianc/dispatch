@@ -1,3 +1,4 @@
+import { Icon } from '../components/icons.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -66,7 +67,7 @@ export function Project() {
       back="/projects"
       actions={
         <>
-          <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude">💬 Plan</Button>
+          <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude"><Icon name="discuss" size={16} /> Plan</Button>
           {(tab === 'backlog' || tab === 'bugs') && <Button small variant="ghost" onClick={() => setSheet('item')} aria-label="New item">+</Button>}
         </>
       }
