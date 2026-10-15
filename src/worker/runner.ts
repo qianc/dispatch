@@ -263,7 +263,15 @@ export class ClaudeRunner implements AgentRunner {
   private async loop() {
     try {
       for await (const m of this.q!) this.handle(m);
-      if (!this.closed) this.close();
+      if (!this.closed) {
+        // the Claude process ended without being asked to (crash, kill): say so, or the session
+        // would show "running" forever with nothing behind it
+        this.deps.emit({
+          t: 'status', session_id: this.sessionId, status: 'failed',
+          error: 'The Claude process stopped unexpectedly. Your work in the worktree is kept; send a message to resume where it stopped.',
+        });
+        this.close();
+      }
     } catch (e) {
       if (this.closed) return;
       this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'failed', error: (e as Error).message });
