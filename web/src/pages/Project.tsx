@@ -11,7 +11,7 @@ import { useAccounts } from '../accounts.ts';
 import { noteProject } from '../nav.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { ItemDetail } from './ItemDetail.tsx';
-import { Button, Card, Chip, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
+import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
@@ -28,11 +28,20 @@ export function Project() {
   const openItem = Number(params.get('item')) || null;
   const setOpenItem = (id: number | null) => {
     const next = new URLSearchParams(params);
+    next.delete('new');
     if (id) next.set('item', String(id));
     else {
       next.delete('item');
       next.delete('discuss');
     }
+    setParams(next, { replace: true });
+  };
+  /** desktop: the new-item form opens in the side panel (?new=1) */
+  const openNew = () => {
+    const next = new URLSearchParams(params);
+    next.delete('item');
+    next.delete('discuss');
+    next.set('new', '1');
     setParams(next, { replace: true });
   };
   useEffect(() => noteProject(key), [key]);
@@ -54,7 +63,8 @@ export function Project() {
   // desktop has room for the checkboxes all the time
   const selecting = wide || selectMode || marked.length > 0;
   const listTab = tab === 'backlog' || tab === 'bugs';
-  const drawer = wide && listTab && openItem;
+  const creating = wide && listTab && params.get('new') === '1';
+  const drawer = wide && listTab && openItem && !creating;
   // item | chat side by side in the drawer when there is room; the list gets narrower
   const discussing = veryWide && params.get('discuss') === '1';
 
@@ -68,7 +78,11 @@ export function Project() {
       actions={
         <>
           <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude"><Icon name="discuss" size={16} /> Plan</Button>
-          {(tab === 'backlog' || tab === 'bugs') && <Button small variant="ghost" onClick={() => setSheet('item')} aria-label="New item">+</Button>}
+          {listTab && (wide ? (
+            <Button small variant="primary" className="ml-1 pl-2" onClick={openNew}><Icon name="plus" size={18} strokeWidth={2} /> {tab === 'bugs' ? 'New bug' : 'New item'}</Button>
+          ) : (
+            <button onClick={() => setSheet('item')} aria-label="New item" className="size-10 flex items-center justify-center rounded-lg text-fg active:bg-raised"><Icon name="plus" size={24} strokeWidth={2} /></button>
+          ))}
         </>
       }
       footer={marked.length > 0 && (tab === 'backlog' || tab === 'bugs') ? (
@@ -123,6 +137,15 @@ export function Project() {
       </Sheet>
     </Page>
     </div>
+    {creating && (
+      <aside className="w-[min(560px,46%)] shrink-0 min-h-0 flex flex-col border-l border-line bg-bg" aria-label="New item">
+        <Page title={tab === 'bugs' ? 'New bug' : 'New backlog item'} subtitle={project.name} keepScroll={false} actions={<CloseButton onClick={() => setOpenItem(null)} label="Close" />}>
+          <div className="px-4 pt-4">
+            <NewItemForm key={type} project={project} type={type} onDone={(it) => setOpenItem(it.id)} />
+          </div>
+        </Page>
+      </aside>
+    )}
     {drawer && (
       <aside className={cx('shrink-0 min-h-0 flex flex-col border-l border-line bg-bg', discussing ? 'w-[min(1000px,68%)]' : 'w-[min(560px,46%)]')} aria-label="Item">
         <ItemDetail key={openItem} itemId={openItem} onClose={() => setOpenItem(null)} />

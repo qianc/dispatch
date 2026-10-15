@@ -36,6 +36,14 @@ test('desktop: left menu, checkboxes always on, items open in a drawer', async (
   await expect(page.getByRole('link', { name: /Second thing/ })).toBeVisible(); // list still there
   await drawer.getByRole('button', { name: 'Close item' }).click();
   await expect(drawer).toHaveCount(0);
+
+  // a new item is written in the side panel too, and opens there once created
+  await page.getByRole('button', { name: 'New item' }).click();
+  const form = page.getByRole('complementary', { name: 'New item' });
+  await form.getByLabel('Title').fill('Made in the panel');
+  await form.getByRole('button', { name: 'Create' }).click();
+  await expect(drawer.getByRole('heading', { name: 'Made in the panel' })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('link', { name: /Made in the panel/ })).toBeVisible();
 });
 
 test('phone: in select mode a tap on the text opens the item, the checkbox marks it', async ({ page }) => {

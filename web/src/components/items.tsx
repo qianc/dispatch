@@ -170,6 +170,11 @@ export function ItemFields({ project, draft, set, showStatus }: { project: Proje
       <Field label="Type" group>
         <Segmented<ItemType> value={draft.type} onChange={(type) => set({ type })} options={[{ value: 'backlog', label: 'Backlog' }, { value: 'bug', label: 'Bug' }]} />
       </Field>
+      {showStatus && 'status' in draft && (
+        <Field label="Status" group>
+          <StatusPicker value={draft.status} onChange={(status) => set({ status })} />
+        </Field>
+      )}
       <Field label="Title">
         <input className={inputCls} value={draft.title} onChange={(e) => set({ title: e.target.value })} autoFocus />
       </Field>
@@ -184,11 +189,6 @@ export function ItemFields({ project, draft, set, showStatus }: { project: Proje
       </Field>
       <TokenInput label="Modules" value={draft.modules ?? []} onChange={(modules) => set({ modules })} suggestions={facets?.modules.map((m) => m.name) ?? []} placeholder="e.g. charts, export" />
       <TokenInput label="Tags" value={draft.labels ?? []} onChange={(labels) => set({ labels })} suggestions={facets?.tags.map((t) => t.name) ?? []} placeholder="e.g. ux, quick-win" />
-      {showStatus && 'status' in draft && (
-        <Field label="Status" group>
-          <StatusPicker value={draft.status} onChange={(status) => set({ status })} />
-        </Field>
-      )}
     </>
   );
 }
