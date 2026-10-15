@@ -3,7 +3,7 @@ import { z } from 'zod';
 // ---------- domain ----------
 
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
-export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'canceled'] as const;
+export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled'] as const;
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
 export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss'] as const;
 /** Light read-only chats: no worker slot, not listed as agent work, no push when a reply is ready. */

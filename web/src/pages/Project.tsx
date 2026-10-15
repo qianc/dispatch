@@ -201,7 +201,8 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
   const active = f.tags.length + f.modules.length + f.importance.length;
   const shown = items.filter((i) => matches(i, f));
   const open = shown.filter((i) => OPEN.includes(i.status));
-  const closed = shown.filter((i) => !OPEN.includes(i.status));
+  const held = shown.filter((i) => i.status === 'hold').sort((a, b) => b.importance - a.importance || b.number - a.number);
+  const closed = shown.filter((i) => !OPEN.includes(i.status) && i.status !== 'hold');
   const groups = [
     { title: 'In review', items: open.filter((i) => i.status === 'in_review') },
     { title: 'In progress', items: open.filter((i) => i.status === 'in_progress') },
@@ -247,12 +248,17 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
           <button className="text-accent" onClick={() => setF({ ...NO_FILTER, wrap: f.wrap })}>Clear</button>
         </div>
       )}
-      {!open.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
+      {!open.length && !held.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
       {groups.map((g) => (
         <Section key={g.title} title={`${g.title} · ${g.items.length}`}>
           <Card>{g.items.map((it) => row(it))}</Card>
         </Section>
       ))}
+      {held.length > 0 && (
+        <Section title={`On hold · ${held.length}`}>
+          <Card>{held.map((it) => row(it))}</Card>
+        </Section>
+      )}
       {closed.length > 0 && (
         <Section title={`Closed · ${closed.length}`} action={<button className="text-[12px] text-accent" onClick={() => setShowClosed(!showClosed)}>{showClosed ? 'Hide' : 'Show'}</button>}>
           {showClosed && <Card>{closed.map((it) => row(it, false))}</Card>}

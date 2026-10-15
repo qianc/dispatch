@@ -101,7 +101,7 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       only_under: z.array(z.string()).optional().describe('Import only sections under headings containing one of these texts, e.g. ["Open work"]'),
       heading_level: z.number().int().min(1).max(6).optional().describe('Heading level of the items (default: detected)'),
       type: z.enum(['backlog', 'bug']).default('backlog'),
-      status: z.string().optional().describe('Status for the items, e.g. canceled for a "won\'t fix" group'),
+      status: z.string().optional().describe('Status for the items, e.g. canceled for a "won\'t fix" group, hold for parked work'),
       source_title: z.string().optional(),
       reporter: z.string().optional(),
       version_tag: z.string().optional(),
@@ -151,7 +151,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
   }
   const tools: SdkMcpToolDefinition<any>[] = [
     tool('list_items', 'List open tracker items in this project (key, title, type, status, importance, effort).', {
-      status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses'),
+      status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses (not hold, done or canceled)'),
       type: z.enum(['backlog', 'bug']).optional(),
     }, call(rpc, 'list_items')),
     tool('get_item', 'Read one item with its description, comments and source (retro/report).', {

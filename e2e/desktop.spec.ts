@@ -60,6 +60,13 @@ test('item status shows as an icon with a picker', async ({ page }) => {
   await page.getByRole('button', { name: /Status: Backlog/ }).click();
   await page.getByRole('dialog', { name: 'Status' }).getByRole('button', { name: /In progress/ }).click();
   await expect(page.getByRole('button', { name: /Status: In progress/ })).toBeVisible();
+  // on hold: its own group above Closed
+  await page.getByRole('button', { name: /Status: In progress/ }).click();
+  await page.getByRole('dialog', { name: 'Status' }).getByRole('button', { name: /On hold/ }).click();
+  await expect(page.getByRole('button', { name: /Status: On hold/ })).toBeVisible();
+  await page.goto('/p/STS');
+  await expect(page.getByText('On hold · 1')).toBeVisible();
+  await expect(page.getByText('Status item')).toBeVisible();
 });
 
 test('inbox: a finished turn says what it needs and can be marked complete', async ({ page }) => {

@@ -103,21 +103,22 @@ export function SessionStatusChip({ status }: { status: SessionStatus }) {
 }
 
 export const ITEM_STATUS_LABEL: Record<ItemStatus, string> = {
-  triage: 'Triage', backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review', done: 'Done', canceled: 'Canceled',
+  triage: 'Triage', backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review', hold: 'On hold', done: 'Done', canceled: 'Canceled',
 };
 
 export function ItemStatusIcon({ status, size = 14 }: { status: ItemStatus; size?: number }) {
   const c = {
     triage: 'var(--color-faint)', backlog: 'var(--color-faint)', todo: 'var(--color-muted)', in_progress: 'var(--color-wait)',
-    in_review: 'var(--color-run)', done: 'var(--color-accent)', canceled: 'var(--color-faint)',
+    in_review: 'var(--color-run)', hold: 'var(--color-muted)', done: 'var(--color-accent)', canceled: 'var(--color-faint)',
   }[status];
-  const fill = { triage: 0, backlog: 0, todo: 0, in_progress: 0.5, in_review: 0.75, done: 1, canceled: 0 }[status];
+  const fill = { triage: 0, backlog: 0, todo: 0, in_progress: 0.5, in_review: 0.75, hold: 0, done: 1, canceled: 0 }[status];
   const r = 5.5;
   const circ = 2 * Math.PI * 3;
   return (
     <svg width={size} height={size} viewBox="0 0 14 14" className="shrink-0" aria-label={ITEM_STATUS_LABEL[status]} role="img">
       <circle cx="7" cy="7" r={r} fill="none" stroke={c} strokeWidth="1.5" strokeDasharray={status === 'backlog' || status === 'triage' ? '2 1.6' : undefined} />
       {fill > 0 && <circle cx="7" cy="7" r="3" fill="none" stroke={c} strokeWidth="6" strokeDasharray={`${circ * fill} ${circ}`} transform="rotate(-90 7 7)" />}
+      {status === 'hold' && <path d="M5.6 4.8v4.4M8.4 4.8v4.4" stroke={c} strokeWidth="1.5" strokeLinecap="round" />}
       {status === 'canceled' && <path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke={c} strokeWidth="1.5" />}
     </svg>
   );
