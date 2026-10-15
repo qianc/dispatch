@@ -49,6 +49,8 @@ function toRepo(r: Row): Repo {
     default_branch: String(r.default_branch),
     check_command: (r.check_command as string | null) ?? null,
     local_path: (r.local_path as string | null) ?? null,
+    worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
+    setup_command: (r.setup_command as string | null) ?? null,
   };
 }
 
@@ -174,17 +176,17 @@ export class Store {
     const r = this.db.get('SELECT * FROM repos WHERE id = ?', id);
     return r && toRepo(r);
   }
-  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path'> & { local_path?: string | null }): Repo {
+  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command'>>): Repo {
     const { lastId } = this.db.run(
-      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path) VALUES (?, ?, ?, ?, ?, ?)',
-      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null,
+      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null,
     );
     return this.repo(lastId)!;
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };
-    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ? WHERE id = ?',
-      n.github_owner, n.github_name, n.default_branch, n.check_command, id);
+    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ? WHERE id = ?',
+      n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, id);
     return this.repo(id)!;
   }
   deleteRepo(id: number) {

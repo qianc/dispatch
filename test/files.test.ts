@@ -43,7 +43,7 @@ describe('reading a repo file from the default branch', () => {
     git('commit', '-m', 'init');
     git('push', bare, 'main');
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${remoteRoot}`);
-    const repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null };
+    const repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null };
     expect((await ws.readRepoFile(repo, 'docs/a.md')).toString()).toBe('# Hello\n');
     expect([...(await ws.readRepoFile(repo, 'pic.png'))]).toEqual([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
     await expect(ws.readRepoFile(repo, 'missing.md')).rejects.toThrow();

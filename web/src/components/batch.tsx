@@ -45,6 +45,12 @@ export function RunOptionsFields({ value, set }: { value: RunOptions; set: (p: P
       <Field label="When done" group hint={value.auto_merge !== 'off' ? 'Merges the PR when the agent is done, it is mergeable and every check passed. Otherwise you get a push saying why not.' : undefined}>
         <Segmented value={value.auto_merge} onChange={(auto_merge) => set({ auto_merge })} options={opts('auto_merge')} />
       </Field>
+      {value.auto_merge !== 'off' && (
+        <label className="flex items-start gap-2 mb-3 text-[14px]">
+          <input type="checkbox" checked={value.base_check} onChange={(e) => set({ base_check: e.target.checked })} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+          <span>Update with main before merging<span className="block text-[12px] text-muted">If main moved on, the agent merges it into the branch and re-runs the affected tests first.</span></span>
+        </label>
+      )}
     </>
   );
 }

@@ -349,6 +349,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     onSuccess: (r) => { setRepo({ full: '', default_branch: '', check_command: '' }); setRepoNote(r.note ?? null); refresh(); },
   });
   const delRepo = useMutation({ mutationFn: (r: Repo) => api.del(`/repos/${r.id}`), onSuccess: refresh });
+  const [editing, setEditing] = useState<Repo | null>(null);
   return (
     <>
       <Section title="Repos">
@@ -359,9 +360,14 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                 <div className="truncate">
                   {r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</> : `${r.github_owner}/${r.github_name}`}
                 </div>
-                <div className="text-[12px] text-muted truncate">base {r.default_branch}{r.check_command ? ` · check: ${r.check_command}` : ''}</div>
+                <div className="text-[12px] text-muted truncate">
+                  base {r.default_branch}
+                  {r.local_path && (r.worktree_from === 'clone' ? ' · separate clone' : ' · worktrees in the repo')}
+                  {r.setup_command ? ` · setup: ${r.setup_command}` : ''}
+                  {r.check_command ? ` · check: ${r.check_command}` : ''}
+                </div>
               </div>
-              <Button small variant="ghost" onClick={() => confirm(`Remove ${r.github_name}?`) && delRepo.mutate(r)}>Remove</Button>
+              <Button small variant="ghost" onClick={() => setEditing(r)}>Edit</Button>
             </div>
           ))}
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
@@ -377,6 +383,15 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           </form>
         </Card>
       </Section>
+      <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing ? `Repo ${editing.github_name}` : 'Repo'}>
+        {editing && (
+          <RepoForm
+            repo={editing}
+            onDone={() => { setEditing(null); refresh(); }}
+            onRemove={() => { if (confirm(`Remove ${editing.github_name} from this project?`)) { delRepo.mutate(editing); setEditing(null); } }}
+          />
+        )}
+      </Sheet>
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
           <label className="flex items-center justify-between text-[14px]">
@@ -407,5 +422,49 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
         </form>
       </Section>
     </>
+  );
+}
+
+function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; onRemove: () => void }) {
+  const [f, setF] = useState({
+    default_branch: repo.default_branch,
+    check_command: repo.check_command ?? '',
+    setup_command: repo.setup_command ?? '',
+    worktree_from: repo.worktree_from ?? 'repo',
+  });
+  const save = useMutation({
+    mutationFn: () => api.patch(`/repos/${repo.id}`, {
+      default_branch: f.default_branch,
+      check_command: f.check_command.trim() || null,
+      setup_command: f.setup_command.trim() || null,
+      ...(repo.local_path ? { worktree_from: f.worktree_from } : {}),
+    }),
+    onSuccess: onDone,
+  });
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+      <p className="text-[13px] text-muted mb-3 break-all">{repo.local_path ?? `${repo.github_owner}/${repo.github_name}`}</p>
+      <Field label="Base branch"><input className={inputCls} value={f.default_branch} onChange={(e) => setF({ ...f, default_branch: e.target.value })} /></Field>
+      {repo.local_path && (
+        <Field
+          label="Session worktrees"
+          group
+          hint={f.worktree_from === 'repo'
+            ? 'Worktrees of your repo itself: its own tools see your checkout as main (venv, test cache, current main). Branches appear in your repo at once.'
+            : 'A separate Dispatch clone: fully isolated, but tools that expect a worktree of your checkout will not find its venv or caches.'}
+        >
+          <Segmented value={f.worktree_from} onChange={(worktree_from) => setF({ ...f, worktree_from })} options={[{ value: 'repo', label: 'From the repo itself' }, { value: 'clone', label: 'Separate clone' }]} />
+        </Field>
+      )}
+      <Field label="Setup command (optional)" hint="Runs in each new session worktree before the agent starts, e.g. a venv setup or npm ci.">
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.setup_command} onChange={(e) => setF({ ...f, setup_command: e.target.value })} placeholder="bash tools/setup.sh" />
+      </Field>
+      <Field label="Check command (optional)" hint="Must pass before a local merge.">
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.check_command} onChange={(e) => setF({ ...f, check_command: e.target.value })} placeholder="npm test" />
+      </Field>
+      <ErrorText error={save.error} />
+      <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>
+      <Button type="button" variant="danger" className="w-full mt-2" onClick={onRemove}>Remove repo</Button>
+    </form>
   );
 }

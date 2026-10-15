@@ -84,6 +84,7 @@ async function discussContext(spec: StartSpec) {
 }
 
 async function launch(spec: StartSpec, text: string) {
+  // spec and text may be adjusted below (attached worktrees, setup notes)
   const id = spec.session_id;
   const live = runners.get(id);
   if (live) return live.push(text);
@@ -102,7 +103,19 @@ async function launch(spec: StartSpec, text: string) {
       // the assistant reads only allow-listed folders; give it an empty working dir
       cwd = join(workspaces.root, 'assistant');
       await mkdir(cwd, { recursive: true });
-    } else cwd = await workspaces.prepare(spec);
+    } else {
+      const created: { repo: StartSpec['repos'][number]; wt: string }[] = [];
+      cwd = await workspaces.prepare(spec, created);
+      // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
+      spec = { ...spec, repos: spec.repos.map((r) => ({ ...r, attached: Workspaces.isAttached(workspaces.repoDir(spec.session_id, r), r) })) };
+      // per-repo setup for new worktrees (venv, npm ci, ...), before the agent starts
+      for (const { repo, wt } of created.filter((c) => c.repo.setup_command)) {
+        send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
+        const res = await workspaces.setup(repo, wt);
+        send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
+        if (!res.ok) text = `Note from Dispatch: the worktree setup command \`${repo.setup_command}\` failed in ${repo.github_name}. Its output:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
+      }
+    }
     const deps: RunnerDeps = {
       emit: send,
       rpc: rpcFor(id),

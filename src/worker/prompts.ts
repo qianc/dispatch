@@ -20,7 +20,12 @@ function itemBlock(spec: StartSpec, it: Item) {
 function repoLines(spec: StartSpec) {
   const single = spec.repos.length === 1;
   return spec.repos
-    .map((r) => `- ${r.local_path ? `${r.github_name} (local repo, no GitHub: origin is ${r.local_path})` : `${r.github_owner}/${r.github_name}`} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})`)
+    .map((r) => {
+      const where = !r.local_path ? `${r.github_owner}/${r.github_name}`
+        : r.attached ? `${r.github_name} (local repo at ${r.local_path}; this checkout is a git worktree of it, so its tools see that checkout as main)`
+        : `${r.github_name} (local repo, no GitHub: origin is ${r.local_path})`;
+      return `- ${where} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})`;
+    })
     .join('\n');
 }
 
@@ -44,9 +49,13 @@ export function workPrompt(spec: StartSpec): string {
     '- All items in this batch go into ONE branch and ONE pull request per changed repo.',
     `- When the work is done and verified: push the branch (\`git push -u origin ${spec.branch}\`) and open a pull request with \`gh pr create --head ${spec.branch}\` against the repo's base branch. The PR body lists the item keys it covers. Only open PRs for repos you changed. Dispatch links the PR to the items automatically.`,
     '- Do not merge the PR yourself; the owner merges from Dispatch.',
-    ...(spec.repos.some((r) => r.local_path)
-      ? [`- Local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it from there.`]
+    ...(spec.repos.some((r) => r.local_path && r.attached)
+      ? [`- Local repos where this checkout is a worktree of the owner's repo: the branch \`${spec.branch}\` already lives in that repo. Commit and stop; do not push and do not run \`gh\`. Dispatch shows the branch to the owner for review and merges it from there.`]
       : []),
+    ...(spec.repos.some((r) => r.local_path && !r.attached)
+      ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it from there.`]
+      : []),
+    '- Your environment: change nothing outside this checkout (the owner\'s own checkout, its venv, shared caches) except through the repo\'s own tools and scripts. If a test fails because of your environment and not your change, fix the environment and re-run, so shared test records are true. Before you finish, remove any failure records you caused that way.',
     '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.',
   );
   const exec = {

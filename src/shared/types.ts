@@ -44,6 +44,12 @@ export interface Repo {
   check_command: string | null;
   /** set for a local-only repo: a git folder on the worker host (github_owner is then 'local') */
   local_path: string | null;
+  /** local repos: make session worktrees in the repo itself (default) or in a separate clone */
+  worktree_from: 'repo' | 'clone' | null;
+  /** run in each new session worktree before the agent starts (venv, npm ci, ...) */
+  setup_command: string | null;
+  /** worker only: this session's worktree is a worktree of the owner's repo itself */
+  attached?: boolean;
 }
 
 export interface Source {
@@ -96,6 +102,8 @@ export const runOptions = z.object({
   start: z.enum(START_MODES).default('now'),
   /** merge the PR when the agent is done and checks pass */
   auto_merge: z.enum(AUTO_MERGE).default('off'),
+  /** before auto-merge: if the branch is behind the default branch, ask the agent to update it first */
+  base_check: z.boolean().default(true),
 });
 export type RunOptions = z.infer<typeof runOptions>;
 export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
@@ -233,6 +241,8 @@ export const repoInput = z.object({
   github_owner: z.string().min(1),
   github_name: z.string().min(1),
   local_path: z.string().nullable().default(null),
+  worktree_from: z.enum(['repo', 'clone']).nullable().default(null),
+  setup_command: z.string().nullable().default(null),
   default_branch: z.string().min(1).default('main'),
   check_command: z.string().nullable().default(null),
 });
@@ -267,6 +277,8 @@ export const repoPatch = z.object({
   github_name: z.string().min(1).optional(),
   default_branch: z.string().min(1).optional(),
   check_command: z.string().nullable().optional(),
+  worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
+  setup_command: z.string().nullable().optional(),
 });
 
 export const sourcePatch = z.object({

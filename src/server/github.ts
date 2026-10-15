@@ -111,6 +111,19 @@ export class GitHub {
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
+  /** Called when auto-merge waits because the branch is behind (app.ts sends the agent a message). */
+  onBehind: ((s: Session, repo: Repo, behind: number) => void) | null = null;
+
+  /** Commits on the default branch that the PR / local branch does not have yet. */
+  private async behindBy(repo: Repo, pr: PullRequest): Promise<number> {
+    if (repo.local_path) {
+      const st = await this.hub.cmd<BranchStatus>({ c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
+      return st.behind;
+    }
+    const { data } = await this.gh().repos.compareCommits({ owner: repo.github_owner, repo: repo.github_name, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    return data.behind_by;
+  }
+
   /** PRs already reported as not auto-mergeable, per head sha, so the owner is told once. */
   private autoMergeNoted = new Set<string>();
   /** PRs being auto-merged now: merging re-syncs the PR, which must not start a second merge. */
@@ -136,6 +149,19 @@ export class GitHub {
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
     const repo = this.store.repo(pr.repo_id)!;
+    if (s.options.base_check) {
+      // tested against an older default branch? have the agent bring the branch up to date first
+      const behind = await this.behindBy(repo, pr);
+      if (behind > 0) {
+        const key = `${pr.id}:${pr.head_sha}:behind`;
+        if (!this.autoMergeNoted.has(key)) {
+          this.autoMergeNoted.add(key);
+          this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} waits: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
+          this.onBehind?.(s, repo, behind);
+        }
+        return;
+      }
+    }
     const checks = pr.head_sha && !repo.local_path
       ? (await this.gh().checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
       : [];

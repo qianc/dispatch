@@ -27,7 +27,7 @@ describe('local repos in the worker', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
     const dir = localRepo(root);
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
-    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: 'test -f b.txt', local_path: dir };
+    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: 'test -f b.txt', local_path: dir, worktree_from: null, setup_command: null };
     const spec = { session_id: 5, kind: 'work' as const, project_key: 'L', project_name: 'L', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/l-5-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, resume: null, resume_note: null };
     const wt = await ws.prepare(spec);
     writeFileSync(join(wt, 'b.txt'), 'two\n');
@@ -51,7 +51,7 @@ describe('local repos in the worker', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
     const dir = localRepo(root);
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
-    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: null, local_path: dir };
+    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: null, local_path: dir, worktree_from: null, setup_command: null };
     git(dir, 'checkout', '-b', 'feat');
     writeFileSync(join(dir, 'c.txt'), 'x\n');
     git(dir, 'add', '.');

@@ -66,7 +66,7 @@ describe('start modes', () => {
 
 describe('auto-merge', () => {
   type Check = { name: string; status: string; conclusion: string | null; html_url: null };
-  const setup = async (checks: Check[], mergeable: boolean | null = true) => {
+  const setup = async (checks: Check[], mergeable: boolean | null = true, behind = 0) => {
     const s = await startServer();
     await s.call('POST', '/projects', { key: 'AM', name: 'AM' });
     await s.call('POST', '/projects/AM/repos', { github_owner: 'me', github_name: 'r' });
@@ -85,6 +85,7 @@ describe('auto-merge', () => {
         merge: async (args: unknown) => { merges.push(args); merged = true; return { data: {} }; },
       },
       checks: { listForRef: async () => ({ data: { check_runs: checks } }) },
+      repos: { compareCommits: async () => ({ data: { behind_by: behind } }) },
     };
     Object.defineProperty(s.ctx.github, 'octo', { value: fake });
     return { s, session, item, merges };
@@ -118,6 +119,27 @@ describe('auto-merge', () => {
     expect(conflict.merges).toHaveLength(0);
     expect(conflict.s.ctx.notifier.sent.some((n) => n.body.includes('merge conflicts'))).toBe(true);
     await conflict.s.app.close();
+  });
+
+  it('waits for a branch behind the default branch and asks the agent once to update it', async () => {
+    const { s, session, merges } = await setup([], true, 3);
+    const asked: string[] = [];
+    s.ctx.github.onBehind = (sess, _repo, n) => asked.push(`${sess.id}:${n}`);
+    await s.ctx.github.syncSession(session);
+    await s.ctx.github.syncSession(session);
+    expect(merges).toHaveLength(0);
+    expect(asked).toEqual([`${session.id}:3`]);
+    const events = (await s.call('GET', `/sessions/${session.id}`)).data.events;
+    expect(events.some((e: { body: { text?: string } }) => e.body.text?.includes('3 commits behind main'))).toBe(true);
+    await s.app.close();
+  });
+
+  it('sessions from before the base check keep the old behaviour', async () => {
+    const { s, session, merges } = await setup([], true, 3);
+    s.ctx.store.db.run("UPDATE sessions SET options = json_set(options, '$.base_check', json('false')) WHERE id = ?", session.id);
+    await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    expect(merges).toHaveLength(1);
+    await s.app.close();
   });
 
   it('waits while the agent is still working', async () => {
