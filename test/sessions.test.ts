@@ -122,6 +122,21 @@ describe('sessions with the fake runner', () => {
     await s.ctx.sessions.rpc(work.id, 'add_comment', { key: r.key, body: 'Seen in logs' });
     expect((await s.call('GET', `/items/${r.id}`)).data.comments[0]).toMatchObject({ author: 'claude', body_md: 'Seen in logs' });
   });
+
+  it('lets the agent add items to its batch when the owner asks, so the merge closes them too', async () => {
+    const a = (await s.call('POST', '/projects/HC/items', { title: 'Started with this' })).data;
+    const b = (await s.call('POST', '/projects/HC/items', { title: 'Asked for later', status: 'backlog' })).data;
+    const done = (await s.call('POST', '/projects/HC/items', { title: 'Already done', status: 'done' })).data;
+    const work = (await s.call('POST', '/projects/HC/batches', { item_ids: [a.id] })).data;
+    const res = (await s.ctx.sessions.rpc(work.id, 'add_to_batch', { keys: [b.key, done.key, b.key] })) as { batch: { key: string }[] };
+    expect(res.batch.map((i) => i.key).sort()).toEqual([a.key, b.key, done.key].sort());
+    const d = (await s.call('GET', `/sessions/${work.id}`)).data;
+    expect(d.session.item_ids.sort()).toEqual([a.id, b.id, done.id].sort());
+    expect(d.events.some((e: { body: { text?: string } }) => e.body.text === `Added to this batch: ${b.key}, ${done.key}`)).toBe(true);
+    expect((await s.call('GET', `/items/${b.id}`)).data.status).toBe('in_progress');
+    expect((await s.call('GET', `/items/${done.id}`)).data.status).toBe('done'); // closed stays closed
+    await expect(s.ctx.sessions.rpc(work.id, 'add_to_batch', { keys: ['HC-999'] })).rejects.toThrow(/No item HC-999/);
+  });
 });
 
 describe('worker reconnect edge cases', () => {

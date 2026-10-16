@@ -394,6 +394,20 @@ export class Sessions {
         const it = byKey(p.key);
         return this.store.addComment(it.id, 'claude', String(p.body ?? ''), s.id);
       }
+      case 'add_to_batch': {
+        if (s.kind !== 'work') throw new Error('Only a work session has a batch.');
+        const keys = Array.isArray(p.keys) ? [...new Set((p.keys as unknown[]).map((k) => String(k).toUpperCase()))] : [];
+        if (!keys.length) throw new Error('Give the item keys, e.g. ["HC-3"]');
+        const items = keys.map(byKey);
+        this.store.addSessionItems(s.id, items.map((i) => i.id));
+        for (const it of items) {
+          // closed items stay closed; open ones are now being worked on here
+          if (['triage', 'backlog', 'todo', 'hold'].includes(it.status)) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress' }) });
+        }
+        this.addEvent(s.id, { kind: 'system', text: `Added to this batch: ${items.map((i) => i.key).join(', ')}` });
+        this.emitSession(this.store.session(s.id)!);
+        return { batch: this.store.itemsByIds(this.store.session(s.id)!.item_ids).map((i) => ({ key: i.key, title: i.title, status: i.status })) };
+      }
       case 'create_item': {
         const parsed = proposedItemSchema.parse(p);
         const item = this.store.createProposedItems(project.id, [parsed], this.agentSource(s).id)[0];

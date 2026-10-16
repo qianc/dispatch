@@ -176,7 +176,12 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
     }, call(rpc, 'add_comment')),
   ];
   if (kind === 'work') {
-    tools.push(tool('create_item', 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', itemShape, call(rpc, 'create_item')));
+    tools.push(
+      tool('add_to_batch', 'Add existing items to this batch when the owner asks you to also work on them (e.g. "also look at 100"). Dispatch then tracks them with this session and closes them when the branch merges.', {
+        keys: z.array(z.string()).min(1).describe('Item keys, e.g. ["HC-3"]'),
+      }, call(rpc, 'add_to_batch')),
+      tool('create_item', 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', itemShape, call(rpc, 'create_item')),
+    );
   } else {
     tools.push(
       tool('propose_batch', 'Show the owner a proposed batch as a card they can edit and start. A batch = one session, one branch, one PR.', {

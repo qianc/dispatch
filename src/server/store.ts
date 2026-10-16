@@ -299,6 +299,11 @@ export class Store {
     return this.db.get<Comment>('SELECT * FROM comments WHERE id = ?', lastId)!;
   }
 
+  /** Add items to a session's batch (no-op for ones already in it). */
+  addSessionItems(sessionId: number, itemIds: number[]) {
+    for (const id of itemIds) this.db.run('INSERT OR IGNORE INTO session_items (session_id, item_id) VALUES (?, ?)', sessionId, id);
+  }
+
   // ---------- item images ----------
   private toImage(r: Row): ItemImage & { file: string } {
     const id = Number(r.id);

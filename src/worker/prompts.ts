@@ -61,6 +61,7 @@ export function workPrompt(spec: StartSpec): string {
       : []),
     '- Your environment: change nothing outside this checkout (the owner\'s own checkout, its venv, shared caches) except through the repo\'s own tools and scripts. If a test fails because of your environment and not your change, fix the environment and re-run, so shared test records are true. Before you finish, remove any failure records you caused that way.',
     '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.',
+    '- If the owner asks you to also work on another item (by key, or by its number, e.g. "also do 100" means ' + spec.project_key + '-100), call `add_to_batch` with its key before you start on it. Items in the batch are closed when the branch merges; items you only mention are not.',
   );
   const exec = {
     auto: '- Implementation: choose how to run the plan yourself (superpowers subagent-driven development when tasks are independent, inline execution otherwise). Do not ask the owner which execution method to use.',
