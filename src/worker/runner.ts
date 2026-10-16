@@ -1,11 +1,11 @@
 // One live Claude Code session, driven through the Agent SDK with streaming input.
 import { randomUUID } from 'node:crypto';
-import { query, type CanUseTool, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type CanUseTool, type HookCallback, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, type Rpc } from './mcp.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, workPrompt } from './prompts.ts';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, globSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -70,6 +70,44 @@ export function rescuePath(path: string, cwd: string, extraDirs: string[]): stri
     }
   }
   return null;
+}
+
+/** Glob: if the pattern finds nothing where the model searched, search the extra folders. */
+export function rescueGlob(pattern: string, path: string | undefined, cwd: string, extraDirs: string[]): string | null {
+  if (!pattern || !extraDirs.length) return null;
+  const where = resolve(cwd, path || '.');
+  if (extraDirs.some((d) => insideDirs(where, [d], '/'))) return null; // already searching one
+  const finds = (dir: string) => {
+    try {
+      return globSync(pattern, { cwd: dir }).some((f) => insideDirs(join(dir, f), [dir], '/'));
+    } catch {
+      return false;
+    }
+  };
+  if (existsSync(where) && finds(where)) return null;
+  return extraDirs.find((d) => existsSync(d) && finds(d)) ?? null;
+}
+
+/**
+ * Discuss: a PreToolUse hook that sends Read and Glob to the extra folders when the path or pattern
+ * is not in the checkout. A hook, not canUseTool: reads inside the working folder never ask for
+ * permission, so canUseTool does not see them.
+ */
+export function discussPathHook(cwd: string, extraDirs: string[]): HookCallback {
+  return async (hookInput) => {
+    if (hookInput.hook_event_name !== 'PreToolUse') return {};
+    const input = (hookInput.tool_input ?? {}) as Record<string, unknown>;
+    let updated: Record<string, unknown> | null = null;
+    if (hookInput.tool_name === 'Read') {
+      const found = rescuePath(String(input.file_path ?? ''), cwd, extraDirs);
+      if (found) updated = { ...input, file_path: found };
+    } else if (hookInput.tool_name === 'Glob') {
+      const dir = rescueGlob(String(input.pattern ?? ''), input.path ? String(input.path) : undefined, cwd, extraDirs);
+      if (dir) updated = { ...input, path: dir };
+    }
+    if (!updated) return {};
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Found in an extra readable folder', updatedInput: updated } };
+  };
 }
 
 export function insideDirs(path: string, dirs: string[], cwd: string): boolean {
@@ -216,11 +254,18 @@ export class ClaudeRunner implements AgentRunner {
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p)) },
         canUseTool: this.canUseTool,
+        ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
         stderr: (d) => process.stderr.write(`[session ${this.sessionId}] ${d}`),
       },
     });
     void this.loop();
+  }
+
+  /** Discuss: the readable folders that are not the checkout itself (the repo's extra folders). */
+  private extraDirs() {
+    const cwd = this.deps.cwd;
+    return (this.deps.readDirs ?? []).filter((d) => !insideDirs(cwd, [d], '/') && !insideDirs(d, [cwd], '/'));
   }
 
   private readDirs() {
@@ -268,11 +313,6 @@ export class ClaudeRunner implements AgentRunner {
   private canUseTool: CanUseTool = async (name, input, { signal }) => {
     if ((this.spec.kind === 'assistant' || this.spec.kind === 'discuss') && ASSISTANT_TOOLS.includes(name)) {
       const dirs = this.readDirs();
-      if (name === 'Read' && this.spec.kind === 'discuss') {
-        const extra = dirs.filter((d) => !insideDirs(this.deps.cwd, [d], '/') && !insideDirs(d, [this.deps.cwd], '/'));
-        const found = rescuePath(String(input.file_path ?? ''), this.deps.cwd, extra);
-        if (found) input = { ...input, file_path: found };
-      }
       const path = String(input.file_path ?? input.path ?? '');
       if ((path || this.spec.kind === 'discuss') && !insideDirs(path || this.deps.cwd, dirs, this.deps.cwd)) {
         const allowed = dirs.join(', ') || 'none';

@@ -165,3 +165,34 @@ describe('Discuss: a path the owner gives relative to an extra folder', () => {
     expect(rescuePath('cvdd/renders/entry-20.png', checkout, [])).toBeNull();
   });
 });
+
+describe('Discuss: the hook that sends Read and Glob to the extra folders', () => {
+  it('rewrites the calls this chat made, and leaves the rest alone', async () => {
+    const { discussPathHook } = await import('../src/worker/runner.ts');
+    const { mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const root = mkdtempSync(join(tmpdir(), 'dsp-hook-'));
+    const checkout = join(root, 'session', 'tpl');
+    const extra = join(root, 'tpl', 'reference-decks', 'library-work');
+    mkdirSync(checkout, { recursive: true });
+    mkdirSync(join(extra, 'cvdd', 'renders'), { recursive: true });
+    writeFileSync(join(extra, 'cvdd', 'renders', 'entry-20.png'), 'png');
+    writeFileSync(join(checkout, 'README.md'), 'x');
+    const hook = discussPathHook(checkout, [extra]);
+    const call = (tool_name: string, tool_input: unknown) =>
+      hook({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 'u', session_id: 's', transcript_path: '', cwd: checkout } as never, 'u', { signal: new AbortController().signal });
+
+    // exactly what the chat sent
+    const read = await call('Read', { file_path: join(checkout, 'cvdd/renders/entry-20.png') });
+    expect(read).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: { file_path: join(extra, 'cvdd/renders/entry-20.png') } } });
+    const glob = await call('Glob', { pattern: '**/*entry-20*', path: checkout });
+    expect(glob).toMatchObject({ hookSpecificOutput: { updatedInput: { pattern: '**/*entry-20*', path: extra } } });
+
+    // found in the checkout, or nowhere: no change
+    expect(await call('Read', { file_path: join(checkout, 'README.md') })).toEqual({});
+    expect(await call('Glob', { pattern: '*.md', path: checkout })).toEqual({});
+    expect(await call('Glob', { pattern: '**/nothing-*' })).toEqual({});
+    expect(await call('Grep', { pattern: 'x' })).toEqual({});
+  });
+});
