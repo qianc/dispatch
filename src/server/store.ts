@@ -5,6 +5,7 @@ import {
   itemKey,
   type InputAnswer,
   type Item,
+  type ItemImage,
   type ItemStatus,
   type PendingInput,
   type PendingInputPayload,
@@ -295,6 +296,33 @@ export class Store {
   addComment(itemId: number, author: string, body: string, sessionId: number | null = null): Comment {
     const { lastId } = this.db.run('INSERT INTO comments (item_id, author, body_md, session_id) VALUES (?, ?, ?, ?)', itemId, author, body, sessionId);
     return this.db.get<Comment>('SELECT * FROM comments WHERE id = ?', lastId)!;
+  }
+
+  // ---------- item images ----------
+  private toImage(r: Row): ItemImage & { file: string } {
+    const id = Number(r.id);
+    return {
+      id, item_id: Number(r.item_id), comment_id: r.comment_id === null ? null : Number(r.comment_id),
+      name: String(r.name), mime: String(r.mime), size: Number(r.size), author: String(r.author), created_at: String(r.created_at),
+      file: String(r.file), url: `/api/images/${id}/${encodeURIComponent(String(r.name))}`,
+    };
+  }
+  itemImages(itemId: number) {
+    return this.db.all<Row>('SELECT * FROM item_images WHERE item_id = ? ORDER BY id', itemId).map((r) => this.toImage(r));
+  }
+  itemImage(id: number) {
+    const r = this.db.get<Row>('SELECT * FROM item_images WHERE id = ?', id);
+    return r ? this.toImage(r) : undefined;
+  }
+  addItemImage(p: { item_id: number; comment_id: number | null; name: string; file: string; mime: string; size: number; author: string }) {
+    const { lastId } = this.db.run(
+      'INSERT INTO item_images (item_id, comment_id, name, file, mime, size, author) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      p.item_id, p.comment_id, p.name, p.file, p.mime, p.size, p.author,
+    );
+    return this.itemImage(Number(lastId))!;
+  }
+  deleteItemImage(id: number) {
+    this.db.run('DELETE FROM item_images WHERE id = ?', id);
   }
 
   // ---------- sessions ----------

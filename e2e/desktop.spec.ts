@@ -194,3 +194,23 @@ test('phone chat box: Enter adds a line, the button sends', async ({ page }) => 
   await page.keyboard.type('two');
   await expect(box).toHaveValue('one\ntwo');
 });
+
+test('images on an item: add, view full size, delete', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'PIC', name: 'Pictures' } });
+  const it = await (await page.request.post('/api/projects/PIC/items', { data: { title: 'Legend overlaps' } })).json();
+  await page.goto(`/items/${it.id}`);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  await page.locator('input[type=file]').setInputFiles({ name: 'overlap.png', mimeType: 'image/png', buffer: png });
+  const thumb = page.getByRole('button', { name: 'Show image overlap.png' });
+  await expect(thumb).toBeVisible();
+  await thumb.click();
+  const box = page.getByRole('dialog', { name: 'Image' });
+  await expect(box.getByText('overlap.png · you')).toBeVisible();
+  page.once('dialog', (d) => d.accept());
+  await box.getByRole('button', { name: 'Delete' }).click();
+  await expect(thumb).toHaveCount(0);
+  // a file that is not an image is refused, with the reason
+  await page.locator('input[type=file]').setInputFiles({ name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('not really a png file') });
+  await expect(page.getByText('Only PNG, JPEG, GIF and WebP images can be attached.')).toBeVisible();
+});

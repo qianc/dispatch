@@ -116,6 +116,12 @@ next", "write the release notes", item keys like HC-42), and works through a sma
 3. In each repo, add `.dispatch.md` (start from `skills/dispatch-backlog/dispatch.example.md`): the
    project key in the frontmatter, then your rules for naming, tags, modules and the changelog.
 
+Items can carry images (screenshots, rendered output): add them in the app (camera, photo
+library, file, or paste on desktop) or with the script. `images:` in `.dispatch.md`
+(`always`, `when_possible`, `off`) says how hard Claude tries to attach an example image that
+shows the issue, and the text below it can say how to make one. Agents working on an item can
+look at its images.
+
 The changelog stays a file in the repo. Claude writes it from done items without a `rel:<version>`
 label, then labels them, so the next entry starts where this one ended.
 

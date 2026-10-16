@@ -17,6 +17,17 @@ const call = (rpc: Rpc, method: RpcMethod) => async (params: unknown) => {
   }
 };
 
+/** An item image as an image block, so Claude sees it (the server sends it base64). */
+const viewImage = (rpc: Rpc) =>
+  tool('view_image', 'Look at an image attached to an item (ids from get_item → images).', { id: z.number().int() }, async ({ id }) => {
+    try {
+      const img = (await rpc('get_image', { id })) as { name: string; mime: string; data: string };
+      return { content: [{ type: 'text' as const, text: img.name }, { type: 'image' as const, data: img.data, mimeType: img.mime }] };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
 const itemShape = {
   type: z.enum(['backlog', 'bug']).describe('bug = defect, backlog = improvement or feature'),
   title: z.string().describe('Short title, max 200 chars'),
@@ -144,7 +155,8 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       name: 'dispatch',
       version: '1.0.0',
       tools: [
-        tool('get_item', 'Read one item with its description, comments and source.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
+        tool('get_item', 'Read one item with its description, comments, source and image list.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
+        viewImage(rpc),
         tool('list_items', 'List open items in this project.', { status: z.array(z.string()).optional(), type: z.enum(['backlog', 'bug']).optional() }, call(rpc, 'list_items')),
       ],
     });
@@ -154,9 +166,10 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses (not hold, done or canceled)'),
       type: z.enum(['backlog', 'bug']).optional(),
     }, call(rpc, 'list_items')),
-    tool('get_item', 'Read one item with its description, comments and source (retro/report).', {
+    tool('get_item', 'Read one item with its description, comments, source (retro/report) and image list.', {
       key: z.string().describe('Item key, e.g. HC-42'),
     }, call(rpc, 'get_item')),
+    viewImage(rpc),
     tool('add_comment', 'Add a comment to an item.', {
       key: z.string(),
       body: z.string(),

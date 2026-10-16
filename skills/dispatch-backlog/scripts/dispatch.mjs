@@ -7,9 +7,9 @@
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
 // (searched from the current folder upwards). Run `dispatch.mjs help` for the commands.
 
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 const STATUSES = [...OPEN, 'hold', 'done', 'canceled'];
@@ -22,18 +22,20 @@ Reading
   scales                         the project's importance and effort labels
   list [filters]                 open items (one line each). Filters: --status a,b | --all
                                  --type bug|backlog  --tag t  --module m  --q "words"  --json
-  show KEY                       one item in full, with comments and sessions
+  show KEY                       one item in full, with comments, images and sessions
   facets                         tags and modules in use, with counts
   unreleased                     done items without a release label (for the changelog)
 
 Writing
   add --title T [--type bug|backlog] [--body TEXT | --body-file F] [--importance N|label]
       [--effort label] [--tags a,b] [--modules a,b] [--status S] [--source ID]
-                                 prints the new key
+      [--images a.png,b.png]     prints the new key
   update KEY [same fields as add] [--add-tags a,b] [--remove-tags a,b]
                                  [--add-modules a,b] [--remove-modules a,b]
   status S KEY [KEY...]          S: ${STATUSES.join(', ')}
-  comment KEY TEXT               (or --body-file F)
+  comment KEY TEXT               (or --body-file F) [--images a.png,b.png]
+  attach KEY FILE [FILE...]      add images (PNG, JPEG, GIF, WebP) to an item
+  images KEY [--save DIR]        download an item's images; prints the file paths to read
   release VERSION KEY [KEY...]   add the release label (prefix from .dispatch.md) to items
   release VERSION --unreleased   ...to every unreleased done item
 
@@ -102,6 +104,8 @@ const tokenFile = join(homedir(), '.config', 'dispatch', 'tokens', host);
 const TOKEN = process.env.DISPATCH_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
 const PROJECT = (flags.project || process.env.DISPATCH_PROJECT || cfg.meta.project || '').toUpperCase();
 const RELEASE_PREFIX = cfg.meta.release_label_prefix || 'rel:';
+// when Claude should attach example images: always | when_possible (default) | off
+const IMAGES = ['always', 'when_possible', 'off'].includes(cfg.meta.images) ? cfg.meta.images : 'when_possible';
 
 // ---------- http ----------
 async function api(method, path, body) {
@@ -119,6 +123,30 @@ async function api(method, path, body) {
   if (res.status === 401) die(`not signed in to ${URL_BASE}: put the API token from its Settings page in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
   return data;
+}
+
+/** Upload image files to an item (optionally to one of its comments), signed "claude". */
+async function attach(itemId, files, commentId) {
+  const out = [];
+  for (const f of files) {
+    if (!existsSync(f)) die(`no such file: ${f}`);
+    const q = new URLSearchParams({ name: basename(f), author: 'claude' });
+    if (commentId) q.set('comment_id', String(commentId));
+    let res;
+    try {
+      res = await fetch(`${URL_BASE}/api/items/${itemId}/images?${q}`, {
+        method: 'POST',
+        headers: { ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}), 'content-type': 'application/octet-stream' },
+        body: readFileSync(f),
+      });
+    } catch (e) {
+      die(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message})`);
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) die(`${basename(f)}: ${data?.error ?? res.statusText}`);
+    out.push(data);
+  }
+  return out;
 }
 
 const needProject = () => PROJECT || die('no project: add `project: KEY` to .dispatch.md in the repo, or pass --project KEY.');
@@ -189,7 +217,8 @@ switch (cmd) {
     console.log(`token:    ${process.env.DISPATCH_TOKEN ? 'from DISPATCH_TOKEN' : TOKEN ? tokenFile : `MISSING (expected in ${tokenFile})`}`);
     console.log(`config:   ${cfgFile ?? '(no .dispatch.md found)'}`);
     console.log(`project:  ${PROJECT || '(none)'}`);
-    for (const [k, v] of Object.entries(cfg.meta)) if (!['project', 'url'].includes(k)) console.log(`${(k + ':').padEnd(10)}${v}`);
+    for (const [k, v] of Object.entries(cfg.meta)) if (!['project', 'url', 'images'].includes(k)) console.log(`${(k + ':').padEnd(10)}${v}`);
+    console.log(`images:   ${IMAGES}${cfg.meta.images ? '' : ' (default)'}`);
     if (cfg.body) console.log(`\n--- project conventions ---\n${cfg.body}`);
     break;
   }
@@ -235,7 +264,9 @@ switch (cmd) {
     console.log(line(it, p));
     if (it.source) console.log(`source #${it.source.id}: ${it.source.title}${it.source.version_tag ? ` (${it.source.version_tag})` : ''}`);
     console.log(`\n${it.body_md || '(no description)'}`);
-    for (const c of it.comments) console.log(`\n— ${c.author}, ${c.created_at}\n${c.body_md}`);
+    const imgs = (cid) => it.images.filter((i) => i.comment_id === cid).map((i) => `  [image ${i.id}] ${i.name} (${i.author})`);
+    if (imgs(null).length) console.log(`\nimages (download with: images ${it.key}):\n${imgs(null).join('\n')}`);
+    for (const c of it.comments) console.log(`\n— ${c.author}, ${c.created_at}\n${c.body_md}${imgs(c.id).length ? `\n${imgs(c.id).join('\n')}` : ''}`);
     for (const s of it.sessions) console.log(`\nsession #${s.id} ${s.status}: ${s.title}`);
     break;
   }
@@ -264,6 +295,7 @@ switch (cmd) {
     const body = await fields();
     if (!body.title) die('add needs --title');
     const it = await api('POST', `/projects/${p.key}/items`, body);
+    if (typeof flags.images === 'string') await attach(it.id, list(flags.images));
     console.log(it.key);
     break;
   }
@@ -301,8 +333,35 @@ switch (cmd) {
     const it = await item(rest[0] ?? die('comment KEY TEXT'));
     const text = bodyFrom() ?? rest.slice(1).join(' ');
     if (!text.trim()) die('comment needs text');
-    await api('POST', `/items/${it.id}/comments`, { body_md: text, author: 'claude' });
+    const c = await api('POST', `/items/${it.id}/comments`, { body_md: text, author: 'claude' });
+    if (typeof flags.images === 'string') await attach(it.id, list(flags.images), c.id);
     console.log(`commented on ${it.key}`);
+    break;
+  }
+
+  case 'attach': {
+    const [key, ...files] = rest;
+    if (!key || !files.length) die('attach KEY FILE [FILE...]');
+    const it = await item(key);
+    for (const img of await attach(it.id, files)) console.log(`${it.key}: image ${img.id} ${img.name}`);
+    break;
+  }
+
+  case 'images': {
+    const it = await item(rest[0] ?? die('images KEY [--save DIR]'));
+    if (!it.images.length) {
+      console.log(`${it.key} has no images`);
+      break;
+    }
+    const dir = typeof flags.save === 'string' ? flags.save : join(tmpdir(), 'dispatch-images', it.key);
+    mkdirSync(dir, { recursive: true });
+    for (const img of it.images) {
+      const res = await fetch(`${URL_BASE}${img.url}`, { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} });
+      if (!res.ok) die(`image ${img.id}: ${res.statusText}`);
+      const file = join(dir, `${img.id}-${img.name.replace(/[^\w.-]+/g, '_')}`);
+      writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+      console.log(`${file}${img.comment_id ? `  (on comment ${img.comment_id})` : ''}`);
+    }
     break;
   }
 

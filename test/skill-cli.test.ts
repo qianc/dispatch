@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -92,6 +92,28 @@ describe('dispatch-backlog skill script', () => {
     } finally {
       await authed.app.close();
     }
+  });
+
+  it('attaches images to items and comments, and downloads them for reading', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    writeFileSync(join(repo, 'wrong.png'), png);
+    writeFileSync(join(repo, 'after.png'), png);
+    writeFileSync(join(repo, 'notes.txt'), 'not an image');
+    const key = await cli('add', '--title', 'Legend in the wrong place', '--images', join(repo, 'wrong.png'));
+    await cli('comment', key, 'Fixed', '--images', join(repo, 'after.png'));
+    expect(await cli('attach', key, join(repo, 'wrong.png'))).toMatch(new RegExp(`^${key}: image \\d+ wrong.png$`));
+    const shown = await cli('show', key);
+    expect(shown).toMatch(/images \(download with: images CLI-\d+\):\n {2}\[image \d+\] wrong.png \(claude\)/);
+    expect(shown).toMatch(/— claude, .*\nFixed\n {2}\[image \d+\] after.png \(claude\)/);
+
+    const out = join(repo, 'downloaded');
+    const paths = (await cli('images', key, '--save', out)).split('\n');
+    expect(paths).toHaveLength(3);
+    expect(paths[1]).toMatch(/after.png {2}\(on comment \d+\)$/);
+    expect(readFileSync(paths[0])).toEqual(png);
+
+    expect(await fails('attach', key, join(repo, 'notes.txt'))).toContain('notes.txt: Only PNG, JPEG, GIF and WebP images can be attached.');
+    expect(await cli('config')).toContain('images:   when_possible (default)');
   });
 
   it('says plainly what is wrong', async () => {

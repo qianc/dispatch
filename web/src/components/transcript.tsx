@@ -1,5 +1,4 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../../src/shared/types.ts';
@@ -7,6 +6,7 @@ import { api, type Item, type PendingInput, type Project, type Session, type Ses
 import { Button, Chip, ErrorText, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
+import { Lightbox } from './images.tsx';
 import { RunOptionsFields, runOptionsSummary, useRunOptions } from './batch.tsx';
 
 const HIDDEN_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
@@ -18,22 +18,6 @@ const AssistantText = memo(function AssistantText({ text, projectId, projectKey,
 
 type ToolUse = Extract<SessionEventBody, { kind: 'tool_use' }>;
 type ToolResult = Extract<SessionEventBody, { kind: 'tool_result' }>;
-
-/** Full-screen image, tap anywhere to close. */
-function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
-  return createPortal(
-    <div className="fixed inset-0 z-50 bg-black/95 flex flex-col pt-safe pb-safe" role="dialog" aria-label="Image" onClick={onClose}>
-      <div className="flex justify-between items-center px-3 h-12 shrink-0">
-        <a href={src} target="_blank" rel="noreferrer" className="text-[13px] text-accent" onClick={(e) => e.stopPropagation()}>Open original ↗</a>
-        <button className="text-fg text-xl px-2" aria-label="Close">✕</button>
-      </div>
-      <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-2" style={{ touchAction: 'pinch-zoom' }}>
-        <img src={src} alt="" className="max-w-full max-h-full object-contain" onClick={(e) => e.stopPropagation()} />
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 function Thumbs({ images }: { images: { url: string }[] }) {
   const [full, setFull] = useState<string | null>(null);

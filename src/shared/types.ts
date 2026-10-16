@@ -92,6 +92,8 @@ export interface Item {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** set where an item is handed to an agent: how many images it has */
+  image_count?: number;
 }
 
 export const MODELS = ['default', 'opus', 'sonnet', 'haiku'] as const;
@@ -226,6 +228,19 @@ export interface PullRequest {
   local: boolean;
   /** why auto-merge stopped, while that still holds (open, same head commit) */
   blocked: string | null;
+}
+
+/** An image on an item (or on one of its comments). `url` serves it; `file` stays on the server. */
+export interface ItemImage {
+  id: number;
+  item_id: number;
+  comment_id: number | null;
+  name: string;
+  mime: string;
+  size: number;
+  author: string;
+  created_at: string;
+  url: string;
 }
 
 /** What an idle session in the inbox needs from you. */

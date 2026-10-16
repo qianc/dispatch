@@ -1,3 +1,4 @@
+import type { Attachments } from '../attachments.ts';
 import type { Auth } from '../auth.ts';
 import type { Bus } from '../bus.ts';
 import type { Config } from '../config.ts';
@@ -16,6 +17,7 @@ export interface Ctx {
   sessions: Sessions;
   github: GitHub;
   notifier: Notifier;
+  attachments: Attachments;
 }
 
 export class HttpError extends Error {

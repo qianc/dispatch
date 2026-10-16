@@ -362,7 +362,7 @@ export class Sessions {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
     }
-    if (s.kind === 'discuss' && method !== 'get_item' && method !== 'list_items') throw new Error('A discussion is read-only.');
+    if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image'].includes(method)) throw new Error('A discussion is read-only.');
     const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => {
       const n = Number(String(key).split('-').pop());
@@ -380,7 +380,15 @@ export class Sessions {
       }
       case 'get_item': {
         const it = byKey(p.key);
-        return { ...it, comments: this.store.comments(it.id), source: it.source_id ? this.store.source(it.source_id) : null };
+        const images = this.store.itemImages(it.id).map((i) => ({ id: i.id, name: i.name, author: i.author, comment_id: i.comment_id }));
+        return { ...it, comments: this.store.comments(it.id), source: it.source_id ? this.store.source(it.source_id) : null, images };
+      }
+      case 'get_image': {
+        const img = this.store.itemImage(Number(p.id));
+        if (!img || this.store.item(img.item_id)?.project_id !== project.id) throw new Error(`No image ${String(p.id)} in project ${project.key}`);
+        const data = await this.attachments?.readItemImage(img.item_id, img.file);
+        if (!data) throw new Error('The image file is missing');
+        return { name: img.name, mime: img.mime, data: data.toString('base64') };
       }
       case 'add_comment': {
         const it = byKey(p.key);
@@ -445,7 +453,7 @@ export class Sessions {
       title: s.title,
       branch: s.branch,
       repos: this.reposOf(s),
-      items: this.store.itemsByIds(s.item_ids),
+      items: this.store.itemsByIds(s.item_ids).map((i) => ({ ...i, image_count: this.store.itemImages(i.id).length })),
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,

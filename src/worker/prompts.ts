@@ -14,7 +14,8 @@ function itemBlock(spec: StartSpec, it: Item) {
   const importance = spec.importance_scale[it.importance - 1] ?? it.importance;
   const effort = it.effort === null ? '' : ` · effort ${spec.effort_scale[it.effort] ?? it.effort}`;
   const meta = [it.modules.length ? `modules: ${it.modules.join(', ')}` : '', it.labels.length ? `tags: ${it.labels.join(', ')}` : ''].filter(Boolean).join(' · ');
-  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, ...(meta ? [meta] : []), '', it.body_md.trim() || '(no description)'].join('\n');
+  const images = it.image_count ? [`(${it.image_count} image${it.image_count === 1 ? '' : 's'} attached: list them with dispatch get_item, look at them with dispatch view_image)`] : [];
+  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, ...(meta ? [meta] : []), ...images, '', it.body_md.trim() || '(no description)'].join('\n');
 }
 
 function repoLines(spec: StartSpec) {

@@ -1,8 +1,8 @@
 import type {
-  Attention, InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source,
+  Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 
-export type { Attention, InputAnswer, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
+export type { Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
 
 export class ApiError extends Error {
   status: number;
@@ -27,6 +27,21 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+/** Upload one image file to an item (raw body; the server checks it is an image). */
+export async function uploadImage(itemId: number, file: File, commentId?: number) {
+  const q = new URLSearchParams({ name: file.name || 'image' });
+  if (commentId) q.set('comment_id', String(commentId));
+  const res = await fetch(`/api/items/${itemId}/images?${q}`, {
+    method: 'POST',
+    headers: { 'content-type': file.type.startsWith('image/') ? file.type : 'application/octet-stream' },
+    body: file,
+    credentials: 'same-origin',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
+  return data as ItemImage;
+}
+
 export const api = {
   get: <T>(p: string) => req<T>('GET', p),
   post: <T>(p: string, b: unknown = {}) => req<T>('POST', p, b),
@@ -41,7 +56,7 @@ export type ProjectSummary = Project & {
 };
 
 export interface Comment { id: number; item_id: number; author: string; body_md: string; created_at: string }
-export type ItemDetail = Item & { comments: Comment[]; source: Source | null; sessions: Session[]; project: Project };
+export type ItemDetail = Item & { comments: Comment[]; source: Source | null; sessions: Session[]; project: Project; images: ItemImage[] };
 export type SourceDetail = Source & { items: Item[]; project_key: string; project: Project };
 export type SourceSummary = Source & { item_count: number };
 

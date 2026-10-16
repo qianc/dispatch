@@ -1,6 +1,6 @@
 ---
 name: dispatch-backlog
-description: Use for any backlog, bug or changelog work in a project tracked in Dispatch. Triggers include "add to the backlog", "file a bug", "log an issue", "what's on the backlog", "what's next", "close/finish/park an item", "mark as done", "tag these", "write the changelog", "release notes", "what changed since", or a retro to split into items. Also use when an item key like HC-42 is mentioned. The repo has a .dispatch.md, or the user names a Dispatch project. Dispatch replaces backlog.md files; changelogs stay in the repo but are written from Dispatch items.
+description: Use for any backlog, bug or changelog work, including screenshots or images that show an issue, in a project tracked in Dispatch. Triggers include "add to the backlog", "file a bug", "log an issue", "what's on the backlog", "what's next", "close/finish/park an item", "mark as done", "tag these", "write the changelog", "release notes", "what changed since", or a retro to split into items. Also use when an item key like HC-42 is mentioned. The repo has a .dispatch.md, or the user names a Dispatch project. Dispatch replaces backlog.md files; changelogs stay in the repo but are written from Dispatch items.
 ---
 
 # Dispatch backlog
@@ -42,6 +42,8 @@ labels in `--importance` and `--effort`.
   `--status hold,done`, `--all`, or `--json`.
 - `dispatch show HC-42`: one item in full, with its comments and agent sessions.
 - `dispatch facets`: tags and modules already in use, with counts.
+- `dispatch images HC-42`: downloads the item's images and prints their paths. Read those files to
+  look at them. Do this whenever `show` lists images: they often show the problem better than the text.
 
 When the user asks "what's next", list the open items and recommend a few, with reasons. Put
 importance first, then items that unblock others, then small quick wins.
@@ -63,7 +65,35 @@ importance first, then items that unblock others, then small quick wins.
      Name files with repo paths (`src/chart/legend.ts`). Use `--body-file` for anything longer
      than one line.
    - Default status is `backlog` (bugs: `triage` is fine too).
-4. Report the new keys to the user.
+4. Attach images that show it (see 3a), with `--images` or `dispatch attach`.
+5. Report the new keys to the user.
+
+### 3a. Example images
+
+A picture of the problem is often the fastest way for a person, or the agent that picks the item
+up, to see it. The `images:` setting in `.dispatch.md` (shown by `dispatch config`) says how hard
+to try:
+
+| `images:` | What to do |
+|---|---|
+| `always` | Every new bug and every item about visible output gets at least one image. If you cannot make one, say so to the user. |
+| `when_possible` (default) | Attach one whenever you have it or can make it cheaply. Do not stop work to make one. |
+| `off` | Do not attach images unless the user asks. |
+
+Good images: a screenshot or rendered output that shows the defect, a before/after pair, or the
+expected result next to the actual one. Crop to the part that matters. Make them with the
+project's own tools when it has them (its conventions may say how, e.g. a preview renderer).
+Name files so the name says what they show (`legend-overlaps-axis.png`). Mention in the
+description what each image shows.
+
+Never attach an image that holds secrets, personal data, or content the conventions say to keep
+out (e.g. client material). Only PNG, JPEG, GIF and WebP are accepted.
+
+```bash
+dispatch add --type bug --title "..." --images /tmp/legend-overlap.png,/tmp/expected.png ...
+dispatch attach HC-42 /tmp/after-fix.png
+dispatch comment HC-42 "Fixed; this is the output now" --images /tmp/after.png
+```
 
 **Retro or report with several findings:** keep the full text as a source, then link each item to it:
 ```bash
@@ -77,7 +107,7 @@ dispatch add --source 12 --title "..." ...
 - `dispatch status done HC-42 HC-43`. Statuses: `triage, backlog, todo, in_progress, in_review,
   hold, done, canceled`. Use `hold` for parked work and `canceled` for "won't do".
 - `dispatch comment HC-42 "Found the cause: ..."`: notes, findings and decisions. Comments are
-  signed "claude".
+  signed "claude". Add `--images` to show what you found, or the result after a fix.
 
 Rules:
 - Items `in_progress` or `in_review` belong to a running agent session. Do not change their status

@@ -12,6 +12,7 @@ import type { Config } from './config.ts';
 import { Db } from './db.ts';
 import { AssistantTools } from './assistant.ts';
 import { Attachments } from './attachments.ts';
+import { imageRoutes } from './routes/images.ts';
 import { GitHub } from './github.ts';
 import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
@@ -61,7 +62,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onRpc: (id, method, params) => sessions.rpc(id, method, params),
     onDisconnect: () => sessions.onWorkerDisconnect(),
   };
-  const ctx: Ctx = { cfg, store, auth, bus, hub, sessions, github, notifier };
+  const ctx: Ctx = { cfg, store, auth, bus, hub, sessions, github, notifier, attachments };
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
   await app.register(cookie);
@@ -98,6 +99,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   pushRoutes(app, ctx);
   streamRoutes(app, ctx);
   fileRoutes(app, ctx);
+  imageRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);

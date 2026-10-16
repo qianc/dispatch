@@ -4,6 +4,7 @@ project: HC
 #                                     # its token goes in ~/.config/dispatch/tokens/dispatch.example.com
 changelog: CHANGELOG.md
 release_label_prefix: "rel:"
+images: when_possible               # always | when_possible | off: attach example images to items
 ---
 
 How Claude keeps this project's backlog and changelog in Dispatch. Copy this file to the repo root
@@ -18,6 +19,12 @@ instructions.
 - Tags: `ux`, `performance`, `regression`, `quick-win`, `docs`. No new tags without asking.
 - Importance: Critical = blocks users or loses data; High = this release; Medium = soon; Low = some day.
 - Effort: XS < 1 h, S ≈ half a day, M ≈ 1–2 days, L ≈ a week, XL = split it first.
+
+## Images
+
+- Bugs in the UI: a screenshot of the wrong state, cropped to the part that matters.
+- Charts and exports: render with `npm run preview -- <file>` and attach the PNG.
+- Never attach screenshots with customer data; use the demo project.
 
 ## Changelog
 

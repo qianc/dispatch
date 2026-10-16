@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { itemInput, itemPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
-export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
+export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -46,6 +46,7 @@ export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
     return {
       ...it,
       comments: store.comments(it.id),
+      images: store.itemImages(it.id).map(({ file: _f, ...img }) => img),
       source: it.source_id ? store.source(it.source_id) : null,
       sessions: store.sessionsForItem(it.id),
       project: store.project(it.project_id),
@@ -62,6 +63,7 @@ export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
 
   app.delete('/api/items/:id', async (req) => {
     const it = item((req.params as { id: string }).id);
+    for (const img of store.itemImages(it.id)) attachments.deleteItemImage(it.id, img.file);
     store.deleteItem(it.id);
     return { ok: true };
   });

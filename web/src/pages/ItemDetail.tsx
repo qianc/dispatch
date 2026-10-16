@@ -2,7 +2,8 @@ import { Icon } from '../components/icons.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Item, type ItemDetail as Detail, type ProjectSummary, type Repo } from '../api.ts';
+import { api, uploadImage, type Item, type ItemDetail as Detail, type ItemImage, type ProjectSummary, type Repo } from '../api.ts';
+import { AddImageButton, ImageStrip, usePastedImages } from '../components/images.tsx';
 import { Page } from '../components/Layout.tsx';
 import { RichMd } from '../components/RichMd.tsx';
 import { BatchForm } from '../components/batch.tsx';
@@ -35,6 +36,14 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   const repos: Repo[] = projectFull?.repos ?? [];
   const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => (onClose ? onClose() : nav(`/p/${it!.project.key}`)) });
   useEffect(() => { if (it) noteProject(it.project.key); }, [it?.project.key]);
+  const upload = useMutation({
+    mutationFn: async (files: File[]) => {
+      for (const f of files) await uploadImage(id, f);
+    },
+    onSettled: refresh,
+  });
+  const deleteImage = useMutation({ mutationFn: (img: ItemImage) => api.del(`/images/${img.id}`), onSuccess: refresh });
+  usePastedImages((files) => upload.mutate(files), !!it);
   const closeBtn = drawer && <CloseButton onClick={onClose} label="Close item" />;
   // desktop: Discuss opens beside the item (?discuss=1), not on its own screen
   const wide = useWide();
@@ -81,6 +90,14 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
           </Link>
         )}
         <div className="mt-4">{it.body_md ? <RichMd ctx={{ project: p, sourceId: it.source_id }}>{it.body_md}</RichMd> : <p className="text-muted text-sm">No description.</p>}</div>
+        <div className="mt-4">
+          <ImageStrip images={it.images.filter((i) => !i.comment_id)} onDelete={(img) => deleteImage.mutate(img)} className="mb-2" />
+          <div className="flex items-center gap-2">
+            <AddImageButton onFiles={(files) => upload.mutate(files)} busy={upload.isPending} />
+            {wide && <span className="text-[12px] text-faint">or paste a screenshot</span>}
+          </div>
+          <ErrorText error={upload.error ?? deleteImage.error} />
+        </div>
         {wide ? (
           <button onClick={() => setDiscuss(!discussing)} aria-pressed={discussing} className={cx('mt-4 w-full flex items-center justify-center gap-1.5 h-10 rounded-lg border font-medium', discussing ? 'border-accent bg-accent/15' : 'border-line bg-raised hover:bg-line')}>
             <Icon name="discuss" size={20} /> {discussing ? 'Hide the discussion' : 'Discuss this'}
@@ -111,6 +128,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
             <div key={c.id}>
               <div className="text-[12px] text-faint">{c.author} · {timeAgo(c.created_at)}</div>
               <RichMd className="text-[14px]" ctx={{ project: p, sourceId: it.source_id }}>{c.body_md}</RichMd>
+              <ImageStrip images={it.images.filter((i) => i.comment_id === c.id)} onDelete={(img) => deleteImage.mutate(img)} className="mt-1.5" />
             </div>
           ))}
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); addComment.mutate(); }}>
