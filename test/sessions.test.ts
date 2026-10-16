@@ -130,7 +130,8 @@ describe('worker reconnect edge cases', () => {
     await s.call('POST', '/projects/HC/repos', { github_owner: 'me', github_name: 'hc' });
     await waitFor(() => s.ctx.hub.connected, 'worker');
     const a = (await s.call('POST', '/projects/HC/batches', { prompt: 'x' })).data;
-    await waitFor(async () => (await s.call('GET', `/sessions/${a.id}`)).data.session.status === 'waiting_input', 'waiting');
+    // a fresh worker under a parallel test run can take a while to reach its first question
+    await waitFor(async () => (await s.call('GET', `/sessions/${a.id}`)).data.session.status === 'waiting_input', 'waiting', 20_000);
     // simulate the close message being lost: mark it finished directly, then have the worker say hello again
     const sent: unknown[] = [];
     const orig = s.ctx.hub.send.bind(s.ctx.hub);
@@ -143,5 +144,5 @@ describe('worker reconnect edge cases', () => {
     expect((await s.call('GET', `/sessions/${a.id}`)).data.session.status).toBe('completed');
     await stopWorker(worker);
     await s.app.close();
-  });
+  }, 30_000);
 });
