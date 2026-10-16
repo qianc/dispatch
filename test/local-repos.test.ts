@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
@@ -127,4 +127,45 @@ describe('local repos end to end on the server', () => {
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
     expect((await card()).attention.kind).toBe('merged');
   });
+
+  it('lets Discuss read folders of the real checkout that git does not carry, and nothing else', async () => {
+    const dir = localRepo(root, 'withrefs');
+    mkdirSync(join(dir, 'refs', 'renders'), { recursive: true });
+    writeFileSync(join(dir, 'refs', 'renders', 'entry-20.png'), 'x');
+    writeFileSync(join(dir, '.gitignore'), 'refs/\n');
+    git(dir, 'add', '.gitignore');
+    git(dir, 'commit', '-m', 'ignore refs');
+    await s.call('POST', '/projects', { key: 'REF', name: 'Refs' });
+    const repo = (await s.call('POST', '/projects/REF/repos', { local_path: dir })).data;
+
+    // only folders inside the repo, only for local repos
+    for (const bad of ['../outside', '/etc', '~/x', 'refs/../../x']) {
+      const r = await s.call('PATCH', `/repos/${repo.id}`, { read_dirs: [bad] });
+      expect(r.status, bad).toBe(400);
+    }
+    await s.call('POST', '/projects', { key: 'GHR', name: 'Gh' });
+    const gh = (await s.call('POST', '/projects/GHR/repos', { github_owner: 'me', github_name: 'x' })).data;
+    expect((await s.call('PATCH', `/repos/${gh.id}`, { read_dirs: ['refs'] })).data.error).toMatch(/local repos only/);
+    expect((await s.call('PATCH', `/repos/${repo.id}`, { read_dirs: ['refs/', 'refs', 'missing'] })).data.read_dirs).toEqual(['refs', 'missing']);
+
+    const item = (await s.call('POST', '/projects/REF/items', { title: 'Look at the render' })).data;
+    const chat = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'which folders?' })).data;
+    const answer = await waitFor(async () => {
+      const ev = (await s.call('GET', `/sessions/${chat.id}`)).data.events.find((e: { body: { kind: string; text?: string } }) => e.body.text?.startsWith('(fake) I may read'));
+      return ev?.body.text as string | undefined;
+    }, 'discuss answer', 20_000);
+    expect(answer).toContain(join(dir, 'refs')); // the real checkout's folder
+    expect(answer).not.toContain(join(dir, 'missing')); // a folder that does not exist is left out
+    expect(answer).toContain('context: More folders you may read');
+    await s.call('POST', `/items/${item.id}/discuss/new`);
+
+    // cleared: back to the session's own checkout only
+    await s.call('PATCH', `/repos/${repo.id}`, { read_dirs: [] });
+    const chat2 = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'which folders now?' })).data;
+    const answer2 = await waitFor(async () => {
+      const ev = (await s.call('GET', `/sessions/${chat2.id}`)).data.events.find((e: { body: { kind: string; text?: string } }) => e.body.text?.startsWith('(fake) I may read'));
+      return ev?.body.text as string | undefined;
+    }, 'second answer', 20_000);
+    expect(answer2).not.toContain(join(dir, 'refs'));
+  }, 40_000);
 });

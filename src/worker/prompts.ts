@@ -25,7 +25,10 @@ function repoLines(spec: StartSpec) {
       const where = !r.local_path ? `${r.github_owner}/${r.github_name}`
         : r.attached ? `${r.github_name} (local repo at ${r.local_path}; this checkout is a git worktree of it, so its tools see that checkout as main)`
         : `${r.github_name} (local repo, no GitHub: origin is ${r.local_path})`;
-      return `- ${where} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})`;
+      const extra = r.local_path && r.read_dirs?.length
+        ? `\n  Reference folders in the owner's checkout, not in git (read only): ${r.read_dirs.map((d) => `${r.local_path!.replace(/\/$/, '')}/${d}`).join(', ')}`
+        : '';
+      return `- ${where} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})${extra}`;
     })
     .join('\n');
 }

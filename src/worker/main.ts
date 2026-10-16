@@ -101,7 +101,26 @@ async function discussContext(spec: StartSpec) {
   }
   const src = spec.source?.title;
   if (src && isAbsolute(src) && insideDirs(src, opts.assistantReadDirs, '/')) dirs.push(dirname(src));
+  // folders of the owner's real checkout that git does not carry into a session (repo setting)
+  const extra: string[] = [];
+  for (const r of spec.repos) {
+    if (!r.local_path) continue;
+    for (const d of r.read_dirs ?? []) {
+      const abs = resolve(r.local_path, d);
+      if (existsSync(abs) && insideDirs(abs, [r.local_path], '/')) extra.push(abs);
+    }
+  }
   const context: { label: string; text: string }[] = [];
+  if (extra.length) {
+    context.push({
+      label: 'More folders you may read',
+      text: [
+        "These folders are in the owner's own checkout and are not in git, so they are not in the checkouts above. Read, Glob and Grep work there too. Images you Read are shown to the owner.",
+        ...extra.map((d) => `- ${d}`),
+        'They can hold material the owner keeps out of git on purpose. Quote from it only what the question needs.',
+      ].join('\n'),
+    });
+  }
   for (const d of dirs) {
     for (const name of ['CLAUDE.md', 'AGENTS.md']) {
       const f = resolve(d, name);
@@ -110,7 +129,7 @@ async function discussContext(spec: StartSpec) {
   }
   const cwd = dirs[0] ?? join(workspaces.root, 'assistant');
   await mkdir(cwd, { recursive: true });
-  return { dirs, context, cwd };
+  return { dirs: [...dirs, ...extra], context, cwd };
 }
 
 async function launch(spec: StartSpec, text: string) {
@@ -124,12 +143,13 @@ async function launch(spec: StartSpec, text: string) {
   try {
     let cwd: string;
     let extra: Pick<RunnerDeps, 'readDirs' | 'context'> = {};
-    if (FAKE) cwd = process.cwd();
-    else if (spec.kind === 'discuss') {
+    // the fake runner cannot clone GitHub repos, but local ones are real git (as for work sessions)
+    if (spec.kind === 'discuss' && (!FAKE || spec.repos.every((r) => r.local_path))) {
       const c = await discussContext(spec);
       cwd = c.cwd;
       extra = { readDirs: c.dirs, context: c.context };
-    } else if (spec.kind === 'assistant') {
+    } else if (FAKE) cwd = process.cwd();
+    else if (spec.kind === 'assistant') {
       // the assistant reads only allow-listed folders; give it an empty working dir
       cwd = join(workspaces.root, 'assistant');
       await mkdir(cwd, { recursive: true });

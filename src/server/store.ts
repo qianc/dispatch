@@ -55,6 +55,7 @@ function toRepo(r: Row): Repo {
     local_path: (r.local_path as string | null) ?? null,
     worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
     setup_command: (r.setup_command as string | null) ?? null,
+    read_dirs: json<string[]>(r.read_dirs, []),
     github_account: (r.project_github_account as string | null) ?? null,
   };
 }
@@ -195,8 +196,8 @@ export class Store {
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };
-    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ? WHERE id = ?',
-      n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, id);
+    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ? WHERE id = ?',
+      n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, n.read_dirs?.length ? JSON.stringify(n.read_dirs) : null, id);
     return this.repo(id)!;
   }
   deleteRepo(id: number) {

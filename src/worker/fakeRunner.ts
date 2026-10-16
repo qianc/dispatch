@@ -73,7 +73,11 @@ export class FakeRunner implements AgentRunner {
     if (this.closed) return;
     if (this.spec.kind === 'planner') return this.plannerTurn();
     if (this.spec.kind === 'assistant') return this.assistantTurn(text);
-    if (this.spec.kind === 'discuss') {
+    if (this.spec.kind === 'discuss' && /which folders/i.test(text)) {
+      // tests: what this chat may read, and the context it was given
+      this.say(`(fake) I may read: ${(this.deps.readDirs ?? []).join(', ')} | context: ${(this.deps.context ?? []).map((c) => c.label).join(', ')}`);
+      return this.finishTurn();
+    } else if (this.spec.kind === 'discuss') {
       this.say(`(fake) About ${this.spec.items[0]?.key}: ${this.spec.items[0]?.title}. You asked: ${text}`);
       return this.finishTurn();
     }

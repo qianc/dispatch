@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { projectInput, projectPatch, repoInput, repoPatch } from '../../shared/types.ts';
+import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { addLocalRepo, mergeNote } from '../repos.ts';
 
@@ -72,8 +72,16 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx)
 
   app.patch('/api/repos/:id', async (req) => {
     const id = intParam((req.params as { id: string }).id);
-    if (!store.repo(id)) throw notFound('Repo');
-    return store.updateRepo(id, repoPatch.parse(req.body));
+    const repo = store.repo(id);
+    if (!repo) throw notFound('Repo');
+    const patch = repoPatch.parse(req.body);
+    if (patch.read_dirs?.length) {
+      if (!repo.local_path) throw new HttpError(400, 'Extra readable folders are for local repos only: a GitHub repo has no checkout of yours to read.');
+      const bad = patch.read_dirs.find((d) => !isRepoSubdir(d));
+      if (bad) throw new HttpError(400, `"${bad}" must be a folder inside the repo, e.g. reference-decks/library-work`);
+      patch.read_dirs = [...new Set(patch.read_dirs.map((d) => d.replace(/\/+$/, '')))];
+    }
+    return store.updateRepo(id, patch);
   });
 
   app.delete('/api/repos/:id', async (req) => {

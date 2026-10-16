@@ -54,6 +54,8 @@ export interface Repo {
   worktree_from: 'repo' | 'clone' | null;
   /** run in each new session worktree before the agent starts (venv, npm ci, ...) */
   setup_command: string | null;
+  /** local repos: folders of the real checkout (relative, often not in git) that Discuss may read */
+  read_dirs?: string[];
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */
@@ -318,7 +320,11 @@ export const repoPatch = z.object({
   check_command: z.string().nullable().optional(),
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
   setup_command: z.string().nullable().optional(),
+  read_dirs: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
 });
+
+/** A folder inside the repo: relative, no "..", no leading "/" or "~". */
+export const isRepoSubdir = (d: string) => !/^[/~]/.test(d) && !d.split(/[/\\]/).includes('..') && !/^[A-Za-z]:/.test(d);
 
 export const sourcePatch = z.object({
   kind: z.enum(SOURCE_KINDS).optional(),

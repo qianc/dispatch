@@ -433,6 +433,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                   base {r.default_branch}
                   {r.local_path && (r.worktree_from === 'clone' ? ' · separate clone' : ' · worktrees in the repo')}
                   {r.setup_command ? ` · setup: ${r.setup_command}` : ''}
+                  {r.read_dirs?.length ? ` · Discuss also reads: ${r.read_dirs.join(', ')}` : ''}
                   {r.check_command ? ` · check: ${r.check_command}` : ''}
                 </div>
               </div>
@@ -501,13 +502,14 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     check_command: repo.check_command ?? '',
     setup_command: repo.setup_command ?? '',
     worktree_from: repo.worktree_from ?? 'repo',
+    read_dirs: (repo.read_dirs ?? []).join('\n'),
   });
   const save = useMutation({
     mutationFn: () => api.patch(`/repos/${repo.id}`, {
       default_branch: f.default_branch,
       check_command: f.check_command.trim() || null,
       setup_command: f.setup_command.trim() || null,
-      ...(repo.local_path ? { worktree_from: f.worktree_from } : {}),
+      ...(repo.local_path ? { worktree_from: f.worktree_from, read_dirs: f.read_dirs.split('\n').map((d) => d.trim()).filter(Boolean) } : {}),
     }),
     onSuccess: onDone,
   });
@@ -529,6 +531,14 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       <Field label="Setup command (optional)" hint="Runs in each new session worktree before the agent starts, e.g. a venv setup or npm ci.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.setup_command} onChange={(e) => setF({ ...f, setup_command: e.target.value })} placeholder="bash tools/setup.sh" />
       </Field>
+      {repo.local_path && (
+        <Field
+          label="Extra folders Discuss may read (optional)"
+          hint="One per line, inside the repo. For material git does not track, so sessions do not have it (e.g. reference renders). Discuss chats can then read these folders in your checkout, and show images from them. Leave empty to keep them out."
+        >
+          <textarea className={cx(inputCls, 'min-h-16 font-mono text-[14px]')} value={f.read_dirs} onChange={(e) => setF({ ...f, read_dirs: e.target.value })} placeholder="reference-decks/library-work" />
+        </Field>
+      )}
       <Field label="Check command (optional)" hint="Must pass before a local merge.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.check_command} onChange={(e) => setF({ ...f, check_command: e.target.value })} placeholder="npm test" />
       </Field>
