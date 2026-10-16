@@ -100,6 +100,8 @@ export interface Item {
   updated_at: string;
   /** set where an item is handed to an agent: how many images it has */
   image_count?: number;
+  /** set where an item is handed to an agent: its comments, oldest first */
+  comments?: { author: string; body_md: string; created_at: string }[];
 }
 
 export const MODELS = ['default', 'opus', 'sonnet', 'haiku'] as const;

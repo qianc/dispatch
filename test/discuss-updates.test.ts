@@ -38,6 +38,12 @@ describe('Discuss suggests item changes; the owner applies them', () => {
     expect(item.comments).toEqual([expect.objectContaining({ author: 'claude', body_md: 'Design note' })]);
     expect((await card()).done.at(-1)!.body.note).toBe(`Applied to ${it.key}: 3 changes and a comment`);
     expect((await s.call('POST', `/sessions/${chat.id}/apply-update`, { event_id: proposal.id })).status).toBe(409); // once
+
+    // agents see the comment: counted in list_items, and in the start data of a session on the item
+    const listed = (await s.ctx.sessions.rpc(chat.id, 'list_items', {})) as { key: string; comments: number }[];
+    expect(listed.find((x) => x.key === it.key)!.comments).toBe(1);
+    const spec = s.ctx.sessions.spec(s.ctx.store.session(chat.id)!, 'x', null, null);
+    expect(spec.items[0].comments).toEqual([expect.objectContaining({ author: 'claude', body_md: 'Design note' })]);
   });
 
   it('can be dismissed, and refuses what it cannot do', async () => {

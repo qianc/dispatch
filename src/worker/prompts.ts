@@ -15,7 +15,37 @@ function itemBlock(spec: StartSpec, it: Item) {
   const effort = it.effort === null ? '' : ` · effort ${spec.effort_scale[it.effort] ?? it.effort}`;
   const meta = [it.modules.length ? `modules: ${it.modules.join(', ')}` : '', it.labels.length ? `tags: ${it.labels.join(', ')}` : ''].filter(Boolean).join(' · ');
   const images = it.image_count ? [`(${it.image_count} image${it.image_count === 1 ? '' : 's'} attached: list them with dispatch get_item, look at them with dispatch view_image)`] : [];
-  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, ...(meta ? [meta] : []), ...images, '', it.body_md.trim() || '(no description)'].join('\n');
+  return [`### ${it.key} · ${it.type} · importance ${importance}${effort}`, it.title, ...(meta ? [meta] : []), ...images, '', it.body_md.trim() || '(no description)', ...commentLines(it)].join('\n');
+}
+
+const MAX_COMMENTS = 10;
+const MAX_COMMENT_CHARS = 1200;
+const MAX_COMMENTS_TOTAL = 6000;
+
+/**
+ * An item's comments for the prompt: decisions and notes from the owner and earlier sessions.
+ * The newest ones that fit (count, per-comment and total limits); get_item has the rest.
+ */
+function commentLines(it: Item): string[] {
+  const all = it.comments ?? [];
+  if (!all.length) return [];
+  const picked: string[] = [];
+  let total = 0;
+  for (const c of [...all].reverse()) {
+    if (picked.length >= MAX_COMMENTS) break;
+    const body = c.body_md.trim();
+    const text = body.length > MAX_COMMENT_CHARS ? `${body.slice(0, MAX_COMMENT_CHARS)}… (cut; get_item has the full text)` : body;
+    if (picked.length && total + text.length > MAX_COMMENTS_TOTAL) break;
+    total += text.length;
+    picked.unshift(`- ${c.author}, ${c.created_at.slice(0, 10)}: ${text}`);
+  }
+  const left = all.length - picked.length;
+  return [
+    '',
+    `Comments on ${it.key} (oldest first; they record decisions and open points, so take them into account):`,
+    ...(left ? [`(${left} earlier comment${left === 1 ? '' : 's'} not shown here; get_item has them all)`] : []),
+    ...picked,
+  ];
 }
 
 function repoLines(spec: StartSpec) {
@@ -107,6 +137,7 @@ export function plannerPrompt(spec: StartSpec): string {
       '## Your job',
       'Suggest the next batch of work. A batch runs as ONE Claude Code session that produces ONE branch and ONE pull request per changed repo, so group items that belong together and keep the batch small enough to review on a phone.',
       'Weigh importance against effort, look at the code where needed, and say briefly why you picked the batch. You may also suggest new items (new_items) when you find gaps.',
+      'Before you propose a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner, which can change what belongs in a batch.',
       'When the owner agrees, or when you have a clear suggestion, call `propose_batch`. The owner sees it as a card they can edit and start.',
     );
   }

@@ -429,6 +429,8 @@ export class Sessions {
         return this.store.items(project.id, { type: p.type as string | undefined, status }).map((i) => ({
           key: i.key, id: i.id, type: i.type, title: i.title, status: i.status,
           importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
+          // comments hold decisions and open points: read the item with get_item when it has any
+          comments: this.store.comments(i.id).length,
         }));
       }
       case 'get_item': {
@@ -584,7 +586,11 @@ export class Sessions {
       title: s.title,
       branch: s.branch,
       repos: this.reposOf(s),
-      items: this.store.itemsByIds(s.item_ids).map((i) => ({ ...i, image_count: this.store.itemImages(i.id).length })),
+      items: this.store.itemsByIds(s.item_ids).map((i) => ({
+        ...i,
+        image_count: this.store.itemImages(i.id).length,
+        comments: this.store.comments(i.id).map((c) => ({ author: c.author, body_md: c.body_md, created_at: c.created_at })),
+      })),
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
