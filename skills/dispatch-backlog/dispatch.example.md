@@ -1,6 +1,7 @@
 ---
 project: HC
-# url: http://localhost:3000          # only if Dispatch is not on this machine's port 3000
+# url: https://dispatch.example.com   # only if Dispatch is not on this machine's port 3000;
+#                                     # its token goes in ~/.config/dispatch/tokens/dispatch.example.com
 changelog: CHANGELOG.md
 release_label_prefix: "rel:"
 ---

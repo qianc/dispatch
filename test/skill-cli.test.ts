@@ -76,6 +76,24 @@ describe('dispatch-backlog skill script', () => {
     expect(out).toContain('Fonts wrong in Edge');
   });
 
+  it('reads the token for this server from its own file', async () => {
+    const authed = await startServer({ DISABLE_AUTH: '' , APP_PASSWORD: 'pw' });
+    try {
+      const home = mkdtempSync(join(tmpdir(), 'dsp-home-'));
+      const env = { ...process.env, DISPATCH_URL: authed.base, DISPATCH_TOKEN: '', HOME: home };
+      const missing = await run(process.execPath, [SCRIPT, 'projects'], { cwd: home, env }).then(() => '', (e) => String(e.stderr));
+      const file = join(home, '.config/dispatch/tokens', `127.0.0.1_${authed.port}`);
+      expect(missing).toContain(`put the API token from its Settings page in ${file}`);
+      await run('mkdir', ['-p', join(home, '.config/dispatch/tokens')]);
+      writeFileSync(file, `${authed.ctx.auth.apiToken}\n`);
+      writeFileSync(join(home, '.config/dispatch/tokens/localhost_3000'), 'wrong-server-token\n');
+      expect((await run(process.execPath, [SCRIPT, 'projects'], { cwd: home, env })).stdout).toBe('');
+      expect((await run(process.execPath, [SCRIPT, 'config'], { cwd: home, env })).stdout).toContain(`token:    ${file}`);
+    } finally {
+      await authed.app.close();
+    }
+  });
+
   it('says plainly what is wrong', async () => {
     expect(await fails('add', '--title', 'x', '--effort', 'XXL')).toContain('effort "XXL" is not on the project\'s scale: XS, S, M, L, XL');
     expect(await fails('show', 'CLI-99')).toContain('Item not found');

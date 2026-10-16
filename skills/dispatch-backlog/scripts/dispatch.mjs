@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Dispatch backlog CLI for Claude Code skills. No dependencies; Node 18+.
 //
-// Connection: DISPATCH_URL (default http://localhost:3000) and DISPATCH_TOKEN, or the token in
-// ~/.config/dispatch/token (the API token from Dispatch → Settings). The token never goes in a repo.
+// Server: DISPATCH_URL, else `url:` in the repo's .dispatch.md, else http://localhost:3000.
+// Token: DISPATCH_TOKEN, else ~/.config/dispatch/tokens/<host> (host with ':' as '_', e.g.
+// localhost_3000), holding the API token from that server's Settings. Tokens never go in a repo.
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
 // (searched from the current folder upwards). Run `dispatch.mjs help` for the commands.
 
@@ -89,7 +90,15 @@ function readConfig(file) {
 const cfgFile = findConfig(process.cwd());
 const cfg = readConfig(cfgFile);
 const URL_BASE = (process.env.DISPATCH_URL || cfg.meta.url || 'http://localhost:3000').replace(/\/$/, '');
-const tokenFile = join(homedir(), '.config', 'dispatch', 'token');
+// one token file per server, named after its host: ~/.config/dispatch/tokens/localhost_3000
+const host = (() => {
+  try {
+    return new URL(URL_BASE).host.replace(/:/g, '_');
+  } catch {
+    return die(`"${URL_BASE}" is not a valid Dispatch URL`);
+  }
+})();
+const tokenFile = join(homedir(), '.config', 'dispatch', 'tokens', host);
 const TOKEN = process.env.DISPATCH_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
 const PROJECT = (flags.project || process.env.DISPATCH_PROJECT || cfg.meta.project || '').toUpperCase();
 const RELEASE_PREFIX = cfg.meta.release_label_prefix || 'rel:';
@@ -107,7 +116,7 @@ async function api(method, path, body) {
     die(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message}). Is it running? Set DISPATCH_URL if it is elsewhere.`);
   }
   const data = await res.json().catch(() => null);
-  if (res.status === 401) die(`not signed in: put the API token from Dispatch → Settings in ${tokenFile} (chmod 600) or DISPATCH_TOKEN.`);
+  if (res.status === 401) die(`not signed in to ${URL_BASE}: put the API token from its Settings page in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
   return data;
 }
@@ -176,7 +185,8 @@ switch (cmd) {
     break;
 
   case 'config': {
-    console.log(`server:   ${URL_BASE} (${TOKEN ? 'token set' : 'NO TOKEN'})`);
+    console.log(`server:   ${URL_BASE}`);
+    console.log(`token:    ${process.env.DISPATCH_TOKEN ? 'from DISPATCH_TOKEN' : TOKEN ? tokenFile : `MISSING (expected in ${tokenFile})`}`);
     console.log(`config:   ${cfgFile ?? '(no .dispatch.md found)'}`);
     console.log(`project:  ${PROJECT || '(none)'}`);
     for (const [k, v] of Object.entries(cfg.meta)) if (!['project', 'url'].includes(k)) console.log(`${(k + ':').padEnd(10)}${v}`);

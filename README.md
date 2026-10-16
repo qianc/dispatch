@@ -109,8 +109,10 @@ next", "write the release notes", item keys like HC-42), and works through a sma
 (`scripts/dispatch.mjs`, no dependencies).
 
 1. Install it for your user: `ln -s "$PWD/skills/dispatch-backlog" ~/.claude/skills/dispatch-backlog`
-2. Token: copy the API token from Settings into `~/.config/dispatch/token` (`chmod 600`). Set
-   `DISPATCH_URL` if Dispatch is not on `http://localhost:3000`.
+2. Token: copy the API token from Settings into `~/.config/dispatch/tokens/<host>`, with `:` as
+   `_` (e.g. `tokens/localhost_3000`), `chmod 600`. One file per server.
+   Dispatch is assumed on `http://localhost:3000`; a repo names another server with `url:` in its
+   `.dispatch.md` (`DISPATCH_URL` overrides it for the whole machine).
 3. In each repo, add `.dispatch.md` (start from `skills/dispatch-backlog/dispatch.example.md`): the
    project key in the frontmatter, then your rules for naming, tags, modules and the changelog.
 
