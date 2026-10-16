@@ -1,4 +1,4 @@
-import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
 import Markdown from 'react-markdown';
@@ -132,25 +132,50 @@ export function ItemStatusIcon({ status, size = 14 }: { status: ItemStatus; size
   );
 }
 
-/** Bottom sheet on phones, centered dialog on wide screens. Portaled to <body>: iOS traps fixed
- *  elements inside the scroll container's stacking context, under the bottom bar. */
+/**
+ * Bottom sheet on phones, centered dialog on wide screens. Portaled to <body>: iOS traps fixed
+ * elements inside the scroll container's stacking context, under the bottom bar. Sized to the
+ * visible area (--app-h, set from visualViewport), so with the keyboard up the sheet sits above it,
+ * and the field you type in is scrolled into view inside the sheet.
+ */
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    // keep the focused field visible: set the sheet's own scrollTop (scrollIntoView would also
+    // scroll the locked page on iOS)
+    const reveal = () => requestAnimationFrame(() => {
+      const box = body.current;
+      const el = document.activeElement as HTMLElement | null;
+      if (!box || !el || !box.contains(el)) return;
+      const b = box.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      if (r.bottom > b.bottom - 8) box.scrollTop += r.bottom - b.bottom + 16;
+      else if (r.top < b.top + 8) box.scrollTop -= b.top - r.top + 16;
+    });
+    window.addEventListener('dispatch:viewport', reveal);
+    document.addEventListener('focusin', reveal);
+    return () => {
+      window.removeEventListener('dispatch:viewport', reveal);
+      document.removeEventListener('focusin', reveal);
+    };
+  }, [open]);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="fixed inset-x-0 top-0 z-50 flex items-end sm:items-center justify-center" style={{ height: 'var(--app-h, 100dvh)' }} role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative w-full sm:max-w-lg max-h-[88dvh] flex flex-col rounded-t-2xl sm:rounded-2xl bg-panel border border-line pb-safe">
+      <div className="relative w-full sm:max-w-lg max-h-[92%] sm:max-h-[88%] flex flex-col rounded-t-2xl sm:rounded-2xl bg-panel border border-line pb-safe [.kb-open_&]:pb-0">
         <div className="flex items-center justify-between px-4 h-12 border-b border-line shrink-0">
           <h2 className="font-semibold">{title}</h2>
           <button onClick={onClose} className="text-muted px-2 h-8" aria-label="Close">✕</button>
         </div>
-        <div className="overflow-y-auto overscroll-contain p-4">{children}</div>
+        <div ref={body} className="overflow-y-auto overscroll-contain p-4">{children}</div>
       </div>
     </div>,
     document.body,

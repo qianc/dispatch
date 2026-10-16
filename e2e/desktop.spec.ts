@@ -214,3 +214,24 @@ test('images on an item: add, view full size, delete', async ({ page }) => {
   await page.locator('input[type=file]').setInputFiles({ name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('not really a png file') });
   await expect(page.getByText('Only PNG, JPEG, GIF and WebP images can be attached.')).toBeVisible();
 });
+
+test('phone: a sheet stays above the keyboard, with the field you type in visible', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'KBD', name: 'Keyboard' } });
+  await page.goto('/p/KBD');
+  await page.getByRole('button', { name: 'Plan with Claude' }).click();
+  // what the iOS keyboard does: the visible area shrinks (main.tsx sets --app-h from visualViewport)
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--app-h', '420px');
+    document.documentElement.classList.add('kb-open');
+    window.dispatchEvent(new Event('dispatch:viewport'));
+  });
+  const field = page.getByRole('dialog').locator('textarea');
+  await field.click();
+  await field.fill('quick wins before the release');
+  const fieldBox = (await field.boundingBox())!;
+  const sheetBox = (await page.getByRole('dialog').locator('> div.relative').boundingBox())!;
+  expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(421);
+  expect(fieldBox.y + fieldBox.height).toBeLessThanOrEqual(421);
+  expect(fieldBox.y).toBeGreaterThanOrEqual(0);
+});
