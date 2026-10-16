@@ -56,7 +56,7 @@ export type ProjectSummary = Project & {
 };
 
 export interface Comment { id: number; item_id: number; author: string; body_md: string; created_at: string }
-export type ItemDetail = Item & { comments: Comment[]; source: Source | null; sessions: Session[]; project: Project; images: ItemImage[] };
+export type ItemDetail = Omit<Item, 'comments'> & { comments: Comment[]; source: Source | null; sessions: Session[]; project: Project; images: ItemImage[] };
 export type SourceDetail = Source & { items: Item[]; project_key: string; project: Project };
 export type SourceSummary = Source & { item_count: number };
 

@@ -207,6 +207,22 @@ test('images on an item: add, view full size, delete', async ({ page }) => {
   await thumb.click();
   const box = page.getByRole('dialog', { name: 'Image' });
   await expect(box.getByText('overlap.png · you')).toBeVisible();
+  // zoom inside the viewer: double-tap in and out, wheel; a tap while zoomed keeps it open
+  const img = box.locator('img');
+  const vb = (await img.boundingBox())!;
+  const mid = { x: vb.x + vb.width / 2, y: vb.y + vb.height / 2 }; // where a finger would tap
+  await expect(img).toHaveAttribute('data-zoom', '1.00');
+  await page.mouse.dblclick(mid.x, mid.y);
+  await expect(img).toHaveAttribute('data-zoom', '2.50');
+  await page.waitForTimeout(350);
+  await page.mouse.click(mid.x, mid.y);
+  await expect(box).toBeVisible();
+  await page.waitForTimeout(350);
+  await page.mouse.dblclick(mid.x, mid.y);
+  await expect(img).toHaveAttribute('data-zoom', '1.00');
+  await page.mouse.move(mid.x, mid.y);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(async () => Number(await img.getAttribute('data-zoom'))).toBeGreaterThan(1.2);
   page.once('dialog', (d) => d.accept());
   await box.getByRole('button', { name: 'Delete' }).click();
   await expect(thumb).toHaveCount(0);
