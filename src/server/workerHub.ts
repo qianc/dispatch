@@ -18,13 +18,21 @@ export class WorkerHub {
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   handlers!: HubHandlers;
 
+  /** the worker said hello on this connection: it has told us which sessions it runs */
+  private ready = false;
+
+  /**
+   * Open and past its hello. Before the hello, a session started here would also look "lost" when
+   * the hello arrives (it lists only what the worker ran before), and be started a second time.
+   */
   get connected() {
-    return this.ws?.readyState === 1;
+    return this.ready && this.ws?.readyState === 1;
   }
 
   attach(ws: WebSocket) {
     this.ws?.close(4000, 'replaced by a new worker connection');
     this.ws = ws;
+    this.ready = false;
     let alive = true;
     ws.on('pong', () => (alive = true));
     const beat = setInterval(() => {
@@ -40,6 +48,7 @@ export class WorkerHub {
       } catch {
         return;
       }
+      if (msg.t === 'hello' && this.ws !== ws) return; // a replaced connection's late hello
       this.handle(msg).catch((e) => console.error('worker message failed', msg.t, e));
     });
     ws.on('close', () => {
@@ -77,6 +86,7 @@ export class WorkerHub {
     switch (msg.t) {
       case 'hello':
         if (msg.claude_accounts) this.claudeAccounts = msg.claude_accounts;
+        this.ready = true;
         return this.handlers.onHello(msg.live);
       case 'cmd_result': {
         const p = this.pending.get(msg.req_id);
