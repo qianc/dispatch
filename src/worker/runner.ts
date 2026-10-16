@@ -5,9 +5,9 @@ import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, type Rpc } from './mcp.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, workPrompt } from './prompts.ts';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface RunnerDeps {
@@ -50,6 +50,28 @@ export function expandDirs(list: string): string[] {
 }
 
 /** True if `path` (after resolving symlinks) is inside one of `dirs`. */
+/**
+ * Discuss: the owner often names a file relative to an extra reference folder ("cvdd/renders/x.png"),
+ * or relative to the repo root, and the model then looks for it in its own checkout. If the path
+ * does not exist there, find the same path under an extra folder (or under one of its parents,
+ * as long as the result stays inside that folder). Returns the path to read, or null.
+ */
+export function rescuePath(path: string, cwd: string, extraDirs: string[]): string | null {
+  if (!path || !extraDirs.length) return null;
+  const asked = resolve(cwd, path);
+  if (existsSync(asked)) return null;
+  const rel = isAbsolute(path) ? (asked.startsWith(cwd + sep) ? relative(cwd, asked) : null) : path;
+  if (!rel || rel.split(/[\\/]/).includes('..')) return null;
+  for (const dir of extraDirs) {
+    for (let base = dir, up = 0; up < 4; base = dirname(base), up++) {
+      const candidate = join(base, rel);
+      if (existsSync(candidate) && insideDirs(candidate, [dir], '/')) return candidate;
+      if (dirname(base) === base) break;
+    }
+  }
+  return null;
+}
+
 export function insideDirs(path: string, dirs: string[], cwd: string): boolean {
   let real: string;
   try {
@@ -246,6 +268,11 @@ export class ClaudeRunner implements AgentRunner {
   private canUseTool: CanUseTool = async (name, input, { signal }) => {
     if ((this.spec.kind === 'assistant' || this.spec.kind === 'discuss') && ASSISTANT_TOOLS.includes(name)) {
       const dirs = this.readDirs();
+      if (name === 'Read' && this.spec.kind === 'discuss') {
+        const extra = dirs.filter((d) => !insideDirs(this.deps.cwd, [d], '/') && !insideDirs(d, [this.deps.cwd], '/'));
+        const found = rescuePath(String(input.file_path ?? ''), this.deps.cwd, extra);
+        if (found) input = { ...input, file_path: found };
+      }
       const path = String(input.file_path ?? input.path ?? '');
       if ((path || this.spec.kind === 'discuss') && !insideDirs(path || this.deps.cwd, dirs, this.deps.cwd)) {
         const allowed = dirs.join(', ') || 'none';

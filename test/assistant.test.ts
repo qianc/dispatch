@@ -131,3 +131,37 @@ describe('import_sections', () => {
     await s.app.close();
   });
 });
+
+describe('Discuss: a path the owner gives relative to an extra folder', () => {
+  it('finds the file under the extra folder when the checkout does not have it, and never outside it', async () => {
+    const { rescuePath } = await import('../src/worker/runner.ts');
+    const { mkdirSync, mkdtempSync, writeFileSync, symlinkSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const root = mkdtempSync(join(tmpdir(), 'dsp-rescue-'));
+    const checkout = join(root, 'session', 'tpl');
+    const repo = join(root, 'tpl');
+    const extra = join(repo, 'reference-decks', 'library-work');
+    mkdirSync(checkout, { recursive: true });
+    mkdirSync(join(extra, 'cvdd', 'renders'), { recursive: true });
+    writeFileSync(join(extra, 'cvdd', 'renders', 'entry-20.png'), 'png');
+    writeFileSync(join(checkout, 'in-git.md'), 'x');
+    writeFileSync(join(repo, 'secret.txt'), 'outside the extra folder');
+    const want = join(extra, 'cvdd', 'renders', 'entry-20.png');
+
+    // relative to the extra folder, as the owner says it; or as the model makes it absolute in its checkout
+    expect(rescuePath('cvdd/renders/entry-20.png', checkout, [extra])).toBe(want);
+    expect(rescuePath(join(checkout, 'cvdd/renders/entry-20.png'), checkout, [extra])).toBe(want);
+    // relative to the repo root
+    expect(rescuePath('reference-decks/library-work/cvdd/renders/entry-20.png', checkout, [extra])).toBe(want);
+    // a file that is in the checkout is left alone; nothing found → null
+    expect(rescuePath('in-git.md', checkout, [extra])).toBeNull();
+    expect(rescuePath('cvdd/renders/entry-99.png', checkout, [extra])).toBeNull();
+    // never a file outside the extra folder, even one level up in the same repo
+    expect(rescuePath('secret.txt', checkout, [extra])).toBeNull();
+    expect(rescuePath('../secret.txt', checkout, [extra])).toBeNull();
+    symlinkSync(join(repo, 'secret.txt'), join(extra, 'link.txt'));
+    expect(rescuePath('link.txt', checkout, [extra])).toBeNull();
+    expect(rescuePath('cvdd/renders/entry-20.png', checkout, [])).toBeNull();
+  });
+});

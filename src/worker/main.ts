@@ -115,9 +115,12 @@ async function discussContext(spec: StartSpec) {
     context.push({
       label: 'More folders you may read',
       text: [
-        "These folders are in the owner's own checkout and are not in git, so they are not in the checkouts above. Read, Glob and Grep work there too. Images you Read are shown to the owner.",
+        "These folders are in the owner's own checkout and are not in git, so they are NOT in your checkout above. You may Read, Glob and Grep them, with these absolute paths:",
         ...extra.map((d) => `- ${d}`),
-        'They can hold material the owner keeps out of git on purpose. Quote from it only what the question needs.',
+        '',
+        '- When the owner names a file or folder (often a path relative to one of these folders, like `cvdd/renders/x.png`) and it is not in your checkout, look in these folders: Glob with `path` set to the folder. Do not say you cannot find a file before you have searched them.',
+        '- Images you Read are shown to the owner in the chat, so Read an image when they ask to see it.',
+        '- These folders can hold material the owner keeps out of git on purpose. Quote from it only what the question needs.',
       ].join('\n'),
     });
   }
