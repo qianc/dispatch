@@ -21,7 +21,7 @@ test('desktop: left menu, checkboxes always on, items open in a drawer', async (
   await page.getByRole('link', { name: /Desktop/ }).first().click();
   await expect(page.getByRole('heading', { name: 'Desktop' })).toBeVisible();
   // ...and lists the project as recent
-  await expect(menu.getByRole('link', { name: /DSK/ })).toBeVisible();
+  await expect(menu.getByRole('link', { name: 'Desktop' })).toBeVisible();
 
   // checkboxes without a Select button
   await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
@@ -234,4 +234,21 @@ test('phone: a sheet stays above the keyboard, with the field you type in visibl
   expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(421);
   expect(fieldBox.y + fieldBox.height).toBeLessThanOrEqual(421);
   expect(fieldBox.y).toBeGreaterThanOrEqual(0);
+});
+
+test('projects get a colour and an icon, shown in the list', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'LOOK', name: 'Looks' } });
+  await page.goto('/p/LOOK?tab=settings');
+  await page.getByRole('radio', { name: 'teal' }).click();
+  await page.getByRole('radio', { name: 'slides' }).click();
+  await expect(page.getByRole('radio', { name: 'slides' })).toHaveAttribute('aria-checked', 'true');
+  const p = await (await page.request.get('/api/projects/LOOK')).json();
+  expect(p).toMatchObject({ color: 'teal', icon: 'slides' });
+  // a name that is not on the list is refused
+  expect((await page.request.patch('/api/projects/LOOK', { data: { color: 'chartreuse' } })).status()).toBe(400);
+  await page.getByRole('link', { name: 'Projects' }).click();
+  const row = page.getByRole('link', { name: /Looks/ });
+  await expect(row.locator('span[aria-hidden] svg')).toBeVisible();
+  await expect(row.getByText('LOOK', { exact: true })).toHaveCSS('color', 'rgb(20, 184, 166)');
 });

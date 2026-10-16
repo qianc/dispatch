@@ -1,3 +1,4 @@
+import { ProjectKey } from './ProjectBadge.tsx';
 import { Icon } from './icons.tsx';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -107,7 +108,7 @@ export function SessionRow({ s, showProject }: { s: Session; showProject?: boole
   return (
     <Link to={`/s/${s.id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
       <div className="flex items-center gap-2">
-        {showProject && <span className="text-[12px] font-semibold text-accent">{s.project_key}</span>}
+        {showProject && <ProjectKey k={s.project_key} badge />}
         <span className="flex-1 min-w-0 truncate font-medium">{s.kind === 'planner' && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
         <SessionStatusChip status={s.status} />
       </div>

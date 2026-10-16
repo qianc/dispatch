@@ -1,3 +1,4 @@
+import { ProjectBadge, ProjectKey } from './ProjectBadge.tsx';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -103,7 +104,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
           <SideGroup title="Needs you">
             {needs.slice(0, 10).map((n) => row(`/s/${n.id}`, <>
               <span className={cx('size-1.5 rounded-full shrink-0', n.tone === 'bad' ? 'bg-bad' : n.tone === 'ok' ? 'bg-ok' : 'bg-wait')} />
-              {n.key && <span className="text-[11px] font-semibold text-accent shrink-0">{n.key}</span>}
+              <ProjectKey k={n.key} className="text-[11px]" />
               <span className="truncate">{n.title}</span>
             </>, `n-${n.id}`))}
           </SideGroup>
@@ -112,7 +113,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
           <SideGroup title="Running">
             {runningNow.slice(0, 10).map((s) => row(`/s/${s.id}`, <>
               <span className={cx('size-1.5 rounded-full shrink-0', s.status === 'running' ? 'bg-run animate-pulse' : 'bg-faint')} />
-              {s.project_key && <span className="text-[11px] font-semibold text-accent shrink-0">{s.project_key}</span>}
+              <ProjectKey k={s.project_key} className="text-[11px]" />
               <span className="truncate">{s.title}</span>
             </>, `r-${s.id}`))}
           </SideGroup>
@@ -120,7 +121,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
         {recentList.length > 0 && (
           <SideGroup title="Projects">
             {recentList.map((p) => row(`/p/${p.key}`, <>
-              <span className="text-[11px] font-semibold text-accent w-9 shrink-0">{p.key}</span>
+              <ProjectBadge project={p} size={20} />
               <span className="truncate flex-1">{p.name}</span>
               {!!p.counts?.waiting && <span className="text-[11px] text-wait">{p.counts.waiting}</span>}
             </>, `p-${p.key}`))}
@@ -146,7 +147,7 @@ function SideGroup({ title, children }: { title: string; children: ReactNode }) 
  * (path + query) and restored on return, retrying briefly while cached content renders.
  * `keepScroll={false}` for screens that manage scrolling themselves (chats pin to the bottom).
  */
-export function Page({ title, subtitle, back, actions, children, footer, keepScroll = true }: { title: ReactNode; subtitle?: ReactNode; back?: string | true; actions?: ReactNode; children: ReactNode; footer?: ReactNode; keepScroll?: boolean }) {
+export function Page({ title, subtitle, icon, back, actions, children, footer, keepScroll = true }: { title: ReactNode; subtitle?: ReactNode; icon?: ReactNode; back?: string | true; actions?: ReactNode; children: ReactNode; footer?: ReactNode; keepScroll?: boolean }) {
   const nav = useNavigate();
   const loc = useLocation();
   const key = loc.pathname + loc.search;
@@ -206,7 +207,8 @@ export function Page({ title, subtitle, back, actions, children, footer, keepScr
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 5l-7 7 7 7" /></svg>
             </button>
           )}
-          <div className={cx('min-w-0 flex-1', !back && 'pl-2')}>
+          {icon && <span className={cx('shrink-0 mr-1', !back && 'pl-2')}>{icon}</span>}
+          <div className={cx('min-w-0 flex-1', !back && !icon && 'pl-2')}>
             <h1 className="font-semibold truncate leading-tight">{title}</h1>
             {subtitle && <div className="text-[12px] text-muted truncate leading-tight">{subtitle}</div>}
           </div>

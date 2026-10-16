@@ -1,3 +1,4 @@
+import { PROJECT_COLOR_NAMES, PROJECT_ICONS, type ProjectColor } from './projectLook.ts';
 import { z } from 'zod';
 
 // ---------- domain ----------
@@ -38,6 +39,9 @@ export interface Project {
   claude_account: string | null;
   /** Claude accounts its sessions may use (null = any) */
   claude_allowed: string[] | null;
+  /** look in lists (names from projectLook.ts); null = default colour from the key / its first letter */
+  color: string | null;
+  icon: string | null;
   created_at: string;
 }
 
@@ -271,6 +275,8 @@ export const projectPatch = z.object({
   github_account: z.string().nullable().optional(),
   claude_account: z.string().nullable().optional(),
   claude_allowed: z.array(z.string()).nullable().optional(),
+  color: z.enum(PROJECT_COLOR_NAMES as [ProjectColor, ...ProjectColor[]]).nullable().optional(),
+  icon: z.enum(PROJECT_ICONS).nullable().optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   default_force_plan: z.boolean().optional(),

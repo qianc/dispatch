@@ -1,3 +1,4 @@
+import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Inbox as InboxData } from '../api.ts';
@@ -23,7 +24,7 @@ function TurnCard({ s }: { s: Idle }) {
     <div className={cx('mx-3 rounded-xl bg-panel border border-line border-l-[3px] px-3 py-2.5', TONE_EDGE[look.tone])}>
       <Link to={`/s/${s.id}`} className="block">
         <div className="flex items-center gap-2">
-          <span className="text-[12px] font-semibold text-accent">{s.project_key}</span>
+          <ProjectKey k={s.project_key} badge />
           <span className="flex-1 min-w-0 truncate font-medium">{s.title}</span>
           <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
         </div>
@@ -59,7 +60,7 @@ export function Inbox() {
               return (
                 <Link key={i.id} to={`/s/${i.session_id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
                   <div className="flex items-center gap-2">
-                    <span className="text-[12px] font-semibold text-accent">{s?.project_key}</span>
+                    <ProjectKey k={s?.project_key} badge />
                     <span className="flex-1 min-w-0 truncate font-medium">{s?.title}</span>
                     <Chip tone="wait">{i.payload.kind === 'plan_approval' ? 'Plan' : 'Question'}</Chip>
                   </div>

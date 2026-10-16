@@ -1,3 +1,4 @@
+import { ProjectBadge, ProjectKey } from '../components/ProjectBadge.tsx';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -38,15 +39,17 @@ export function Projects() {
       {data && !data.length && <Empty>No projects yet. Create one to start.</Empty>}
       <Card className="mt-3">
         {data?.map((p) => (
-          <Link key={p.id} to={`/p/${p.key}`} className="block px-3 py-3 border-b border-line last:border-b-0 active:bg-raised">
+          <Link key={p.id} to={`/p/${p.key}`} className="flex items-center gap-3 px-3 py-3 border-b border-line last:border-b-0 active:bg-raised">
+            <ProjectBadge project={p} size={36} />
+            <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-[12px] font-semibold text-accent w-10">{p.key}</span>
               <span className="flex-1 font-medium truncate">{p.name}</span>
               {!!p.counts?.waiting && <Chip tone="wait">{p.counts.waiting} waiting</Chip>}
               {!!p.counts?.active_sessions && !p.counts.waiting && <Chip tone="run">{p.counts.active_sessions} live</Chip>}
             </div>
-            <div className="text-[13px] text-muted mt-0.5 pl-12">
-              {p.counts?.backlog ?? 0} backlog · {p.counts?.bugs ?? 0} bugs · {p.repos.length} repo{p.repos.length === 1 ? '' : 's'}
+            <div className="text-[13px] text-muted mt-0.5">
+              <ProjectKey k={p.key} className="mr-1.5" />{p.counts?.backlog ?? 0} backlog · {p.counts?.bugs ?? 0} bugs · {p.repos.length} repo{p.repos.length === 1 ? '' : 's'}
+            </div>
             </div>
           </Link>
         ))}

@@ -1,3 +1,5 @@
+import { PROJECT_ICON_PATHS, ProjectBadge, lookColor } from '../components/ProjectBadge.tsx';
+import { PROJECT_COLORS, PROJECT_COLOR_NAMES, PROJECT_ICONS } from '../../../src/shared/projectLook.ts';
 import { Icon } from '../components/icons.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -72,8 +74,9 @@ export function Project() {
     <div className="flex-1 min-h-0 flex">
     <div className="flex-1 min-w-0 flex flex-col">
     <Page
+      icon={<ProjectBadge project={project} size={32} />}
       title={project.name}
-      subtitle={project.key}
+      subtitle={<span style={{ color: lookColor(project) }} className="font-semibold">{project.key}</span>}
       back="/projects"
       actions={
         <>
@@ -398,7 +401,10 @@ function NewSourceForm({ project, onDone }: { project: ProjectSummary; onDone: (
 
 function ProjectSettings({ project }: { project: ProjectSummary }) {
   const qc = useQueryClient();
-  const refresh = () => qc.invalidateQueries({ queryKey: ['project', project.key] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['project', project.key] });
+    qc.invalidateQueries({ queryKey: ['projects'] }); // colours and icons elsewhere
+  };
   const [f, setF] = useState({ name: project.name, description: project.description, importance: project.importance_scale.join(', '), effort: project.effort_scale.join(', ') });
   const save = useMutation({
     mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch),
@@ -462,6 +468,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           />
         )}
       </Sheet>
+      <ProjectLook project={project} onSave={(patch) => save.mutate(patch)} />
       <ProjectAccounts project={project} onSaved={refresh} />
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
@@ -493,6 +500,50 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
         </form>
       </Section>
     </>
+  );
+}
+
+/** Colour and icon, so projects are easy to tell apart in lists. */
+function ProjectLook({ project, onSave }: { project: ProjectSummary; onSave: (patch: { color?: string | null; icon?: string | null }) => void }) {
+  const current = lookColor(project);
+  return (
+    <Section title="Look">
+      <Card className="p-3">
+        <div className="flex items-center gap-3 mb-3">
+          <ProjectBadge project={project} size={40} />
+          <div className="text-[13px] text-muted">Colour and icon for this project in lists, the menu and the inbox.</div>
+        </div>
+        <div className="text-[13px] text-muted mb-1.5">Colour</div>
+        <div className="flex flex-wrap gap-2 mb-4" role="radiogroup" aria-label="Colour">
+          {PROJECT_COLOR_NAMES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={project.color === c}
+              aria-label={c}
+              onClick={() => onSave({ color: c })}
+              className={cx('size-8 rounded-full border-2', PROJECT_COLORS[c] === current && project.color === c ? 'border-fg' : 'border-transparent')}
+              style={{ background: PROJECT_COLORS[c] }}
+            />
+          ))}
+          <button type="button" role="radio" aria-checked={!project.color} onClick={() => onSave({ color: null })} className={cx('h-8 px-2.5 rounded-full border text-[12px]', !project.color ? 'border-fg text-fg' : 'border-line text-muted')}>Auto</button>
+        </div>
+        <div className="text-[13px] text-muted mb-1.5">Icon</div>
+        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Icon">
+          <button type="button" role="radio" aria-checked={!project.icon} aria-label="First letter of the key" onClick={() => onSave({ icon: null })}
+            className={cx('size-10 rounded-lg border flex items-center justify-center font-bold', !project.icon ? 'border-fg' : 'border-line')} style={{ color: current }}>
+            {project.key.charAt(0)}
+          </button>
+          {PROJECT_ICONS.map((icon) => (
+            <button key={icon} type="button" role="radio" aria-checked={project.icon === icon} aria-label={icon} onClick={() => onSave({ icon })}
+              className={cx('size-10 rounded-lg border flex items-center justify-center', project.icon === icon ? 'border-fg' : 'border-line')} style={{ color: current }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"><path d={PROJECT_ICON_PATHS[icon]} /></svg>
+            </button>
+          ))}
+        </div>
+      </Card>
+    </Section>
   );
 }
 

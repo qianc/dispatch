@@ -40,6 +40,8 @@ function toProject(r: Row): Project {
     github_account: (r.github_account as string | null) ?? null,
     claude_account: (r.claude_account as string | null) ?? null,
     claude_allowed: json<string[] | null>(r.claude_allowed, null),
+    color: (r.color as string | null) ?? null,
+    icon: (r.icon as string | null) ?? null,
     created_at: String(r.created_at),
   };
 }
@@ -154,7 +156,7 @@ export class Store {
     const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed'>>): Project {
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
@@ -165,9 +167,9 @@ export class Store {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(
-      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ? WHERE id = ?',
+      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ? WHERE id = ?',
       n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
-      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, id,
+      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, id,
     );
     return this.project(id)!;
   }
