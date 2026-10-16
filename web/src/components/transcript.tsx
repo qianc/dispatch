@@ -275,7 +275,7 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
     <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">Planning chat · {project.name}</div>
       {done ? (
-        <p className="text-[13px] text-ok">{done}</p>
+        <p className={cx('text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
       ) : (
         <>
           <textarea className={cx(inputCls, 'min-h-16 text-[14px]')} placeholder="Focus (optional)" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
@@ -334,9 +334,10 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
     apply(n);
   };
   const existing = items.filter((i) => picked.has(i.id) || (proposal.type === 'batch' && proposal.item_ids.includes(i.id)));
+  const replaced = !!done && /^(Replaced|Not used)/.test(done);
 
   return (
-    <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
+    <div className={cx('rounded-xl border border-accent/40 bg-accent/5 p-3', replaced && 'opacity-60')}>
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">
         {proposal.type === 'batch' ? 'Proposed batch' : 'Proposed items'}{session.kind === 'assistant' && ` · ${project.name}`}
       </div>
@@ -370,7 +371,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
         </>
       )}
       {done ? (
-        <p className="mt-2 text-[13px] text-ok">{done}</p>
+        <p className={cx('mt-2 text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
       ) : proposal.type === 'batch' ? (
         <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!picked.size && !pickedNew.size)} onClick={() => start.mutate()}>
           Start batch ({picked.size + pickedNew.size})

@@ -104,7 +104,26 @@ export class Sessions {
     if (!ref || !this.store.session(ref.session_id)) return;
     this.assertProposalOpen(ref);
     this.addEvent(ref.session_id, { kind: 'proposal_done', event_id: ref.event_id, note });
+    // the cards it revised (from turns before it) cannot be started any more either
+    const accepted = this.store.events(ref.session_id).find((e) => e.id === ref.event_id);
+    if (accepted) this.closeOlderProposals(ref.session_id, accepted.seq, 'Not used: a later version was started');
     this.closePlannerAfterProposal(ref.session_id);
+  }
+
+  /**
+   * In a planning chat, a proposal from a later turn replaces the open ones before it (you asked
+   * for a change). Open cards from turns before `seq` get a note instead of Start buttons; cards
+   * proposed together in one turn stay open (they are meant side by side).
+   */
+  private closeOlderProposals(sessionId: number, seq: number, note: string) {
+    const s = this.store.session(sessionId);
+    if (!s || s.kind !== 'planner') return;
+    const events = this.store.events(sessionId);
+    const turnStart = Math.max(0, ...events.filter((e) => e.body.kind === 'user' && e.seq < seq).map((e) => e.seq));
+    const done = new Set(events.flatMap((e) => (e.body.kind === 'proposal_done' ? [e.body.event_id] : [])));
+    for (const e of events) {
+      if (e.body.kind === 'proposal' && e.seq < turnStart && !done.has(e.id)) this.addEvent(sessionId, { kind: 'proposal_done', event_id: e.id, note });
+    }
   }
 
   /** Sessions that proposed something this turn: the push is sent when the turn ends. */
@@ -434,7 +453,8 @@ export class Sessions {
   propose(s: Session, raw: unknown): string {
     const proposal = proposalSchema.parse(raw);
     if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
-    this.addEvent(s.id, { kind: 'proposal', proposal });
+    const seq = this.addEvent(s.id, { kind: 'proposal', proposal })?.seq;
+    if (seq) this.closeOlderProposals(s.id, seq, 'Replaced by a newer proposal below');
     const what = proposal.type === 'items' ? `${proposal.items.length} items` : proposal.type === 'planner' ? `planning chat for ${proposal.project_key}` : proposal.title;
     // the push goes out when the turn ends, with the explanation (one notice, not two)
     this.proposalNotice.set(s.id, what);
@@ -509,7 +529,9 @@ export class Sessions {
   }
 
   private addEvent(sessionId: number, body: Parameters<Store['addEvent']>[1]) {
-    this.bus.emit({ t: 'session_event', event: this.store.addEvent(sessionId, body) });
+    const event = this.store.addEvent(sessionId, body);
+    this.bus.emit({ t: 'session_event', event });
+    return event;
   }
 
   private emitSession(s: Session) {
