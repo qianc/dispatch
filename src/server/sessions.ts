@@ -4,8 +4,11 @@ import {
   ACTIVE_STATUSES,
   CHAT_KINDS,
   FINAL_STATUSES,
+  ITEM_STATUSES,
+  itemPatch,
   proposedItemSchema,
   type InputAnswer,
+  type ItemChanges,
   DEFAULT_RUN_OPTIONS,
   type Project,
   type ProposedItem,
@@ -48,6 +51,20 @@ const proposalSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('items'), source_id: z.number().int().nullable().default(null), items: z.array(proposedItemSchema).min(1) }),
   z.object({ type: z.literal('planner'), project_key: z.string(), prompt: z.string().default('') }),
+  z.object({
+    type: z.literal('item_update'),
+    key: z.string(),
+    title: z.string().min(1).max(200).optional(),
+    body_md: z.string().optional(),
+    item_type: z.enum(['backlog', 'bug']).optional(),
+    status: z.enum(ITEM_STATUSES).optional(),
+    importance: z.union([z.number(), z.string()]).optional(),
+    effort: z.union([z.number(), z.string()]).nullable().optional(),
+    tags: z.array(z.string()).optional(),
+    modules: z.array(z.string()).optional(),
+    comment: z.string().optional(),
+    reason: z.string().default(''),
+  }),
 ]);
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -397,7 +414,8 @@ export class Sessions {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
     }
-    if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image'].includes(method)) throw new Error('A discussion is read-only.');
+    if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image', 'propose'].includes(method)) throw new Error('A discussion is read-only.');
+    if (s.kind === 'discuss' && method === 'propose' && (p as { type?: string }).type !== 'item_update') throw new Error('A discussion can only suggest item changes.');
     const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => {
       const n = Number(String(key).split('-').pop());
@@ -458,7 +476,9 @@ export class Sessions {
 
   /** Show a proposal card in the session's transcript. */
   propose(s: Session, raw: unknown): string {
-    const proposal = proposalSchema.parse(raw);
+    const parsed = proposalSchema.parse(raw);
+    if (parsed.type === 'item_update') return this.proposeItemUpdate(s, parsed);
+    const proposal = parsed;
     if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
     const seq = this.addEvent(s.id, { kind: 'proposal', proposal })?.seq;
     if (seq) this.closeOlderProposals(s.id, seq, 'Replaced by a newer proposal below');
@@ -466,6 +486,63 @@ export class Sessions {
     // the push goes out when the turn ends, with the explanation (one notice, not two)
     this.proposalNotice.set(s.id, what);
     return 'The proposal will be shown to the owner as a card below your reply, once your turn ends. Now explain it briefly: what is in it and why. Then stop and wait for their reply.';
+  }
+
+  /** Discuss: show a suggested change to an item as a card; nothing changes until the owner applies it. */
+  private proposeItemUpdate(s: Session, p: Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>): string {
+    const project = this.store.project(s.project_id!)!;
+    const it = this.store.itemByNumber(project.id, Number(p.key.split('-').pop()));
+    if (!it) throw new Error(`No item ${p.key} in project ${project.key}`);
+    const scaleIndex = (scale: string[], v: number | string, offset: number) => {
+      const byLabel = scale.findIndex((l) => l.toLowerCase() === String(v).toLowerCase());
+      if (byLabel >= 0) return byLabel + offset;
+      const n = Number(v);
+      if (Number.isInteger(n) && n - offset >= 0 && n - offset < scale.length) return n;
+      throw new Error(`"${v}" is not on the project's scale: ${scale.join(', ')}`);
+    };
+    const changes: ItemChanges = {};
+    if (p.title !== undefined && p.title !== it.title) changes.title = p.title;
+    if (p.body_md !== undefined && p.body_md !== it.body_md) changes.body_md = p.body_md;
+    if (p.item_type !== undefined && p.item_type !== it.type) changes.type = p.item_type;
+    if (p.status !== undefined && p.status !== it.status) changes.status = p.status;
+    if (p.importance !== undefined) {
+      const v = scaleIndex(project.importance_scale, p.importance, 1);
+      if (v !== it.importance) changes.importance = v;
+    }
+    if (p.effort !== undefined) {
+      const v = p.effort === null || p.effort === '' ? null : scaleIndex(project.effort_scale, p.effort, 0);
+      if (v !== it.effort) changes.effort = v;
+    }
+    const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+    if (p.tags !== undefined && !same(p.tags, it.labels)) changes.labels = p.tags;
+    if (p.modules !== undefined && !same(p.modules, it.modules)) changes.modules = p.modules;
+    const comment = p.comment?.trim() || null;
+    if (!Object.keys(changes).length && !comment) throw new Error('Nothing to change: every value is already as proposed.');
+    const before: ItemChanges = {};
+    for (const k of Object.keys(changes) as (keyof ItemChanges)[]) {
+      const field = k === 'type' ? it.type : it[k as keyof typeof it];
+      (before as Record<string, unknown>)[k] = field;
+    }
+    this.addEvent(s.id, { kind: 'proposal', proposal: { type: 'item_update', item_id: it.id, item_key: it.key, changes, before, comment, reason: p.reason } });
+    return 'The change is shown to the owner as a card with Apply and Dismiss, below your reply. Nothing has changed yet. Say in one or two sentences what you propose and why, then stop.';
+  }
+
+  /** The owner applied a suggested item change from a Discuss chat. */
+  applyItemUpdate(sessionId: number, eventId: number) {
+    const ev = this.store.events(sessionId).find((e) => e.id === eventId);
+    if (!ev || ev.body.kind !== 'proposal' || ev.body.proposal.type !== 'item_update') throw new SessionError('Unknown proposal', 404);
+    const ref = { session_id: sessionId, event_id: eventId };
+    this.assertProposalOpen(ref);
+    const p = ev.body.proposal;
+    const it = this.store.item(p.item_id);
+    if (!it) throw new SessionError('The item was deleted.', 404);
+    const patch = itemPatch.parse(p.changes);
+    const updated = Object.keys(patch).length ? this.store.updateItem(it.id, patch) : it;
+    if (p.comment) this.store.addComment(it.id, 'claude', p.comment, sessionId);
+    this.bus.emit({ t: 'item', item: updated });
+    const parts = [Object.keys(patch).length ? `${Object.keys(patch).length} change${Object.keys(patch).length === 1 ? '' : 's'}` : '', p.comment ? 'a comment' : ''].filter(Boolean);
+    this.markProposalDone(ref, `Applied to ${it.key}: ${parts.join(' and ')}`);
+    return updated;
   }
 
   // ---------- internals ----------

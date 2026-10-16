@@ -214,7 +214,20 @@ export type Proposal =
   /** project_key is set when the proposal comes from the assistant (not tied to one project) */
   | { type: 'batch'; project_key?: string; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean }
   | { type: 'planner'; project_key: string; prompt: string }
-  | { type: 'items'; source_id: number | null; items: ProposedItem[] };
+  | { type: 'items'; source_id: number | null; items: ProposedItem[] }
+  /** Discuss: a change to one item that the owner applies (or not). `before` holds the old values. */
+  | { type: 'item_update'; item_id: number; item_key: string; changes: ItemChanges; before: ItemChanges; comment: string | null; reason: string };
+
+export interface ItemChanges {
+  title?: string;
+  body_md?: string;
+  type?: ItemType;
+  status?: ItemStatus;
+  importance?: number;
+  effort?: number | null;
+  labels?: string[];
+  modules?: string[];
+}
 
 export interface PullRequest {
   id: number;

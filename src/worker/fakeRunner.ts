@@ -77,6 +77,12 @@ export class FakeRunner implements AgentRunner {
       // tests: what this chat may read, and the context it was given
       this.say(`(fake) I may read: ${(this.deps.readDirs ?? []).join(', ')} | context: ${(this.deps.context ?? []).map((c) => c.label).join(', ')}`);
       return this.finishTurn();
+    } else if (this.spec.kind === 'discuss' && /add this to the item/i.test(text)) {
+      // tests: suggest a change, as Claude would with propose_item_update
+      const key = this.spec.items[0]?.key;
+      await this.deps.rpc('propose', { type: 'item_update', key, importance: 'High', tags: ['design'], comment: '**Design note:** keep the two layers apart.', reason: 'Records what we found.' });
+      this.say('(fake) I suggest a design note and the High importance. Apply it if it looks right.');
+      return this.finishTurn();
     } else if (this.spec.kind === 'discuss') {
       this.say(`(fake) About ${this.spec.items[0]?.key}: ${this.spec.items[0]?.title}. You asked: ${text}`);
       return this.finishTurn();

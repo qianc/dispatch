@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../../src/shared/types.ts';
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
-import { Button, Chip, ErrorText, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
+import { Button, Chip, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
@@ -261,7 +261,70 @@ function ProposalLoader(props: { eventId: number; done: string | null; proposal:
   const project = key ? loaded : props.project;
   if (!project) return null;
   if (props.proposal.type === 'planner') return <PlannerProposalCard {...props} proposal={props.proposal} project={project} />;
+  if (props.proposal.type === 'item_update') return <ItemUpdateCard {...props} proposal={props.proposal} project={project} />;
   return <ProposalCard {...props} proposal={props.proposal} project={project} />;
+}
+
+const FIELD_LABEL: Record<string, string> = { title: 'Title', body_md: 'Description', type: 'Type', status: 'Status', importance: 'Importance', effort: 'Effort', labels: 'Tags', modules: 'Modules' };
+
+/** A change to an item that a Discuss chat suggests: old → new for each field, a comment, Apply / Dismiss. */
+function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'item_update' }>; session: Session; project: Project }) {
+  const qc = useQueryClient();
+  const [showBody, setShowBody] = useState(false);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['session', session.id] });
+    qc.invalidateQueries({ queryKey: ['item', proposal.item_id] });
+    qc.invalidateQueries({ queryKey: ['items', project.id] });
+  };
+  const apply = useMutation({ mutationFn: () => api.post(`/sessions/${session.id}/apply-update`, { event_id: eventId }), onSuccess: refresh });
+  const dismiss = useMutation({ mutationFn: () => api.post(`/sessions/${session.id}/dismiss-proposal`, { event_id: eventId }), onSuccess: refresh });
+  const show = (field: string, v: unknown): string => {
+    if (v === null || v === undefined || (Array.isArray(v) && !v.length)) return '—';
+    if (field === 'importance') return project.importance_scale[Number(v) - 1] ?? String(v);
+    if (field === 'effort') return project.effort_scale[Number(v)] ?? String(v);
+    if (field === 'status') return ITEM_STATUS_LABEL[v as keyof typeof ITEM_STATUS_LABEL] ?? String(v);
+    if (Array.isArray(v)) return v.join(', ');
+    return String(v);
+  };
+  const fields = Object.keys(proposal.changes) as (keyof typeof proposal.changes)[];
+  const replaced = !!done && /^(Replaced|Not used|Dismissed)/.test(done);
+  return (
+    <div className={cx('rounded-xl border border-accent/40 bg-accent/5 p-3', replaced && 'opacity-60')}>
+      <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-1">Suggested change · {proposal.item_key}</div>
+      {proposal.reason && <p className="text-[13px] text-muted mb-2">{proposal.reason}</p>}
+      <div className="space-y-1.5 text-[14px]">
+        {fields.filter((f) => f !== 'body_md').map((f) => (
+          <div key={f} className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-[12px] text-faint w-20 shrink-0">{FIELD_LABEL[f]}</span>
+            <span className="line-through text-faint">{show(f, proposal.before[f])}</span>
+            <span aria-hidden="true">→</span>
+            <span className="font-medium">{show(f, proposal.changes[f])}</span>
+          </div>
+        ))}
+        {proposal.changes.body_md !== undefined && (
+          <div>
+            <button className="text-[13px] text-accent" onClick={() => setShowBody(!showBody)}>{showBody ? 'Hide' : 'Show'} the new description</button>
+            {showBody && <div className="mt-1.5 rounded-lg bg-panel border border-line p-2.5"><Md className="text-[13.5px]">{proposal.changes.body_md}</Md></div>}
+          </div>
+        )}
+        {proposal.comment && (
+          <div>
+            <div className="text-[12px] text-faint mb-1">New comment</div>
+            <div className="rounded-lg bg-panel border border-line p-2.5"><Md className="text-[13.5px]">{proposal.comment}</Md></div>
+          </div>
+        )}
+      </div>
+      {done ? (
+        <p className={cx('mt-2 text-[13px]', replaced ? 'text-faint' : 'text-ok')}>{done}</p>
+      ) : (
+        <div className="flex gap-2 mt-3">
+          <Button variant="primary" className="flex-1" disabled={apply.isPending || dismiss.isPending} onClick={() => apply.mutate()}>Apply</Button>
+          <Button disabled={apply.isPending || dismiss.isPending} onClick={() => dismiss.mutate()}>Dismiss</Button>
+        </div>
+      )}
+      <ErrorText error={apply.error ?? dismiss.error} />
+    </div>
+  );
 }
 
 function PlannerProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'planner' }>; session: Session; project: Project }) {
@@ -287,7 +350,7 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
   );
 }
 
-function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' }>; session: Session; project: Project }) {
+function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' }>; session: Session; project: Project }) {
   const qc = useQueryClient();
   const nav = useNavigate();
   const { data: items = [] } = useQuery({

@@ -158,6 +158,24 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         tool('get_item', 'Read one item with its description, comments, source and image list.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
         viewImage(rpc),
         tool('list_items', 'List open items in this project.', { status: z.array(z.string()).optional(), type: z.enum(['backlog', 'bug']).optional() }, call(rpc, 'list_items')),
+        tool(
+          'propose_item_update',
+          'Suggest a change to an item: its fields and/or a new comment. The owner sees a card with the old and new values and applies it or not; nothing changes until they do. Use it when the owner asks to add or change something on an item. Give only the fields that change. body_md replaces the whole description: start from the current text (get_item) and keep what is still true.',
+          {
+            key: z.string().describe('Item key, e.g. HC-42'),
+            title: z.string().optional(),
+            body_md: z.string().optional().describe('The full new description (markdown)'),
+            item_type: z.enum(['backlog', 'bug']).optional(),
+            status: z.enum(['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled']).optional(),
+            importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
+            effort: z.union([z.number(), z.string()]).nullable().optional().describe('A label of the project effort scale, or null'),
+            tags: z.array(z.string()).optional().describe('The full new tag list; reuse existing tags'),
+            modules: z.array(z.string()).optional().describe('The full new module list'),
+            comment: z.string().optional().describe('A comment to add (markdown), e.g. a design note from this discussion'),
+            reason: z.string().optional().describe('One line on why, shown on the card'),
+          },
+          async (p) => call(rpc, 'propose')({ type: 'item_update', ...p }),
+        ),
       ],
     });
   }

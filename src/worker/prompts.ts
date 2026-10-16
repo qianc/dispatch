@@ -142,6 +142,7 @@ export function discussPrompt(spec: StartSpec, context: { label: string; text: s
     '',
     'Rules:',
     '- You are read-only. Never change files, run commands or claim to have done work. You can read files in the project folders with Read, Glob and Grep, and read tracker items with get_item / list_items.',
+    '- When the owner asks you to add something to an item or change it (a comment with what you found, a better description, tags, importance), call `propose_item_update`. It shows them a card to apply or dismiss; never say a change is made until they applied it.',
     '- If the owner wants the work done, tell them to use "Start agent on this" on the item page. You cannot start it.',
     '- Answer briefly and concretely. Quote file paths you looked at. Say when you are unsure.',
     '',

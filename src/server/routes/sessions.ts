@@ -118,6 +118,22 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     return github.createPr(s, repo_id);
   });
 
+  /** Apply a change to an item that a Discuss chat suggested. */
+  app.post('/api/sessions/:id/apply-update', async (req) => {
+    const s = session((req.params as { id: string }).id);
+    const { event_id } = z.object({ event_id: z.number().int() }).parse(req.body);
+    return sessions.applyItemUpdate(s.id, event_id);
+  });
+
+  /** Set a proposal card aside without acting on it. */
+  app.post('/api/sessions/:id/dismiss-proposal', async (req) => {
+    const s = session((req.params as { id: string }).id);
+    const { event_id } = z.object({ event_id: z.number().int() }).parse(req.body);
+    if (!store.events(s.id).some((e) => e.id === event_id && e.body.kind === 'proposal')) throw notFound('Proposal');
+    sessions.markProposalDone({ session_id: s.id, event_id }, 'Dismissed');
+    return { ok: true };
+  });
+
   /** Accept an `items` proposal from a planner chat. */
   app.post('/api/sessions/:id/accept-items', async (req) => {
     const s = session((req.params as { id: string }).id);

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FINAL_STATUSES } from '../../../src/shared/types.ts';
@@ -21,6 +21,8 @@ export interface ChatMode {
   onNew: () => void;
   /** in a side panel: a close button instead of back */
   onClose?: () => void;
+  /** shown above the conversation (Discuss on a phone: the item itself) */
+  intro?: ReactNode;
 }
 
 /** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
@@ -123,7 +125,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
         </div>
       )}
-      {(data.items.length > 0 || data.source) && (
+      {chat?.intro}
+      {!chat?.intro && (data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">
           {data.items.map((i) => (
             <Link key={i.id} to={`/items/${i.id}`}><Chip tone="accent">{i.key} {i.title.slice(0, 28)}</Chip></Link>

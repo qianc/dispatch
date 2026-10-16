@@ -252,3 +252,41 @@ test('projects get a colour and an icon, shown in the list', async ({ page }) =>
   await expect(row.locator('span[aria-hidden] svg')).toBeVisible();
   await expect(row.getByText('LOOK', { exact: true })).toHaveCSS('color', 'rgb(20, 184, 166)');
 });
+
+test('Discuss suggests a change to the item, and nothing changes until Apply', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'SUG', name: 'Suggestions' } });
+  const it = await (await page.request.post('/api/projects/SUG/items', { data: { title: 'Voice rules' } })).json();
+  await page.goto(`/items/${it.id}/discuss`);
+  await page.getByLabel('Message').fill('Can you add this to the item?');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('Suggested change · SUG-1')).toBeVisible();
+  await expect(page.getByText('Medium')).toBeVisible(); // old value, crossed out
+  await expect(page.getByText('Design note:')).toBeVisible();
+  expect((await (await page.request.get(`/api/items/${it.id}`)).json()).comments).toEqual([]);
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByText(/Applied to SUG-1: 2 changes and a comment/)).toBeVisible();
+  const after = await (await page.request.get(`/api/items/${it.id}`)).json();
+  expect(after).toMatchObject({ importance: 3, labels: ['design'] });
+  expect(after.comments[0]).toMatchObject({ author: 'claude' });
+});
+
+test('phone: Discuss shows the item above the chat, long text shortened', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'RD', name: 'Reading' } });
+  const body = `Start of the description.\n\n${'A long middle paragraph about the voice rules. '.repeat(20)}\n\nThe last line of the description.`;
+  const it = await (await page.request.post('/api/projects/RD/items', { data: { title: 'Read me first', body_md: body } })).json();
+  await page.goto(`/items/${it.id}/discuss`);
+  const intro = page.getByLabel('The item');
+  await expect(intro.getByRole('heading', { name: 'Read me first' })).toBeVisible();
+  await expect(intro.getByText('Start of the description.')).toBeVisible();
+  await expect(intro.getByText('The last line of the description.')).not.toBeInViewport();
+  await intro.getByRole('button', { name: 'Show all' }).click();
+  await intro.getByText('The last line of the description.').scrollIntoViewIfNeeded();
+  await expect(intro.getByText('The last line of the description.')).toBeInViewport();
+  // still there once the chat has started
+  await page.getByLabel('Message').fill('what is this?');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('(fake) About RD-1')).toBeVisible();
+  await expect(page.getByLabel('The item').getByRole('heading', { name: 'Read me first' })).toBeAttached();
+});
