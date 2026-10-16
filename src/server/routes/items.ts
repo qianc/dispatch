@@ -68,7 +68,8 @@ export function itemRoutes(app: FastifyInstance, { store, bus }: Ctx) {
 
   app.post('/api/items/:id/comments', async (req) => {
     const it = item((req.params as { id: string }).id);
-    const { body_md } = z.object({ body_md: z.string().min(1) }).parse(req.body);
-    return store.addComment(it.id, 'you', body_md);
+    // skills and scripts sign their comments (e.g. "claude"); the app's own are "you"
+    const { body_md, author } = z.object({ body_md: z.string().min(1), author: z.string().trim().min(1).max(40).default('you') }).parse(req.body);
+    return store.addComment(it.id, author, body_md);
   });
 }

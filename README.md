@@ -101,6 +101,22 @@ curl -X POST "$DISPATCH/api/projects/HC/sources" \
 
 The API token is on the Settings page. `items` is optional; you can split later in the app.
 
+## Claude Code skill: keep the backlog in Dispatch
+
+`skills/dispatch-backlog` lets Claude Code manage a repo's backlog and changelog in Dispatch rather
+than in a markdown file. It reacts to backlog, bug and changelog requests ("file a bug", "what's
+next", "write the release notes", item keys like HC-42), and works through a small script
+(`scripts/dispatch.mjs`, no dependencies).
+
+1. Install it for your user: `ln -s "$PWD/skills/dispatch-backlog" ~/.claude/skills/dispatch-backlog`
+2. Token: copy the API token from Settings into `~/.config/dispatch/token` (`chmod 600`). Set
+   `DISPATCH_URL` if Dispatch is not on `http://localhost:3000`.
+3. In each repo, add `.dispatch.md` (start from `skills/dispatch-backlog/dispatch.example.md`): the
+   project key in the frontmatter, then your rules for naming, tags, modules and the changelog.
+
+The changelog stays a file in the repo. Claude writes it from done items without a `rel:<version>`
+label, then labels them, so the next entry starts where this one ended.
+
 ## Tests
 
 ```bash
