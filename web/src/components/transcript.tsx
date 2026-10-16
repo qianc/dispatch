@@ -54,7 +54,7 @@ function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
   );
 }
 
-type Unit = { t: 'event'; e: SessionEvent } | { t: 'work'; key: number; events: SessionEvent[]; live: boolean };
+type Unit = { t: 'event'; e: SessionEvent } | { t: 'work'; key: number; events: SessionEvent[]; live: boolean } | { t: 'pending_proposal'; key: number };
 
 const isWork = (e: SessionEvent) => e.body.kind === 'tool_use' || e.body.kind === 'tool_result' || e.body.kind === 'assistant';
 
@@ -64,7 +64,7 @@ const isWork = (e: SessionEvent) => e.body.kind === 'tool_use' || e.body.kind ==
  * stays outside the fold. The stretch still running stays open, so you can follow along.
  * Proposal cards move to the end of their turn, after the answer that explains them.
  */
-function groupWork(events: SessionEvent[], running: boolean): Unit[] {
+export function groupWork(events: SessionEvent[], running: boolean): Unit[] {
   const out: Unit[] = [];
   let buf: SessionEvent[] = [];
   const flush = (live: boolean) => {
@@ -97,7 +97,9 @@ function groupWork(events: SessionEvent[], running: boolean): Unit[] {
     }
   }
   flush(running);
-  release();
+  // the turn is still running: the card waits for Claude's explanation and the end of the turn
+  if (running && proposals.length) out.push({ t: 'pending_proposal', key: proposals[0].seq });
+  else release();
   return out;
 }
 
@@ -173,7 +175,10 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
   };
   return (
     <div className="px-4 py-3 space-y-2">
-      {units.map((u) => (u.t === 'event' ? render(u.e) : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} render={render} results={results} />))}
+      {units.map((u) =>
+        u.t === 'event' ? render(u.e)
+        : u.t === 'pending_proposal' ? <p key={`p-${u.key}`} className="text-[13px] text-accent animate-pulse">Claude is writing up a proposal…</p>
+        : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} render={render} results={results} />)}
     </div>
   );
 }

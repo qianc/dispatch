@@ -107,6 +107,9 @@ export class Sessions {
     this.closePlannerAfterProposal(ref.session_id);
   }
 
+  /** Sessions that proposed something this turn: the push is sent when the turn ends. */
+  private proposalNotice = new Map<number, string>();
+
   /** Planning chats whose proposal was accepted while Claude was still writing: complete them at turn end. */
   private closeWhenIdle = new Set<number>();
 
@@ -325,12 +328,18 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
+        const proposed = msg.status === 'running' ? undefined : this.proposalNotice.get(s.id);
+        if (msg.status !== 'running') this.proposalNotice.delete(s.id);
         if (msg.status === 'idle' && this.closeWhenIdle.delete(s.id)) {
           this.finish(s.id, 'completed'); // its proposal was accepted during the turn
           return;
         }
         if (msg.status === 'idle' && s.kind === 'work') this.onWorkIdle?.(this.store.session(s.id)!);
-        if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
+        if (msg.status === 'idle' && proposed !== undefined) {
+          // one notice for the turn: the proposal, with Claude's explanation
+          const text = this.store.session(s.id)?.last_text || proposed;
+          this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, text, `proposal-${s.id}`);
+        } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
           this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
         }
@@ -427,8 +436,9 @@ export class Sessions {
     if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
     this.addEvent(s.id, { kind: 'proposal', proposal });
     const what = proposal.type === 'items' ? `${proposal.items.length} items` : proposal.type === 'planner' ? `planning chat for ${proposal.project_key}` : proposal.title;
-    this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, what, `proposal-${s.id}`);
-    return 'The proposal is shown to the user as a card. They will edit and start it from there. Stop here and wait for their reply.';
+    // the push goes out when the turn ends, with the explanation (one notice, not two)
+    this.proposalNotice.set(s.id, what);
+    return 'The proposal will be shown to the owner as a card below your reply, once your turn ends. Now explain it briefly: what is in it and why. Then stop and wait for their reply.';
   }
 
   // ---------- internals ----------

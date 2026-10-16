@@ -98,7 +98,10 @@ describe('sessions with the fake runner', () => {
     const src = (await s.call('POST', '/projects/HC/sources', { title: 'Retro', body_md: 'stuff', reporter: 'alex', version_tag: 'v1' })).data;
     const p = (await s.call('POST', '/projects/HC/planner', { source_id: src.id })).data;
     expect(p.kind).toBe('planner');
-    const d = await waitFor(async () => { const x = await session(p.id); return x.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal') && x; }, 'proposal');
+    const d = await waitFor(async () => { const x = await session(p.id); return x.session.status === 'idle' && x.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal') && x; }, 'proposal');
+    // one push for the turn, sent at its end, with Claude's explanation
+    const pushes = s.ctx.notifier.sent.filter((n) => n.url === `/s/${p.id}`);
+    expect(pushes).toEqual([expect.objectContaining({ title: 'HC: proposal ready', body: '(fake) I split the source into 2 items. Check the card.' })]);
     const proposal = d.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal').body.proposal;
     expect(proposal).toMatchObject({ type: 'items', source_id: src.id });
     const eventId = d.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal').id;
@@ -109,7 +112,6 @@ describe('sessions with the fake runner', () => {
     const after = await session(p.id);
     expect(after.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal_done').body).toMatchObject({ event_id: eventId, note: expect.stringMatching(/^Created HC-\d+, HC-\d+$/) });
     expect(created.every((i: { source_id: number }) => i.source_id === src.id)).toBe(true);
-    expect(s.ctx.notifier.sent.some((n) => n.title === 'HC: proposal ready')).toBe(true);
     // accepting the proposal completes the planning chat (now, or at the end of its turn)
     await waitFor(async () => (await session(p.id)).session.status === 'completed', 'planner completed');
   });
