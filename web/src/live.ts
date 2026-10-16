@@ -20,10 +20,17 @@ export function connectLive(qc: QueryClient): () => void {
   let es: EventSource | null = null;
   let stopped = false;
   let retry: number | undefined;
+  let last = Date.now();
+  let hiddenAt = 0;
 
   const open = () => {
+    clearTimeout(retry);
+    es?.close();
+    liveHealthy = false; // poll until this stream delivers something
+    last = Date.now();
     es = new EventSource('/api/stream');
     es.onmessage = (m) => {
+      last = Date.now();
       liveHealthy = true;
       apply(qc, JSON.parse(m.data) as LiveEvent);
     };
@@ -35,19 +42,43 @@ export function connectLive(qc: QueryClient): () => void {
     };
   };
   open();
-  const onVisible = () => {
-    if (document.visibilityState === 'visible' && es?.readyState !== EventSource.OPEN) {
-      es?.close();
-      open();
-    }
+
+  // iOS freezes a backgrounded app and kills its stream, yet the EventSource can still say OPEN.
+  // Coming back: reconnect, and refetch what is on screen.
+  const resume = () => {
+    if (stopped || document.visibilityState !== 'visible') return;
+    if (hiddenAt && Date.now() - hiddenAt > 2000) open();
+    hiddenAt = 0;
+    void qc.invalidateQueries();
   };
-  document.addEventListener('visibilitychange', onVisible);
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+    else resume();
+  };
+  const onPageShow = (e: PageTransitionEvent) => {
+    if (e.persisted) hiddenAt = hiddenAt || 1; // restored from the back/forward cache
+    resume();
+  };
+  const onOnline = () => {
+    open();
+    void qc.invalidateQueries();
+  };
+  // the server sends something at least every 25 s; a minute of silence means the stream is dead
+  const watchdog = window.setInterval(() => {
+    if (document.visibilityState === 'visible' && Date.now() - last > 60_000) open();
+  }, 15_000);
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('pageshow', onPageShow);
+  window.addEventListener('online', onOnline);
   return () => {
     stopped = true;
     liveHealthy = false;
     clearTimeout(retry);
+    clearInterval(watchdog);
     es?.close();
-    document.removeEventListener('visibilitychange', onVisible);
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('pageshow', onPageShow);
+    window.removeEventListener('online', onOnline);
   };
 }
 
