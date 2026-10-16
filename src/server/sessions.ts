@@ -104,6 +104,21 @@ export class Sessions {
     if (!ref || !this.store.session(ref.session_id)) return;
     this.assertProposalOpen(ref);
     this.addEvent(ref.session_id, { kind: 'proposal_done', event_id: ref.event_id, note });
+    this.closePlannerAfterProposal(ref.session_id);
+  }
+
+  /** Planning chats whose proposal was accepted while Claude was still writing: complete them at turn end. */
+  private closeWhenIdle = new Set<number>();
+
+  /**
+   * A planning chat has done its job once you accept its proposal: mark it complete. If Claude is
+   * still writing, wait for the end of the turn. A message to it later reopens it, as usual.
+   */
+  private closePlannerAfterProposal(sessionId: number) {
+    const s = this.store.session(sessionId);
+    if (!s || s.kind !== 'planner' || FINAL_STATUSES.includes(s.status)) return;
+    if (s.status === 'running' || s.status === 'queued') this.closeWhenIdle.add(s.id);
+    else this.finish(s.id, 'completed');
   }
 
   startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; proposal?: { session_id: number; event_id: number } }): Session {
@@ -310,6 +325,10 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
+        if (msg.status === 'idle' && this.closeWhenIdle.delete(s.id)) {
+          this.finish(s.id, 'completed'); // its proposal was accepted during the turn
+          return;
+        }
         if (msg.status === 'idle' && s.kind === 'work') this.onWorkIdle?.(this.store.session(s.id)!);
         if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';

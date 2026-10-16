@@ -70,8 +70,20 @@ test('phone flow: project → items → batch → answer → planner card → st
   await page.getByRole('button', { name: 'Plan with Claude' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Start planning chat' }).click();
   await expect(page.getByText('Proposed batch')).toBeVisible();
+  // the card comes after Claude's explanation, so you read the reasons before Start
+  const reason = page.getByText(/\(fake\) I suggest/);
+  await expect(reason).toBeVisible();
+  const cardFollows = await reason.evaluate((el) => {
+    const card = [...document.querySelectorAll('*')].find((n) => n.textContent === 'Proposed batch')!;
+    return !!(el.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(cardFollows).toBe(true);
+  const plannerUrl = page.url();
   await page.getByRole('button', { name: /Start batch/ }).click();
   await expect(page.getByText('Which approach should I take?')).toBeVisible();
+  // starting it completes the planning chat
+  await page.goto(plannerUrl);
+  await expect(page.getByText('Done', { exact: true }).first()).toBeVisible();
 });
 
 test('retro capture and split into linked items', async ({ page }) => {

@@ -78,6 +78,7 @@ const isWork = (e: SessionEvent) => e.body.kind === 'tool_use' || e.body.kind ==
  * Fold each stretch of work (tool calls and in-between notes) into one "Worked · N steps" line, so
  * Claude's answer stands out: the last message before a turn ends, a question, or your next message
  * stays outside the fold. The stretch still running stays open, so you can follow along.
+ * Proposal cards move to the end of their turn, after the answer that explains them.
  */
 function groupWork(events: SessionEvent[], running: boolean): Unit[] {
   const out: Unit[] = [];
@@ -95,15 +96,24 @@ function groupWork(events: SessionEvent[], running: boolean): Unit[] {
     for (const e of buf.slice(cut)) out.push({ t: 'event', e });
     buf = [];
   };
+  // a proposal card waits until the end of its turn, so Claude's reasoning comes before the Start button
+  let proposals: SessionEvent[] = [];
+  const release = () => {
+    for (const e of proposals) out.push({ t: 'event', e });
+    proposals = [];
+  };
   for (const e of events) {
     if (isWork(e)) buf.push(e);
     else if (e.body.kind === 'proposal_done') continue;
+    else if (e.body.kind === 'proposal') proposals.push(e);
     else {
       flush(false);
+      release();
       out.push({ t: 'event', e });
     }
   }
   flush(running);
+  release();
   return out;
 }
 

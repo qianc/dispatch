@@ -110,6 +110,8 @@ describe('sessions with the fake runner', () => {
     expect(after.events.find((e: { body: { kind: string } }) => e.body.kind === 'proposal_done').body).toMatchObject({ event_id: eventId, note: expect.stringMatching(/^Created HC-\d+, HC-\d+$/) });
     expect(created.every((i: { source_id: number }) => i.source_id === src.id)).toBe(true);
     expect(s.ctx.notifier.sent.some((n) => n.title === 'HC: proposal ready')).toBe(true);
+    // accepting the proposal completes the planning chat (now, or at the end of its turn)
+    await waitFor(async () => (await session(p.id)).session.status === 'completed', 'planner completed');
   });
 
   it('lets the agent file items through the dispatch tools, linked to an agent_session source', async () => {
