@@ -158,7 +158,31 @@ export class GitHub {
    * open question), GitHub says it is mergeable, and every check has passed. Otherwise wait, or
    * tell the owner once why it will not merge.
    */
+  /** Per session: how many auto-merge outcomes were told to the owner (a notice or a message to the agent). */
+  private told = new Map<number, number>();
+  toldCount(sessionId: number) {
+    return this.told.get(sessionId) ?? 0;
+  }
+  private tell(sessionId: number) {
+    this.told.set(sessionId, this.toldCount(sessionId) + 1);
+  }
+
+  /**
+   * Auto-merge (session option), one at a time per PR: two syncs of the same branch (turn end and
+   * the poller) must not both merge it. The lock covers the whole check, and the PR's state is read
+   * again inside it.
+   */
   async maybeAutoMerge(s: Session, pr: PullRequest) {
+    if (this.merging.has(pr.id)) return;
+    this.merging.add(pr.id);
+    try {
+      await this.autoMerge(s, this.store.pr(pr.id) ?? pr);
+    } finally {
+      this.merging.delete(pr.id);
+    }
+  }
+
+  private async autoMerge(s: Session, pr: PullRequest) {
     const how = s.options.auto_merge;
     if (how === 'off' || pr.state !== 'open') return;
     if (!['idle', 'completed'].includes(s.status) || this.store.openInputs().some((i) => i.session_id === s.id)) return;
@@ -170,6 +194,7 @@ export class GitHub {
       this.store.setPrBlocked(pr.id, why);
       this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
       this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} skipped: ${why}` });
+      this.tell(s.id);
       void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `${label}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
     };
     if (pr.mergeable === null) return; // GitHub is still computing it
@@ -184,6 +209,7 @@ export class GitHub {
           this.autoMergeNoted.add(key);
           this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} waits: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
           this.onBehind?.(s, repo, behind);
+          this.tell(s.id); // the agent goes on working: no "waiting for you" yet
         }
         return;
       }
@@ -194,17 +220,13 @@ export class GitHub {
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
-    if (this.merging.has(pr.id)) return;
-    this.merging.add(pr.id);
-    let res: Awaited<ReturnType<GitHub['merge']>>;
-    try {
-      res = await this.merge(pr.id, how, 'squash');
-    } finally {
-      this.merging.delete(pr.id);
-    }
+    const res = await this.merge(pr.id, how, 'squash');
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
     this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged ${label} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
-    void this.notifier.send({ title: `${s.project_key}: auto-merged`, body: `${label} ${pr.title}`, url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
+    this.tell(s.id);
+    // the one notice for this turn: what Claude said it did, now merged
+    const summary = this.store.session(s.id)?.last_text;
+    void this.notifier.send({ title: `${s.project_key}: done and merged`, body: summary || `${label} ${pr.title}`, url: `/s/${s.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
   }
 
   /** Store a GitHub PR and apply side effects of state changes. */
@@ -238,7 +260,8 @@ export class GitHub {
     const items = this.store.itemsByIds(s.item_ids);
     if (pr.state === 'open' && was === null) {
       for (const it of items) if (it.status === 'in_progress' || it.status === 'todo') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_review' }) });
-      void this.notifier.send({
+      // with auto-merge on, the merge result is the notice (merged, or why not)
+      if (s.options.auto_merge === 'off') void this.notifier.send({
         title: pr.local ? `${s.project_key}: branch ready for review` : `${s.project_key}: PR ready`,
         body: pr.local ? `${pr.head_ref} · ${pr.title}` : `#${pr.number} ${pr.title}`,
         url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined,

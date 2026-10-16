@@ -13,6 +13,18 @@ export function pushRoutes(app: FastifyInstance, { store, notifier }: Ctx) {
     store.removePushSubscription(endpoint);
     return { ok: true };
   });
+  /** How many devices get notifications (an old, removed app install can still count here). */
+  app.get('/api/push/devices', async () => ({ count: store.pushSubscriptions().length }));
+
+  /** Keep only this device: for installs that were removed but whose subscription lives on. */
+  app.post('/api/push/keep-only', async (req) => {
+    const { endpoint } = z.object({ endpoint: z.string() }).parse(req.body);
+    const all = store.pushSubscriptions();
+    if (!all.some((s) => s.endpoint === endpoint)) return { removed: 0, error: 'This device is not subscribed; turn notifications on first.' };
+    for (const s of all) if (s.endpoint !== endpoint) store.removePushSubscription(s.endpoint);
+    return { removed: all.length - 1 };
+  });
+
   app.post('/api/push/test', async () => {
     await notifier.send({ title: 'Dispatch', body: 'Test notification', url: '/', tag: 'test' });
     return { ok: true, subscriptions: store.pushSubscriptions().length };

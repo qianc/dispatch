@@ -92,3 +92,19 @@ describe('images on items', () => {
     }
   });
 });
+
+describe('push devices', () => {
+  it('counts subscribed devices and keeps only one on request', async () => {
+    const s = await startServer();
+    try {
+      for (const n of [1, 2, 3]) await s.call('POST', '/push/subscribe', { endpoint: `https://web.push.apple.com/dev${n}`, keys: { p256dh: 'p', auth: 'a' } });
+      expect((await s.call('GET', '/push/devices')).data.count).toBe(3);
+      expect((await s.call('POST', '/push/keep-only', { endpoint: 'https://web.push.apple.com/dev2' })).data).toEqual({ removed: 2 });
+      expect(s.ctx.store.pushSubscriptions().map((x) => x.endpoint)).toEqual(['https://web.push.apple.com/dev2']);
+      expect((await s.call('POST', '/push/keep-only', { endpoint: 'https://web.push.apple.com/unknown' })).data.removed).toBe(0);
+      expect(s.ctx.store.pushSubscriptions()).toHaveLength(1);
+    } finally {
+      await s.app.close();
+    }
+  });
+});

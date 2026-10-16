@@ -96,8 +96,34 @@ describe('auto-merge', () => {
     await s.ctx.github.syncSession(session);
     expect(merges).toEqual([expect.objectContaining({ pull_number: 7, merge_method: 'squash' })]);
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
-    expect(s.ctx.notifier.sent.some((n) => n.title === 'AM: auto-merged')).toBe(true);
+    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toEqual([expect.objectContaining({ body: '#7 PR', url: `/s/${session.id}` })]);
     await s.app.close();
+  });
+
+  it('merges once when two syncs of the same branch run at the same time', async () => {
+    const { s, session, merges } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+    await Promise.all([s.ctx.github.syncSession(session), s.ctx.github.syncSession(session)]);
+    await s.ctx.github.syncSession(session); // and once more after it is merged
+    expect(merges).toHaveLength(1);
+    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toHaveLength(1);
+    expect((await s.call('GET', `/sessions/${session.id}`)).data.events.filter((e: { body: { text?: string } }) => e.body.text?.startsWith('Auto-merged'))).toHaveLength(1);
+    await s.app.close();
+  });
+
+  it('sends one notice when a turn ends: the merge result if there is one, else "waiting for you"', async () => {
+    const turnEnds = async (checks: Check[], withPr = true) => {
+      const { s, session } = await setup(checks);
+      if (!withPr) Object.defineProperty(s.ctx.github, 'octo', { value: { pulls: { list: async () => ({ data: [] }) } } });
+      s.ctx.store.updateSession(session.id, { status: 'running', last_text: 'Fixed the legend.' });
+      s.ctx.sessions.onWorkerMessage({ t: 'status', session_id: session.id, status: 'idle' });
+      await new Promise((r) => setTimeout(r, 300));
+      const titles = s.ctx.notifier.sent.map((n) => `${n.title} | ${n.body}`);
+      await s.app.close();
+      return titles;
+    };
+    expect(await turnEnds([{ name: 't', status: 'completed', conclusion: 'success', html_url: null }])).toEqual(['AM: done and merged | Fixed the legend.']);
+    expect(await turnEnds([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }])).toEqual(['AM: not auto-merged | #7: checks failed (lint)']);
+    expect(await turnEnds([], false)).toEqual(['AM: waiting for you | Fixed the legend.']);
   });
 
   it('does not merge on failed checks or conflicts, and says why once', async () => {

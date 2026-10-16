@@ -353,14 +353,21 @@ export class Sessions {
           this.finish(s.id, 'completed'); // its proposal was accepted during the turn
           return;
         }
-        if (msg.status === 'idle' && s.kind === 'work') this.onWorkIdle?.(this.store.session(s.id)!);
+        // with auto-merge on, the merge check speaks for this turn (merged / not merged / branch behind);
+        // "waiting for you" goes out only if it said nothing
+        const mergeSpeaks = msg.status === 'idle' && s.kind === 'work' && s.options.auto_merge !== 'off' && was !== 'idle';
+        const idleWork = msg.status === 'idle' && s.kind === 'work' ? this.onWorkIdle?.(this.store.session(s.id)!) : undefined;
         if (msg.status === 'idle' && proposed !== undefined) {
           // one notice for the turn: the proposal, with Claude's explanation
           const text = this.store.session(s.id)?.last_text || proposed;
           this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, text, `proposal-${s.id}`);
         } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
-          const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
-          this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
+          const waiting = () => {
+            const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
+            this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
+          };
+          if (mergeSpeaks && idleWork) void idleWork.then((told) => !told && waiting(), waiting);
+          else waiting();
         }
         if (msg.status === 'failed') this.notify(s, `${s.project_key}: session failed`, msg.error ?? s.title, `failed-${s.id}`);
         if (msg.status !== 'running') this.dispatch();
@@ -482,8 +489,11 @@ export class Sessions {
     }
   }
 
-  /** Called when a work session finishes a turn (app.ts wires it to the GitHub sync). */
-  onWorkIdle: ((s: Session) => void) | null = null;
+  /**
+   * Called when a work session finishes a turn (app.ts wires it to the GitHub sync). Resolves true
+   * if the owner was already told something about this turn (auto-merge result).
+   */
+  onWorkIdle: ((s: Session) => Promise<boolean>) | null = null;
 
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;

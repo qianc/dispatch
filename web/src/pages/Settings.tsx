@@ -16,9 +16,21 @@ export function Settings() {
   useEffect(() => { currentSubscription().then((s) => setSubscribed(!!s)).catch(() => setSubscribed(false)); }, []);
   const toggle = useMutation({
     mutationFn: async () => (subscribed ? disablePush() : enablePush(me!.vapid_public_key)),
-    onSuccess: () => currentSubscription().then((s) => setSubscribed(!!s)),
+    onSuccess: () => {
+      void currentSubscription().then((s) => setSubscribed(!!s));
+      void qc.invalidateQueries({ queryKey: ['push-devices'] });
+    },
   });
   const test = useMutation({ mutationFn: () => api.post<{ subscriptions: number }>('/push/test') });
+  const { data: devices, refetch: refetchDevices } = useQuery({ queryKey: ['push-devices'], queryFn: () => api.get<{ count: number }>('/push/devices') });
+  const keepOnly = useMutation({
+    mutationFn: async () => {
+      const sub = await currentSubscription();
+      if (!sub) throw new Error('Notifications are not on for this device.');
+      return api.post<{ removed: number }>('/push/keep-only', { endpoint: sub.endpoint });
+    },
+    onSuccess: () => refetchDevices(),
+  });
   const logout = useMutation({ mutationFn: () => api.post('/logout'), onSuccess: () => qc.invalidateQueries() });
   const standalone = window.matchMedia('(display-mode: standalone)').matches;
 
@@ -39,7 +51,14 @@ export function Settings() {
               </Button>
               {subscribed && <Button className="w-full" onClick={() => test.mutate()} disabled={test.isPending}>Send test notification</Button>}
               {test.data && <p className="text-[12px] text-faint">Sent to {test.data.subscriptions} device(s).</p>}
-              <ErrorText error={toggle.error ?? test.error} />
+              {subscribed && devices && devices.count > 1 && (
+                <div className="rounded-lg border border-line p-2.5 text-[13px] text-muted space-y-2">
+                  <p>{devices.count} devices get notifications. If you removed and added the app again, the old installs still count, and you can get the same notice more than once.</p>
+                  <Button small className="w-full" disabled={keepOnly.isPending} onClick={() => keepOnly.mutate()}>Turn off other devices</Button>
+                </div>
+              )}
+              {keepOnly.data && <p className="text-[12px] text-faint">Turned off {keepOnly.data.removed} other device(s).</p>}
+              <ErrorText error={toggle.error ?? test.error ?? keepOnly.error} />
             </>
           )}
         </Card>
