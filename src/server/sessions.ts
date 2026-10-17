@@ -128,18 +128,24 @@ export class Sessions {
   }
 
   /**
-   * In a planning chat, a proposal from a later turn replaces the open ones before it (you asked
-   * for a change). Open cards from turns before `seq` get a note instead of Start buttons; cards
+   * In a planning chat, a proposal from a later turn replaces the open ones of the same kind
+   * before it (you asked for a change). Open cards from turns before `seq` get a note instead of Start buttons; cards
    * proposed together in one turn stay open (they are meant side by side).
    */
   private closeOlderProposals(sessionId: number, seq: number, note: string) {
     const s = this.store.session(sessionId);
     if (!s || s.kind !== 'planner') return;
     const events = this.store.events(sessionId);
+    const newer = events.find((e) => e.seq === seq);
+    // only the same kind of card is a revision: a new batch replaces a batch, a new item list an
+    // item list; filing an extra item leaves the batch on offer
+    const type = newer?.body.kind === 'proposal' ? newer.body.proposal.type : null;
     const turnStart = Math.max(0, ...events.filter((e) => e.body.kind === 'user' && e.seq < seq).map((e) => e.seq));
     const done = new Set(events.flatMap((e) => (e.body.kind === 'proposal_done' ? [e.body.event_id] : [])));
     for (const e of events) {
-      if (e.body.kind === 'proposal' && e.seq < turnStart && !done.has(e.id)) this.addEvent(sessionId, { kind: 'proposal_done', event_id: e.id, note });
+      if (e.body.kind === 'proposal' && e.body.proposal.type === type && e.seq < turnStart && !done.has(e.id)) {
+        this.addEvent(sessionId, { kind: 'proposal_done', event_id: e.id, note });
+      }
     }
   }
 

@@ -34,6 +34,23 @@ describe('proposal cards that were revised', () => {
     expect((await s.call('POST', `/sessions/${p.id}/accept-items`, { items: items('x').items, event_id: first.id })).status).toBe(409);
   });
 
+  it('a card of another kind does not replace one: filing an extra item leaves the batch open', async () => {
+    const p = planner();
+    const it = (await s.call('POST', '/projects/VER/items', { title: 'In the batch' })).data;
+    s.ctx.store.addEvent(p.id, { kind: 'user', text: 'plan it' });
+    await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'The batch', item_ids: [it.id] });
+    s.ctx.store.addEvent(p.id, { kind: 'user', text: 'also file an item for the charts' });
+    await s.ctx.sessions.rpc(p.id, 'propose', items('Charts later'));
+    const ev = (await s.call('GET', `/sessions/${p.id}`)).data.events as { id: number; body: { kind: string; proposal?: { type: string }; event_id?: number } }[];
+    const batch = ev.find((e) => e.body.kind === 'proposal' && e.body.proposal!.type === 'batch')!;
+    expect(ev.some((e) => e.body.kind === 'proposal_done' && e.body.event_id === batch.id)).toBe(false);
+    // a revised batch still replaces it
+    s.ctx.store.addEvent(p.id, { kind: 'user', text: 'make the batch smaller' });
+    await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Smaller batch', item_ids: [it.id] });
+    const after = (await s.call('GET', `/sessions/${p.id}`)).data.events as { body: { kind: string; event_id?: number; note?: string } }[];
+    expect(after.find((e) => e.body.kind === 'proposal_done' && e.body.event_id === batch.id)?.body.note).toBe('Replaced by a newer proposal below');
+  });
+
   it('accepting a card closes open cards from earlier turns (chats from before this rule)', async () => {
     const p = planner();
     s.ctx.store.addEvent(p.id, { kind: 'user', text: 'plan it' });
