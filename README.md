@@ -78,6 +78,14 @@ Without `RUNNER=fake` the worker uses your local Claude Code login. Set
 superpowers, and `AGENT_SETTING_SOURCES=project` if you don't want your personal `~/.claude`
 settings in agent sessions.
 
+## Tools for agents
+
+Agents use the tools on the worker's PATH. Put extra tool folders first with `AGENT_EXTRA_PATH`
+(e.g. `~/.local/go/bin` for a Go install). Under WSL the worker also adds Windows' own PATH, as
+a Windows terminal does, so agents can run `powershell.exe` (and through it PowerPoint) and other
+Windows tools; a worker started by systemd does not get that PATH otherwise. `WINDOWS_PATH=off`
+turns it off. The worker logs what it added when it starts.
+
 ## Phone and push notifications
 
 Push needs HTTPS, and on iPhone the app must be added to the home screen (Share → Add to Home

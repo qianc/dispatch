@@ -8,9 +8,13 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { run, Workspaces } from './workspace.ts';
+import { setAgentPath } from './toolPath.ts';
 import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, type ClaudeAccountInfo } from '../shared/accounts.ts';
 
 const env = process.env;
+// agents' PATH: extra tool folders first; under WSL also Windows' PATH (powershell.exe, …)
+const addedToPath = setAgentPath(env);
+if (addedToPath.length) console.log(`PATH for agents: added ${addedToPath.join(', ')}`);
 const SERVER = env.SERVER_WS_URL ?? 'ws://localhost:3000/worker';
 const TOKEN = env.WORKER_TOKEN ?? '';
 const FAKE = env.RUNNER === 'fake';
