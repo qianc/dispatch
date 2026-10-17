@@ -162,6 +162,10 @@ export class Sessions {
   private closePlannerAfterProposal(sessionId: number) {
     const s = this.store.session(sessionId);
     if (!s || s.kind !== 'planner' || FINAL_STATUSES.includes(s.status)) return;
+    // another card is still on offer (e.g. the batch, after filing an extra item): the chat stays open
+    const events = this.store.events(sessionId);
+    const done = new Set(events.flatMap((e) => (e.body.kind === 'proposal_done' ? [e.body.event_id] : [])));
+    if (events.some((e) => e.body.kind === 'proposal' && !done.has(e.id))) return;
     if (s.status === 'running' || s.status === 'queued') this.closeWhenIdle.add(s.id);
     else this.finish(s.id, 'completed');
   }

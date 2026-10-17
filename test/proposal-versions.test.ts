@@ -49,6 +49,11 @@ describe('proposal cards that were revised', () => {
     await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Smaller batch', item_ids: [it.id] });
     const after = (await s.call('GET', `/sessions/${p.id}`)).data.events as { body: { kind: string; event_id?: number; note?: string } }[];
     expect(after.find((e) => e.body.kind === 'proposal_done' && e.body.event_id === batch.id)?.body.note).toBe('Replaced by a newer proposal below');
+    // creating the filed item keeps the chat open while the batch card is still on offer
+    const cards = (await s.call('GET', `/sessions/${p.id}`)).data.events.filter((e: { body: { kind: string } }) => e.body.kind === 'proposal') as { id: number; body: { proposal: { type: string; items?: unknown[] } } }[];
+    const itemsCard = cards.find((c) => c.body.proposal.type === 'items')!;
+    await s.call('POST', `/sessions/${p.id}/accept-items`, { items: itemsCard.body.proposal.items, event_id: itemsCard.id });
+    expect((await s.call('GET', `/sessions/${p.id}`)).data.session.status).toBe('idle');
   });
 
   it('accepting a card closes open cards from earlier turns (chats from before this rule)', async () => {
