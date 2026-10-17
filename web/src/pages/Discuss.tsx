@@ -20,7 +20,7 @@ function ItemIntro({ item }: { item: ItemDetail }) {
         <span>{ITEM_STATUS_LABEL[item.status]}</span>
         <span className="ml-auto text-accent">Open ›</span>
       </Link>
-      <h2 className="font-semibold leading-snug mt-1.5">{item.title}</h2>
+      <h2 className="font-semibold leading-snug mt-1.5 [overflow-wrap:anywhere]">{item.title}</h2>
       {item.body_md ? (
         <div className={cx('relative mt-1.5', !all && long && 'max-h-40 overflow-hidden')}>
           <RichMd className="text-[14px]" ctx={{ project: item.project, sourceId: item.source_id }}>{item.body_md}</RichMd>

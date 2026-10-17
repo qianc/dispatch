@@ -239,14 +239,25 @@ export function InputCard({ input }: { input: PendingInput }) {
 
 // ---------- proposals ----------
 
+/** Markdown as one line of plain text, for short previews. */
+function plainExcerpt(md: string) {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_`>]+/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; project: Project; on: boolean; toggle: () => void }) {
   return (
     <button type="button" onClick={toggle} aria-pressed={on} className="w-full flex items-start gap-2 py-1.5 text-left">
       <span className={cx('mt-0.5 size-4 rounded border shrink-0', on ? 'bg-accent-strong border-accent-strong' : 'border-line')} />
       <ImportanceIcon value={item.importance} label={project.importance_scale[item.importance - 1]} />
       <span className="flex-1 min-w-0">
-        <span className="block text-[14px]">{item.title}</span>
-        {item.body_md && <span className="block text-[12px] text-muted line-clamp-2">{item.body_md}</span>}
+        <span className="block text-[14px] [overflow-wrap:anywhere]">{item.title}</span>
+        {item.body_md && <span className="text-[12px] text-muted line-clamp-2 [overflow-wrap:anywhere]">{plainExcerpt(item.body_md)}</span>}
       </span>
       {item.type === 'bug' && <Chip tone="bad">Bug</Chip>}
       {effortLabel(project, item.effort) && <Chip>{effortLabel(project, item.effort)}</Chip>}

@@ -306,3 +306,18 @@ test('phone: Discuss shows the item above the chat, long text shortened', async 
   await expect(page.getByText('(fake) About RD-1')).toBeVisible();
   await expect(page.getByLabel('The item').getByRole('heading', { name: 'Read me first' })).toBeAttached();
 });
+
+test('phone: a long unbroken title wraps instead of making the page scroll sideways', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'WRAP', name: 'Wrapping' } });
+  const title = 'Fix the flaky TestRestartDoesNotInstallAVersionANewerOneHasReplacedAlreadyWhenTheUpdaterRigRestarts';
+  const it = await (await page.request.post('/api/projects/WRAP/items', { data: { title, body_md: '## Context\n\n`internal/update/updater_test.go:909` fails' } })).json();
+  const noSideways = () => page.evaluate(() => [...document.querySelectorAll('.scroll-area')].every((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).overflowX === 'hidden'));
+  for (const path of [`/items/${it.id}`, `/items/${it.id}/discuss`]) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    const h = (await page.getByRole('heading', { name: title }).boundingBox())!;
+    expect(h.x + h.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(await noSideways()).toBe(true);
+  }
+});

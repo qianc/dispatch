@@ -73,7 +73,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
       </>}
     >
       <div className="px-4 pt-4">
-        <h2 className="text-lg font-semibold leading-snug">{it.title}</h2>
+        <h2 className="text-lg font-semibold leading-snug [overflow-wrap:anywhere]">{it.title}</h2>
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           {it.type === 'bug' && <Chip tone="bad">Bug</Chip>}
           <Chip><ImportanceIcon value={it.importance} /> {p.importance_scale[it.importance - 1]}</Chip>

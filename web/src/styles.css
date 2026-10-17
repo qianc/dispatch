@@ -100,6 +100,8 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* a long unbroken word must never make the page scroll sideways (code and tables scroll on their own) */
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
