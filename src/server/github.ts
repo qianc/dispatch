@@ -226,14 +226,15 @@ export class GitHub {
     if (!['idle', 'completed'].includes(s.status) || this.store.openInputs().some((i) => i.session_id === s.id)) return;
     // name the repo: one session can merge a branch of the same name in several repos
     const repoName = pr.repo_full_name.split('/').pop();
-    const label = pr.local ? `${repoName} ${pr.head_ref}` : `${repoName}#${pr.number}`;
+    const ref = pr.local ? `branch ${pr.head_ref}` : `PR #${pr.number}`;
+    const label = `${repoName} ${ref}`; // for notices, e.g. "web-app branch dispatch/…", "front PR #3"
     const note = (why: string) => {
       const key = `${pr.id}:${pr.head_sha}:${why}`;
       if (this.autoMergeNoted.has(key)) return;
       this.autoMergeNoted.add(key);
       this.store.setPrBlocked(pr.id, why);
       this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
-      this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} skipped: ${why}` });
+      this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge into ${repoName} skipped for ${ref}: ${why}` });
       this.tell(s.id);
       this.queueMergeNotice(s, { stopped: label, why, prId: pr.id });
     };
@@ -247,7 +248,7 @@ export class GitHub {
         const key = `${pr.id}:${pr.head_sha}:behind`;
         if (!this.autoMergeNoted.has(key)) {
           this.autoMergeNoted.add(key);
-          this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} waits: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
+          this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge into ${repoName} waits for ${ref}: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
           this.onBehind?.(s, repo, behind);
           this.tell(s.id); // the agent goes on working: no "waiting for you" yet
         }
@@ -262,7 +263,7 @@ export class GitHub {
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
     const res = await this.merge(pr.id, how, 'squash');
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
-    this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged ${label} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
+    this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged into ${repoName}: ${ref} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
     this.tell(s.id);
     this.queueMergeNotice(s, { merged: label });
   }

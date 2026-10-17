@@ -96,7 +96,7 @@ describe('auto-merge', () => {
     await s.ctx.github.syncSession(session);
     expect(merges).toEqual([expect.objectContaining({ pull_number: 7, merge_method: 'squash' })]);
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
-    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toEqual([expect.objectContaining({ body: 'r#7', url: `/s/${session.id}` })]);
+    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toEqual([expect.objectContaining({ body: 'r PR #7', url: `/s/${session.id}` })]);
     await s.app.close();
   });
 
@@ -135,7 +135,7 @@ describe('auto-merge', () => {
     expect([...merged].sort()).toEqual(['back', 'front']);
     expect(s.ctx.notifier.sent.map((n) => `${n.title} | ${n.body}`)).toEqual(['TWO: done and merged (2 repos) | All fixed in both repos.']);
     const texts = (await s.call('GET', `/sessions/${session.id}`)).data.events.map((e: { body: { text?: string } }) => e.body.text).filter(Boolean);
-    expect(texts).toEqual(expect.arrayContaining(['Auto-merged front#3 (squash on GitHub).', 'Auto-merged back#4 (squash on GitHub).']));
+    expect(texts).toEqual(expect.arrayContaining(['Auto-merged into front: PR #3 (squash on GitHub).', 'Auto-merged into back: PR #4 (squash on GitHub).']));
     await s.app.close();
   });
 
@@ -151,7 +151,7 @@ describe('auto-merge', () => {
       return titles;
     };
     expect(await turnEnds([{ name: 't', status: 'completed', conclusion: 'success', html_url: null }])).toEqual(['AM: done and merged | Fixed the legend.']);
-    expect(await turnEnds([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }])).toEqual(['AM: not auto-merged | r#7: checks failed (lint)']);
+    expect(await turnEnds([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }])).toEqual(['AM: not auto-merged | r PR #7: checks failed (lint)']);
     expect(await turnEnds([], false)).toEqual(['AM: waiting for you | Fixed the legend.']);
   });
 
