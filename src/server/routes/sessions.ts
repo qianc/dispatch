@@ -4,7 +4,7 @@ import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../..
 import { attentionOf } from '../../shared/attention.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
-export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, github, bus }: Ctx) {
+export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -25,7 +25,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id));
     const sessionIds = new Set([...inputs.map((i) => i.session_id), ...prs.map((p) => p.session_id)]);
     const related = [...sessionIds].map((id) => store.session(id)).filter((s) => !!s);
-    return { inputs, idle, prs, sessions: related };
+    // leftovers of finished sessions; re-checked in the background when the last check is old
+    if (!janitor.offer || Date.now() - Date.parse(janitor.offer.checked_at) > 10 * 60_000) void janitor.check().catch(() => undefined);
+    return { inputs, idle, prs, sessions: related, cleanup: janitor.offer };
   });
 
   app.get('/api/sessions', async (req) => {
@@ -116,6 +118,17 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     const s = session((req.params as { id: string }).id);
     const { repo_id } = z.object({ repo_id: z.number().int() }).parse(req.body);
     return github.createPr(s, repo_id);
+  });
+
+  /** Leftovers of finished sessions (worktrees, merged branches): check now, or clean them up. */
+  app.post('/api/cleanup/check', async () => {
+    await janitor.check();
+    return janitor.offer;
+  });
+  app.post('/api/cleanup', async () => {
+    const results = await janitor.cleanAll();
+    bus.emit({ t: 'cleanup' });
+    return { results, left: janitor.offer };
   });
 
   /** Apply a change to an item that a Discuss chat suggested. */

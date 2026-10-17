@@ -76,6 +76,8 @@ export interface Inbox {
   idle: (Session & { attention: Attention })[];
   prs: PullRequest[];
   sessions: Session[];
+  /** leftovers of finished sessions on disk, if any */
+  cleanup: { sessions: { id: number; title: string; project_key: string | null; worktrees: number; branches: number }[]; worktrees: number; branches: number; checked_at: string } | null;
 }
 
 export interface PrDetail {

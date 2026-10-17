@@ -283,9 +283,13 @@ export class Sessions {
   }
 
   /** End a session. `completed` = you are done with it; `stopped` = abandoned. */
+  /** Called once a session is finished (app.ts wires it to the janitor, which tidies its folders). */
+  onFinished: ((s: Session, status: 'completed' | 'stopped', removeAll: boolean) => void) | null = null;
+
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false) {
     const s = this.mustGet(sessionId);
-    this.hub.send({ t: 'close', session_id: sessionId, cleanup, repos: this.reposOf(s) });
+    // the janitor removes worktrees and merged branches after the runner has stopped
+    this.hub.send({ t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -293,6 +297,7 @@ export class Sessions {
       }
     }
     this.setStatus(sessionId, status, { ended_at: new Date().toISOString(), waiting_reason: null });
+    this.onFinished?.(this.store.session(sessionId)!, status, cleanup);
     this.dispatch();
   }
 

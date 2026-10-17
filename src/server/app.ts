@@ -13,6 +13,7 @@ import { Db } from './db.ts';
 import { AssistantTools } from './assistant.ts';
 import { Attachments } from './attachments.ts';
 import { imageRoutes } from './routes/images.ts';
+import { Janitor } from './janitor.ts';
 import { GitHub } from './github.ts';
 import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
@@ -53,18 +54,25 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     }
   };
   // a finished turn often means a PR was just opened: link it (and auto-merge) without waiting for the poll
+  const janitor = new Janitor(store, hub, github, bus);
+  sessions.onFinished = (s, status, removeAll) => janitor.onFinished(s, status, removeAll);
   sessions.onWorkIdle = async (s) => {
     const before = github.toldCount(s.id);
     await github.syncSession(s).catch((e) => console.warn('PR sync failed:', (e as Error).message));
     return github.toldCount(s.id) > before;
   };
   hub.handlers = {
-    onHello: (live) => sessions.onWorkerHello(live),
+    onHello: (live) => {
+      sessions.onWorkerHello(live);
+      // look for leftovers soon after the worker is (back) online
+      setTimeout(() => void janitor.check().catch((e) => console.warn('cleanup check failed:', (e as Error).message)), 30_000).unref();
+    },
     onMessage: (m) => sessions.onWorkerMessage(m),
     onRpc: (id, method, params) => sessions.rpc(id, method, params),
     onDisconnect: () => sessions.onWorkerDisconnect(),
   };
-  const ctx: Ctx = { cfg, store, auth, bus, hub, sessions, github, notifier, attachments };
+  const ctx: Ctx = { cfg, store, auth, bus, hub, sessions, github, notifier, attachments, janitor };
+  if (!opts.dbFile || opts.dbFile !== ':memory:') janitor.start();
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
   await app.register(cookie);
@@ -127,6 +135,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   }
 
   app.addHook('onClose', async () => {
+    janitor.stop();
     github.stop();
     db.raw.close();
   });

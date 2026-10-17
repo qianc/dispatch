@@ -44,8 +44,7 @@ export function NextSteps({ sessionId, attention, compact }: { sessionId: number
     },
   });
   const complete = useMutation({
-    // merged: the worktree is no longer needed
-    mutationFn: () => api.post(`/sessions/${sessionId}/finish`, { status: 'completed', cleanup: attention.kind === 'merged' }),
+    mutationFn: () => api.post(`/sessions/${sessionId}/finish`, { status: 'completed', cleanup: false }), // the janitor removes merged branches and worktrees
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['session', sessionId] });

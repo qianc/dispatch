@@ -1,4 +1,5 @@
 import type { Attachments } from '../attachments.ts';
+import type { Janitor } from '../janitor.ts';
 import type { Auth } from '../auth.ts';
 import type { Bus } from '../bus.ts';
 import type { Config } from '../config.ts';
@@ -18,6 +19,7 @@ export interface Ctx {
   github: GitHub;
   notifier: Notifier;
   attachments: Attachments;
+  janitor: Janitor;
 }
 
 export class HttpError extends Error {

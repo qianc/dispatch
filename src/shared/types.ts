@@ -406,7 +406,9 @@ export type LiveEvent =
   | { t: 'session_event'; event: SessionEvent }
   | { t: 'input'; input: PendingInput }
   | { t: 'item'; item: Item }
-  | { t: 'pr'; pr: PullRequest };
+  | { t: 'pr'; pr: PullRequest }
+  /** finished sessions' leftovers were cleaned up */
+  | { t: 'cleanup' };
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;

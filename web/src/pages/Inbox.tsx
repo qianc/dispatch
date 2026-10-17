@@ -1,10 +1,11 @@
 import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Link } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { api, type Inbox as InboxData } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
-import { Card, Chip, Empty, Section, cx, timeAgo } from '../components/ui.tsx';
+import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
 const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, turn: 2, merged: 3 };
@@ -44,7 +45,7 @@ export function Inbox() {
   const { data: worker } = useQuery({ queryKey: ['worker'], queryFn: () => api.get<{ connected: boolean }>('/worker'), refetchInterval: 15_000 });
   if (!data) return <Page title="Inbox"><Empty>Loading…</Empty></Page>;
   const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
-  const nothing = !data.inputs.length && !data.idle.length && !data.prs.length;
+  const nothing = !data.inputs.length && !data.idle.length && !data.prs.length && !data.cleanup;
   return (
     <Page title="Inbox" subtitle="Everything waiting on you">
       {worker && !worker.connected && (
@@ -81,6 +82,7 @@ export function Inbox() {
           </div>
         </Section>
       )}
+      {data.cleanup && <CleanupCard offer={data.cleanup} />}
       {data.prs.length > 0 && (
         <Section title="To review">
           <Card>
@@ -95,5 +97,41 @@ export function Inbox() {
         </Section>
       )}
     </Page>
+  );
+}
+
+/** Finished sessions left worktrees or merged branches on disk: offer to remove them. */
+function CleanupCard({ offer }: { offer: NonNullable<InboxData['cleanup']> }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const clean = useMutation({
+    mutationFn: () => api.post<{ left: InboxData['cleanup'] }>('/cleanup'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inbox'] }),
+  });
+  const parts = [offer.branches ? `${offer.branches} merged branch${offer.branches === 1 ? '' : 'es'}` : '', offer.worktrees ? `${offer.worktrees} worktree${offer.worktrees === 1 ? '' : 's'}` : ''].filter(Boolean);
+  return (
+    <Section title="Tidy up">
+      <div className="mx-3 rounded-xl bg-panel border border-line px-3 py-2.5">
+        <p className="text-[14px]">
+          {offer.sessions.length} finished session{offer.sessions.length === 1 ? '' : 's'} left {parts.join(' and ')} on disk.
+        </p>
+        <p className="text-[12.5px] text-muted mt-0.5">Clean up removes them. Branches that are not merged, and worktrees with uncommitted changes, stay.</p>
+        {open && (
+          <ul className="mt-2 text-[13px] text-muted space-y-0.5">
+            {offer.sessions.map((s) => (
+              <li key={s.id} className="truncate">
+                <Link to={`/s/${s.id}`} className="text-fg">{s.project_key ? `${s.project_key} ` : ''}#{s.id} {s.title}</Link>
+                {' · '}{[s.branches ? `${s.branches} branch${s.branches === 1 ? '' : 'es'}` : '', s.worktrees ? `${s.worktrees} worktree${s.worktrees === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ')}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2 mt-2.5">
+          <Button small variant="primary" disabled={clean.isPending} onClick={() => clean.mutate()}>{clean.isPending ? 'Cleaning up…' : 'Clean up'}</Button>
+          <Button small onClick={() => setOpen(!open)}>{open ? 'Hide list' : 'Show list'}</Button>
+        </div>
+        <ErrorText error={clean.error} />
+      </div>
+    </Section>
   );
 }

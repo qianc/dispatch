@@ -115,6 +115,19 @@ export class GitHub {
     return out;
   }
 
+  /** Delete a merged PR's head branch on GitHub (no error if it is already gone). */
+  async deleteRemoteBranch(repo: Repo, branch: string): Promise<boolean> {
+    if (repo.local_path || !this.clientFor(repo)) return false;
+    try {
+      await this.gh(repo).git.deleteRef({ owner: repo.github_owner, repo: repo.github_name, ref: `heads/${branch}` });
+      return true;
+    } catch (e) {
+      const code = (e as { status?: number }).status;
+      if (code === 404 || code === 422) return false; // already deleted (often by GitHub itself)
+      throw e;
+    }
+  }
+
   /** Auto-merge outcomes per session, sent as one notice (a session can change several repos). */
   private mergeNotices = new Map<number, { s: Session; merged: string[]; stopped: { label: string; why: string; prId: number }[]; timer: NodeJS.Timeout }>();
 

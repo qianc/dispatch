@@ -50,6 +50,9 @@ async function git(args: string[], cwd?: string) {
   return r.out;
 }
 
+export interface Leftover { repo_id: number; repo: string; worktree: boolean; dirty: boolean; untracked: boolean; branch: string | null; merged: boolean }
+export interface TidyResult { repo: string; worktree: 'none' | 'removed' | 'kept (uncommitted changes)'; branch: string }
+
 export class Workspaces {
   readonly root: string;
   private remoteBase: string;
@@ -266,6 +269,80 @@ export class Workspaces {
       }
       return files;
     });
+  }
+
+  /**
+   * Where a session's branch lives on this machine: the owner's repo (local repos) or Dispatch's
+   * clone. A GitHub branch on the server side is the server's to delete.
+   */
+  private branchHome(repo: Repo) {
+    return repo.local_path ?? this.cacheDir(repo);
+  }
+
+  /**
+   * What a finished session left on disk, per repo: its worktree, its branch, and whether that
+   * branch is merged. Merged = in the default branch's history, or `mergedHint` (a PR merged on
+   * GitHub, which squash-merges leave out of the history).
+   */
+  async leftovers(sessionId: number, repos: Repo[], branch: string | null, mergedHint: number[] = []): Promise<Leftover[]> {
+    const out: Leftover[] = [];
+    for (const repo of repos) {
+      const wt = this.repoDir(sessionId, repo);
+      const worktree = existsSync(wt);
+      // changes to tracked files; and new files git does not ignore (a setup's venv is usually ignored)
+      const dirty = worktree ? (await run('git', ['status', '--porcelain', '--untracked-files=no'], wt)).out.length > 0 : false;
+      const untracked = worktree ? (await run('git', ['status', '--porcelain'], wt)).out.split('\n').some((l) => l.startsWith('??')) : false;
+      const home = this.branchHome(repo);
+      let branchExists = false;
+      let merged = false;
+      if (branch && existsSync(home)) {
+        branchExists = (await run('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], home)).code === 0;
+        if (branchExists) {
+          const base = repo.local_path ? `refs/heads/${repo.default_branch}` : `origin/${repo.default_branch}`;
+          merged = mergedHint.includes(repo.id) || (await run('git', ['merge-base', '--is-ancestor', `refs/heads/${branch}`, base], home)).code === 0;
+        }
+      }
+      out.push({ repo_id: repo.id, repo: repo.github_name, worktree, dirty, untracked, branch: branchExists ? branch : null, merged });
+    }
+    return out;
+  }
+
+  /**
+   * Remove what a finished session left: its worktrees (a worktree with uncommitted changes only
+   * when `force`), and its branch where it is merged (`deleteMerged`). Unmerged branches stay.
+   */
+  async tidy(sessionId: number, repos: Repo[], branch: string | null, opts: { deleteMerged: boolean; force: boolean; mergedHint?: number[] }): Promise<TidyResult[]> {
+    const found = await this.leftovers(sessionId, repos, branch, opts.mergedHint);
+    const out: TidyResult[] = [];
+    for (const l of found) {
+      const repo = repos.find((r) => r.id === l.repo_id)!;
+      const r: TidyResult = { repo: l.repo, worktree: 'none', branch: l.branch ? 'kept' : 'none' };
+      await this.withRepo(repo, async () => {
+        const wt = this.repoDir(sessionId, repo);
+        if (l.worktree) {
+          // uncommitted changes always stay; new untracked files stay unless the work is merged
+          const unsaved = l.dirty || (l.untracked && !(l.branch && l.merged) && branch !== null);
+          if (unsaved && !opts.force) r.worktree = 'kept (uncommitted changes)';
+          else {
+            const owner = Workspaces.isAttached(wt, repo) ? repo.local_path! : this.cacheDir(repo);
+            const res = await run('git', ['worktree', 'remove', '--force', wt], owner);
+            if (res.code !== 0) await rm(wt, { recursive: true, force: true });
+            await run('git', ['worktree', 'prune'], owner);
+            r.worktree = 'removed';
+          }
+        }
+        if (l.branch && l.merged && opts.deleteMerged && r.worktree !== 'kept (uncommitted changes)') {
+          // -D: a squash-merged branch is merged (its PR says so) but not in the history
+          const res = await run('git', ['branch', '-D', l.branch], this.branchHome(repo));
+          r.branch = res.code === 0 ? 'deleted' : `kept (${res.out.split('\n')[0]})`;
+        } else if (l.branch && !l.merged) r.branch = 'kept (not merged)';
+      });
+      out.push(r);
+    }
+    // the session folder goes once nothing is left in it
+    const dir = this.sessionDir(sessionId);
+    if (existsSync(dir) && out.every((r) => r.worktree !== 'kept (uncommitted changes)')) await rm(dir, { recursive: true, force: true });
+    return out;
   }
 
   async cleanup(sessionId: number, repos: Repo[]) {

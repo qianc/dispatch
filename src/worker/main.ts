@@ -194,8 +194,13 @@ async function launch(spec: StartSpec, text: string) {
 async function command(cmd: WorkerCommand): Promise<unknown> {
   // the fake runner still does real git for files and local repos; it only skips GitHub pushes/merges
   const local = 'repo' in cmd && !!cmd.repo?.local_path;
-  if (FAKE && !local && !['read_file', 'inspect_local_repo'].includes(cmd.c)) return { ok: true };
+  // leftovers / tidy only look at real folders, so they run in fake mode too
+  if (FAKE && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy'].includes(cmd.c)) return { ok: true };
   switch (cmd.c) {
+    case 'leftovers':
+      return workspaces.leftovers(cmd.session_id, cmd.repos, cmd.branch, cmd.merged_repo_ids);
+    case 'tidy':
+      return workspaces.tidy(cmd.session_id, cmd.repos, cmd.branch, { deleteMerged: cmd.delete_merged, force: cmd.force, mergedHint: cmd.merged_repo_ids });
     case 'push_branch':
       await workspaces.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
       return { ok: true };
