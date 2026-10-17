@@ -51,6 +51,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     mutationFn: (b: { status: 'completed' | 'stopped'; cleanup: boolean }) => api.post(`/sessions/${id}/finish`, b),
     onSuccess: () => { setMenu(false); refresh(); },
   });
+  const startNow = useMutation({ mutationFn: () => api.post(`/sessions/${id}/start-now`), onSuccess: refresh });
   const syncPrs = useMutation({ mutationFn: () => api.post(`/sessions/${id}/sync-prs`), onSuccess: refresh });
   const createPr = useMutation({ mutationFn: (repo_id: number) => api.post(`/sessions/${id}/prs`, { repo_id }), onSuccess: refresh });
 
@@ -147,7 +148,18 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       <Transcript session={s} events={data.events} inputs={data.inputs} project={project} />
-      {s.status === 'queued' && <p className="text-center text-sm text-muted">Waiting for a free worker slot…</p>}
+      {s.status === 'queued' && (
+        <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
+          <p>{s.waiting_reason ?? 'Waiting for a free worker slot…'}</p>
+          {s.waiting_reason && (
+            <>
+              <p className="text-[12.5px] text-muted mt-0.5">This batch starts from the main branch once the earlier batch is merged, so their changes do not collide.</p>
+              <Button small className="mt-2" disabled={startNow.isPending} onClick={() => startNow.mutate()}>Start anyway</Button>
+              <ErrorText error={startNow.error} />
+            </>
+          )}
+        </div>
+      )}
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
       {s.status === 'idle' && s.kind === 'work' && (
         <div className="px-4 pt-2 pb-1">

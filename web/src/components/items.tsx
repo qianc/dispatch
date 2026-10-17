@@ -113,7 +113,7 @@ export function SessionRow({ s, showProject }: { s: Session; showProject?: boole
         <SessionStatusChip status={s.status} />
       </div>
       <div className="flex items-center gap-2 mt-0.5 text-[13px] text-muted">
-        <span className="flex-1 min-w-0 truncate">{s.status === 'waiting_input' ? s.waiting_reason : s.last_text ?? s.initial_prompt}</span>
+        <span className="flex-1 min-w-0 truncate">{s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : s.last_text ?? s.initial_prompt}</span>
         <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
       </div>
     </Link>

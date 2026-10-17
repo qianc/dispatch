@@ -115,6 +115,9 @@ export class GitHub {
     return out;
   }
 
+  /** A PR changed state (merged, closed, opened): queued batches may now start. */
+  onPrChange: (() => void) | null = null;
+
   /** Delete a merged PR's head branch on GitHub (no error if it is already gone). */
   async deleteRemoteBranch(repo: Repo, branch: string): Promise<boolean> {
     if (repo.local_path || !this.clientFor(repo)) return false;
@@ -300,6 +303,7 @@ export class GitHub {
     const state = row.state;
     const pr = this.store.upsertPr({ ...row, session_id: s.id, repo_id: repo.id });
     this.bus.emit({ t: 'pr', pr });
+    if (before?.state !== state) queueMicrotask(() => this.onPrChange?.());
     if (before?.state !== state) this.onStateChange(s, pr, before?.state ?? null);
     if (state === 'open' && s.options.auto_merge !== 'off') {
       await this.maybeAutoMerge(this.store.session(s.id)!, pr).catch((e) => console.warn('auto-merge failed:', (e as Error).message));

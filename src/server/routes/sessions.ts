@@ -112,6 +112,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     return store.session(s.id);
   });
 
+  app.post('/api/sessions/:id/start-now', async (req) => sessions.startNow(session((req.params as { id: string }).id).id));
+
   app.post('/api/sessions/:id/sync-prs', async (req) => github.syncSession(session((req.params as { id: string }).id)));
 
   app.post('/api/sessions/:id/prs', async (req) => {

@@ -389,12 +389,12 @@ export class Store {
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`);
-      params.push(k === 'usage' ? JSON.stringify(v) : (v as string | null));
+      params.push(k === 'usage' || k === 'options' ? JSON.stringify(v) : (v as string | null));
     }
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
@@ -406,12 +406,11 @@ export class Store {
   queued(): Session[] {
     return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.id`).map((r) => this.toSession(r));
   }
-  /** Earlier work in this project that is still working (not just waiting for its next message). */
-  busyBefore(s: Session): number {
-    return Number(this.db.get<{ n: number }>(
-      "SELECT count(*) AS n FROM sessions WHERE project_id = ? AND id < ? AND kind = 'work' AND status IN ('queued','running','waiting_input')",
-      s.project_id ?? -1, s.id,
-    )!.n);
+  /** Earlier work sessions in this project that are not abandoned (a queued "after" batch waits on them). */
+  earlierWork(s: Session): Session[] {
+    return this.db
+      .all(`${SESSION_SELECT} WHERE s.project_id = ? AND s.id < ? AND s.kind = 'work' AND s.status NOT IN ('stopped','failed') ORDER BY s.id`, s.project_id ?? -1, s.id)
+      .map((r) => this.toSession(r));
   }
 
   // ---------- events ----------

@@ -211,3 +211,78 @@ describe('auto-merge', () => {
     await s.app.close();
   });
 });
+
+describe('a queued "after" batch waits for the earlier batch to merge', () => {
+  type Ctx = Awaited<ReturnType<typeof startServer>>;
+  let s: Ctx;
+  let worker: ChildProcess;
+  const merged = new Set<number>();
+  const numbers = new Map<string, number>();
+  let checksDone = false;
+  let stuck = false;
+
+  beforeAll(async () => {
+    s = await startServer();
+    worker = startWorker(s.port, { FAKE_DELAY_MS: '20' });
+    await waitFor(() => s.ctx.hub.connected, 'worker');
+    // a stand-in GitHub: one numbered PR per branch; checks run until checksDone
+    const pr = (branch: string) => {
+      if (!numbers.has(branch)) numbers.set(branch, numbers.size + 1);
+      const n = numbers.get(branch)!;
+      return { number: n, html_url: 'u', title: branch, state: merged.has(n) ? 'closed' : 'open', merged_at: merged.has(n) ? 'now' : null, mergeable: !stuck, mergeable_state: stuck ? 'dirty' : 'clean', head: { ref: branch, sha: `sha-${n}` }, base: { ref: 'main' }, body: '' };
+    };
+    Object.defineProperty(s.ctx.github, 'octo', { value: {
+      pulls: {
+        list: async ({ head }: { head: string }) => ({ data: [pr(head.split(':')[1])] }),
+        get: async ({ pull_number }: { pull_number: number }) => ({ data: pr([...numbers].find(([, n]) => n === pull_number)![0]) }),
+        merge: async ({ pull_number }: { pull_number: number }) => { merged.add(pull_number); return { data: {} }; },
+      },
+      checks: { listForRef: async () => ({ data: { check_runs: [{ name: 'ci', status: checksDone ? 'completed' : 'in_progress', conclusion: checksDone ? 'success' : null, html_url: null }] } }) },
+      repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
+    } });
+  });
+  afterAll(async () => {
+    await stopWorker(worker);
+    await s.app.close();
+  });
+
+  const session = async (id: number) => (await s.call('GET', `/sessions/${id}`)).data as { session: Session; inputs: { id: number; payload: { questions: { question: string }[] } }[] };
+  /** Batch A (auto-merge) finishes its turn while B (start after) is queued behind it. */
+  const twoBatches = async (key: string) => {
+    expect((await s.call('POST', '/projects', { key, name: key })).status).toBe(200);
+    expect((await s.call('POST', `/projects/${key}/repos`, { github_owner: 'me', github_name: key.toLowerCase() })).status).toBe(200);
+    const ra = await s.call('POST', `/projects/${key}/batches`, { prompt: 'first', options: { auto_merge: 'github' } });
+    expect(ra.status, JSON.stringify(ra.data)).toBe(200);
+    const rb = await s.call('POST', `/projects/${key}/batches`, { prompt: 'second', options: { start: 'after' } });
+    expect(rb.status, JSON.stringify(rb.data)).toBe(200);
+    const a = ra.data as Session, b = rb.data as Session;
+    expect(b.status).toBe('queued');
+    const input = await waitFor(async () => (await session(a.id)).inputs[0], 'a asks its question');
+    await s.call('POST', `/inputs/${input.id}/answer`, { kind: 'question', answers: { [input.payload.questions[0].question]: 'Small fix' } });
+    await waitFor(async () => (await session(a.id)).session.status === 'idle', 'a idle');
+    const waiting = await waitFor(async () => { const x = (await session(b.id)).session; return x.waiting_reason?.includes('to merge') ? x : null; }, 'b waits for the merge');
+    return { a, b, waiting };
+  };
+
+  it('starts once the earlier batch is merged', async () => {
+    checksDone = false;
+    stuck = false;
+    const { a, b, waiting } = await twoBatches('QA');
+    expect(waiting).toMatchObject({ status: 'queued', waiting_reason: `Waiting for #${a.id} first to merge` });
+    checksDone = true;
+    await s.ctx.github.syncSession((await session(a.id)).session); // checks pass: auto-merge, then the queue moves on
+    await waitFor(async () => (await session(b.id)).session.status !== 'queued', 'b started');
+    expect((await session(b.id)).session.waiting_reason).toBeNull();
+  }, 30_000);
+
+  it('holds the queue while the earlier merge is stuck; Start anyway overrides it', async () => {
+    checksDone = true;
+    stuck = true;
+    const { a, b, waiting } = await twoBatches('QB');
+    expect(waiting.waiting_reason).toBe(`Waiting for #${a.id} first to merge: it has merge conflicts`);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await session(b.id)).session.status).toBe('queued');
+    expect((await s.call('POST', `/sessions/${b.id}/start-now`)).status).toBe(200);
+    await waitFor(async () => (await session(b.id)).session.status !== 'queued', 'b started anyway');
+  }, 30_000);
+});

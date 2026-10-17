@@ -297,7 +297,8 @@ test('a session opened from another tab does not trap the Projects tab', async (
   await page.getByRole('link', { name: /Navproj/ }).click();
   const s = await (await page.request.post('/api/projects/NAV/batches', { data: { prompt: 'go' } })).json();
   await page.goto(`/s/${s.id}`); // same as following the batch
-  await expect(page.getByText('Which approach should I take?')).toBeVisible();
+  // the session screen (not Claude's first question: worker slots may still be busy with earlier tests)
+  await expect(page.getByRole('button', { name: 'Session actions' })).toBeVisible();
   // now open the same session from Activity
   await page.getByRole('link', { name: 'Activity' }).click();
   await page.locator(`a[href="/s/${s.id}"]`).first().click();

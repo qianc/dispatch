@@ -55,6 +55,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   // a finished turn often means a PR was just opened: link it (and auto-merge) without waiting for the poll
   const janitor = new Janitor(store, hub, github, bus);
+  github.onPrChange = () => sessions.dispatch();
   sessions.onFinished = (s, status, removeAll) => janitor.onFinished(s, status, removeAll);
   sessions.onWorkIdle = async (s) => {
     const before = github.toldCount(s.id);

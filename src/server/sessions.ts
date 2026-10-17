@@ -388,7 +388,14 @@ export class Sessions {
         // with auto-merge on, the merge check speaks for this turn (merged / not merged / branch behind);
         // "waiting for you" goes out only if it said nothing
         const mergeSpeaks = msg.status === 'idle' && s.kind === 'work' && s.options.auto_merge !== 'off' && was !== 'idle';
+        if (mergeSpeaks) this.settling.add(s.id); // queued "after" batches wait for this merge check
         const idleWork = msg.status === 'idle' && s.kind === 'work' ? this.onWorkIdle?.(this.store.session(s.id)!) : undefined;
+        if (mergeSpeaks) {
+          void (idleWork ?? Promise.resolve(false)).finally(() => {
+            this.settling.delete(s.id);
+            this.dispatch();
+          });
+        }
         if (msg.status === 'idle' && proposed !== undefined) {
           // one notice for the turn: the proposal, with Claude's explanation
           const text = this.store.session(s.id)?.last_text || proposed;
@@ -573,14 +580,52 @@ export class Sessions {
    * whatever is running; `after` also waits until earlier work in the same project has stopped
    * working (finished its turn, or ended).
    */
+  /** Work sessions whose turn just ended and whose branches are being checked and auto-merged. */
+  private settling = new Set<number>();
+
+  /**
+   * Why a queued "after" batch cannot start yet, or null. It waits until each earlier batch in its
+   * project is settled: not working, and (with auto-merge) its branches merged, so it starts from
+   * the main branch with that work in it. A batch whose auto-merge stopped holds the queue too.
+   */
+  waitingFor(next: Session): string | null {
+    for (const e of this.store.earlierWork(next)) {
+      const name = `#${e.id} ${e.title.length > 40 ? `${e.title.slice(0, 40)}…` : e.title}`;
+      if (['queued', 'running', 'waiting_input'].includes(e.status)) return `Waiting for ${name} to finish`;
+      if (e.options.auto_merge === 'off') continue;
+      if (this.settling.has(e.id)) return `Waiting for ${name} to merge`;
+      const open = this.store.prs({ session_id: e.id }).filter((p) => p.state === 'open');
+      if (!open.length) continue;
+      const stuck = open.find((p) => p.blocked || p.mergeable === false);
+      return stuck ? `Waiting for ${name} to merge: ${stuck.blocked ?? 'it has merge conflicts'}` : `Waiting for ${name} to merge`;
+    }
+    return null;
+  }
+
   dispatch() {
     if (!this.hub.connected) return;
     for (const next of this.store.queued()) {
       if (this.store.countActive() >= this.maxConcurrent) return;
-      if (next.kind === 'work' && next.options.start === 'after' && this.store.busyBefore(next) > 0) continue;
+      if (next.kind === 'work' && next.options.start === 'after') {
+        const reason = this.waitingFor(next);
+        if (reason) {
+          if (next.waiting_reason !== reason) this.emitSession(this.store.updateSession(next.id, { waiting_reason: reason }));
+          continue;
+        }
+      }
       this.hub.send({ t: 'start', spec: this.spec(next, next.initial_prompt, next.sdk_session_id, null) });
-      this.setStatus(next.id, 'running');
+      this.setStatus(next.id, 'running', { waiting_reason: null });
     }
+  }
+
+  /** "Start anyway": a queued batch stops waiting for earlier ones. */
+  startNow(sessionId: number) {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'queued') throw new SessionError('Only a queued session can be started.');
+    this.store.updateSession(s.id, { options: { ...s.options, start: 'now' } });
+    this.addEvent(s.id, { kind: 'system', text: 'Started without waiting for the earlier batches.' });
+    this.dispatch();
+    return this.store.session(s.id)!;
   }
 
   /**
