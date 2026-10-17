@@ -98,17 +98,55 @@ export class GitHub {
   async syncSession(s: Session) {
     if (!s.branch || !s.project_id) return [];
     const out: PullRequest[] = [];
-    for (const repo of this.store.repos(s.project_id)) {
-      if (repo.local_path) {
-        const pr = await this.syncLocal(s, repo);
-        if (pr) out.push(pr);
-        continue;
+    try {
+      for (const repo of this.store.repos(s.project_id)) {
+        if (repo.local_path) {
+          const pr = await this.syncLocal(s, repo);
+          if (pr) out.push(pr);
+          continue;
+        }
+        if (!this.clientFor(repo)) continue;
+        const { data } = await this.gh(repo).pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
+        for (const p of data) out.push(await this.record(s, repo, p as GhPull));
       }
-      if (!this.clientFor(repo)) continue;
-      const { data } = await this.gh(repo).pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
-      for (const p of data) out.push(await this.record(s, repo, p as GhPull));
+    } finally {
+      this.flushMergeNotice(s.id); // every repo of the session is through: one notice for all
     }
     return out;
+  }
+
+  /** Auto-merge outcomes per session, sent as one notice (a session can change several repos). */
+  private mergeNotices = new Map<number, { s: Session; merged: string[]; stopped: { label: string; why: string; prId: number }[]; timer: NodeJS.Timeout }>();
+
+  private queueMergeNotice(s: Session, outcome: { merged: string } | { stopped: string; why: string; prId: number }) {
+    const cur = this.mergeNotices.get(s.id) ?? { s, merged: [], stopped: [], timer: undefined as unknown as NodeJS.Timeout };
+    clearTimeout(cur.timer);
+    if ('merged' in outcome) cur.merged.push(outcome.merged);
+    else cur.stopped.push({ label: outcome.stopped, why: outcome.why, prId: outcome.prId });
+    // outside a whole-session sync (a single PR synced), send once things are quiet
+    cur.timer = setTimeout(() => this.flushMergeNotice(s.id), 1500);
+    this.mergeNotices.set(s.id, cur);
+  }
+
+  private flushMergeNotice(sessionId: number) {
+    const n = this.mergeNotices.get(sessionId);
+    if (!n) return;
+    clearTimeout(n.timer);
+    this.mergeNotices.delete(sessionId);
+    const { s, merged, stopped } = n;
+    const project_id = s.project_id ?? undefined;
+    if (stopped.length) {
+      const body = stopped.map((x) => `${x.label}: ${x.why}`).join('\n') + (merged.length ? `\nMerged: ${merged.join(', ')}` : '');
+      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id });
+      return;
+    }
+    // the one notice for this turn: what Claude said it did, now merged
+    const summary = this.store.session(s.id)?.last_text;
+    void this.notifier.send({
+      title: `${s.project_key}: done and merged${merged.length > 1 ? ` (${merged.length} repos)` : ''}`,
+      body: summary || merged.join(', '),
+      url: `/s/${s.id}`, tag: `merged-${s.id}`, project_id,
+    });
   }
 
   /**
@@ -186,7 +224,9 @@ export class GitHub {
     const how = s.options.auto_merge;
     if (how === 'off' || pr.state !== 'open') return;
     if (!['idle', 'completed'].includes(s.status) || this.store.openInputs().some((i) => i.session_id === s.id)) return;
-    const label = pr.local ? pr.head_ref : `#${pr.number}`;
+    // name the repo: one session can merge a branch of the same name in several repos
+    const repoName = pr.repo_full_name.split('/').pop();
+    const label = pr.local ? `${repoName} ${pr.head_ref}` : `${repoName}#${pr.number}`;
     const note = (why: string) => {
       const key = `${pr.id}:${pr.head_sha}:${why}`;
       if (this.autoMergeNoted.has(key)) return;
@@ -195,7 +235,7 @@ export class GitHub {
       this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
       this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge of ${label} skipped: ${why}` });
       this.tell(s.id);
-      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body: `${label}: ${why}`, url: `/pr/${pr.id}`, tag: `automerge-${pr.id}`, project_id: s.project_id ?? undefined });
+      this.queueMergeNotice(s, { stopped: label, why, prId: pr.id });
     };
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
@@ -224,9 +264,7 @@ export class GitHub {
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
     this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged ${label} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
     this.tell(s.id);
-    // the one notice for this turn: what Claude said it did, now merged
-    const summary = this.store.session(s.id)?.last_text;
-    void this.notifier.send({ title: `${s.project_key}: done and merged`, body: summary || `${label} ${pr.title}`, url: `/s/${s.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined });
+    this.queueMergeNotice(s, { merged: label });
   }
 
   /** Store a GitHub PR and apply side effects of state changes. */

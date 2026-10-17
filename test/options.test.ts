@@ -96,7 +96,7 @@ describe('auto-merge', () => {
     await s.ctx.github.syncSession(session);
     expect(merges).toEqual([expect.objectContaining({ pull_number: 7, merge_method: 'squash' })]);
     expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
-    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toEqual([expect.objectContaining({ body: '#7 PR', url: `/s/${session.id}` })]);
+    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toEqual([expect.objectContaining({ body: 'r#7', url: `/s/${session.id}` })]);
     await s.app.close();
   });
 
@@ -107,6 +107,35 @@ describe('auto-merge', () => {
     expect(merges).toHaveLength(1);
     expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: done and merged')).toHaveLength(1);
     expect((await s.call('GET', `/sessions/${session.id}`)).data.events.filter((e: { body: { text?: string } }) => e.body.text?.startsWith('Auto-merged'))).toHaveLength(1);
+    await s.app.close();
+  });
+
+  it('a session that changed two repos gets one notice for both merges', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'TWO', name: 'Two' });
+    for (const name of ['front', 'back']) await s.call('POST', '/projects/TWO/repos', { github_owner: 'me', github_name: name });
+    const item = (await s.call('POST', '/projects/TWO/items', { title: 'x' })).data;
+    const session = s.ctx.store.createSession({
+      project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/two-1-x',
+      initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
+    });
+    s.ctx.store.updateSession(session.id, { last_text: 'All fixed in both repos.' });
+    const merged = new Set<string>();
+    const pr = (repo: string) => ({ number: repo === 'front' ? 3 : 4, html_url: 'u', title: 'PR', state: merged.has(repo) ? 'closed' : 'open', merged_at: merged.has(repo) ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: 'dispatch/two-1-x', sha: `sha-${repo}` }, base: { ref: 'main' }, body: '' });
+    Object.defineProperty(s.ctx.github, 'octo', { value: {
+      pulls: {
+        list: async ({ repo }: { repo: string }) => ({ data: [pr(repo)] }),
+        get: async ({ repo }: { repo: string }) => ({ data: pr(repo) }),
+        merge: async ({ repo }: { repo: string }) => { merged.add(repo); return { data: {} }; },
+      },
+      checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
+      repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
+    } });
+    await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    expect([...merged].sort()).toEqual(['back', 'front']);
+    expect(s.ctx.notifier.sent.map((n) => `${n.title} | ${n.body}`)).toEqual(['TWO: done and merged (2 repos) | All fixed in both repos.']);
+    const texts = (await s.call('GET', `/sessions/${session.id}`)).data.events.map((e: { body: { text?: string } }) => e.body.text).filter(Boolean);
+    expect(texts).toEqual(expect.arrayContaining(['Auto-merged front#3 (squash on GitHub).', 'Auto-merged back#4 (squash on GitHub).']));
     await s.app.close();
   });
 
@@ -122,7 +151,7 @@ describe('auto-merge', () => {
       return titles;
     };
     expect(await turnEnds([{ name: 't', status: 'completed', conclusion: 'success', html_url: null }])).toEqual(['AM: done and merged | Fixed the legend.']);
-    expect(await turnEnds([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }])).toEqual(['AM: not auto-merged | #7: checks failed (lint)']);
+    expect(await turnEnds([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }])).toEqual(['AM: not auto-merged | r#7: checks failed (lint)']);
     expect(await turnEnds([], false)).toEqual(['AM: waiting for you | Fixed the legend.']);
   });
 
