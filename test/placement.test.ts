@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { plannerPrompt } from '../src/worker/prompts.ts';
 import { startServer, waitFor } from './helpers.ts';
 
@@ -104,6 +105,21 @@ describe('placement', () => {
     expect(text).toContain('- b (offline): Windows desktop with PowerPoint. Often asleep.');
     expect(text).toMatch(/set `worker`/);
     wa.close();
+  });
+
+  it('with one worker, the planner still gets its description and the project rules, incl. work no worker can do', () => {
+    const spec = {
+      session_id: 1, kind: 'planner', project_key: 'PL', project_name: 'Place', importance_scale: ['a', 'b', 'c', 'd'], effort_scale: ['S'],
+      title: 't', branch: null, repos: [], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS,
+      claude_account: null, github_account: null, resume: null, resume_note: null,
+      workers: [{ name: 'default', description: 'Windows desktop with PowerPoint.', connected: true, local_repo_dirs: [], claude_accounts: [], github_accounts: [] }],
+      placement_md: 'Mac-only checks cannot run on any worker yet.',
+    };
+    const text = plannerPrompt(spec as never);
+    expect(text).toContain('## Where work runs');
+    expect(text).toContain('- default (online): Windows desktop with PowerPoint.');
+    expect(text).toContain('Mac-only checks cannot run on any worker yet.');
+    expect(text).toMatch(/no worker can do/i);
   });
 
   it('a proposal card carries the worker and the reason', async () => {

@@ -141,7 +141,7 @@ export function plannerPrompt(spec: StartSpec): string {
       'When the owner agrees, or when you have a clear suggestion, call `propose_batch`. The owner sees it as a card they can edit and start.',
     );
   }
-  if (spec.workers && spec.workers.length > 1) lines.push('', ...whereWorkRuns(spec));
+  if (spec.workers?.length || spec.placement_md?.trim()) lines.push('', ...whereWorkRuns(spec));
   return lines.join('\n');
 }
 
@@ -150,7 +150,7 @@ function whereWorkRuns(spec: StartSpec): string[] {
   const out = [
     '## Where work runs',
     'Each batch runs on one worker (a machine with its own tools). These are the workers:',
-    ...spec.workers!.map((w) => {
+    ...(spec.workers ?? []).map((w) => {
       const facts = [
         w.claude_accounts.length ? `Claude accounts: ${w.claude_accounts.join(', ')}` : '',
         w.github_accounts.length ? `GitHub accounts: ${w.github_accounts.join(', ')}` : '',
@@ -162,6 +162,7 @@ function whereWorkRuns(spec: StartSpec): string[] {
   out.push(
     '',
     'When you call `propose_batch`, set `worker` to the worker that fits the work and `worker_reason` to one short line on why. Work that needs a particular machine (its programs, its files) goes there; other work goes where the rules above say.',
+    'If no worker can do an item (it needs a machine, program or access none of them has), leave it out of the batch and tell the owner which item and why.',
     'An offline worker can still take the batch: it waits in the queue until that worker connects. Say so when you pick one.',
     'Do not propose batches that touch the same module to run at the same time on different workers: propose them one after the other instead, so their branches do not drift apart.',
   );

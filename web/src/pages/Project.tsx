@@ -414,7 +414,7 @@ function ProjectWorkers({ project, onSave }: { project: ProjectSummary; onSave: 
             {data?.workers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         </Field>
-        <Field label="Rules for the planner" hint="When to use which worker. The planner reads this with each worker's description.">
+        <Field label="Rules for the planner" hint="When to use which worker, and what no worker can do yet. The planner reads this with each worker's description.">
           <textarea className={cx(inputCls, 'min-h-20')} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Use the desktop only for work that runs PowerPoint. Everything else runs on linux." aria-label="Where work runs" />
         </Field>
         <Button small variant="primary" disabled={text === project.placement_md} onClick={() => onSave({ placement_md: text })}>Save</Button>
@@ -505,7 +505,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
       </Sheet>
       <ProjectLook project={project} onSave={(patch) => save.mutate(patch)} />
       <ProjectAccounts project={project} onSaved={refresh} />
-      {workers.length > 1 && <ProjectWorkers project={project} onSave={(patch) => save.mutate(patch)} />}
+      <ProjectWorkers project={project} onSave={(patch) => save.mutate(patch)} />
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
           <label className="flex items-center justify-between text-[14px]">
