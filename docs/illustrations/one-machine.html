@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dispatch on one machine</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<h1>One machine with Docker</h1>
+<p class="lead"><code>docker compose up</code> runs two containers: the server and one worker. Good for trying Dispatch, or for a single always-on box.</p>
+<figure>
+<svg viewBox="0 0 960 420" role="img" aria-label="A phone and a browser open the server on port 3000. The server and the worker run as two containers on one machine; the worker connects to the server and talks to Claude and GitHub.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--run)"/></marker>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--ok)"/></marker>
+  </defs>
+  <!-- you -->
+  <rect class="box" x="20" y="120" width="170" height="150" rx="14"/>
+  <text class="h" x="40" y="152">You</text>
+  <text class="s muted" x="40" y="178">Phone (installed app)</text>
+  <text class="s muted" x="40" y="200">or a desktop browser</text>
+  <text class="xs muted" x="40" y="236">push notifications when</text>
+  <text class="xs muted" x="40" y="254">Claude needs you</text>
+  <!-- machine -->
+  <rect class="zone" x="240" y="40" width="470" height="340" rx="18"/>
+  <text class="s muted" x="262" y="68">Your machine · docker compose</text>
+  <rect class="accent" x="270" y="90" width="410" height="110" rx="14"/>
+  <text class="h" x="292" y="122">server</text>
+  <text class="s muted" x="292" y="146">the app, API, live updates, push, SQLite</text>
+  <text class="s muted" x="292" y="168">holds no Claude login · runs no agents</text>
+  <text class="mono muted" x="292" y="190">port 3000 · volume dispatch-data</text>
+  <rect class="box" x="270" y="250" width="410" height="110" rx="14"/>
+  <text class="h" x="292" y="282">worker</text>
+  <text class="s muted" x="292" y="306">runs Claude Code sessions, git worktrees, PRs</text>
+  <text class="s muted" x="292" y="328">your Claude login lives here (worker.env)</text>
+  <text class="mono muted" x="292" y="350">volumes workspaces, claude-home</text>
+  <!-- outside -->
+  <rect class="ext" x="760" y="210" width="180" height="70" rx="14"/>
+  <text class="h" x="780" y="240">Claude</text>
+  <text class="s muted" x="780" y="262">your subscription</text>
+  <rect class="ext" x="760" y="300" width="180" height="70" rx="14"/>
+  <text class="h" x="780" y="330">GitHub</text>
+  <text class="s muted" x="780" y="352">clone, push, PRs</text>
+  <!-- arrows -->
+  <path class="arrow" d="M190 180 H266"/>
+  <text class="xs muted" x="198" y="170">http :3000</text>
+  <path class="arrow out" d="M450 248 V204"/>
+  <text class="xs" x="460" y="230" style="fill:var(--run)">worker connects to the server (WORKER_TOKEN)</text>
+  <path class="arrow ok" d="M682 300 L756 252"/>
+  <path class="arrow ok" d="M682 320 L756 332"/>
+  <path class="arrow" d="M682 140 H950 V335 H944" style="stroke-dasharray:4 4"/>
+  <text class="xs muted" x="760" y="132">PR sync, merge (server's token)</text>
+</svg>
+</figure>
+<ul class="notes">
+  <li>Setup: <code>server.env</code> and <code>worker.env</code> share one <code>WORKER_TOKEN</code>; the worker also needs <code>CLAUDE_CODE_OAUTH_TOKEN</code> (from <code>claude setup-token</code>).</li>
+  <li>Try it without Claude: <code>RUNNER=fake</code> in <code>worker.env</code>.</li>
+  <li>The phone needs HTTPS for push notifications and the installed app: put a reverse proxy in front (see the distributed setup).</li>
+</ul>
+</main></body></html>

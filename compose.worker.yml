@@ -1,0 +1,21 @@
+# Distributed setup, part 2: a worker on another machine. It connects out to the server, so it needs no
+# open port. Make the worker in the app (Settings → Workers), copy its token, then:
+#   cp docker/worker.env.example worker.env   # SERVER_WS_URL=wss://…/worker, WORKER_TOKEN=dsw_…, Claude login
+#   docker compose -f compose.worker.yml up -d --build
+# One worker for several servers: mount a worker.json and set WORKER_CONFIG (README → "One worker,
+# several servers").
+services:
+  worker:
+    build: { context: ., dockerfile: docker/Dockerfile.worker }
+    # worker.env (docker/worker.env.example): SERVER_WS_URL and the worker's dsw_… token
+    env_file: [worker.env]
+    volumes:
+      - workspaces:/workspaces
+      - claude-home:/home/node/.claude
+      # - ./worker.json:/config/worker.json:ro     # with WORKER_CONFIG=/config/worker.json
+      # - ${HOME}/projects:/host/repos              # local repos, with LOCAL_REPO_DIRS=/host/repos
+    restart: unless-stopped
+
+volumes:
+  workspaces:
+  claude-home:

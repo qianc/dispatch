@@ -1,0 +1,5 @@
+# HTTPS in front of the Dispatch server (Caddy gets the certificate itself).
+# The phone app and push notifications need HTTPS. WebSockets (/worker) and live updates pass through.
+dispatch.example.com {
+	reverse_proxy localhost:3000
+}

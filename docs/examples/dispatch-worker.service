@@ -1,0 +1,22 @@
+# A Dispatch worker without Docker, as a systemd user service (Linux, or WSL with systemd on).
+#   mkdir -p ~/.config/systemd/user ~/.config/dispatch
+#   cp docs/examples/dispatch-worker.service ~/.config/systemd/user/
+#   cp docker/worker.env.example ~/.config/dispatch/worker.env    # then fill it in (chmod 600)
+#   systemctl --user daemon-reload && systemctl --user enable --now dispatch-worker
+#   loginctl enable-linger "$USER"      # keep it running when you are logged out
+# Adjust the two paths below: the clone of this repo, and your node (24 or newer).
+[Unit]
+Description=Dispatch worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/dispatch
+EnvironmentFile=%h/.config/dispatch/worker.env
+Environment=WORKSPACES_DIR=%h/.local/share/dispatch/ws
+ExecStart=/usr/bin/node src/worker/main.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

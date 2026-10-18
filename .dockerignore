@@ -5,3 +5,9 @@ data
 .env
 test-results
 playwright-report
+server.env
+worker.env
+worker.json
+backups
+*.env
+.superpowers

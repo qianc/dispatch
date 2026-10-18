@@ -31,3 +31,11 @@ describe('nightly backup', () => {
     expect(nextRun('03:15', new Date(2026, 9, 19, 4, 0)).getTime()).toBe(new Date(2026, 9, 20, 3, 15).getTime());
   });
 });
+
+describe('backup errors', () => {
+  it('says which folder it could not write to', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'dsp-bk-data-'));
+    new DatabaseSync(join(data, 'dispatch.db')).exec('CREATE TABLE t (v TEXT)');
+    await expect(backupOnce(data, '/nonexistent/backups', 14)).rejects.toThrow(/cannot write the copy into \/nonexistent\/backups/);
+  });
+});

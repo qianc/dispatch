@@ -1,49 +1,33 @@
-# Local test stack. Copy .env.example to .env first.
+# One machine: the server (app, API, database) and one worker (runs Claude) side by side.
+#   cp docker/server.env.example server.env    # WORKER_TOKEN, APP_PASSWORD, (GITHUB_TOKEN)
+#   cp docker/worker.env.example worker.env    # the same WORKER_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, (GITHUB_TOKEN)
+#   docker compose up -d --build
+#   open http://localhost:3000
+# More workers on other machines: see compose.worker.yml and README → "Distributed setup".
 services:
   server:
     build: { context: ., dockerfile: docker/Dockerfile.server }
     ports: ["${PORT:-3000}:3000"]
+    env_file: [server.env]
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:-}
-      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH:-}
-      DISABLE_AUTH: ${DISABLE_AUTH:-0}
-      WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN in .env}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
-      GITHUB_POLL_SECONDS: ${GITHUB_POLL_SECONDS:-120}
+      DATA_DIR: /data
     volumes: [dispatch-data:/data]
     restart: unless-stopped
 
   worker:
     build: { context: ., dockerfile: docker/Dockerfile.worker }
     depends_on: [server]
+    # worker.env: its token, the Claude login, GitHub (docker/worker.env.example)
+    env_file: [worker.env]
     environment:
       SERVER_WS_URL: ws://server:3000/worker
-      WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN in .env}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Dispatch Agent}
-      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-dispatch@localhost}
-      GIT_COMMITTER_NAME: ${GIT_AUTHOR_NAME:-Dispatch Agent}
-      GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-dispatch@localhost}
-      AGENT_MODEL: ${AGENT_MODEL:-}
-      IDLE_CLOSE_MINUTES: ${IDLE_CLOSE_MINUTES:-10}
-      RUNNER: ${RUNNER:-claude}
-      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-3}
-      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
-      DISCUSS_MODEL: ${DISCUSS_MODEL:-haiku}
-      LOCAL_REPO_DIRS: ${LOCAL_REPO_DIRS:-}
-    # accounts (see .env.example): pass the GITHUB_ACCOUNT_* / CLAUDE_ACCOUNT_* variables you use
-    env_file: [{ path: .env, required: false }]
-      ASSISTANT_READ_DIRS: ${ASSISTANT_READ_DIRS:-/host/projects}
+      ASSISTANT_READ_DIRS: /host/notes
     volumes:
       - workspaces:/workspaces
       - claude-home:/home/node/.claude
-      # read-only folder the assistant may read (retros, notes, other repos)
-      - ${ASSISTANT_HOST_DIR:-./}:/host/projects:ro
-      # local-only repos: mount read-write and set LOCAL_REPO_DIRS=/host/repos
+      # a folder the Assistant may read (retros, notes); read-only
+      - ${NOTES_DIR:-./docs}:/host/notes:ro
+      # local repos (no GitHub): mount them and set LOCAL_REPO_DIRS=/host/repos
       # - ${HOME}/projects:/host/repos
     restart: unless-stopped
 

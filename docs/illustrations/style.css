@@ -1,0 +1,34 @@
+/* Shared look for the Dispatch setup illustrations: the app's own colour roles, light and dark. */
+:root {
+  --bg: #f0f0f3; --panel: #ffffff; --raised: #e8e8ed; --line: #d0d0d8; --fg: #1b1b1f; --muted: #53535c;
+  --accent: #4244d4; --accent-soft: #e5e5fb; --ok: #126b42; --wait: #8a5500; --run: #1b5ea6; --bad: #bb2536;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e0e10; --panel: #1a1a1e; --raised: #26262b; --line: #3a3a42; --fg: #ededef; --muted: #a8a8b1;
+    --accent: #a3a4fc; --accent-soft: #2c2c55; --ok: #55ca94; --wait: #f2ae5c; --run: #71b5f3; --bad: #f6818b;
+  }
+}
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; }
+main { max-width: 1000px; margin: 0 auto; padding: 32px 24px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+p.lead { color: var(--muted); margin: 0 0 20px; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--fg); font-family: inherit; }
+svg .muted { fill: var(--muted); }
+svg .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+svg .zone { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+svg .accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+svg .ext { fill: var(--raised); stroke: var(--line); stroke-width: 1.5; }
+svg .arrow { stroke: var(--muted); stroke-width: 1.8; fill: none; marker-end: url(#a); }
+svg .arrow.out { stroke: var(--run); marker-end: url(#b); }
+svg .arrow.ok { stroke: var(--ok); marker-end: url(#c); }
+svg .arrow.wait { stroke: var(--wait); marker-end: url(#d); }
+svg marker path { stroke: none; }
+svg .h { font-weight: 600; font-size: 15px; }
+svg .s { font-size: 12.5px; }
+svg .xs { font-size: 11.5px; }
+svg .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+ul.notes { color: var(--muted); padding-left: 20px; margin: 16px 0 0; }
+ul.notes code, p code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }

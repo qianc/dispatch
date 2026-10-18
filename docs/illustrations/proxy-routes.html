@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dispatch behind a sign-in proxy</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<h1>Behind a sign-in proxy (SSO)</h1>
+<p class="lead">With <code>AUTH_MODE=proxy</code>, people sign in at the proxy (for example Authelia), which tells Dispatch who they are. Clients that are not browsers cannot do that sign-in, so their paths go <em>around</em> it, and Dispatch checks them itself.</p>
+<figure>
+<svg viewBox="0 0 960 470" role="img" aria-label="Browser traffic and the consent page go through the SSO check. OAuth, MCP, personal-token API calls and the worker socket go around it. Dispatch checks each of them, and only believes the user header from the proxy with its secret.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--ok)"/></marker>
+    <marker id="d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--wait)"/></marker>
+  </defs>
+  <!-- clients -->
+  <rect class="box" x="20" y="40" width="230" height="120" rx="14"/>
+  <text class="h" x="40" y="72">Browsers</text>
+  <text class="s muted" x="40" y="96">the app, and the consent page</text>
+  <text class="mono muted" x="40" y="122">/  /api/…  /authorize</text>
+  <rect class="box" x="20" y="200" width="230" height="230" rx="14"/>
+  <text class="h" x="40" y="232">Other clients</text>
+  <text class="s muted" x="40" y="258">Claude (MCP connector)</text>
+  <text class="mono muted" x="40" y="280">/.well-known/* /register</text>
+  <text class="mono muted" x="40" y="298">/token /revoke /mcp</text>
+  <text class="s muted" x="40" y="330">scripts and skills</text>
+  <text class="mono muted" x="40" y="352">/api/… Bearer dsp_…</text>
+  <text class="s muted" x="40" y="384">workers</text>
+  <text class="mono muted" x="40" y="406">/worker</text>
+  <!-- proxy -->
+  <rect class="zone" x="300" y="20" width="330" height="430" rx="18"/>
+  <text class="s muted" x="320" y="46">Reverse proxy</text>
+  <rect class="ext" x="330" y="64" width="270" height="96" rx="14"/>
+  <text class="h" x="350" y="94">SSO check</text>
+  <text class="s muted" x="350" y="118">sign-in, 2FA; adds Remote-User</text>
+  <text class="s muted" x="350" y="140">and the proxy secret header</text>
+  <rect class="ext" x="330" y="230" width="270" height="96" rx="14"/>
+  <text class="h" x="350" y="260">pass through</text>
+  <text class="s muted" x="350" y="284">no SSO; still adds the</text>
+  <text class="s muted" x="350" y="306">proxy secret header</text>
+  <path class="arrow wait" d="M250 100 H326"/>
+  <path class="arrow ok" d="M250 300 H326"/>
+  <!-- dispatch -->
+  <rect class="accent" x="680" y="64" width="260" height="362" rx="14"/>
+  <text class="h" x="700" y="96">Dispatch</text>
+  <text class="s muted" x="700" y="124">AUTH_MODE=proxy</text>
+  <text class="s" x="700" y="156">believes Remote-User only</text>
+  <text class="s" x="700" y="176">from TRUSTED_PROXIES, with</text>
+  <text class="s" x="700" y="196">the PROXY_SECRET, and only</text>
+  <text class="s" x="700" y="216">for AUTH_USERS</text>
+  <text class="s" x="700" y="240">checks the rest itself:</text>
+  <text class="s muted" x="700" y="264">OAuth tokens, scopes read+tracker</text>
+  <text class="s muted" x="700" y="286">personal tokens; from elsewhere</text>
+  <text class="s muted" x="700" y="306">only read+tracker</text>
+  <text class="s muted" x="700" y="330">worker tokens (dsw_…)</text>
+  <text class="s" x="700" y="370">refuses anything that skips</text>
+  <text class="s" x="700" y="390">the proxy</text>
+  <path class="arrow wait" d="M600 112 H676"/>
+  <path class="arrow ok" d="M600 278 H676"/>
+</svg>
+</figure>
+<ul class="notes">
+  <li>Without a proxy (password mode) none of this applies: the app has its own password sign-in; tokens and workers work the same.</li>
+  <li>The proxy secret matters when other programs share the proxy's address (containers on the same network).</li>
+</ul>
+</main></body></html>

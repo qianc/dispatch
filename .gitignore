@@ -5,3 +5,9 @@ data/
 *.log
 test-results/
 playwright-report/
+
+# Docker setup: secrets and local files
+server.env
+worker.env
+worker.json
+backups/

@@ -19,7 +19,9 @@ export async function backupOnce(dataDir: string, outDir: string, keepDays: numb
   const src = new DatabaseSync(join(dataDir, 'dispatch.db'));
   try {
     // to .tmp first, so a partial copy is never mistaken for a good backup
-    await backup(src, join(outDir, `${dbName}.tmp`));
+    await backup(src, join(outDir, `${dbName}.tmp`)).catch((e: Error) => {
+      throw new Error(`cannot write the copy into ${outDir} (${e.message}); check that the folder exists and is writable`);
+    });
     renameSync(join(outDir, `${dbName}.tmp`), join(outDir, dbName));
     made.push(dbName);
   } finally {

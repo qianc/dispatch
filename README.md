@@ -34,6 +34,148 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
 
 Design spec: [`docs/superpowers/specs/2026-10-14-dispatch-design.md`](docs/superpowers/specs/2026-10-14-dispatch-design.md).
 
+## Getting started
+
+Dispatch has two parts. The **server** is the app you open (projects, backlog, sessions, push
+notifications) and keeps the data; it holds no Claude login and runs no agents. A **worker** runs
+the Claude Code sessions, with your Claude login and git, and connects *out* to the server. Run both
+on one machine to start; add workers on other machines when you need them.
+
+| You want | Use |
+|---|---|
+| To try it, or one always-on box | [One machine with Docker](#one-machine-with-docker) |
+| The app always up, agents on the machines that have the tools (a Windows desktop with Office, a Linux VM) | [Distributed setup](#distributed-setup) |
+| Sign-in through your SSO (Authelia, Authentik, …) | [Sign-in behind a proxy](#sign-in-tokens-and-claude-connectors) |
+
+Illustrations (open the HTML files for light and dark versions):
+[one machine](docs/illustrations/one-machine.html) ·
+[distributed](docs/illustrations/distributed.html) ·
+[behind a sign-in proxy](docs/illustrations/proxy-routes.html).
+
+### One machine with Docker
+
+![One machine: the server and one worker as two containers](docs/illustrations/one-machine.png)
+
+You need Docker with Compose, a Claude subscription (or an API key), and optionally a GitHub token.
+
+```bash
+git clone https://github.com/<you>/dispatch && cd dispatch
+cp docker/server.env.example server.env
+cp docker/worker.env.example worker.env
+# one shared secret between the two:
+T=$(openssl rand -hex 32)
+for f in server.env worker.env; do sed "s/^WORKER_TOKEN=.*/WORKER_TOKEN=$T/" $f > $f.new && mv $f.new $f; done
+```
+
+1. In `server.env`, set `APP_PASSWORD`, and `GITHUB_TOKEN` if you use GitHub (a fine-grained token
+   with *Contents* read/write, *Pull requests* read/write and *Checks* read, on your repos).
+2. In `worker.env`, set `CLAUDE_CODE_OAUTH_TOKEN`: run `claude setup-token` on your own computer and
+   paste the token (to bill the API instead, set `ANTHROPIC_API_KEY`). Set the same `GITHUB_TOKEN`
+   and your commit name and email. To try the app without using Claude, set `RUNNER=fake`.
+3. Start it and open the app:
+
+   ```bash
+   docker compose up -d --build
+   open http://localhost:3000            # sign in with APP_PASSWORD
+   ```
+
+4. Make a project, add a repo (`owner/name`), add a few items, and start a batch, or ask the
+   planner what to do next (**Plan** on the project).
+
+The **phone app** and **push notifications** need HTTPS: put a reverse proxy in front and set
+`PUBLIC_URL` to the https address ([Caddy example](docs/examples/Caddyfile)). Then open the address
+on the phone and add it to the home screen. Data is in the Docker volumes (`dispatch-data` for the
+server, `workspaces` and `claude-home` for the worker).
+
+### Distributed setup
+
+![Distributed: one server behind HTTPS, workers on other machines connecting out](docs/illustrations/distributed.png)
+
+**1. The server**, on an always-on host (a VM, a NAS, a cloud box):
+
+```bash
+cp docker/server.env.example server.env    # APP_PASSWORD, PUBLIC_URL=https://dispatch.example.com, GITHUB_TOKEN
+docker compose -f compose.server.yml up -d --build
+```
+
+Put HTTPS in front ([Caddy example](docs/examples/Caddyfile)); the worker socket `/worker` and live
+updates are ordinary WebSocket/HTTP traffic and pass through. `compose.server.yml` also runs a
+nightly backup of the database into `./backups` (14 days kept). `WORKER_TOKEN` in `server.env` is
+optional here: workers get their own tokens.
+
+**2. A worker for each machine.** In the app, **Settings → Workers → New worker**: give it a name
+(`linux`, `desktop`) and a description the planner reads ("Windows desktop, has PowerPoint, often
+asleep"). Copy the token it shows once (`dsw_…`).
+
+*With Docker* (a Linux VM, a server):
+
+```bash
+cp docker/worker.env.example worker.env
+# SERVER_WS_URL=wss://dispatch.example.com/worker, WORKER_TOKEN=dsw_…, CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN
+docker compose -f compose.worker.yml up -d --build
+```
+
+*Without Docker* (a desktop, so agents can use its programs; under WSL they can run Windows tools
+such as PowerPoint): Node 24 or newer and git, then
+
+```bash
+git clone https://github.com/<you>/dispatch ~/dispatch && cd ~/dispatch && npm ci --omit=dev
+cp docker/worker.env.example ~/.config/dispatch/worker.env    # SERVER_WS_URL, WORKER_TOKEN=dsw_…
+```
+
+and run it as a service with [this systemd unit](docs/examples/dispatch-worker.service). Without
+`CLAUDE_CODE_OAUTH_TOKEN`, a worker on your own machine uses your normal Claude Code login.
+
+The worker shows as online in **Settings → Workers**. On each project, **Settings → Where work runs**
+sets its default worker and the rules the planner follows when it proposes where a batch runs. A
+session for a worker that is asleep waits in the queue and starts when the worker connects.
+
+**One worker, several servers** (for example a home and a work instance): give the worker a
+[`worker.json`](docs/examples/worker.json) with one entry per server (address, token file, the
+folders and accounts that server may use) and set `WORKER_CONFIG` to its path. Its session limit
+counts over all servers.
+
+## Configuration
+
+All settings are environment variables (`server.env`, `worker.env`). Any secret can also come from a
+file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
+
+**Server**
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PUBLIC_URL` | `http://localhost:3000` | The address you open the app on. https for the phone app, push and the Claude connector. |
+| `APP_PASSWORD` / `APP_PASSWORD_HASH` | | Sign-in password (hash: `node src/server/hash-password.ts 'pw'`). |
+| `WORKER_TOKEN` | | Token of the worker "default". Other workers get tokens in Settings → Workers. |
+| `GITHUB_TOKEN` or `GITHUB_ACCOUNTS` + `GITHUB_ACCOUNT_<NAME>_TOKEN` | | The server follows PRs and merges with it. |
+| `VAPID_SUBJECT` | `mailto:admin@example.com` | Sender of push notifications. |
+| `PORT`, `DATA_DIR` | `3000`, `./data` | Where it listens and keeps the database. |
+| `GITHUB_POLL_SECONDS` | `120` | How often PRs are checked. |
+| `AUTH_MODE` | `password` | `proxy` behind a sign-in proxy; `DISABLE_AUTH=1` turns sign-in off (testing only). |
+| `TRUSTED_PROXIES`, `AUTH_USERS`, `AUTH_HEADER`, `PROXY_SECRET`, `PROXY_SECRET_HEADER` | | Proxy mode, see [Sign-in](#sign-in-tokens-and-claude-connectors). |
+| `TOKEN_REMOTE_SCOPES` | `read,tracker` | What personal tokens may do from another machine. |
+
+**Worker**
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SERVER_WS_URL` | `ws://localhost:3000/worker` | The server's worker socket (`wss://…/worker` behind HTTPS). |
+| `WORKER_TOKEN` | | The worker's token (`dsw_…`, or the server's `WORKER_TOKEN` for "default"). |
+| `WORKER_CONFIG` | | A JSON file for a worker that serves several servers ([example](docs/examples/worker.json)). |
+| `MAX_CONCURRENT_SESSIONS` | `3` | Agent sessions at once on this worker (over all its servers). |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` | | Claude login. Without either: the machine's own Claude Code login. |
+| `CLAUDE_ACCOUNTS` + `CLAUDE_ACCOUNT_<NAME>_…` | | Several Claude accounts (see `.env.example`). |
+| `GITHUB_TOKEN` or `GITHUB_ACCOUNTS` + … | | Clone, push and open PRs. |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_…` | | Commit identity. |
+| `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
+| `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
+| `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |
+| `AGENT_MODEL`, `ASSISTANT_MODEL`, `DISCUSS_MODEL` | Claude Code default, `haiku`, `haiku` | Models. |
+| `AGENT_PLUGIN_DIRS`, `AGENT_SETTING_SOURCES` | (the image adds superpowers) | Plugins and which Claude settings agents load. |
+| `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
+| `IDLE_CLOSE_MINUTES` | `10` | Close an idle Claude process after this long (it resumes on the next message). |
+| `RUNNER` | `claude` | `fake`: a scripted agent, to try the app without Claude. |
+
 ## Architecture
 
 ```
@@ -88,21 +230,6 @@ of one server from reading the other server's files on the same machine: agents 
 access. Use separate machines (or users) when that matters. Without `WORKER_CONFIG`, the worker
 uses `SERVER_WS_URL`, `WORKER_TOKEN`, `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS` as one server.
 
-## Run with Docker (local test)
-
-```bash
-cp .env.example .env      # fill in WORKER_TOKEN, APP_PASSWORD, GITHUB_TOKEN, CLAUDE_CODE_OAUTH_TOKEN
-docker compose up --build
-open http://localhost:3000
-```
-
-- **Claude subscription:** run `claude setup-token` on your own machine and put the token in
-  `CLAUDE_CODE_OAUTH_TOKEN`. To bill the API instead, leave it empty and set `ANTHROPIC_API_KEY`.
-- **GitHub:** a fine-grained PAT with *Contents* (read/write), *Pull requests* (read/write) and
-  *Checks* (read) on the repos you add.
-- **Try it without Claude usage:** set `RUNNER=fake`. The worker then plays a scripted session
-  (plan approval, a question, a finished turn, planner proposals).
-
 ## Run without Docker (development)
 
 Node 24+ (runs TypeScript directly, no build step for server/worker).
@@ -120,6 +247,8 @@ superpowers, and `AGENT_SETTING_SOURCES=project` if you don't want your personal
 settings in agent sessions.
 
 ## Sign-in, tokens and Claude connectors
+
+![Behind a sign-in proxy: which paths go through the SSO check and which go around it](docs/illustrations/proxy-routes.png)
 
 Dispatch needs no other infrastructure: by default you sign in with a password (`AUTH_MODE=password`,
 `APP_PASSWORD` or `APP_PASSWORD_HASH`). `DISABLE_AUTH=1` turns sign-in off for local testing.
@@ -216,7 +345,7 @@ label, then labels them, so the next entry starts where this one ended.
 ## Backups
 
 `node src/server/backup.ts --data /data --out /backups --at 03:15 --keep 14` runs in the server
-image (for example as a second service of the stack) and makes, once a night, an online copy of
+image as a second service (`compose.server.yml` includes it) and makes, once a night, an online copy of
 the SQLite database (consistent while the server runs) and a tarball of the attachments. It keeps
 14 days. `--once` makes one copy now. Restore: stop the server, put the `.db` copy in place as
 `dispatch.db` (remove any `-wal`/`-shm` files next to it) and unpack the attachments.
@@ -230,9 +359,3 @@ npm run typecheck
 ```
 
 Set `CHROMIUM_PATH` if Playwright's own browser isn't installed.
-
-## Going to Azure later
-
-The same `compose.yml` runs on a VM. Put a TLS proxy (e.g. Caddy) in front of `server:3000`, set
-`PUBLIC_URL` to the https address, and use `APP_PASSWORD_HASH`
-(`node src/server/hash-password.ts '<password>'`) instead of a plain password.
