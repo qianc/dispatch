@@ -49,6 +49,16 @@ describe('a worker on a hosted repo', () => {
     expect(git(ws.cacheDir(repo), 'config', '--list')).not.toContain(secret);
   });
 
+  it('a merge on the worker (a repo with a check command) runs the check and pushes the result to the server', async () => {
+    const checked = { ...repo, check_command: 'test -f b.txt' };
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-hwm-')), 'https://github.com', () => ({}), { base: hostedGitBase(`ws://127.0.0.1:${s.port}/worker`), token: secret });
+    // the branch from the test above is on the server; merge it as the worker would
+    const res = await ws.mergeLocal(checked, 'dispatch/hw-7-x', 'Merge dispatch/hw-7-x');
+    expect(res).toMatchObject({ ok: true });
+    expect((await s.ctx.hosted.readFile(repo, 'b.txt')).toString()).toBe('two\n');
+    expect(await s.ctx.hosted.branchStatus(repo, 'dispatch/hw-7-x')).toMatchObject({ merged: true });
+  });
+
   it('tells the agent to push the branch and not to open a PR', () => {
     const text = workPrompt({ session_id: 1, kind: 'work', project_key: 'HW', project_name: 'HW', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/hw-1-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null });
     expect(text).toContain('app (hosted by Dispatch');

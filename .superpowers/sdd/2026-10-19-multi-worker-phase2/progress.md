@@ -16,3 +16,4 @@ Task 5: complete (commits f4ab91d..5e3855d, tests: npx vitest run → 196/196 pa
 Task 5: Ruling: a hosted merge records the review row as merged itself — a squash merge leaves the branch outside the history, so ancestry cannot tell — cost if wrong: none
 Task 5: Ruling: 'rebase' as merge method for hosted repos merges (no server-side rebase) — keeps the server merge simple — cost if wrong: a merge commit where a rebase was chosen
 Task 5: Ruling: PrDetail gains repo { kind, upstream, check_command } — the PR page needs to explain a hosted merge — cost if wrong: none
+Task 6: complete (commits 5e3855d..d029abf, tests: npx vitest run → all pass)
