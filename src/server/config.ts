@@ -31,6 +31,13 @@ export interface Config {
   authUsers: string[];
   /** scopes a token may use when the request does not come from this machine */
   remoteTokenScopes: string[];
+  /**
+   * proxy mode, optional but recommended: a secret the proxy adds to every request (header
+   * PROXY_SECRET_HEADER). Everything else on the proxy's host shares its address; with the secret,
+   * only the proxy itself counts as the proxy.
+   */
+  proxySecret: string | null;
+  proxySecretHeader: string;
 }
 
 const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -55,7 +62,10 @@ export function loadConfig(env = process.env): Config {
     authHeader: (env.AUTH_HEADER ?? 'Remote-User').toLowerCase(),
     authUsers: list(env.AUTH_USERS),
     remoteTokenScopes: env.TOKEN_REMOTE_SCOPES !== undefined ? list(env.TOKEN_REMOTE_SCOPES) : ['read', 'tracker'],
+    proxySecret: env.PROXY_SECRET || null,
+    proxySecretHeader: (env.PROXY_SECRET_HEADER ?? 'X-Proxy-Secret').toLowerCase(),
   };
+  if (cfg.proxySecret && cfg.proxySecret.length < 24) throw new Error('PROXY_SECRET must be at least 24 characters.');
   if (env.AUTH_MODE && !['password', 'proxy'].includes(env.AUTH_MODE)) throw new Error('AUTH_MODE must be password or proxy.');
   if (cfg.authMode === 'password' && !cfg.appPassword && !cfg.appPasswordHash) {
     throw new Error('Set APP_PASSWORD or APP_PASSWORD_HASH, or AUTH_MODE=proxy with TRUSTED_PROXIES (or DISABLE_AUTH=1 for local testing only).');

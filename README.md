@@ -85,7 +85,10 @@ Dispatch needs no other infrastructure: by default you sign in with a password (
 
 **Behind a sign-in proxy** (e.g. Traefik with an SSO forward-auth): set `AUTH_MODE=proxy`,
 `TRUSTED_PROXIES` to the proxy's address(es) (IPs or IPv4 CIDRs) and optionally `AUTH_USERS` to the
-users allowed in (`AUTH_HEADER`, default `Remote-User`, names the user). Dispatch then believes the
+users allowed in (`AUTH_HEADER`, default `Remote-User`, names the user). Set `PROXY_SECRET` too and have
+the proxy add it to every request (header `X-Proxy-Secret`): everything else on the proxy's host has
+its address, and the secret is what tells the proxy apart. A tunnel or proxy on Dispatch's own machine
+makes every request look local (full token scopes, password login): do not run one there. Dispatch then believes the
 header only from those addresses, refuses every other request that does not come from the machine
 itself (so the port is no way around the proxy), and keeps the password login for that machine
 only, as a way in when the proxy is down. When the proxy's session expires the app shows

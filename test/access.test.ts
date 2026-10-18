@@ -115,6 +115,21 @@ describe('proxy sign-in', () => {
     }
   });
 
+  it('with a proxy secret, only requests carrying it count as the proxy', async () => {
+    const secret = 'a-long-random-proxy-secret-123456';
+    const s = await startServer({ DISABLE_AUTH: '', AUTH_MODE: 'proxy', TRUSTED_PROXIES: PROXY, AUTH_USERS: 'alice', PROXY_SECRET: secret });
+    try {
+      const get = (headers: Record<string, string>) => s.app.inject({ method: 'GET', url: '/api/projects', remoteAddress: PROXY, headers });
+      expect((await get({ 'remote-user': 'alice', 'x-proxy-secret': secret })).statusCode).toBe(200);
+      // another program on the proxy's host: same address, no secret
+      expect((await get({ 'remote-user': 'alice' })).statusCode).toBe(403);
+      expect((await get({ 'remote-user': 'alice', 'x-proxy-secret': 'wrong-secret-of-another-length' })).statusCode).toBe(403);
+    } finally {
+      await s.app.close();
+    }
+    await expect(startServer({ DISABLE_AUTH: '', AUTH_MODE: 'proxy', TRUSTED_PROXIES: PROXY, PROXY_SECRET: 'short' })).rejects.toThrow(/at least 24/);
+  });
+
   it('refuses to start without a proxy address', async () => {
     await expect(startServer({ DISABLE_AUTH: '', AUTH_MODE: 'proxy' })).rejects.toThrow(/TRUSTED_PROXIES/);
   });

@@ -165,7 +165,14 @@ export class Access {
 
   private from(req: FastifyRequest) {
     const ip = req.socket.remoteAddress;
-    return { local: isLoopback(ip), proxy: ipInList(ip, this.cfg.trustedProxies) };
+    let proxy = ipInList(ip, this.cfg.trustedProxies);
+    if (proxy && this.cfg.proxySecret) {
+      // the proxy's host is shared (other containers have its address): the proxy proves itself
+      const got = Buffer.from(String(req.headers[this.cfg.proxySecretHeader] ?? ''));
+      const want = Buffer.from(this.cfg.proxySecret);
+      proxy = got.length === want.length && timingSafeEqual(got, want);
+    }
+    return { local: isLoopback(ip), proxy };
   }
 
   /**

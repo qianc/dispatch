@@ -83,7 +83,7 @@ describe('dispatch-backlog skill script', () => {
       const env = { ...process.env, DISPATCH_URL: authed.base, DISPATCH_TOKEN: '', HOME: home };
       const missing = await run(process.execPath, [SCRIPT, 'projects'], { cwd: home, env }).then(() => '', (e) => String(e.stderr));
       const file = join(home, '.config/dispatch/tokens', `127.0.0.1_${authed.port}`);
-      expect(missing).toContain(`put the API token from its Settings page in ${file}`);
+      expect(missing).toContain(`make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${file}`);
       await run('mkdir', ['-p', join(home, '.config/dispatch/tokens')]);
       writeFileSync(file, `${authed.ctx.access.createToken('skill', ['tracker', 'read'], null).secret}\n`);
       writeFileSync(join(home, '.config/dispatch/tokens/localhost_3000'), 'wrong-server-token\n');
