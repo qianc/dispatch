@@ -11,3 +11,4 @@ server.env
 worker.env
 worker.json
 backups/
+.superpowers/
