@@ -117,8 +117,9 @@ describe('the janitor on the server', () => {
       const a = await make('a');
       await s.call('POST', `/sessions/${a.sess.id}/finish`, { status: 'completed' });
       await waitFor(() => !existsSync(a.wt) && !branches().includes('jan-a'), 'session a tidied');
-      const ev = (await s.call('GET', `/sessions/${a.sess.id}`)).data.events.map((e: { body: { text?: string } }) => e.body.text);
-      expect(ev).toContain('Cleaned up. tpl: worktree removed; tpl: branch deleted.');
+      // the event is written once the worker's answer is back, a moment after the folder is gone
+      const texts = async () => (await s.call('GET', `/sessions/${a.sess.id}`)).data.events.map((e: { body: { text?: string } }) => e.body.text);
+      await waitFor(async () => (await texts()).includes('Cleaned up. tpl: worktree removed; tpl: branch deleted.'), 'cleanup event');
 
       // one finished before this existed: found by the check, offered, cleaned on request
       const b = await make('b');

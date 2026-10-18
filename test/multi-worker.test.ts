@@ -158,7 +158,9 @@ describe('the queue with workers that come and go', () => {
     await waitFor(() => wb.got.some((m) => m.t === 'start'), 'resumed');
     const start = wb.got.find((m) => m.t === 'start')!;
     expect(start.spec).toMatchObject({ session_id: job.id, resume: 'sdk-9', prompt: 'and one more thing' });
-    expect(await get(job.id)).toMatchObject({ status: 'running', pending_prompt: null });
+    wb.send({ t: 'status', session_id: job.id, status: 'running', sdk_session_id: 'sdk-9' });
+    await waitFor(async () => (await get(job.id)).pending_prompt === null, 'delivered');
+    expect((await get(job.id)).status).toBe('running');
     wb.close();
   });
 
@@ -210,4 +212,65 @@ describe('the queue with workers that come and go', () => {
     expect(wb.starts()).toHaveLength(2);
     wb.close();
   });
+});
+
+describe('one worker serving two servers', () => {
+  it('runs session 1 of each server side by side, with its own allow lists, and shares its slots', async () => {
+    const { mkdtempSync, writeFileSync, mkdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+    const { startWorker, stopWorker } = await import('./helpers.ts');
+    const s1 = await startServer();
+    const s2 = await startServer();
+    const root = mkdtempSync(join(tmpdir(), 'dsp-2srv-'));
+    for (const d of ['home', 'work']) {
+      mkdirSync(join(root, d, 'repo'), { recursive: true });
+      execFileSync('git', ['init', '-q', '-b', 'main', join(root, d, 'repo')]);
+    }
+    const t1 = s1.ctx.workers.create('desk', '').secret;
+    const t2 = s2.ctx.workers.create('desk', '').secret;
+    writeFileSync(join(root, 'worker.json'), JSON.stringify({
+      max_concurrent: 1,
+      servers: [
+        { name: 'home', url: `ws://127.0.0.1:${s1.port}/worker`, token: t1, local_repo_dirs: [join(root, 'home')] },
+        { name: 'work', url: `ws://127.0.0.1:${s2.port}/worker`, token: t2, local_repo_dirs: [join(root, 'work')] },
+      ],
+    }));
+    const worker = startWorker(0, { WORKER_CONFIG: join(root, 'worker.json'), WORKSPACES_DIR: join(root, 'ws'), FAKE_DELAY_MS: '30' });
+    try {
+      const desk1 = s1.ctx.workers.byName('desk')!.id;
+      const desk2 = s2.ctx.workers.byName('desk')!.id;
+      await waitFor(() => s1.ctx.hub.isConnected(desk1) && s2.ctx.hub.isConnected(desk2), 'connected to both');
+      expect(s1.ctx.hub.facts(desk1)).toMatchObject({ slots: 1, free_slots: 1, local_repo_dirs: [join(root, 'home')] });
+      expect(s2.ctx.hub.facts(desk2)?.local_repo_dirs).toEqual([join(root, 'work')]);
+      for (const s of [s1, s2]) {
+        s.ctx.workers.setDefault(s.ctx.workers.byName('desk')!.id);
+        await s.call('POST', '/projects', { key: 'TW', name: 'Two' });
+        await s.call('POST', '/projects/TW/repos', { github_owner: 'me', github_name: 'tw' });
+      }
+      // allow lists: the work server may not use the home folder
+      expect((await s2.call('POST', '/projects/TW/repos', { local_path: join(root, 'home', 'repo') })).status).toBe(400);
+      expect((await s1.call('POST', '/projects/TW/repos', { local_path: join(root, 'home', 'repo') })).status).toBe(200);
+      await s1.call('DELETE', `/repos/${s1.ctx.store.repos(s1.ctx.store.projectByKey('TW')!.id).find((r) => r.local_path)!.id}`);
+
+      // one slot: home's session 1 holds it (it waits for an answer); work's session 1 waits
+      const a = (await s1.call('POST', '/projects/TW/batches', { prompt: 'home work' })).data;
+      await waitFor(async () => (await s1.call('GET', `/sessions/${a.id}`)).data.session.status === 'waiting_input', 'home asks');
+      const b = (await s2.call('POST', '/projects/TW/batches', { prompt: 'work work' })).data;
+      expect(a.id).toBe(b.id); // the same session id on both servers
+      await waitFor(async () => (await s2.call('GET', `/sessions/${b.id}`)).data.session.waiting_reason === 'Waiting for worker desk (busy)', 'work waits for the slot');
+      // answer home: it finishes, the slot frees, work's session 1 runs in its own runner
+      const input = (await s1.call('GET', `/sessions/${a.id}`)).data.inputs.find((i: { answered_at: string | null }) => !i.answered_at);
+      await s1.call('POST', `/inputs/${input.id}/answer`, { kind: 'question', answers: { [input.payload.questions[0].question]: 'Small fix' } });
+      await waitFor(async () => (await s1.call('GET', `/sessions/${a.id}`)).data.session.status === 'idle', 'home done');
+      await waitFor(async () => (await s2.call('GET', `/sessions/${b.id}`)).data.session.status === 'waiting_input', 'work runs and asks', 10_000);
+      const workEvents = (await s2.call('GET', `/sessions/${b.id}`)).data.events.map((e: { body: { text?: string } }) => e.body.text).join('\n');
+      expect(workEvents).not.toContain('Small fix'); // home's answer never reached work's runner
+    } finally {
+      await stopWorker(worker);
+      await s1.app.close();
+      await s2.app.close();
+    }
+  }, 30_000);
 });

@@ -456,7 +456,10 @@ export class Sessions {
           if (msg.error) this.addEvent(s.id, { kind: 'error', text: msg.error });
         }
         if (msg.status === 'idle') patch.waiting_reason = 'Turn finished';
-        if (msg.status === 'running') patch.waiting_reason = null;
+        if (msg.status === 'running') {
+          patch.waiting_reason = null;
+          if (s.pending_prompt) patch.pending_prompt = null; // delivered
+        }
         if (msg.status === 'idle' || msg.status === 'failed') {
           for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
         }
@@ -751,7 +754,8 @@ export class Sessions {
       // until the worker reports again, count the slot as taken
       if (!chat && link.facts && link.facts.free_slots > 0) link.facts.free_slots--;
       this.toldWaiting.delete(next.id);
-      this.setStatus(next.id, 'running', { waiting_reason: null, pending_prompt: null });
+      // a waiting reply (pending_prompt) is kept until the worker says it runs: a refused start keeps it
+      this.setStatus(next.id, 'running', { waiting_reason: null });
     }
   }
 
