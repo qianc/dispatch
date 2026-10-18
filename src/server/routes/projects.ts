@@ -4,7 +4,7 @@ import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { addLocalRepo, mergeNote } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github, workers }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -54,6 +54,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx)
     const allowed = rest.claude_allowed === undefined ? p.claude_allowed : rest.claude_allowed;
     const def = rest.claude_account === undefined ? p.claude_account : rest.claude_account;
     if (def && allowed?.length && !allowed.includes(def)) throw new HttpError(400, `The default Claude account "${def}" must be one of the allowed accounts`);
+    if (rest.worker_id != null && (!workers.get(rest.worker_id) || workers.get(rest.worker_id)!.revoked_at)) throw new HttpError(400, `Unknown worker ${rest.worker_id}`);
     if (muted !== undefined) store.setMuted(p.id, muted);
     return { ...store.updateProject(p.id, rest), muted: store.isMuted(p.id), repos: store.repos(p.id) };
   });
@@ -62,7 +63,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx)
     const p = project((req.params as { key: string }).key);
     const body = (req.body ?? {}) as { local_path?: string };
     if (body.local_path) {
-      const input = z.object({ local_path: z.string().min(1), default_branch: z.string().optional(), check_command: z.string().nullable().optional() }).parse(req.body);
+      const input = z.object({ local_path: z.string().min(1), default_branch: z.string().optional(), check_command: z.string().nullable().optional(), worker_id: z.number().int().nullable().optional() }).parse(req.body);
       const { repo, info } = await addLocalRepo(store, hub, p, input.local_path, input);
       return { ...repo, note: mergeNote(info) };
     }

@@ -11,6 +11,12 @@ export interface LocalRepoInfo { path: string; name: string; default_branch: str
 /** Add a local repo after the worker has checked it (inside LOCAL_REPO_DIRS, is a git repo). */
 export async function addLocalRepo(store: Store, hub: WorkerHub, project: Project, path: string, opts: { default_branch?: string; check_command?: string | null; worker_id?: number | null } = {}) {
   const workerId = opts.worker_id ?? project.worker_id ?? store.defaultWorkerId();
+  // all of a project's local repos are on one worker (its sessions run there)
+  const other = store.repos(project.id).find((r) => r.kind === 'local' && r.worker_id && r.worker_id !== workerId);
+  if (other) {
+    const name = store.db.get<{ name: string }>('SELECT name FROM workers WHERE id = ?', other.worker_id!)?.name ?? other.worker_id;
+    throw new HttpError(400, `This project's local repos are on worker ${name}; add this one there too, or use another project.`);
+  }
   let info: LocalRepoInfo;
   try {
     info = await hub.cmd<LocalRepoInfo>(workerId, { c: 'inspect_local_repo', path }, 30_000);

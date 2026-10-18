@@ -62,6 +62,8 @@ const proposalSchema = z.discriminatedUnion('type', [
     new_items: z.array(proposedItemSchema).default([]),
     prompt: z.string().default(''),
     force_plan: z.boolean().default(false),
+    worker: z.string().optional(),
+    worker_reason: z.string().max(300).optional(),
   }),
   z.object({ type: z.literal('items'), source_id: z.number().int().nullable().default(null), items: z.array(proposedItemSchema).min(1) }),
   z.object({ type: z.literal('planner'), project_key: z.string(), prompt: z.string().default('') }),
@@ -111,19 +113,56 @@ export class Sessions {
    * default, checked against the project's allowed list and, when the worker has said which accounts
    * it has, against those. null = the legacy default (one unnamed login).
    */
-  claudeAccountFor(project: Project | null, requested: string | null | undefined, chat?: 'assistant'): string | null {
-    const known = this.hub.claudeAccounts().map((a) => a.name);
+  claudeAccountFor(project: Project | null, requested: string | null | undefined, chat?: 'assistant', workerId?: number): string | null {
+    const known = (workerId !== undefined && this.hub.isConnected(workerId) ? this.hub.claudeAccounts(workerId) : this.hub.claudeAccounts()).map((a) => a.name);
     const name = chat === 'assistant'
       ? requested ?? this.store.db.setting('assistant_claude_account') ?? null
       : requested ?? project?.claude_account ?? null;
     const fallback = known.length && !known.includes('default') ? known[0] : null;
     const chosen = name ?? (project?.claude_allowed?.length ? project.claude_allowed[0] : fallback);
     if (!chosen) return null;
-    if (known.length && !known.includes(chosen)) throw new SessionError(`Unknown Claude account "${chosen}". The worker has: ${known.join(', ')}.`);
+    if (known.length && !known.includes(chosen)) {
+      const worker = workerId !== undefined && this.hub.isConnected(workerId) ? this.workers.get(workerId)?.name : undefined;
+      throw new SessionError(worker ? `Worker ${worker} has no Claude account "${chosen}" (it has: ${known.join(', ')}).` : `Unknown Claude account "${chosen}". The worker has: ${known.join(', ')}.`);
+    }
     if (project?.claude_allowed && !project.claude_allowed.includes(chosen)) {
       throw new SessionError(`Project ${project.key} does not allow the Claude account "${chosen}" (allowed: ${project.claude_allowed.join(', ')}).`);
     }
     return chosen === 'default' ? null : chosen;
+  }
+
+  /**
+   * The worker a new session runs on. A project's local repos live on one worker, so its sessions
+   * run there (asking for another is an error); otherwise the requested worker, the project's
+   * default, or the global default.
+   */
+  workerFor(project: Project | null, requested: number | null | undefined): number {
+    const local = project ? this.store.repos(project.id).find((r) => r.kind === 'local' && r.worker_id) : undefined;
+    if (local) {
+      if (requested && requested !== local.worker_id) {
+        throw new SessionError(`This project's local repos are on worker ${this.workers.get(local.worker_id!)?.name ?? local.worker_id}.`);
+      }
+      return local.worker_id!;
+    }
+    const id = requested ?? project?.worker_id ?? this.workers.defaultId();
+    const w = this.workers.get(id);
+    if (!w || w.revoked_at) throw new SessionError(`Unknown worker ${id}`);
+    return id;
+  }
+
+  /** A worker that said which accounts it has must have the session's (the start would fail). */
+  private checkAccounts(workerId: number, claudeAccount: string | null, project: Project | null) {
+    const facts = this.hub.facts(workerId) ?? this.workers.get(workerId)?.facts ?? null;
+    if (!facts) return;
+    const name = this.workers.get(workerId)?.name ?? String(workerId);
+    const claude = facts.claude_accounts.map((a) => a.name);
+    if (claudeAccount && claude.length && !claude.includes(claudeAccount)) {
+      throw new SessionError(`Worker ${name} has no Claude account "${claudeAccount}" (it has: ${claude.join(', ')}).`);
+    }
+    const gh = project?.github_account;
+    if (gh && facts.github_accounts.length && !facts.github_accounts.includes(gh)) {
+      throw new SessionError(`Worker ${name} has no GitHub account "${gh}" (it has: ${facts.github_accounts.join(', ')}).`);
+    }
   }
 
   /** Remember that a proposal card was acted on, so no device offers it again. */
@@ -188,9 +227,17 @@ export class Sessions {
     else this.finish(s.id, 'completed');
   }
 
-  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; proposal?: { session_id: number; event_id: number } }): Session {
+  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }): Session {
     this.assertProposalOpen(input.proposal);
-    const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account);
+    let requested = input.options?.worker_id ?? null;
+    if (!requested && input.worker) {
+      const named = this.workers.byName(input.worker);
+      if (!named) throw new SessionError(`Unknown worker "${input.worker}".`);
+      requested = named.id;
+    }
+    const workerId = this.workerFor(project, requested);
+    const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account, undefined, workerId);
+    this.checkAccounts(workerId, claudeAccount, project);
     const items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
@@ -207,8 +254,9 @@ export class Sessions {
       initial_prompt: input.prompt,
       source_id: input.source_id ?? null,
       item_ids: all.map((i) => i.id),
-      options: input.options ?? DEFAULT_RUN_OPTIONS,
+      options: { ...(input.options ?? DEFAULT_RUN_OPTIONS), worker_id: workerId },
       claude_account: claudeAccount,
+      worker_id: workerId,
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
@@ -236,7 +284,8 @@ export class Sessions {
   assistantSend(text: string): Session {
     return this.chatSend(this.currentAssistant(), () => this.store.createSession({
       project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant'),
+      initial_prompt: text, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', this.workerFor(null, null)),
+      worker_id: this.workerFor(null, null),
     }), text);
   }
 
@@ -250,7 +299,9 @@ export class Sessions {
     if (!item) throw new SessionError('Unknown item', 404);
     return this.chatSend(this.currentDiscuss(itemId), () => this.store.createSession({
       project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: item.source_id, item_ids: [item.id], claude_account: this.claudeAccountFor(this.store.project(item.project_id)!, null),
+      initial_prompt: text, source_id: item.source_id, item_ids: [item.id],
+      claude_account: this.claudeAccountFor(this.store.project(item.project_id)!, null, undefined, this.workerFor(this.store.project(item.project_id)!, null)),
+      worker_id: this.workerFor(this.store.project(item.project_id)!, null),
     }), text);
   }
 
@@ -268,7 +319,8 @@ export class Sessions {
       : 'Look at the open backlog, bugs and the code, and propose the next batch of work. Call propose_batch with your suggestion.');
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null),
+      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null, undefined, this.workerFor(project, null)),
+      worker_id: this.workerFor(project, null),
     });
     this.markProposalDone(input.proposal, `Started planning chat #${session.id}`);
     this.emitSession(session);
@@ -760,7 +812,62 @@ export class Sessions {
       github_account: project?.github_account ?? null,
       resume,
       resume_note: resumeNote,
+      ...(s.kind === 'planner' ? { workers: this.plannerWorkers(), placement_md: project?.placement_md ?? '' } : {}),
     };
+  }
+
+  /** What the planner knows about the workers, to place a batch. */
+  private plannerWorkers() {
+    return this.workers.list().map((w) => {
+      const facts = this.hub.facts(w.id) ?? w.facts;
+      return {
+        name: w.name,
+        description: w.description,
+        connected: this.hub.isConnected(w.id),
+        local_repo_dirs: facts?.local_repo_dirs ?? [],
+        claude_accounts: (facts?.claude_accounts ?? []).map((a) => a.name),
+        github_accounts: facts?.github_accounts ?? [],
+      };
+    });
+  }
+
+  /**
+   * Run a session on another worker. One that has not started just changes worker. A started one
+   * stays where its worktree and conversation are: it stops, and a new session on the other worker
+   * picks the work up from the pushed branch. Local repos exist on one worker only.
+   */
+  move(sessionId: number, workerId: number): Session {
+    const s = this.mustGet(sessionId);
+    const target = this.workers.get(workerId);
+    if (!target || target.revoked_at) throw new SessionError('Unknown worker');
+    if (s.worker_id === workerId) return s;
+    const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
+    if (project && this.store.repos(project.id).some((r) => r.kind === 'local')) {
+      throw new SessionError('This session works on local repos, which exist on one worker only: it cannot move.');
+    }
+    this.checkAccounts(workerId, s.claude_account, project);
+    if (s.status === 'queued' && !s.sdk_session_id) {
+      const moved = this.store.updateSession(s.id, { worker_id: workerId, options: { ...s.options, worker_id: workerId }, waiting_reason: null });
+      this.emitSession(moved);
+      this.dispatch();
+      return this.store.session(s.id)!;
+    }
+    if (s.kind !== 'work' || !s.branch) throw new SessionError('Only a work session can move once it has started.');
+    const from = this.workers.get(s.worker_id ?? -1)?.name ?? 'another worker';
+    const next = this.store.createSession({
+      project_id: s.project_id, kind: 'work', title: s.title, status: 'queued', force_plan: s.force_plan, branch: s.branch,
+      initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} and pushed. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}`.trim(),
+      source_id: s.source_id, item_ids: s.item_ids, options: { ...s.options, worker_id: workerId }, claude_account: s.claude_account,
+      worker_id: workerId, moved_from: s.id,
+    });
+    for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);
+    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+    for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
+    this.addEvent(s.id, { kind: 'system', text: `Moved to worker ${target.name}: continued in session #${next.id}.` });
+    this.setStatus(s.id, 'stopped', { ended_at: new Date().toISOString(), waiting_reason: null });
+    this.emitSession(next);
+    this.dispatch();
+    return this.store.session(next.id)!;
   }
 
   private agentSource(s: Session) {

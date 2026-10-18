@@ -133,6 +133,8 @@ export const runOptions = z.object({
   base_check: z.boolean().default(true),
   /** Claude account for this batch; null = the project's default */
   claude_account: z.string().nullable().default(null),
+  /** worker to run on; null = the project's (or the global) default */
+  worker_id: z.number().int().nullable().default(null),
 });
 export type RunOptions = z.infer<typeof runOptions>;
 export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
@@ -256,7 +258,7 @@ export type ProposedItem = z.infer<typeof proposedItemSchema>;
 
 export type Proposal =
   /** project_key is set when the proposal comes from the assistant (not tied to one project) */
-  | { type: 'batch'; project_key?: string; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean }
+  | { type: 'batch'; project_key?: string; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean; worker?: string; worker_reason?: string }
   | { type: 'planner'; project_key: string; prompt: string }
   | { type: 'items'; source_id: number | null; items: ProposedItem[] }
   /** Discuss: a change to one item that the owner applies (or not). `before` holds the old values. */
@@ -339,6 +341,8 @@ export const projectPatch = z.object({
   default_force_plan: z.boolean().optional(),
   importance_scale: scale(4).optional(),
   effort_scale: scale().optional(),
+  worker_id: z.number().int().nullable().optional(),
+  placement_md: z.string().max(20_000).optional(),
 });
 
 export const repoInput = z.object({
@@ -420,6 +424,8 @@ export const batchInput = z.object({
   prompt: z.string().default(''),
   force_plan: z.boolean().optional(),
   options: runOptions.optional(),
+  /** a worker by name (a planner's proposal names one); options.worker_id wins */
+  worker: z.string().optional(),
   /** Set when the batch comes from a planner proposal card. */
   proposal: z.object({ session_id: z.number().int(), event_id: z.number().int() }).optional(),
 });

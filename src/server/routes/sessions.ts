@@ -115,6 +115,10 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     return store.session(s.id);
   });
 
+  app.post('/api/sessions/:id/move', async (req) => {
+    const { worker_id } = z.object({ worker_id: z.number().int() }).parse(req.body);
+    return sessions.move(session((req.params as { id: string }).id).id, worker_id);
+  });
   app.post('/api/sessions/:id/pause', async (req) => sessions.pause(session((req.params as { id: string }).id).id));
   app.post('/api/sessions/:id/resume', async (req) => sessions.resume(session((req.params as { id: string }).id).id));
   app.post('/api/sessions/:id/start-now', async (req) => sessions.startNow(session((req.params as { id: string }).id).id));

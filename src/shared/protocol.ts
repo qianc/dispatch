@@ -25,6 +25,18 @@ export interface StartSpec {
   resume: string | null; // sdk session id
   /** Text sent right after resume, when a session is restarted rather than continued by the user. */
   resume_note: string | null;
+  /** planner sessions: the workers it can place work on, and the project's text on where work runs */
+  workers?: PlannerWorker[];
+  placement_md?: string;
+}
+
+export interface PlannerWorker {
+  name: string;
+  description: string;
+  connected: boolean;
+  local_repo_dirs: string[];
+  claude_accounts: string[];
+  github_accounts: string[];
 }
 
 export type ServerToWorker =

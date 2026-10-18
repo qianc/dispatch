@@ -208,6 +208,8 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         new_items: z.array(z.object(itemShape)).default([]).describe('New items to create as part of the batch'),
         prompt: z.string().describe('Extra instructions for the session that will do the work'),
         force_plan: z.boolean().default(false).describe('True if the work needs a written plan before code'),
+        worker: z.string().optional().describe('Name of the worker to run it on (see "Where work runs" in your instructions)'),
+        worker_reason: z.string().optional().describe('One line: why that worker'),
       }, async (p) => call(rpc, 'propose')({ type: 'batch', ...p })),
       tool('propose_items', 'Show the owner a list of new items (e.g. split from a retro) as a card they can edit and create.', {
         source_id: z.number().int().nullable().describe('Source the items come from, if any'),

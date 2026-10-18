@@ -71,6 +71,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/sessions/:id/finish': 'sessions',
   'POST /api/sessions/:id/start-now': 'sessions',
   'POST /api/sessions/:id/pause': 'sessions',
+  'POST /api/sessions/:id/move': 'sessions',
   'POST /api/sessions/:id/resume': 'sessions',
   'POST /api/sessions/:id/sync-prs': 'sessions',
   'POST /api/sessions/:id/prs': 'sessions',
