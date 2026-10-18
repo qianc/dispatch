@@ -431,3 +431,17 @@ test('on the phone, nothing in the Inbox is wider than the screen', async ({ pag
   });
   expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
 });
+
+test('browser-drawn controls (checkboxes, scrollbars) follow the theme, also on Auto', async ({ page }) => {
+  const scheme = () => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+  for (const [system, want] of [['light', 'light'], ['dark', 'dark']] as const) {
+    await page.emulateMedia({ colorScheme: system });
+    await page.goto('/');
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme')); // Auto
+    expect(await scheme()).toBe(want);
+  }
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+  expect(await scheme()).toBe('light');
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+  expect(await scheme()).toBe('dark');
+});

@@ -105,7 +105,14 @@ select:disabled { opacity: 1; color: var(--color-faint); }
   --tab-row: 48px;
   --tab-pb: max(6px, calc(var(--sab) - 12px));
 }
-:root:not([data-theme='light']) { color-scheme: dark; }
+/* the browser draws checkboxes and scrollbars in the theme's scheme: dark only for the dark
+   theme, or Auto with a dark system setting (the light rules above set light) */
+:root[data-theme='dark'] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { color-scheme: dark; }
+}
+/* thin scrollbars in the theme's colours (desktop) */
+* { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
 /* --app-h follows the visible area (set from visualViewport in main.tsx), so the shell sits above
    the on-screen keyboard instead of under it */
 html { height: 100%; height: var(--app-h, 100dvh); overflow: hidden; background: var(--color-panel); }
