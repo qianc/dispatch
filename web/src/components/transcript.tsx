@@ -8,7 +8,7 @@ import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
-import { RunOptionsFields, runOptionsSummary, useRunOptions } from './batch.tsx';
+import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
 
 
 /** One assistant message. Memoized on primitives so a refetch does not re-parse every message's markdown. */
@@ -377,11 +377,13 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   const [forcePlan, setForcePlan] = useState(proposal.type === 'batch' ? proposal.force_plan : false);
   const [options, setOptions] = useRunOptions(project.key);
   const [showOptions, setShowOptions] = useState(false);
+  const proposedWorker = proposal.type === 'batch' ? { name: proposal.worker, reason: proposal.worker_reason } : undefined;
+  const [workerId, setWorkerId] = useChosenWorker(project, proposedWorker?.name);
 
   const start = useMutation({
     mutationFn: () =>
       api.post<Session>(`/projects/${project.key}/batches`, {
-        title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options,
+        title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
         proposal: { session_id: session.id, event_id: eventId },
       }),
     onSuccess: (s) => {
@@ -438,6 +440,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
             <input type="checkbox" checked={forcePlan} onChange={(e) => setForcePlan(e.target.checked)} className="size-4 accent-[var(--color-accent-strong)]" />
             Plan first (spec + approval before code)
           </label>
+          <div className="mt-2"><WorkerField value={workerId} onChange={setWorkerId} project={project} proposed={proposedWorker} /></div>
           <button type="button" className="mt-2 text-[13px] text-accent" onClick={() => setShowOptions(!showOptions)} aria-expanded={showOptions}>
             Run options{runOptionsSummary(options).length ? `: ${runOptionsSummary(options).join(', ')}` : ' (defaults)'} {showOptions ? '▴' : '▾'}
           </button>

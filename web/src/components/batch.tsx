@@ -4,6 +4,7 @@ import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions } from '../../../src/s
 import { api, type Item, type Project, type Repo, type Session } from '../api.ts';
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
 import { projectClaude, useAccounts } from '../accounts.ts';
+import { useWorkers } from '../workers.ts';
 
 const LABELS = {
   model: { default: 'Default', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' },
@@ -68,6 +69,42 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
   );
 }
 
+/**
+ * Which worker runs the batch. `proposed`: the planner's pick (a name) and why. Shown only when
+ * there is more than one worker; a project with local repos runs where they are.
+ */
+export function WorkerField({ value, onChange, project, proposed }: {
+  value: number | null;
+  onChange: (id: number) => void;
+  project: Pick<Project, 'worker_id'> & { repos?: Repo[] };
+  proposed?: { name?: string; reason?: string };
+}) {
+  const { data } = useWorkers();
+  const workers = data?.workers ?? [];
+  if (workers.length < 2) return null;
+  const local = project.repos?.find((r) => r.kind === 'local' && r.worker_id);
+  const fallback = local?.worker_id ?? workers.find((w) => w.name === proposed?.name)?.id ?? project.worker_id ?? data?.default_worker_id ?? null;
+  const chosen = workers.find((w) => w.id === (value ?? fallback));
+  return (
+    <Field label="Worker" group hint={local ? 'This project’s local repos are on this worker, so its sessions run there.' : proposed?.reason ? `Planner: ${proposed.reason}` : undefined}>
+      <select className={inputCls} value={chosen?.id ?? ''} disabled={!!local} onChange={(e) => onChange(Number(e.target.value))} aria-label="Worker">
+        {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
+      </select>
+      {chosen && !chosen.connected && <p className="text-[12px] text-wait mt-1">{chosen.name} is offline: the session waits until it connects.</p>}
+    </Field>
+  );
+}
+
+/** The worker a form will send: the one picked, else what the field shows by default. */
+export function useChosenWorker(project: Pick<Project, 'worker_id'> & { repos?: Repo[] }, proposedName?: string) {
+  const { data } = useWorkers();
+  const [picked, setPicked] = useState<number | null>(null);
+  const workers = data?.workers ?? [];
+  const local = project.repos?.find((r) => r.kind === 'local' && r.worker_id);
+  const id = local?.worker_id ?? picked ?? workers.find((w) => w.name === proposedName)?.id ?? project.worker_id ?? null;
+  return [id, setPicked] as const;
+}
+
 /** Short summary of non-default options, for session headers and proposal cards. */
 export function runOptionsSummary(o: RunOptions): string[] {
   const out: string[] = [];
@@ -85,8 +122,9 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
   const [title, setTitle] = useState('');
   const [forcePlan, setForcePlan] = useState(project.default_force_plan);
   const [options, setOptions] = useRunOptions(project.key);
+  const [workerId, setWorkerId] = useChosenWorker(project);
   const start = useMutation({
-    mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan, options }),
+    mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan, options: { ...options, worker_id: workerId } }),
     onSuccess: onStarted,
   });
   return (
@@ -101,6 +139,7 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
         <input type="checkbox" checked={forcePlan} onChange={(e) => setForcePlan(e.target.checked)} className="size-4 accent-[var(--color-accent-strong)]" />
         Plan first (Claude writes a plan and waits for approval)
       </label>
+      <WorkerField value={workerId} onChange={setWorkerId} project={project} />
       <RunOptionsFields value={options} set={setOptions} project={project} />
       {!project.repos.length && <p className="text-wait text-sm mb-2">Add a repo in Settings first.</p>}
       <ErrorText error={start.error} />

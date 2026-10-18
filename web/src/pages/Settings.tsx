@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Me } from '../api.ts';
 import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
-import { Button, Card, Chip, ErrorText, Field, Section, Segmented, inputCls } from '../components/ui.tsx';
+import { Button, Card, Chip, ErrorText, Field, Section, Segmented, cx, inputCls } from '../components/ui.tsx';
+import { useWorkers, type WorkerRow } from '../workers.ts';
 import { getTheme, setTheme, type Theme } from '../theme.ts';
 import { currentSubscription, disablePush, enablePush, pushSupported } from '../push.ts';
 
@@ -63,6 +64,7 @@ export function Settings() {
         </Card>
       </Section>
       <AccountsSection />
+      <WorkersSection />
       <AccessSection />
       <Section title="Status">
         <Card className="p-3 text-sm text-muted space-y-1">
@@ -163,6 +165,75 @@ const SCOPE_INFO: Record<string, string> = {
   admin: 'Projects, repos, settings',
 };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
+
+/** The machines that run agents: each has its own token and a description the planner reads. */
+function WorkersSection() {
+  const qc = useQueryClient();
+  const { data } = useWorkers();
+  const [form, setForm] = useState({ name: '', description: '' });
+  const [secret, setSecret] = useState<{ name: string; secret: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; description: string } | null>(null);
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['workers'] });
+  const create = useMutation({
+    mutationFn: () => api.post<{ worker: WorkerRow; secret: string }>('/workers', form),
+    onSuccess: (r) => { setSecret({ name: r.worker.name, secret: r.secret }); setForm({ name: '', description: '' }); refresh(); },
+  });
+  const save = useMutation({ mutationFn: (e: { id: number; description: string }) => api.patch(`/workers/${e.id}`, { description: e.description }), onSuccess: () => { setEditing(null); refresh(); } });
+  const revoke = useMutation({ mutationFn: (id: number) => api.del(`/workers/${id}`), onSuccess: refresh });
+  const setDefault = useMutation({ mutationFn: (id: number) => api.put('/settings/default-worker', { worker_id: id }), onSuccess: refresh });
+  const workers = data?.workers ?? [];
+  return (
+    <Section title="Workers">
+      <Card>
+        {workers.map((w) => (
+          <div key={w.id} className="px-3 py-2.5 border-b border-line last:border-b-0">
+            <div className="flex items-center gap-2">
+              <span className={cx('size-2 rounded-full shrink-0', w.connected ? 'bg-ok' : 'bg-faint')} aria-label={w.connected ? 'online' : 'offline'} />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <span className="ml-2 text-[12px] text-muted">default</span>}</div>
+                <div className="text-[12px] text-muted">
+                  {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
+                  {w.facts?.os ? ` · ${w.facts.os}` : ''}
+                  {w.facts?.slots ? ` · ${w.facts.free_slots}/${w.facts.slots} slots free` : ''}
+                  {w.facts?.claude_accounts.length ? ` · Claude: ${w.facts.claude_accounts.map((a) => a.label).join(', ')}` : ''}
+                  {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
+                </div>
+              </div>
+              {w.id !== data?.default_worker_id && <Button small variant="ghost" onClick={() => setDefault.mutate(w.id)}>Make default</Button>}
+              {!w.legacy && <Button small variant="ghost" onClick={() => confirm(`Revoke worker "${w.name}"? It is cut off at once.`) && revoke.mutate(w.id)}>Revoke</Button>}
+            </div>
+            {editing?.id === w.id ? (
+              <form className="mt-2" onSubmit={(e) => { e.preventDefault(); save.mutate(editing); }}>
+                <textarea className={cx(inputCls, 'min-h-16')} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} aria-label={`Description of ${w.name}`} />
+                <div className="flex gap-2 mt-1.5"><Button small variant="primary">Save</Button><Button small type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button></div>
+              </form>
+            ) : (
+              <button type="button" className="mt-1 text-left text-[13px] text-muted w-full" onClick={() => setEditing({ id: w.id, description: w.description })}>
+                {w.description || 'Add a description: what this machine has, and when to use it. The planner reads it.'}
+              </button>
+            )}
+          </div>
+        ))}
+      </Card>
+      <form className="mx-3 mt-3 rounded-xl border border-line bg-panel p-3" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+        <Field label="New worker" hint="Lowercase letters, digits and dashes."><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. desktop" /></Field>
+        <Field label="Description"><textarea className={cx(inputCls, 'min-h-16')} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Windows desktop in WSL. Has PowerPoint. Often asleep." /></Field>
+        <ErrorText error={create.error ?? save.error ?? revoke.error ?? setDefault.error} />
+        <Button variant="primary" className="w-full" disabled={!form.name.trim() || create.isPending}>Create worker</Button>
+        {secret && (
+          <div className="mt-3 rounded-lg border border-wait/40 bg-wait/10 p-2.5">
+            <p className="text-[13px] mb-1.5">The token for {secret.name}. Copy it now: it is not shown again. Put it in the worker's config (WORKER_TOKEN, or token_file in WORKER_CONFIG).</p>
+            <code className="block text-[12px] break-all bg-bg rounded p-2 select-all">{secret.secret}</code>
+            <div className="flex gap-2 mt-2">
+              <Button small type="button" onClick={() => void navigator.clipboard?.writeText(secret.secret)}>Copy</Button>
+              <Button small type="button" variant="ghost" onClick={() => setSecret(null)}>Done</Button>
+            </div>
+          </div>
+        )}
+      </form>
+    </Section>
+  );
+}
 
 /** Personal tokens for scripts and skills, and apps connected through OAuth (Claude's MCP connector). */
 function AccessSection() {

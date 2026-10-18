@@ -47,6 +47,47 @@ The server holds no Claude credentials. The worker runs agents with full tool ac
 container, routes `AskUserQuestion` / `ExitPlanMode` to you, and keeps each session in its own
 worktree under `/workspaces/sessions/<id>`.
 
+## Several workers
+
+A server can have several workers, for example a Linux VM for most work and a Windows desktop
+(in WSL) for work that needs its programs. Each session runs on one worker for its whole life.
+
+- **Make a worker** in Settings → Workers. It gets its own token (`dsw_…`, shown once) and a
+  description, such as "Windows desktop. Has PowerPoint. Often asleep." The worker that connects
+  with the server's `WORKER_TOKEN` is the worker "default"; it keeps working as before.
+- **Placement.** Each project has a default worker and a "Where work runs" text. The planner reads
+  the worker descriptions and that text, and proposes a worker on its card; you can change it on
+  the card and on the batch sheet. A project's local repos are on one worker, so its sessions run
+  there.
+- **Away or busy.** A session for a worker that is not connected waits (`Waiting for worker
+  <name>`), with one push, and starts when the worker connects. A worker with no free slot gives
+  `Waiting for worker <name> (busy)`. A reply to an idle session waits too. You can pause a waiting
+  session, and move it to another worker (a started work session moves as a new session that
+  continues from its pushed branch).
+- **Logins stay on the worker.** Each worker uses its own Claude login and GitHub token. The
+  server never sends credentials to a worker.
+
+**A worker that serves several servers** (for example a home server and a work server) reads a
+JSON file named by `WORKER_CONFIG`. The worker owns its slots (`max_concurrent`, over all
+servers), and each server gets only the folders and accounts listed for it:
+
+```json
+{
+  "max_concurrent": 3,
+  "servers": [
+    { "name": "home", "url": "wss://dispatch.example.com/worker", "token_file": "~/.config/dispatch/worker-home.token",
+      "local_repo_dirs": ["~/projects"], "read_dirs": ["~/projects"] },
+    { "name": "work", "url": "wss://dispatch.work.example/worker", "token_file": "~/.config/dispatch/worker-work.token",
+      "local_repo_dirs": ["~/work"], "claude_accounts": ["work"], "github_accounts": ["work"] }
+  ]
+}
+```
+
+These lists stop a server from asking for the wrong folder or account. They do not keep the agents
+of one server from reading the other server's files on the same machine: agents have full tool
+access. Use separate machines (or users) when that matters. Without `WORKER_CONFIG`, the worker
+uses `SERVER_WS_URL`, `WORKER_TOKEN`, `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS` as one server.
+
 ## Run with Docker (local test)
 
 ```bash
@@ -113,8 +154,9 @@ tokens). Settings → Connected apps lists them and disconnects them.
 
 Behind a proxy, route these paths **around** the proxy's sign-in, because the client is not a
 browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for tokens,
-`/api/*` requests that carry `Authorization: Bearer dsp_…`. Keep `/authorize` (the consent page)
-and everything else **behind** it. Dispatch checks all of these itself.
+`/api/*` requests that carry `Authorization: Bearer dsp_…`; and `/worker` (the WebSocket that
+workers on other machines connect to, with their worker token). Keep `/authorize` (the consent
+page) and everything else **behind** it. Dispatch checks all of these itself.
 
 ## Tools for agents
 

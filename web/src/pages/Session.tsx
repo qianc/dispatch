@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
@@ -11,7 +11,8 @@ import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { claudeLabel, useAccounts } from '../accounts.ts';
-import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet } from '../components/ui.tsx';
+import { useWorkers, workerName } from '../workers.ts';
+import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
 export interface ChatMode {
   id: number;
@@ -52,6 +53,14 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     onSuccess: () => { setMenu(false); refresh(); },
   });
   const startNow = useMutation({ mutationFn: () => api.post(`/sessions/${id}/start-now`), onSuccess: refresh });
+  const nav = useNavigate();
+  const { data: workerList } = useWorkers();
+  const workers = workerList?.workers ?? [];
+  const pause = useMutation({ mutationFn: (on: boolean) => api.post(`/sessions/${id}/${on ? 'pause' : 'resume'}`), onSuccess: refresh });
+  const move = useMutation({
+    mutationFn: (worker_id: number) => api.post<{ id: number }>(`/sessions/${id}/move`, { worker_id }),
+    onSuccess: (r) => { setMenu(false); if (r.id !== Number(id)) nav(`/s/${r.id}`); else refresh(); },
+  });
   const syncPrs = useMutation({ mutationFn: () => api.post(`/sessions/${id}/sync-prs`), onSuccess: refresh });
   const createPr = useMutation({ mutationFn: (repo_id: number) => api.post(`/sessions/${id}/prs`, { repo_id }), onSuccess: refresh });
 
@@ -119,8 +128,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         />
       }
     >
-      {(s.kind === 'work' || (accounts?.claude.length ?? 0) > 1) && (
+      {(s.kind === 'work' || (accounts?.claude.length ?? 0) > 1 || workers.length > 1) && (
         <div className="px-4 pt-3 text-[12px] text-muted flex flex-wrap gap-x-2">
+          {workers.length > 1 && <span>Worker: {workerName(workers, s.worker_id)}</span>}
+          {s.moved_from && <Link className="text-accent" to={`/s/${s.moved_from}`}>moved from #{s.moved_from}</Link>}
           {(accounts?.claude.length ?? 0) > 1 && <span>Claude: {claudeLabel(accounts, s.claude_account)}</span>}
           {(accounts?.github.length ?? 0) > 1 && project?.github_account && <span>GitHub: {project.github_account}</span>}
           {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
@@ -151,7 +162,18 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {s.status === 'queued' && (
         <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
           <p>{s.waiting_reason ?? 'Waiting for a free worker slot…'}</p>
-          {s.waiting_reason && (
+          {s.pending_prompt && <p className="text-[12.5px] text-muted mt-0.5">Your reply is delivered when the session starts.</p>}
+          <div className="flex flex-wrap gap-2 mt-2">
+            <Button small disabled={pause.isPending} onClick={() => pause.mutate(!s.paused)}>{s.paused ? 'Resume' : 'Pause'}</Button>
+            {workers.length > 1 && (
+              <select className="rounded-lg border border-line bg-bg px-2 text-[13px]" aria-label="Move to worker" value="" onChange={(e) => e.target.value && move.mutate(Number(e.target.value))}>
+                <option value="">Move to…</option>
+                {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
+              </select>
+            )}
+          </div>
+          <ErrorText error={pause.error ?? move.error} />
+          {s.waiting_reason && s.waiting_reason.startsWith('Waiting for #') && (
             <>
               <p className="text-[12.5px] text-muted mt-0.5">This batch starts from the main branch once the earlier batch is merged, so their changes do not collide.</p>
               <Button small className="mt-2" disabled={startNow.isPending} onClick={() => startNow.mutate()}>Start anyway</Button>
@@ -197,10 +219,19 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
             </>
           )}
           {s.status === 'running' && <Button className="w-full" onClick={() => interrupt.mutate()}>Interrupt Claude</Button>}
+          {!final && s.status !== 'queued' && s.kind === 'work' && workers.length > 1 && (
+            <select className={cx(inputCls)} aria-label="Move to another worker" value="" onChange={(e) => {
+              const to = workers.find((w) => w.id === Number(e.target.value));
+              if (to && confirm(`This stops the session and starts a new one on ${to.name} from the pushed branch.`)) move.mutate(to.id);
+            }}>
+              <option value="">Move to another worker…</option>
+              {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
+            </select>
+          )}
           {!final && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
           {!final && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
           {final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
-          <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error} />
+          <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error ?? move.error} />
           {s.usage?.cost_usd !== undefined && <p className="text-[12px] text-faint text-center pt-2">Estimated usage ${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} model turns</p>}
         </div>
       </Sheet>

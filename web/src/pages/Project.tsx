@@ -10,6 +10,7 @@ import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { useAccounts } from '../accounts.ts';
+import { useWorkers, workerName } from '../workers.ts';
 import { noteProject } from '../nav.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { ItemDetail } from './ItemDetail.tsx';
@@ -399,6 +400,29 @@ function NewSourceForm({ project, onDone }: { project: ProjectSummary; onDone: (
   );
 }
 
+/** Where this project's work runs: its default worker, and prose the planner reads to choose. */
+function ProjectWorkers({ project, onSave }: { project: ProjectSummary; onSave: (patch: object) => void }) {
+  const { data } = useWorkers();
+  const [text, setText] = useState(project.placement_md);
+  const local = project.repos.find((r) => r.kind === 'local' && r.worker_id);
+  return (
+    <Section title="Where work runs">
+      <Card className="p-3">
+        <Field label="Default worker" hint={local ? 'Its local repos are on this worker, so every session runs there.' : undefined}>
+          <select className={inputCls} disabled={!!local} value={String(local?.worker_id ?? project.worker_id ?? '')} onChange={(e) => onSave({ worker_id: e.target.value ? Number(e.target.value) : null })} aria-label="Default worker">
+            <option value="">The global default ({workerName(data?.workers, data?.default_worker_id)})</option>
+            {data?.workers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Rules for the planner" hint="When to use which worker. The planner reads this with each worker's description.">
+          <textarea className={cx(inputCls, 'min-h-20')} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Use the desktop only for work that runs PowerPoint. Everything else runs on linux." aria-label="Where work runs" />
+        </Field>
+        <Button small variant="primary" disabled={text === project.placement_md} onClick={() => onSave({ placement_md: text })}>Save</Button>
+      </Card>
+    </Section>
+  );
+}
+
 function ProjectSettings({ project }: { project: ProjectSummary }) {
   const qc = useQueryClient();
   const refresh = () => {
@@ -410,18 +434,21 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch),
     onSuccess: refresh,
   });
-  const [repo, setRepo] = useState({ full: '', default_branch: '', check_command: '' });
+  const [repo, setRepo] = useState({ full: '', default_branch: '', check_command: '', worker_id: '' });
   const isPath = /^(\/|~\/|\.\.?\/)/.test(repo.full.trim());
+  const { data: workerList } = useWorkers();
+  const workers = workerList?.workers ?? [];
+  const localWorker = project.repos.find((r) => r.kind === 'local' && r.worker_id)?.worker_id ?? null;
   const [repoNote, setRepoNote] = useState<string | null>(null);
   const addRepo = useMutation({
     mutationFn: () => {
       if (isPath) {
-        return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { local_path: repo.full.trim(), default_branch: repo.default_branch || undefined, check_command: repo.check_command || null });
+        return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { local_path: repo.full.trim(), default_branch: repo.default_branch || undefined, check_command: repo.check_command || null, worker_id: localWorker ?? (repo.worker_id ? Number(repo.worker_id) : null) });
       }
       const [github_owner, github_name] = repo.full.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '').split('/');
       return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { github_owner, github_name, default_branch: repo.default_branch || 'main', check_command: repo.check_command || null });
     },
-    onSuccess: (r) => { setRepo({ full: '', default_branch: '', check_command: '' }); setRepoNote(r.note ?? null); refresh(); },
+    onSuccess: (r) => { setRepo({ full: '', default_branch: '', check_command: '', worker_id: '' }); setRepoNote(r.note ?? null); refresh(); },
   });
   const delRepo = useMutation({ mutationFn: (r: Repo) => api.del(`/repos/${r.id}`), onSuccess: refresh });
   const [editing, setEditing] = useState<Repo | null>(null);
@@ -437,6 +464,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                 </div>
                 <div className="text-[12px] text-muted truncate">
                   base {r.default_branch}
+                  {r.local_path && workers.length > 1 && ` · on ${workerName(workers, r.worker_id)}`}
                   {r.local_path && (r.worktree_from === 'clone' ? ' · separate clone' : ' · worktrees in the repo')}
                   {r.setup_command ? ` · setup: ${r.setup_command}` : ''}
                   {r.read_dirs?.length ? ` · Discuss also reads: ${r.read_dirs.join(', ')}` : ''}
@@ -449,6 +477,13 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
             <input className={inputCls} placeholder="owner/repo, or a local folder like ~/projects/x" value={repo.full} onChange={(e) => setRepo({ ...repo, full: e.target.value })} aria-label="Repository" />
             {isPath && <p className="text-[12px] text-muted">Local repo: agents push their branches into this folder, and you review and merge them here. No GitHub needed.</p>}
+            {isPath && workers.length > 1 && (localWorker ? (
+              <p className="text-[12px] text-muted">On worker {workerName(workers, localWorker)}, with this project's other local repos.</p>
+            ) : (
+              <select className={inputCls} value={repo.worker_id || String(project.worker_id ?? workerList?.default_worker_id ?? '')} onChange={(e) => setRepo({ ...repo, worker_id: e.target.value })} aria-label="Worker that has this folder">
+                {workers.map((w) => <option key={w.id} value={w.id}>On worker {w.name}</option>)}
+              </select>
+            ))}
             <div className="grid grid-cols-2 gap-2">
               <input className={inputCls} placeholder={isPath ? 'base (auto)' : 'base branch (main)'} value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
               <input className={inputCls} placeholder="check cmd (optional)" value={repo.check_command} onChange={(e) => setRepo({ ...repo, check_command: e.target.value })} aria-label="Check command" />
@@ -470,6 +505,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
       </Sheet>
       <ProjectLook project={project} onSave={(patch) => save.mutate(patch)} />
       <ProjectAccounts project={project} onSaved={refresh} />
+      {workers.length > 1 && <ProjectWorkers project={project} onSave={(patch) => save.mutate(patch)} />}
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
           <label className="flex items-center justify-between text-[14px]">

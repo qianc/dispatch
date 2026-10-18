@@ -52,6 +52,7 @@ export const api = {
   post: <T>(p: string, b: unknown = {}) => req<T>('POST', p, b),
   patch: <T>(p: string, b: unknown) => req<T>('PATCH', p, b),
   del: <T>(p: string) => req<T>('DELETE', p),
+  put: <T>(p: string, b: unknown) => req<T>('PUT', p, b),
 };
 
 export type ProjectSummary = Project & {
@@ -87,6 +88,8 @@ export interface Inbox {
 
 export interface PrDetail {
   pr: PullRequest;
+  /** times the owner's hands were needed for this session's merges */
+  hands: { id: number; kind: 'asked_update' | 'resolve_conflicts' | 'manual_merge'; detail: string | null; created_at: string }[];
   body: string;
   base_ref: string;
   files: { filename: string; status: string; additions: number; deletions: number; patch: string | null }[];

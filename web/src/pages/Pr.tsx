@@ -27,6 +27,9 @@ function Patch({ patch }: { patch: string }) {
 
 type MergeResult = { ok: true } | { ok: false; conflict: boolean; output: string };
 
+/** Times the owner's hands were needed, in words. */
+const HANDS = { asked_update: 'Agent asked to update the branch', resolve_conflicts: 'Session sent to resolve conflicts', manual_merge: 'Merged by hand after auto-merge stopped' } as const;
+
 export function PrView() {
   const id = Number(useParams().id);
   const nav = useNavigate();
@@ -88,6 +91,16 @@ export function PrView() {
         </div>
       )}
 
+      {(pr.behind_at_merge !== null || data.hands.length > 0) && (
+        <Section title="Staying in sync">
+          <div className="px-4 text-[13px] text-muted space-y-0.5">
+            {pr.behind_at_merge !== null && <p>Behind {data.base_ref} at merge: {pr.behind_at_merge} commit{pr.behind_at_merge === 1 ? '' : 's'}</p>}
+            {data.hands.map((h) => (
+              <p key={h.id}>{HANDS[h.kind]}{h.detail ? ` (${h.detail})` : ''} · {new Date(h.created_at).toLocaleString()}</p>
+            ))}
+          </div>
+        </Section>
+      )}
       {data.body && <Section title="Description"><div className="px-4"><Md className="text-[14px]">{data.body}</Md></div></Section>}
 
       <Section title={`Files · ${data.files.length}`}>

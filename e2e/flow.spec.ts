@@ -371,3 +371,36 @@ test('two Claude accounts: settings, project limits, batch picker', async ({ pag
   await page.getByRole('dialog').getByRole('button', { name: 'Start session' }).click();
   await expect(page.getByText('Claude: Work')).toBeVisible();
 });
+
+test('a second worker: made in Settings, picked on the batch sheet, waits while offline, can be paused', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'WRK', name: 'Workers' } });
+  await page.request.post('/api/projects/WRK/repos', { data: { github_owner: 'me', github_name: 'wrk' } });
+
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await page.getByLabel('New worker').fill('desk');
+  await page.getByLabel('Description').fill('Windows desktop. Often asleep.');
+  await page.getByRole('button', { name: 'Create worker' }).click();
+  await expect(page.getByText('The token for desk. Copy it now')).toBeVisible();
+  await expect(page.locator('code', { hasText: /^dsw_/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('code', { hasText: /^dsw_/ })).toHaveCount(0); // shown once
+
+  await page.request.post('/api/projects/WRK/items', { data: { title: 'Needs the desktop' } });
+  await page.goto('/p/WRK');
+  await page.getByText('Needs the desktop').click();
+  await page.getByRole('button', { name: 'Start agent on this' }).click();
+  const sheet = page.getByRole('dialog');
+  await sheet.getByRole('combobox', { name: 'Worker' }).selectOption({ label: 'desk (offline)' });
+  await expect(sheet.getByText('desk is offline: the session waits until it connects.')).toBeVisible();
+  await sheet.getByRole('button', { name: 'Start session' }).click();
+  await expect(page.getByText('Worker: desk')).toBeVisible();
+  await expect(page.getByText('Waiting for worker desk')).toBeVisible();
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(page.getByText('Paused', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await expect(page.getByText('Waiting for worker desk')).toBeVisible();
+});
