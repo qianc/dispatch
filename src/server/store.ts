@@ -422,8 +422,9 @@ export class Store {
   countActive(): number {
     return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind NOT IN ('assistant', 'discuss')")!.n);
   }
+  /** Everything waiting to start, chats included (they wait for their worker too). */
   queued(): Session[] {
-    return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.id`).map((r) => this.toSession(r));
+    return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' ORDER BY s.id`).map((r) => this.toSession(r));
   }
   /** Earlier work sessions in this project that are not abandoned (a queued "after" batch waits on them). */
   earlierWork(s: Session): Session[] {

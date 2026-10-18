@@ -224,14 +224,11 @@ export class Sessions {
       this.send(open.id, text);
       return this.store.session(open.id)!;
     }
+    // a new chat starts at once, or waits in the queue for its worker
     const s = create();
-    if (!this.hub.isConnected(s.worker_id)) {
-      this.store.db.run('DELETE FROM sessions WHERE id = ?', s.id);
-      throw new SessionError('Worker is not connected.', 503);
-    }
     this.addEvent(s.id, { kind: 'user', text });
-    this.hub.send(s.worker_id, { t: 'start', spec: this.spec(s, text, null, null) });
-    this.setStatus(s.id, 'running');
+    this.emitSession(s);
+    this.dispatch();
     return this.store.session(s.id)!;
   }
 
@@ -288,7 +285,10 @@ export class Sessions {
     this.addEvent(sessionId, { kind: 'user', text });
     const reopen = FINAL_STATUSES.includes(s.status);
     if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
-      throw new SessionError('Worker is not connected.', 503);
+      // its worker is away: the reply waits, and the session resumes with it when the worker is back
+      this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
+      this.dispatch();
+      return;
     }
     this.setStatus(sessionId, 'running', { ended_at: reopen ? null : s.ended_at, waiting_reason: null });
   }
@@ -342,6 +342,10 @@ export class Sessions {
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
         this.hub.send(workerId, { t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
       }
+    }
+    // still running over there: no longer waiting for it
+    for (const s of this.liveSessions().filter((x) => x.worker_id === workerId && x.status === 'running' && live.includes(x.id))) {
+      if (s.waiting_reason?.startsWith('Waiting for worker')) this.emitSession(this.store.updateSession(s.id, { waiting_reason: null }));
     }
     // Anything of this worker's we believe is live but it does not know about was lost (worker restart): resume it.
     const lost = this.liveSessions().filter((s) => s.worker_id === workerId && !live.includes(s.id));
@@ -451,8 +455,12 @@ export class Sessions {
     }
   }
 
-  onWorkerDisconnect(_workerId: number) {
+  onWorkerDisconnect(workerId: number) {
     // Sessions stay in their state; onWorkerHello reconciles when the worker comes back.
+    const name = this.workers.get(workerId)?.name ?? String(workerId);
+    for (const s of this.liveSessions().filter((x) => x.worker_id === workerId && x.status === 'running')) {
+      this.emitSession(this.store.updateSession(s.id, { waiting_reason: `Waiting for worker ${name}` }));
+    }
     this.dispatch(); // queued sessions for it now show that they wait
   }
 
@@ -645,20 +653,70 @@ export class Sessions {
     return null;
   }
 
+  /** Sessions already told about (push) that they wait for their worker. */
+  private toldWaiting = new Set<number>();
+
+  /**
+   * Start what can start. Each session waits for its own worker (connected, and with a free slot
+   * as the worker reports it); one that cannot start never holds up the others. Chats take no slot.
+   */
   dispatch() {
     for (const next of this.store.queued()) {
-      if (this.store.countActive() >= this.maxConcurrent) return;
-      if (!this.hub.isConnected(next.worker_id)) continue; // its worker is away: others may start
-      if (next.kind === 'work' && next.options.start === 'after') {
-        const reason = this.waitingFor(next);
-        if (reason) {
-          if (next.waiting_reason !== reason) this.emitSession(this.store.updateSession(next.id, { waiting_reason: reason }));
+      const wait = (reason: string) => {
+        if (next.waiting_reason !== reason) this.emitSession(this.store.updateSession(next.id, { waiting_reason: reason }));
+      };
+      if (next.paused) {
+        wait('Paused');
+        continue;
+      }
+      const link = this.hub.link(next.worker_id);
+      const name = this.workers.get(next.worker_id ?? -1)?.name ?? 'unknown';
+      if (!link) {
+        wait(`Waiting for worker ${name}`);
+        if (!this.toldWaiting.has(next.id)) {
+          this.toldWaiting.add(next.id);
+          this.notify(next, `${next.project_key ?? 'Dispatch'}: waiting for worker ${name}`, `"${next.title}" starts when ${name} connects.`, `worker-wait-${next.id}`);
+        }
+        continue;
+      }
+      const chat = CHAT_KINDS.includes(next.kind);
+      if (!chat) {
+        if (this.store.countActive() >= this.maxConcurrent) continue;
+        if (link.facts && link.facts.free_slots === 0) {
+          wait(`Waiting for worker ${name} (busy)`);
           continue;
         }
+        if (next.kind === 'work' && next.options.start === 'after') {
+          const reason = this.waitingFor(next);
+          if (reason) {
+            wait(reason);
+            continue;
+          }
+        }
       }
-      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, next.initial_prompt, next.sdk_session_id, null) });
-      this.setStatus(next.id, 'running', { waiting_reason: null });
+      const prompt = next.pending_prompt ?? next.initial_prompt;
+      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, null) });
+      // until the worker reports again, count the slot as taken
+      if (!chat && link.facts && link.facts.free_slots > 0) link.facts.free_slots--;
+      this.toldWaiting.delete(next.id);
+      this.setStatus(next.id, 'running', { waiting_reason: null, pending_prompt: null });
     }
+  }
+
+  /** Hold a queued session: it does not start until resumed. */
+  pause(sessionId: number) {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'queued') throw new SessionError('Only a waiting session can be paused.');
+    this.setStatus(s.id, 'queued', { paused: true, waiting_reason: 'Paused' });
+    return this.store.session(s.id)!;
+  }
+
+  resume(sessionId: number) {
+    const s = this.mustGet(sessionId);
+    if (!s.paused) throw new SessionError('This session is not paused.');
+    this.setStatus(s.id, s.status, { paused: false, waiting_reason: null });
+    this.dispatch();
+    return this.store.session(s.id)!;
   }
 
   /** "Start anyway": a queued batch stops waiting for earlier ones. */
