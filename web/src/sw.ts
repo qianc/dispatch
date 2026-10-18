@@ -7,7 +7,9 @@ declare const self: ServiceWorkerGlobalScope;
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 try {
-  registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/api\//] }));
+  // server pages, not the app shell: /signin must reach the network so a sign-in proxy can show its
+  // login; /authorize is the OAuth consent page for connected apps
+  registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/api\//, /^\/signin/, /^\/authorize/, /^\/\.well-known\//, /^\/mcp/] }));
 } catch {
   // dev mode: index.html is not precached
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Dispatch backlog CLI for Claude Code skills. No dependencies; Node 18+.
 //
-// Server: DISPATCH_URL, else `url:` in the repo's .dispatch.md, else http://localhost:3000.
+// Server: DISPATCH_URL, else `url:` in the repo's .dispatch.md, else ~/.config/dispatch/default-url,
+// else http://localhost:3000.
 // Token: DISPATCH_TOKEN, else ~/.config/dispatch/tokens/<host> (host with ':' as '_', e.g.
 // localhost_3000), holding the API token from that server's Settings. Tokens never go in a repo.
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
@@ -91,7 +92,12 @@ function readConfig(file) {
 
 const cfgFile = findConfig(process.cwd());
 const cfg = readConfig(cfgFile);
-const URL_BASE = (process.env.DISPATCH_URL || cfg.meta.url || 'http://localhost:3000').replace(/\/$/, '');
+// this machine's default server, if it has one (~/.config/dispatch/default-url): no address in any repo
+const machineDefault = (() => {
+  const f = join(homedir(), '.config', 'dispatch', 'default-url');
+  return existsSync(f) ? readFileSync(f, 'utf8').trim() : '';
+})();
+const URL_BASE = (process.env.DISPATCH_URL || cfg.meta.url || machineDefault || 'http://localhost:3000').replace(/\/$/, '');
 // one token file per server, named after its host: ~/.config/dispatch/tokens/localhost_3000
 const host = (() => {
   try {
@@ -120,7 +126,8 @@ async function api(method, path, body) {
     die(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message}). Is it running? Set DISPATCH_URL if it is elsewhere.`);
   }
   const data = await res.json().catch(() => null);
-  if (res.status === 401) die(`not signed in to ${URL_BASE}: put the API token from its Settings page in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
+  if (res.status === 401) die(`not signed in to ${URL_BASE}: make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
+  if (res.status === 403 && data?.error) die(`${method} ${path}: ${data.error}`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
   return data;
 }

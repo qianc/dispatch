@@ -75,7 +75,8 @@ describe('auth', () => {
     const res = await fetch(`${s.base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) });
     const cookie = res.headers.get('set-cookie')!.split(';')[0];
     expect((await s.call('GET', '/projects', undefined, { cookie })).status).toBe(200);
-    expect((await s.call('GET', '/projects', undefined, { authorization: `Bearer ${s.ctx.auth.apiToken}` })).status).toBe(200);
+    const { secret } = s.ctx.access.createToken('test', ['read'], null);
+    expect((await s.call('GET', '/projects', undefined, { authorization: `Bearer ${secret}` })).status).toBe(200);
     expect((await s.call('GET', '/projects', undefined, { authorization: 'Bearer wrong' })).status).toBe(401);
   });
 });
@@ -98,7 +99,7 @@ describe('auth bypass attempts', () => {
     for (const url of ['/%61pi/projects', '/%61pi/settings', '/api/%70rojects', '/%61%70%69/settings']) {
       const r = await s.app.inject({ method: 'GET', url });
       expect(r.statusCode, url).not.toBe(200);
-      expect(r.body).not.toContain(s.ctx.auth.apiToken);
+      expect(r.body).not.toContain('dsp_');
     }
     expect((await s.app.inject({ method: 'GET', url: '/api/me' })).statusCode).toBe(200);
     await s.app.close();

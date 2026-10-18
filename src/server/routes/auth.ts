@@ -1,11 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { COOKIE } from '../auth.ts';
+import { SCOPES, isLoopback } from '../access.ts';
 import { HttpError, type Ctx } from './ctx.ts';
 
-export function authRoutes(app: FastifyInstance, { auth, cfg, notifier, hub, github, store }: Ctx) {
+export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store }: Ctx) {
   const db = store.db;
+  const passwordSet = !!(cfg.appPassword || cfg.appPasswordHash);
+  /** Where the password login may be used: anywhere in password mode; only from this machine behind a proxy. */
+  const passwordHere = (req: { socket: { remoteAddress?: string } }) => passwordSet && (cfg.authMode === 'password' || isLoopback(req.socket.remoteAddress));
+
   app.post('/api/login', async (req, reply) => {
+    if (!passwordHere(req)) throw new HttpError(403, 'Sign in through the proxy.');
     const { password } = z.object({ password: z.string() }).parse(req.body);
     if (!auth.checkPassword(password)) {
       await new Promise((r) => setTimeout(r, 500));
@@ -18,12 +24,38 @@ export function authRoutes(app: FastifyInstance, { auth, cfg, notifier, hub, git
     reply.clearCookie(COOKIE, { path: '/' });
     return { ok: true };
   });
-  app.get('/api/me', async (req) => ({
-    authed: auth.isAuthed(req),
-    auth_disabled: cfg.disableAuth,
-    vapid_public_key: notifier.publicKey,
-  }));
-  app.get('/api/settings', async () => ({ api_token: auth.apiToken, github: cfg.githubAccounts.length > 0 }));
+  app.get('/api/me', async (req) => {
+    const user = access.browserUser(req);
+    return {
+      authed: !!user,
+      user,
+      auth_mode: cfg.authMode,
+      auth_disabled: cfg.authMode === 'off',
+      /** the password form makes sense here (else: sign in through the proxy) */
+      password_login: passwordHere(req),
+      vapid_public_key: notifier.publicKey,
+    };
+  });
+  app.get('/api/settings', async () => ({ github: cfg.githubAccounts.length > 0, legacy_token: access.hasLegacyToken(), auth_mode: cfg.authMode }));
+
+  // ---------- named personal tokens (a signed-in person only, never a token) ----------
+  app.get('/api/tokens', async () => access.tokens());
+  app.post('/api/tokens', async (req) => {
+    const b = z.object({
+      name: z.string().trim().min(1).max(60),
+      scopes: z.array(z.enum(SCOPES)).min(1).default(['tracker']),
+      expires_days: z.number().int().min(1).max(3650).nullable().default(null),
+    }).parse(req.body);
+    const scopes = [...new Set(b.scopes.includes('tracker') ? [...b.scopes, 'read' as const] : b.scopes)];
+    const expires = b.expires_days ? new Date(Date.now() + b.expires_days * 86_400_000).toISOString() : null;
+    return access.createToken(b.name, scopes, expires);
+  });
+  app.delete('/api/tokens/:id', async (req) => {
+    const id = (req.params as { id: string }).id;
+    if (id === 'legacy') access.retireLegacyToken();
+    else access.revokeToken(Number(id));
+    return { ok: true };
+  });
 
   /** Accounts by name and status only: credentials stay in the server's and worker's env. */
   app.get('/api/accounts', async () => ({

@@ -6,23 +6,28 @@ export type { Attention, InputAnswer, ItemImage, Item, PendingInput, Project, Pu
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** the answer did not come from Dispatch (a sign-in proxy turned the request away) */
+  foreign: boolean;
+  constructor(status: number, message: string, foreign = false) {
     super(message);
     this.status = status;
+    this.foreign = foreign;
   }
 }
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+    // ask for JSON: a sign-in proxy then answers 401 instead of redirecting to its login page
+    headers: { accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
-  const data = await res.json().catch(() => ({}));
+  const json = (res.headers.get('content-type') ?? '').includes('application/json');
+  const data = json ? await res.json().catch(() => ({})) : {};
   if (!res.ok) {
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('dispatch:unauthorized'));
-    throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
+    throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText, !json);
   }
   return data as T;
 }
@@ -88,7 +93,7 @@ export interface PrDetail {
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
 }
 
-export interface Me { authed: boolean; auth_disabled: boolean; vapid_public_key: string }
+export interface Me { authed: boolean; user: string | null; auth_mode: 'password' | 'proxy' | 'off'; auth_disabled: boolean; password_login: boolean; vapid_public_key: string }
 
 export interface Accounts {
   claude: { name: string; label: string; kind: string; logged_in: boolean | null; config_dir: string | null }[];

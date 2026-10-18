@@ -1,5 +1,6 @@
 import type { Attachments } from '../attachments.ts';
 import type { Janitor } from '../janitor.ts';
+import type { Access } from '../access.ts';
 import type { Auth } from '../auth.ts';
 import type { Bus } from '../bus.ts';
 import type { Config } from '../config.ts';
@@ -13,6 +14,7 @@ export interface Ctx {
   cfg: Config;
   store: Store;
   auth: Auth;
+  access: Access;
   bus: Bus;
   hub: WorkerHub;
   sessions: Sessions;

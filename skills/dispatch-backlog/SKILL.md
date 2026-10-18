@@ -16,6 +16,10 @@ node <this skill's folder>/scripts/dispatch.mjs <command> ...
 
 Below, `dispatch` means that command.
 
+**If the Dispatch MCP connector is connected** (tools such as `list_items`, `get_item`, `add_item`,
+`update_item`, `add_comment`, `add_source`, `release_items`), use those tools instead of the script:
+same rules, no token needed. The project's conventions are still in `.dispatch.md`; read the file.
+
 ## 1. Start with the project's settings
 
 Run `dispatch config` first, once per conversation. It shows:
@@ -30,8 +34,9 @@ If something is missing:
 | Problem | What to do |
 |---|---|
 | No `.dispatch.md`, but a `backlog.md` or similar | Ask the user if this repo should use Dispatch. Do not move a backlog on your own. If yes, offer to add `.dispatch.md` from `dispatch.example.md` in this skill. Existing markdown backlogs are best imported in the Dispatch app: ask its Assistant to import the file. |
-| No token | Each server has its own token file, named after its host: `~/.config/dispatch/tokens/<host>` (`:` written as `_`, e.g. `localhost_3000`). `dispatch config` shows the exact path. Tell the user to copy the API token from that server's Settings page into it (`chmod 600`). Do not ask them to paste it in the chat. |
-| Cannot reach the server | Dispatch runs at `http://localhost:3000` by default. A repo can name another server with `url:` in `.dispatch.md`; `DISPATCH_URL` overrides it for the whole machine. |
+| No token | Each server has its own token file, named after its host: `~/.config/dispatch/tokens/<host>` (`:` written as `_`, e.g. `localhost_3000`). `dispatch config` shows the exact path. Tell the user to make a token in Dispatch → Settings → Tokens (scope `tracker` is enough) and save it there (`chmod 600`). Do not ask them to paste it in the chat. |
+| "This needs the … scope" | The token may not do that. Tracker work needs `tracker`; tokens used from another machine never get more than `read` and `tracker`. |
+| Cannot reach the server | The server is `DISPATCH_URL`, else `url:` in `.dispatch.md`, else this machine's `~/.config/dispatch/default-url`, else `http://localhost:3000`. Ask the user which address to use. |
 
 `dispatch scales` shows the project's importance labels (4 levels) and effort labels. Use those
 labels in `--importance` and `--effort`.

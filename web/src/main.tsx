@@ -4,11 +4,11 @@ import { createBrowserRouter, RouterProvider } from 'react-router';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { registerSW } from 'virtual:pwa-register';
 import './styles.css';
-import { api, type Me } from './api.ts';
+import { api, ApiError, type Me } from './api.ts';
 import { connectLive, liveHealthy } from './live.ts';
 import { initTheme } from './theme.ts';
 import { Layout } from './components/Layout.tsx';
-import { Login } from './pages/Login.tsx';
+import { Login, SignedOut } from './pages/Login.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Activity } from './pages/Activity.tsx';
 import { Projects } from './pages/Projects.tsx';
@@ -63,15 +63,17 @@ const router = createBrowserRouter([
 
 function App() {
   const client = useQueryClient();
-  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  const { data: me, error: meError } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
   useEffect(() => {
     const onUnauthorized = () => client.invalidateQueries({ queryKey: ['me'] });
     window.addEventListener('dispatch:unauthorized', onUnauthorized);
     return () => window.removeEventListener('dispatch:unauthorized', onUnauthorized);
   }, [client]);
   useEffect(() => (me?.authed ? connectLive(client) : undefined), [me?.authed, client]);
+  // a sign-in proxy turned even /api/me away: its session expired
+  if (!me && meError instanceof ApiError && meError.foreign) return <SignedOut />;
   if (!me) return null;
-  if (!me.authed) return <Login />;
+  if (!me.authed) return <Login passwordLogin={me.password_login} />;
   return <RouterProvider router={router} />;
 }
 

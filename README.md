@@ -78,6 +78,41 @@ Without `RUNNER=fake` the worker uses your local Claude Code login. Set
 superpowers, and `AGENT_SETTING_SOURCES=project` if you don't want your personal `~/.claude`
 settings in agent sessions.
 
+## Sign-in, tokens and Claude connectors
+
+Dispatch needs no other infrastructure: by default you sign in with a password (`AUTH_MODE=password`,
+`APP_PASSWORD` or `APP_PASSWORD_HASH`). `DISABLE_AUTH=1` turns sign-in off for local testing.
+
+**Behind a sign-in proxy** (e.g. Traefik with an SSO forward-auth): set `AUTH_MODE=proxy`,
+`TRUSTED_PROXIES` to the proxy's address(es) (IPs or IPv4 CIDRs) and optionally `AUTH_USERS` to the
+users allowed in (`AUTH_HEADER`, default `Remote-User`, names the user). Dispatch then believes the
+header only from those addresses, refuses every other request that does not come from the machine
+itself (so the port is no way around the proxy), and keeps the password login for that machine
+only, as a way in when the proxy is down. When the proxy's session expires the app shows
+"Signed out" and sends you through `/signin`, which the proxy guards.
+
+**Scopes.** Every API route needs one: `read`, `tracker` (items, comments, sources, images),
+`sessions` (start and steer agents, merge) or `admin` (projects, repos, settings). A signed-in person
+has all of them.
+
+**Tokens** for scripts and skills: Settings → Tokens. A token has a name, scopes (`tracker` by
+default), an optional expiry and a last-used time, is shown once and stored only as a hash, and can
+be revoked on its own. Used from another machine, a token only gets `read` and `tracker`
+(`TOKEN_REMOTE_SCOPES`), so a leaked token cannot start agents from outside. Making tokens needs a
+signed-in person; a token cannot make tokens.
+
+**Claude connector (MCP).** `PUBLIC_URL/mcp` is an MCP server with the tracker tools (list, read,
+add and edit items, comments, sources, images, release labels; nothing that starts agents). Add it
+as a connector in Claude (claude.ai, the apps, Claude Code: `claude mcp add --transport http dispatch
+https://dispatch.example.com/mcp`). Claude registers itself, you approve it once on a consent page
+(signed in as above), and it renews its access by itself (24 h access, 60-day rotating refresh
+tokens). Settings → Connected apps lists them and disconnects them.
+
+Behind a proxy, route these paths **around** the proxy's sign-in, because the client is not a
+browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for tokens,
+`/api/*` requests that carry `Authorization: Bearer dsp_…`. Keep `/authorize` (the consent page)
+and everything else **behind** it. Dispatch checks all of these itself.
+
 ## Tools for agents
 
 Agents use the tools on the worker's PATH. Put extra tool folders first with `AGENT_EXTRA_PATH`

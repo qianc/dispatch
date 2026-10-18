@@ -3,16 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Me } from '../api.ts';
 import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
-import { Button, Card, Chip, ErrorText, Field, Section, Segmented } from '../components/ui.tsx';
+import { Button, Card, Chip, ErrorText, Field, Section, Segmented, inputCls } from '../components/ui.tsx';
 import { getTheme, setTheme, type Theme } from '../theme.ts';
 import { currentSubscription, disablePush, enablePush, pushSupported } from '../push.ts';
 
 export function Settings() {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ api_token: string; github: boolean }>('/settings') });
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ github: boolean; legacy_token: boolean; auth_mode: string }>('/settings') });
   const [subscribed, setSubscribed] = useState<boolean | null>(null);
-  const [showToken, setShowToken] = useState(false);
   useEffect(() => { currentSubscription().then((s) => setSubscribed(!!s)).catch(() => setSubscribed(false)); }, []);
   const toggle = useMutation({
     mutationFn: async () => (subscribed ? disablePush() : enablePush(me!.vapid_public_key)),
@@ -64,15 +63,10 @@ export function Settings() {
         </Card>
       </Section>
       <AccountsSection />
-      <Section title="API token">
-        <Card className="p-3 space-y-2">
-          <p className="text-sm text-muted">For skills and scripts that post retros: <code className="text-[12px]">POST /api/projects/KEY/sources</code> with <code className="text-[12px]">Authorization: Bearer …</code></p>
-          <code className="block text-[12px] break-all bg-bg rounded p-2 select-all">{showToken ? settings?.api_token : '••••••••••••••••'}</code>
-          <Button small onClick={() => setShowToken(!showToken)}>{showToken ? 'Hide' : 'Show'}</Button>
-        </Card>
-      </Section>
+      <AccessSection />
       <Section title="Status">
         <Card className="p-3 text-sm text-muted space-y-1">
+          <div>Sign-in: {settings?.auth_mode === 'proxy' ? `through the proxy${me?.user ? `, as ${me.user}` : ''}` : settings?.auth_mode === 'off' ? 'off (testing)' : 'password'}</div>
           <div>GitHub token: {settings?.github ? 'configured' : 'missing (PR sync and merge are off)'}</div>
           <div>Installed as app: {standalone ? 'yes' : 'no'}</div>
           <div>Build: {__BUILD__} UTC</div>
@@ -153,6 +147,111 @@ function AccountsSection() {
             </div>
           ))}
           {!data.github.length && <p className="p-3 text-[13px] text-muted">No GitHub account configured (GITHUB_ACCOUNTS or GITHUB_TOKEN).</p>}
+        </Card>
+      </Section>
+    </>
+  );
+}
+
+interface ApiTokenRow { id: number; name: string; prefix: string; scopes: string[]; created_at: string; expires_at: string | null; last_used_at: string | null; revoked_at: string | null }
+interface GrantRow { id: number; client_name: string; scopes: string[]; created_at: string; last_used_at: string | null; refresh_expires_at: string }
+
+const SCOPE_INFO: Record<string, string> = {
+  tracker: 'Items, comments, sources, images',
+  read: 'Read only',
+  sessions: 'Start and steer agents, merge',
+  admin: 'Projects, repos, settings',
+};
+const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
+
+/** Personal tokens for scripts and skills, and apps connected through OAuth (Claude's MCP connector). */
+function AccessSection() {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ legacy_token: boolean }>('/settings') });
+  const { data: tokens = [] } = useQuery({ queryKey: ['tokens'], queryFn: () => api.get<ApiTokenRow[]>('/tokens') });
+  const { data: grants = [] } = useQuery({ queryKey: ['grants'], queryFn: () => api.get<GrantRow[]>('/oauth/grants') });
+  const [form, setForm] = useState({ name: '', scopes: ['tracker'] as string[], days: '' });
+  const [secret, setSecret] = useState<string | null>(null);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['tokens'] });
+    void qc.invalidateQueries({ queryKey: ['grants'] });
+    void qc.invalidateQueries({ queryKey: ['settings'] });
+  };
+  const create = useMutation({
+    mutationFn: () => api.post<{ secret: string }>('/tokens', { name: form.name, scopes: form.scopes, expires_days: form.days ? Number(form.days) : null }),
+    onSuccess: (r) => { setSecret(r.secret); setForm({ name: '', scopes: ['tracker'], days: '' }); refresh(); },
+  });
+  const revoke = useMutation({ mutationFn: (id: number | 'legacy') => api.del(`/tokens/${id}`), onSuccess: refresh });
+  const disconnect = useMutation({ mutationFn: (id: number) => api.del(`/oauth/grants/${id}`), onSuccess: refresh });
+  const live = tokens.filter((t) => !t.revoked_at && (!t.expires_at || t.expires_at > new Date().toISOString()));
+  return (
+    <>
+      <Section title="Tokens">
+        <Card>
+          {live.map((t) => (
+            <div key={t.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium truncate">{t.name}</div>
+                <div className="text-[12px] text-muted">{t.prefix}… · {t.scopes.join(', ')} · used {when(t.last_used_at)}{t.expires_at ? ` · expires ${when(t.expires_at)}` : ''}</div>
+              </div>
+              <Button small variant="ghost" onClick={() => confirm(`Revoke "${t.name}"? Scripts using it stop working.`) && revoke.mutate(t.id)}>Revoke</Button>
+            </div>
+          ))}
+          {settings?.legacy_token && (
+            <div className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium">Old all-access token</div>
+                <div className="text-[12px] text-wait">From before named tokens. Every scope from this machine; read and tracker from elsewhere.</div>
+              </div>
+              <Button small variant="ghost" onClick={() => confirm('Retire the old token? Scripts still using it stop working.') && revoke.mutate('legacy')}>Retire</Button>
+            </div>
+          )}
+          {!live.length && !settings?.legacy_token && <p className="px-3 py-2.5 text-[13px] text-muted">No tokens. Scripts and skills need one to reach Dispatch.</p>}
+        </Card>
+        <form className="mx-3 mt-3 rounded-xl border border-line bg-panel p-3" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+          <Field label="New token for"><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. laptop skills" /></Field>
+          <Field label="It may" group hint="From another machine a token only gets read and tracker, whatever it was made with.">
+            <div className="space-y-1.5">
+              {Object.entries(SCOPE_INFO).map(([scope, info]) => (
+                <label key={scope} className="flex items-center gap-2 text-[14px]">
+                  <input type="checkbox" className="size-4 accent-[var(--color-accent-strong)]" checked={form.scopes.includes(scope)}
+                    onChange={(e) => setForm({ ...form, scopes: e.target.checked ? [...form.scopes, scope] : form.scopes.filter((x) => x !== scope) })} />
+                  <span className="font-medium">{scope}</span><span className="text-muted">{info}</span>
+                </label>
+              ))}
+            </div>
+          </Field>
+          <Field label="Expires">
+            <select className={inputCls} value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })}>
+              <option value="">Never</option><option value="30">In 30 days</option><option value="90">In 90 days</option><option value="365">In a year</option>
+            </select>
+          </Field>
+          <ErrorText error={create.error ?? revoke.error} />
+          <Button variant="primary" className="w-full" disabled={!form.name.trim() || !form.scopes.length || create.isPending}>Create token</Button>
+          {secret && (
+            <div className="mt-3 rounded-lg border border-wait/40 bg-wait/10 p-2.5">
+              <p className="text-[13px] mb-1.5">Copy it now: it is not shown again.</p>
+              <code className="block text-[12px] break-all bg-bg rounded p-2 select-all">{secret}</code>
+              <div className="flex gap-2 mt-2">
+                <Button small type="button" onClick={() => void navigator.clipboard?.writeText(secret)}>Copy</Button>
+                <Button small type="button" variant="ghost" onClick={() => setSecret(null)}>Done</Button>
+              </div>
+            </div>
+          )}
+        </form>
+      </Section>
+      <Section title="Connected apps">
+        <Card>
+          {grants.map((g) => (
+            <div key={g.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium truncate">{g.client_name}</div>
+                <div className="text-[12px] text-muted">{g.scopes.join(', ')} · since {when(g.created_at)} · used {when(g.last_used_at)}</div>
+              </div>
+              <Button small variant="ghost" onClick={() => confirm(`Disconnect ${g.client_name}?`) && disconnect.mutate(g.id)}>Disconnect</Button>
+            </div>
+          ))}
+          {!grants.length && <p className="px-3 py-2.5 text-[13px] text-muted">None. Add Dispatch as a connector in Claude with the address <code>{location.origin}/mcp</code>.</p>}
         </Card>
       </Section>
     </>

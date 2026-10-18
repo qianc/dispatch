@@ -14,6 +14,9 @@ import { AssistantTools } from './assistant.ts';
 import { Attachments } from './attachments.ts';
 import { imageRoutes } from './routes/images.ts';
 import { Janitor } from './janitor.ts';
+import { Access, ROUTE_ACCESS, type Principal } from './access.ts';
+import { OAuth } from './oauth.ts';
+import { mcpRoutes } from './mcp.ts';
 import { GitHub } from './github.ts';
 import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
@@ -30,7 +33,13 @@ import { pushRoutes } from './routes/push.ts';
 import { streamRoutes } from './routes/stream.ts';
 import { fileRoutes } from './routes/files.ts';
 
-const PUBLIC_API = new Set(['/api/login', '/api/me']);
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** who made this /api request (set by the access hook) */
+    principal?: Principal;
+  }
+}
 
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
   const db = new Db(opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db'));
@@ -72,10 +81,16 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onRpc: (id, method, params) => sessions.rpc(id, method, params),
     onDisconnect: () => sessions.onWorkerDisconnect(),
   };
-  const ctx: Ctx = { cfg, store, auth, bus, hub, sessions, github, notifier, attachments, janitor };
+  const access = new Access(cfg, db, auth);
+  const ctx: Ctx = { cfg, store, auth, access, bus, hub, sessions, github, notifier, attachments, janitor };
   if (!opts.dbFile || opts.dbFile !== ':memory:') janitor.start();
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
+  /** every route, as "METHOD /path" (a test checks each /api one has an access rule) */
+  const routes: string[] = [];
+  app.addHook('onRoute', (r) => {
+    for (const m of [r.method].flat()) routes.push(`${m} ${r.url}`);
+  });
   await app.register(cookie);
   await app.register(websocket);
 
@@ -87,12 +102,41 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return reply.status(status).send({ error: (err as Error).message });
   });
 
-  // Check the matched route pattern, not req.url: the router decodes %-escapes (/%61pi/… matches /api/…).
+  // Proxy mode: the port is no way around the proxy's sign-in. Only this machine and the proxy get in.
+  app.addHook('onRequest', async (req, reply) => {
+    if (access.refused(req)) return reply.status(403).send({ error: 'Use the proxy address to reach Dispatch.' });
+  });
+
+  // Every /api route needs its scope (ROUTE_ACCESS). Check the matched route pattern, not req.url:
+  // the router decodes %-escapes (/%61pi/… matches /api/…).
   app.addHook('onRequest', async (req, reply) => {
     const route = req.routeOptions.url;
-    if (!route || !route.startsWith('/api/') || PUBLIC_API.has(route)) return;
-    if (!auth.isAuthed(req)) return reply.status(401).send({ error: 'Not signed in' });
+    if (!route || !route.startsWith('/api/')) return;
+    const need = ROUTE_ACCESS[`${req.method} ${route}`] ?? (req.method === 'HEAD' ? ROUTE_ACCESS[`GET ${route}`] : undefined) ?? 'admin';
+    if (need === 'public') return;
+    const who = access.principal(req);
+    if (!who) return reply.status(401).send({ error: 'Not signed in' });
+    if (who.kind === 'token') console.log(`token "${who.name}"${who.local ? '' : ' (remote)'}: ${req.method} ${req.url.split('?')[0]}`);
+    if (need === 'user' ? who.kind !== 'user' : !who.scopes.has(need)) {
+      return reply.status(403).send({ error: need === 'user' ? 'Only a signed-in person can do this, not a token.' : `This needs the "${need}" scope${who.kind === 'token' && !who.local ? ' (tokens used from another machine are limited to read and tracker)' : ''}.` });
+    }
+    req.principal = who;
   });
+
+  // "Sign in again": behind a sign-in proxy this path goes through its login, then back into the app
+  app.get('/signin', async (req, reply) => {
+    const to = String((req.query as { to?: string }).to ?? '/');
+    return reply.redirect(to.startsWith('/') && !to.startsWith('//') ? to : '/');
+  });
+
+  // OAuth clients send forms (application/x-www-form-urlencoded)
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => {
+    done(null, Object.fromEntries(new URLSearchParams(String(body))));
+  });
+  // MCP for Claude on other machines: OAuth (/authorize, /token, …) and the tracker tools at /mcp
+  const oauth = new OAuth(cfg, db, access);
+  oauth.routes(app);
+  mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl });
 
   app.get('/worker', { websocket: true }, (socket, req) => {
     const token = String(req.headers['x-worker-token'] ?? '');
@@ -141,5 +185,5 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     db.raw.close();
   });
 
-  return { app, ctx };
+  return { app, ctx, routes };
 }

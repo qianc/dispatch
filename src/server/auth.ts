@@ -16,17 +16,15 @@ function eq(a: Buffer, b: Buffer) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** The app's own sign-in: a password and a signed session cookie. Tokens and the proxy header live in access.ts. */
 export class Auth {
   private secret: string;
-  readonly apiToken: string;
   private cfg: Config;
 
   constructor(cfg: Config, db: Db) {
     this.cfg = cfg;
     this.secret = db.setting('session_secret') ?? randomBytes(32).toString('hex');
     db.setSetting('session_secret', this.secret);
-    this.apiToken = db.setting('api_token') ?? `dsp_${randomBytes(24).toString('base64url')}`;
-    db.setSetting('api_token', this.apiToken);
   }
 
   checkPassword(password: string): boolean {
@@ -46,10 +44,8 @@ export class Auth {
     });
   }
 
-  isAuthed(req: FastifyRequest): boolean {
-    if (this.cfg.disableAuth) return true;
-    const bearer = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
-    if (bearer) return eq(Buffer.from(bearer), Buffer.from(this.apiToken));
+  /** A valid, unexpired session cookie from the password login. */
+  hasSessionCookie(req: FastifyRequest): boolean {
     const raw = req.cookies[COOKIE];
     if (!raw) return false;
     const [issued, sig] = raw.split('.');

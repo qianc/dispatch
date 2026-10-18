@@ -14,7 +14,7 @@ export async function waitFor<T>(fn: () => T | Promise<T>, what: string, timeout
 
 export async function startServer(env: Record<string, string> = {}) {
   const cfg = loadConfig({ WORKER_TOKEN: 'test-token', DISABLE_AUTH: '1', WEB_DIST: '/nonexistent', ...env });
-  const { app, ctx } = await buildApp(cfg, { dbFile: ':memory:' });
+  const { app, ctx, routes } = await buildApp(cfg, { dbFile: ':memory:' });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = (app.server.address() as { port: number }).port;
   const base = `http://127.0.0.1:${port}`;
@@ -26,7 +26,7 @@ export async function startServer(env: Record<string, string> = {}) {
     });
     return { status: res.status, data: (await res.json().catch(() => null)) as T };
   };
-  return { app, ctx, port, base, call };
+  return { app, ctx, routes, port, base, call };
 }
 
 export function startWorker(port: number, env: Record<string, string> = {}): ChildProcess {
