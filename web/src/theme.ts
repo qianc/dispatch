@@ -12,7 +12,7 @@ export function getTheme(): Theme {
 /** Status bar / browser chrome colour follows the header surface. */
 function syncThemeColor() {
   const panel = getComputedStyle(document.documentElement).getPropertyValue('--color-panel').trim();
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', panel || '#19191c');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', panel || '#1a1a1e');
 }
 
 export function setTheme(t: Theme) {

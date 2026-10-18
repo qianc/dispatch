@@ -272,7 +272,7 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
           <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
         </div>
         <Button small onClick={() => setFilterOpen(true)} aria-label="Filter and view">
-          Filter{active > 0 && <span className="ml-0.5 min-w-4 h-4 px-1 rounded-full bg-accent-strong text-white text-[10px] leading-4">{active}</span>}
+          Filter{active > 0 && <span className="ml-0.5 min-w-4 h-4 px-1 rounded-full bg-accent-strong text-on-accent text-[10px] leading-4">{active}</span>}
         </Button>
         {!wide && <Button small variant={selectMode ? 'primary' : 'secondary'} onClick={() => setSelectMode(!selectMode)}>{selectMode ? 'Done' : 'Select'}</Button>}
       </div>

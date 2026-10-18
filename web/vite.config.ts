@@ -31,8 +31,8 @@ export default defineConfig({
         name: 'Dispatch',
         short_name: 'Dispatch',
         description: 'Projects, backlog and Claude agents',
-        theme_color: '#19191c',
-        background_color: '#111113',
+        theme_color: '#1a1a1e',
+        background_color: '#0e0e10',
         display: 'standalone',
         start_url: '/',
         icons: [

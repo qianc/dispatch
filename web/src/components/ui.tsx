@@ -8,11 +8,12 @@ import type { ItemStatus, SessionStatus } from '../../../src/shared/types.ts';
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+// hover is for desktop; active is the press on a phone. Disabled is one look for all: no colour, faint text.
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-accent-strong text-white active:bg-accent',
-  secondary: 'bg-raised text-fg border border-line active:bg-line',
-  ghost: 'text-muted active:bg-raised',
-  danger: 'bg-bad/15 text-bad border border-bad/30 active:bg-bad/25',
+  primary: 'bg-accent-strong text-on-accent hover:brightness-110 active:brightness-95 disabled:bg-raised disabled:text-faint disabled:brightness-100',
+  secondary: 'bg-raised text-fg border border-line hover:border-faint active:bg-line disabled:text-faint disabled:border-line',
+  ghost: 'text-muted hover:bg-raised hover:text-fg active:bg-raised disabled:text-faint disabled:bg-transparent',
+  danger: 'bg-bad/15 text-bad border border-bad/30 hover:bg-bad/20 active:bg-bad/25 disabled:opacity-50',
 };
 
 export function Button({ variant = 'secondary', small, className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; small?: boolean }) {
@@ -20,7 +21,7 @@ export function Button({ variant = 'secondary', small, className, ...rest }: But
     <button
       {...rest}
       className={cx(
-        'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium select-none transition-colors disabled:opacity-40',
+        'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium select-none transition-[color,background-color,border-color,filter] disabled:cursor-default',
         small ? 'h-8 px-2.5 text-[13px]' : 'h-10 px-3.5 text-[15px]',
         VARIANTS[variant],
         className,
@@ -58,7 +59,7 @@ export function Section({ title, action, children }: { title: string; action?: R
   return (
     <section className="mt-5">
       <div className="flex items-center justify-between px-4 mb-1.5">
-        <h2 className="text-[12px] font-semibold uppercase tracking-wide text-faint">{title}</h2>
+        <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {action}
       </div>
       {children}
@@ -215,7 +216,7 @@ export function Segmented<T extends string | number>({ value, options, onChange 
           className={cx(
             'rounded-md text-[13px] font-medium leading-tight',
             stacked ? 'min-h-9 px-3 py-2 text-left' : 'flex-1 min-h-8 px-1 py-1',
-            o.value === value ? 'bg-raised text-fg' : 'text-muted',
+            o.value === value ? 'bg-panel text-fg shadow-sm ring-1 ring-line' : 'text-muted hover:text-fg',
           )}
         >
           {o.label}

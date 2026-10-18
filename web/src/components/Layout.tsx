@@ -28,7 +28,7 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
         <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 1.9 : 1.6} strokeLinejoin="round" strokeLinecap="round">{icon}</svg>
         {!!badge && (
           <span
-            className={cx('absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center', badgeTone === 'run' ? 'bg-run text-white' : 'bg-wait text-black')}
+            className={cx('absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center', badgeTone === 'run' ? 'bg-run text-on-status' : 'bg-wait text-on-status')}
             aria-label={badgeTone === 'run' ? `${badge} running` : `${badge} waiting`}
           >
             {badge}

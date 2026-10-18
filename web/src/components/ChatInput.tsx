@@ -61,7 +61,7 @@ export function ChatInput({ value, onChange, onSubmit, canSubmit = true, disable
         }}
         aria-label="Message"
       />
-      {action ?? <button type="submit" disabled={!ready} aria-label="Send" className="h-10 px-3.5 rounded-lg bg-accent-strong text-white font-medium active:bg-accent disabled:opacity-40 shrink-0">↑</button>}
+      {action ?? <button type="submit" disabled={!ready} aria-label="Send" className="h-10 px-3.5 rounded-lg bg-accent-strong text-on-accent font-medium hover:brightness-110 active:brightness-95 disabled:bg-raised disabled:text-faint disabled:brightness-100 border border-transparent disabled:border-line shrink-0">↑</button>}
     </form>
   );
 }

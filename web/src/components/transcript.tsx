@@ -92,7 +92,7 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
       case 'user':
         return (
           <div key={e.seq} className="flex justify-end">
-            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-strong/25 border border-accent/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
+            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft border border-accent/25 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
           </div>
         );
       case 'assistant':
@@ -161,7 +161,7 @@ function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: s
               disabled={disabled}
               onClick={() => toggle(o.label)}
               aria-pressed={on}
-              className={cx('w-full text-left rounded-lg border px-3 py-2', on ? 'border-accent bg-accent/10' : 'border-line bg-bg', disabled && 'opacity-60')}
+              className={cx('w-full text-left rounded-lg border px-3 py-2', on ? 'border-accent bg-accent-soft' : 'border-line bg-bg hover:border-faint', disabled && 'opacity-60')}
             >
               <div className="font-medium text-[14px]">{o.label}</div>
               {o.description && <div className="text-[13px] text-muted">{o.description}</div>}
@@ -194,7 +194,7 @@ export function InputCard({ input }: { input: PendingInput }) {
   });
   const p = input.payload;
   return (
-    <div className={cx('rounded-xl border p-3', open ? 'border-wait/50 bg-wait/5' : 'border-line bg-panel')}>
+    <div className={cx('rounded-xl border p-3', open ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
       {!open && (
         <div className="text-[12px] text-faint mb-2">{input.expired ? 'Closed without an answer' : 'Answered'}</div>
       )}
@@ -300,7 +300,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId
   const fields = Object.keys(proposal.changes) as (keyof typeof proposal.changes)[];
   const replaced = !!done && /^(Replaced|Not used|Dismissed)/.test(done);
   return (
-    <div className={cx('rounded-xl border border-accent/40 bg-accent/5 p-3', replaced && 'opacity-60')}>
+    <div className={cx('rounded-xl border border-accent/50 bg-panel shadow-sm p-3', replaced && 'opacity-60')}>
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-1">Suggested change · {proposal.item_key}</div>
       {proposal.reason && <p className="text-[13px] text-muted mb-2">{proposal.reason}</p>}
       <div className="space-y-1.5 text-[14px]">
@@ -346,7 +346,7 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
     onSuccess: (s) => nav(`/s/${s.id}`),
   });
   return (
-    <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
+    <div className="rounded-xl border border-accent/50 bg-panel shadow-sm p-3">
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">Planning chat · {project.name}</div>
       {done ? (
         <p className={cx('text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
@@ -413,7 +413,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   const replaced = !!done && /^(Replaced|Not used)/.test(done);
 
   return (
-    <div className={cx('rounded-xl border border-accent/40 bg-accent/5 p-3', replaced && 'opacity-60')}>
+    <div className={cx('rounded-xl border border-accent/50 bg-panel shadow-sm p-3', replaced && 'opacity-60')}>
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">
         {proposal.type === 'batch' ? 'Proposed batch' : 'Proposed items'}{session.kind === 'assistant' && ` · ${project.name}`}
       </div>

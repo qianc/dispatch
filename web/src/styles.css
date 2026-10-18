@@ -1,58 +1,92 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-bg: #111113;
-  --color-panel: #19191c;
-  --color-raised: #222226;
-  --color-line: #2c2c31;
+  /* Colour roles. Each pair a text role meets is checked in test/contrast.test.ts (4.5:1). */
+  --color-bg: #0e0e10;
+  --color-panel: #1a1a1e;
+  --color-raised: #26262b;
+  --color-line: #3a3a42;
   --color-fg: #ededef;
-  --color-muted: #9b9ba3;
-  --color-faint: #6b6b73;
-  --color-accent: #8b8cf9;
-  --color-accent-strong: #6e6ff0;
-  --color-wait: #f0a54a;
-  --color-ok: #4cc38a;
-  --color-bad: #f0616d;
-  --color-run: #5aa8f0;
+  --color-muted: #a8a8b1;
+  --color-faint: #8d8d97;
+  --color-accent: #a3a4fc;
+  --color-accent-strong: #5254dc;
+  /* text on an accent-strong fill (primary buttons, counts) */
+  --color-on-accent: #ffffff;
+  /* quiet accent surface (your chat messages, selected rows) */
+  --color-accent-soft: #2c2c55;
+  --color-wait: #f2ae5c;
+  --color-ok: #55ca94;
+  --color-bad: #f6818b;
+  --color-run: #71b5f3;
+  /* text on a solid status fill (badges): dark on the bright dark-theme colours */
+  --color-on-status: #111113;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
 /* Light theme: chosen in Settings (data-theme="light"), or Auto (no attribute) with a light system setting */
 :root[data-theme='light'] {
-  --color-bg: #f4f4f6;
+  --color-bg: #f0f0f3;
   --color-panel: #ffffff;
-  --color-raised: #ececf0;
-  --color-line: #dedee3;
+  --color-raised: #e8e8ed;
+  --color-line: #d0d0d8;
   --color-fg: #1b1b1f;
-  --color-muted: #5d5d66;
-  --color-faint: #8b8b94;
-  --color-accent: #5557e8;
-  --color-accent-strong: #4f50e6;
-  --color-wait: #b8700c;
-  --color-ok: #1b8f5a;
-  --color-bad: #d23445;
-  --color-run: #2276c9;
+  --color-muted: #53535c;
+  --color-faint: #656570;
+  --color-accent: #4244d4;
+  --color-accent-strong: #4547dc;
+  --color-on-accent: #ffffff;
+  --color-accent-soft: #e5e5fb;
+  --color-wait: #8a5500;
+  --color-ok: #126b42;
+  --color-bad: #bb2536;
+  --color-run: #1b5ea6;
+  --color-on-status: #ffffff;
   color-scheme: light;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --color-bg: #f4f4f6;
+    --color-bg: #f0f0f3;
     --color-panel: #ffffff;
-    --color-raised: #ececf0;
-    --color-line: #dedee3;
+    --color-raised: #e8e8ed;
+    --color-line: #d0d0d8;
     --color-fg: #1b1b1f;
-    --color-muted: #5d5d66;
-    --color-faint: #8b8b94;
-    --color-accent: #5557e8;
-    --color-accent-strong: #4f50e6;
-    --color-wait: #b8700c;
-    --color-ok: #1b8f5a;
-    --color-bad: #d23445;
-    --color-run: #2276c9;
+    --color-muted: #53535c;
+    --color-faint: #656570;
+    --color-accent: #4244d4;
+    --color-accent-strong: #4547dc;
+    --color-on-accent: #ffffff;
+    --color-accent-soft: #e5e5fb;
+    --color-wait: #8a5500;
+    --color-ok: #126b42;
+    --color-bad: #bb2536;
+    --color-run: #1b5ea6;
+    --color-on-status: #ffffff;
     color-scheme: light;
   }
 }
+
+/* Dropdowns look like the other inputs in both themes (no browser chrome); the chevron is drawn
+   with the theme's muted colour. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 2rem;
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23a8a8b1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:root[data-theme='light'] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2353535c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2353535c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+}
+select:disabled { opacity: 1; color: var(--color-faint); }
 
 /* iOS standalone shell (same pattern as the family apps): the document never scrolls.
    html/body/#root are locked to the viewport, the shell is a flex column, and only

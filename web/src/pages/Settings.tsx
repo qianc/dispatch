@@ -190,7 +190,7 @@ function WorkersSection() {
             <div className="flex items-center gap-2">
               <span className={cx('size-2 rounded-full shrink-0', w.connected ? 'bg-ok' : 'bg-faint')} aria-label={w.connected ? 'online' : 'offline'} />
               <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <span className="ml-2 text-[12px] text-muted">default</span>}</div>
+                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <Chip className="ml-2">used by default</Chip>}</div>
                 <div className="text-[12px] text-muted">
                   {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}

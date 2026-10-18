@@ -166,7 +166,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           <div className="flex flex-wrap gap-2 mt-2">
             <Button small disabled={pause.isPending} onClick={() => pause.mutate(!s.paused)}>{s.paused ? 'Resume' : 'Pause'}</Button>
             {workers.length > 1 && (
-              <select className="rounded-lg border border-line bg-bg px-2 text-[13px]" aria-label="Move to worker" value="" onChange={(e) => e.target.value && move.mutate(Number(e.target.value))}>
+              <select className="h-8 rounded-lg border border-line bg-bg pl-2.5 text-[13px] text-fg" aria-label="Move to worker" value="" onChange={(e) => e.target.value && move.mutate(Number(e.target.value))}>
                 <option value="">Move to…</option>
                 {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
               </select>
