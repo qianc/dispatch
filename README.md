@@ -213,6 +213,14 @@ look at its images.
 The changelog stays a file in the repo. Claude writes it from done items without a `rel:<version>`
 label, then labels them, so the next entry starts where this one ended.
 
+## Backups
+
+`node src/server/backup.ts --data /data --out /backups --at 03:15 --keep 14` runs in the server
+image (for example as a second service of the stack) and makes, once a night, an online copy of
+the SQLite database (consistent while the server runs) and a tarball of the attachments. It keeps
+14 days. `--once` makes one copy now. Restore: stop the server, put the `.db` copy in place as
+`dispatch.db` (remove any `-wal`/`-shm` files next to it) and unpack the attachments.
+
 ## Tests
 
 ```bash

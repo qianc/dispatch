@@ -96,8 +96,8 @@ Every choice below is checked against this sentence.
   worker and gives them to the planner. They are facts for warnings, not rules.
 - The worker owns its slot count (`MAX_CONCURRENT_SESSIONS` in the worker's config), because it
   can serve more than one server (see below). It reports its free slots to the server at `hello`
-  and after each change. The server-wide `MAX_CONCURRENT_SESSIONS` stays as an optional overall
-  limit on that server.
+  and after each change. The server sets no session limit of its own (owner's decision, 2026-10-18):
+  only workers limit how many sessions run.
 - Settings has a global default worker. The Assistant (which has no project) runs there, and a
   project without its own default uses it. *(Builder's call.)*
 

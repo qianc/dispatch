@@ -93,20 +93,18 @@ export class Sessions {
   private bus: Bus;
   private hub: WorkerHub;
   private notifier: Notifier;
-  private maxConcurrent: number;
   private workers: Workers;
   /** Where tool-result images are stored (set by app.ts). */
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
 
-  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, maxConcurrent: number, workers: Workers) {
+  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers) {
     this.workers = workers;
     this.store = store;
     this.bus = bus;
     this.hub = hub;
     this.notifier = notifier;
-    this.maxConcurrent = maxConcurrent;
   }
 
   // ---------- creation ----------
@@ -697,7 +695,7 @@ export class Sessions {
   }
 
   /**
-   * Start queued sessions while slots are free (MAX_CONCURRENT_SESSIONS). `now` runs alongside
+   * Start queued sessions while their workers have free slots (each worker's MAX_CONCURRENT_SESSIONS). `now` runs alongside
    * whatever is running; `after` also waits until earlier work in the same project has stopped
    * working (finished its turn, or ended).
    */
@@ -765,7 +763,6 @@ export class Sessions {
       }
       const chat = CHAT_KINDS.includes(next.kind);
       if (!chat) {
-        if (this.store.countActive() >= this.maxConcurrent) continue;
         if (link.facts && link.facts.free_slots === 0) {
           wait(`Waiting for worker ${name} (busy)`);
           continue;

@@ -26,8 +26,8 @@ describe('start modes', () => {
   const status = async (id: number) => (await s.call('GET', `/sessions/${id}`)).data.session.status as string;
 
   beforeAll(async () => {
-    s = await startServer({ MAX_CONCURRENT_SESSIONS: '3' });
-    worker = startWorker(s.port);
+    s = await startServer();
+    worker = startWorker(s.port, { MAX_CONCURRENT_SESSIONS: '3' });
     await waitFor(() => s.ctx.hub.connected, 'worker');
     for (const key of ['A', 'B']) {
       await s.call('POST', '/projects', { key: `P${key}`, name: key });

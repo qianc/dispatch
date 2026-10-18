@@ -8,8 +8,8 @@ describe('sessions with the fake runner', () => {
   const session = async (id: number) => (await s.call('GET', `/sessions/${id}`)).data;
 
   beforeAll(async () => {
-    s = await startServer({ MAX_CONCURRENT_SESSIONS: '1' });
-    worker = startWorker(s.port);
+    s = await startServer();
+    worker = startWorker(s.port, { MAX_CONCURRENT_SESSIONS: '1' }); // the worker owns its slots
     await s.call('POST', '/projects', { key: 'HC', name: 'Homecontrol' });
     await s.call('POST', '/projects/HC/repos', { github_owner: 'me', github_name: 'hc' });
     for (const title of ['One', 'Two', 'Three']) await s.call('POST', '/projects/HC/items', { title });

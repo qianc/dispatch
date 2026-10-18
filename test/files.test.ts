@@ -93,7 +93,7 @@ describe('discuss chats and files from a source folder', () => {
     expect((await s.call('POST', `/items/${item.id}/discuss`, { text: 'more' })).data.id).toBe(chat.id);
     expect((await s.call('GET', '/sessions')).data).toHaveLength(0);
     expect((await s.call('GET', `/items/${item.id}`)).data.sessions).toHaveLength(0);
-    expect(s.ctx.store.countActive()).toBe(0);
+    expect(s.ctx.hub.facts(s.ctx.workers.legacy().id)?.free_slots).toBe(3); // chats take no worker slot
     await expect(s.ctx.sessions.rpc(chat.id, 'add_comment', { key: 'SLD-1', body: 'x' })).rejects.toThrow(/read-only/);
     await expect(s.ctx.sessions.rpc(chat.id, 'get_item', { key: 'SLD-1' })).resolves.toMatchObject({ title: 'Charts overlap' });
     await s.call('POST', `/items/${item.id}/discuss/new`);

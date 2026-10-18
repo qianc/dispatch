@@ -11,7 +11,6 @@ export interface Config {
   workerToken: string;
   githubToken: string | null;
   githubAccounts: GithubAccount[];
-  maxConcurrent: number;
   pollSeconds: number;
   publicUrl: string;
   vapidSubject: string;
@@ -74,7 +73,6 @@ export function loadConfig(raw = process.env): Config {
     workerToken: env.WORKER_TOKEN ?? '',
     githubToken: env.GITHUB_TOKEN || null,
     githubAccounts: githubAccounts(env),
-    maxConcurrent: Number(env.MAX_CONCURRENT_SESSIONS ?? 3),
     pollSeconds: Number(env.GITHUB_POLL_SECONDS ?? 120),
     publicUrl: env.PUBLIC_URL ?? 'http://localhost:3000',
     vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@example.com',

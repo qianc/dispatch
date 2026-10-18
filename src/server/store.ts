@@ -420,10 +420,6 @@ export class Store {
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
   }
-  /** Agent sessions holding a worker slot. The assistant is light and never takes a slot. */
-  countActive(): number {
-    return Number(this.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE status IN ('running','waiting_input') AND kind NOT IN ('assistant', 'discuss')")!.n);
-  }
   /** Everything waiting to start, chats included (they wait for their worker too). */
   queued(): Session[] {
     return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' ORDER BY s.id`).map((r) => this.toSession(r));

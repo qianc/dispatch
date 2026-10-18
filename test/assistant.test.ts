@@ -61,7 +61,7 @@ describe('assistant tools (server side)', () => {
     expect((await s.call('POST', '/assistant/messages', { text: 'again' })).data.id).toBe(chatId);
     const listed = (await s.call('GET', '/sessions')).data as { id: number }[];
     expect(listed.map((x) => x.id)).not.toContain(chatId);
-    expect(s.ctx.store.countActive()).toBe(0);
+    expect(s.ctx.hub.facts(s.ctx.workers.legacy().id)?.free_slots).toBe(3); // chats take no worker slot
   });
 
   it('creates a project with a repo, then items with labels and a linked source', async () => {

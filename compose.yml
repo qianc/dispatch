@@ -11,7 +11,6 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
-      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-3}
       GITHUB_POLL_SECONDS: ${GITHUB_POLL_SECONDS:-120}
     volumes: [dispatch-data:/data]
     restart: unless-stopped
@@ -32,6 +31,7 @@ services:
       AGENT_MODEL: ${AGENT_MODEL:-}
       IDLE_CLOSE_MINUTES: ${IDLE_CLOSE_MINUTES:-10}
       RUNNER: ${RUNNER:-claude}
+      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-3}
       ASSISTANT_MODEL: ${ASSISTANT_MODEL:-haiku}
       DISCUSS_MODEL: ${DISCUSS_MODEL:-haiku}
       LOCAL_REPO_DIRS: ${LOCAL_REPO_DIRS:-}

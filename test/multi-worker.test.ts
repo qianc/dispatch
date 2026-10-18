@@ -179,6 +179,14 @@ describe('the queue with workers that come and go', () => {
     wb.close();
   });
 
+  it('the server sets no session limit: the worker\'s free slots decide', async () => {
+    s.ctx.workers.setDefault(b.id);
+    const wb = await rawWorker(s.port, b.secret, { facts: { os: 'linux', hostname: 'h', slots: 5, free_slots: 5, claude_accounts: [], github_accounts: [], local_repo_dirs: [] } });
+    for (const p of ['1', '2', '3', '4']) await s.call('POST', '/projects/QW/batches', { prompt: p });
+    await waitFor(() => wb.starts().length === 4, 'all four start');
+    wb.close();
+  });
+
   it('a new chat for an absent worker is queued, not refused', async () => {
     const item = (await s.call('POST', '/projects/QW/items', { title: 'Talk about it' })).data;
     s.ctx.workers.setDefault(b.id);
