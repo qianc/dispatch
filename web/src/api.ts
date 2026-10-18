@@ -88,6 +88,7 @@ export interface Inbox {
 
 export interface PrDetail {
   pr: PullRequest;
+  repo: { kind: 'github' | 'local' | 'hosted'; upstream: string | null; check_command: string | null };
   /** times the owner's hands were needed for this session's merges */
   hands: { id: number; kind: 'asked_update' | 'resolve_conflicts' | 'manual_merge'; detail: string | null; created_at: string }[];
   body: string;

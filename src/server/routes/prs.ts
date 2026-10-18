@@ -14,6 +14,9 @@ export function prRoutes(app: FastifyInstance, { github, sessions, store }: Ctx)
     return github.merge(id, how, method);
   });
 
+  /** A hosted repo's review moves to a PR on its upstream GitHub repo. */
+  app.post('/api/prs/:id/github-pr', async (req) => github.openUpstreamPr(intParam((req.params as { id: string }).id)));
+
   /** Merge conflict: send the session that owns the branch back to work to resolve it. */
   app.post('/api/prs/:id/resolve-conflicts', async (req) => {
     const pr = store.pr(intParam((req.params as { id: string }).id));

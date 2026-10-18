@@ -6,6 +6,7 @@ import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
+import type { HostedGit } from './hosted.ts';
 
 export interface PrFile {
   filename: string;
@@ -17,6 +18,8 @@ export interface PrFile {
 
 export interface PrDetail {
   pr: PullRequest;
+  /** what kind of repo it is in: a hosted one is reviewed and merged in Dispatch */
+  repo: { kind: NonNullable<Repo['kind']>; upstream: string | null; check_command: string | null };
   /** times the owner's hands were needed for this session's merges */
   hands: MergeEvent[];
   body: string;
@@ -55,6 +58,26 @@ export class GitHub {
   /** The client for a repo: its project's GitHub account, else the first account. */
   /** where git reaches GitHub (set from the config; a folder in tests) */
   gitBase = 'https://github.com';
+
+  /** the server's own repos (set by app.ts) */
+  hosted: HostedGit | null = null;
+
+  /** The GitHub repo the API talks to: the repo itself, a hosted repo's upstream, or none (local). */
+  private target(repo: Repo): { owner: string; repo: string } | null {
+    if (repo.kind === 'hosted') return repo.upstream_owner && repo.upstream_name ? { owner: repo.upstream_owner, repo: repo.upstream_name } : null;
+    if (repo.local_path) return null;
+    return { owner: repo.github_owner, repo: repo.github_name };
+  }
+
+  private repoSummary(repo: Repo): PrDetail['repo'] {
+    return { kind: repo.kind ?? 'github', upstream: repo.upstream_owner ? `${repo.upstream_owner}/${repo.upstream_name}` : null, check_command: repo.check_command };
+  }
+
+  private mustTarget(repo: Repo) {
+    const t = this.target(repo);
+    if (!t) throw new Error(`${repo.github_name} has no GitHub repo`);
+    return t;
+  }
 
   /** A GitHub repo's git URL. Credentials never go in it (see gitEnv). */
   gitUrl(owner: string, name: string) {
@@ -130,6 +153,17 @@ export class GitHub {
           if (pr) out.push(pr);
           continue;
         }
+        if (repo.kind === 'hosted') {
+          // a PR the owner chose to open on the upstream, then the review in Dispatch
+          const t = this.target(repo);
+          if (t && this.clientFor(repo)) {
+            const { data } = await this.gh(repo).pulls.list({ owner: t.owner, repo: t.repo, head: `${t.owner}:${s.branch}`, state: 'all', per_page: 5 });
+            for (const p of data) out.push(await this.record(s, repo, p as GhPull));
+          }
+          const pr = await this.syncHosted(s, repo);
+          if (pr) out.push(pr);
+          continue;
+        }
         if (!this.clientFor(repo)) continue;
         const { data } = await this.gh(repo).pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
         for (const p of data) out.push(await this.record(s, repo, p as GhPull));
@@ -145,6 +179,7 @@ export class GitHub {
 
   /** Delete a merged PR's head branch on GitHub (no error if it is already gone). */
   async deleteRemoteBranch(repo: Repo, branch: string): Promise<boolean> {
+    if (repo.kind === 'hosted') return this.hosted?.deleteBranch(repo, branch) ?? false;
     if (repo.local_path || !this.clientFor(repo)) return false;
     try {
       await this.gh(repo).git.deleteRef({ owner: repo.github_owner, repo: repo.github_name, ref: `heads/${branch}` });
@@ -205,12 +240,79 @@ export class GitHub {
     });
   }
 
+  /**
+   * A hosted repo's session branch, read on the server (no worker needed): a review entry like a
+   * local repo's. It stays as it is once merged here, or once the owner moved the review to a PR on
+   * the upstream.
+   */
+  private async syncHosted(s: Session, repo: Repo): Promise<PullRequest | null> {
+    const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id && p.number < 0);
+    if (known && known.state !== 'open') return known;
+    const st = await this.hosted!.branchStatus(repo, s.branch!);
+    if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
+    if (st.merged && !known) return null;
+    return this.recordRow(s, repo, {
+      number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
+      mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
+    });
+  }
+
+  /** Merges pushed to a hosted repo's upstream that failed, told once each. */
+  private upstreamToldFor = new Set<string>();
+
+  /** After a merge into a hosted repo: push its default branch to the upstream, if there is one. */
+  private async pushUpstreamAfterMerge(repo: Repo, s: Session) {
+    const t = this.target(repo);
+    if (!t || !this.hosted) return;
+    const res = await this.hosted.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${repo.default_branch}`], this.gitEnv(repo));
+    if (res.ok) return;
+    const key = `${repo.id}:${s.id}`;
+    if (this.upstreamToldFor.has(key)) return;
+    this.upstreamToldFor.add(key);
+    const why = res.output.split('\n').slice(-3).join(' ').slice(0, 300);
+    this.store.addEvent(s.id, { kind: 'error', text: `Merged in Dispatch, but pushing ${repo.default_branch} to ${t.owner}/${t.repo} failed: ${why}` });
+    void this.notifier.send({ title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined });
+  }
+
+  /** A PR on the upstream was merged: bring the result into the hosted repo (fast-forward only). */
+  private async pullUpstream(repo: Repo, s: Session) {
+    const t = this.target(repo);
+    if (!t || !this.hosted) return;
+    const res = await this.hosted.fetchUpstreamDefault(repo, this.gitUrl(t.owner, t.repo), this.gitEnv(repo));
+    if (!res.ok) this.store.addEvent(s.id, { kind: 'error', text: `The PR was merged on GitHub, but ${repo.default_branch} here could not follow (it has commits GitHub lacks): ${res.output.slice(0, 300)}` });
+  }
+
+  /**
+   * Review on GitHub instead of in Dispatch: push the session branch to the hosted repo's upstream
+   * and open a PR there. The review entry in Dispatch closes; the PR takes its place.
+   */
+  async openUpstreamPr(prId: number) {
+    const pr = this.store.pr(prId);
+    if (!pr) throw new Error('Unknown PR');
+    const repo = this.store.repo(pr.repo_id)!;
+    if (repo.kind !== 'hosted' || !pr.local || pr.state !== 'open') throw new Error('Only an open review of a hosted repo can move to GitHub.');
+    const t = this.target(repo);
+    if (!t) throw new Error(`${repo.github_name} has no GitHub repo to open a PR on. Link one in the repo's settings.`);
+    const s = this.store.session(pr.session_id)!;
+    const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${pr.head_ref}`], this.gitEnv(repo));
+    if (!pushed.ok) throw new Error(`Pushing ${pr.head_ref} to ${t.owner}/${t.repo} failed: ${pushed.output.slice(0, 300)}`);
+    const keys = this.store.itemsByIds(s.item_ids).map((i) => i.key);
+    const body = `From Dispatch session #${s.id}${keys.length ? ` (${keys.join(', ')})` : ''}.`;
+    const { data } = await this.gh(repo).pulls.create({ owner: t.owner, repo: t.repo, head: pr.head_ref, base: repo.default_branch, title: s.title, body });
+    const opened = await this.record(s, repo, data as GhPull);
+    this.store.upsertPr({ session_id: s.id, repo_id: repo.id, number: pr.number, url: pr.url, title: pr.title, state: 'closed', mergeable: pr.mergeable, mergeable_state: pr.mergeable_state, head_ref: pr.head_ref, head_sha: pr.head_sha });
+    this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
+    return opened;
+  }
+
   async syncPr(prId: number) {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) return (await this.syncLocal(this.store.session(pr.session_id)!, repo)) ?? pr;
-    const { data } = await this.gh(repo).pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number });
+    if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.store.session(pr.session_id)!, repo)) ?? pr;
+    const t = this.mustTarget(repo);
+    const { data } = await this.gh(repo).pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
@@ -228,7 +330,9 @@ export class GitHub {
       const st = await this.hub.cmd<BranchStatus>(this.workerOf(pr), { c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
       return st.behind;
     }
-    const { data } = await this.gh(repo).repos.compareCommits({ owner: repo.github_owner, repo: repo.github_name, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    if (repo.kind === 'hosted' && pr.local) return (await this.hosted!.branchStatus(repo, pr.head_ref)).behind;
+    const t = this.mustTarget(repo);
+    const { data } = await this.gh(repo).repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
     return data.behind_by;
   }
 
@@ -302,8 +406,8 @@ export class GitHub {
         return;
       }
     }
-    const checks = pr.head_sha && !repo.local_path
-      ? (await this.gh(repo).checks.listForRef({ owner: repo.github_owner, repo: repo.github_name, ref: pr.head_sha, per_page: 100 })).data.check_runs
+    const checks = pr.head_sha && !pr.local
+      ? (await this.gh(repo).checks.listForRef({ owner: this.mustTarget(repo).owner, repo: this.mustTarget(repo).repo, ref: pr.head_sha, per_page: 100 })).data.check_runs
       : [];
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
@@ -319,7 +423,8 @@ export class GitHub {
   private async record(s: Session, repo: Repo, p: GhPull): Promise<PullRequest> {
     let full = p;
     if (p.state === 'open' && p.mergeable === undefined) {
-      full = (await this.gh(repo).pulls.get({ owner: repo.github_owner, repo: repo.github_name, pull_number: p.number })).data as GhPull;
+      const t = this.mustTarget(repo);
+      full = (await this.gh(repo).pulls.get({ owner: t.owner, repo: t.repo, pull_number: p.number })).data as GhPull;
     }
     const state: PullRequest['state'] = full.merged_at || full.merged ? 'merged' : full.state === 'open' ? 'open' : 'closed';
     return this.recordRow(s, repo, {
@@ -334,6 +439,8 @@ export class GitHub {
     const state = row.state;
     const pr = this.store.upsertPr({ ...row, session_id: s.id, repo_id: repo.id });
     this.bus.emit({ t: 'pr', pr });
+    // a hosted repo's PR merged on GitHub: its default branch here follows
+    if (repo.kind === 'hosted' && row.number > 0 && state === 'merged' && before?.state !== 'merged') await this.pullUpstream(repo, s);
     if (before?.state !== state) queueMicrotask(() => this.onPrChange?.());
     if (before?.state !== state) this.onStateChange(s, pr, before?.state ?? null);
     if (state === 'open' && s.options.auto_merge !== 'off') {
@@ -373,9 +480,13 @@ export class GitHub {
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) {
       const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
-      return { pr, hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
+      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
     }
-    const o = { owner: repo.github_owner, repo: repo.github_name };
+    if (repo.kind === 'hosted' && pr.local) {
+      const files = await this.hosted!.branchDiff(repo, pr.head_ref);
+      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
+    }
+    const o = this.mustTarget(repo);
     const [{ data: p }, files, checks] = await Promise.all([
       this.gh(repo).pulls.get({ ...o, pull_number: pr.number }),
       this.gh(repo).paginate(this.gh(repo).pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
@@ -385,6 +496,7 @@ export class GitHub {
     ]);
     return {
       pr,
+      repo: this.repoSummary(repo),
       hands: this.store.mergeEvents(pr.session_id),
       body: p.body ?? '',
       base_ref: p.base.ref,
@@ -401,8 +513,10 @@ export class GitHub {
     if (repo.local_path) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
     this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).catch(() => null));
+    if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
     if (how === 'github') {
-      await this.gh(repo).pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
+      const t = this.mustTarget(repo);
+      await this.gh(repo).pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>(this.workerOf(pr), {
         c: 'merge_local', repo, branch: pr.head_ref, message: pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`,
@@ -418,13 +532,36 @@ export class GitHub {
     return { ok: true as const, pr: this.store.pr(prId)! };
   }
 
+  /**
+   * Merge a hosted repo's session branch in Dispatch: on the server, or, when the repo has a check
+   * command, on the session's worker (which runs the check before it pushes the merge back here).
+   * Then the merged default branch goes to the upstream, if there is one.
+   */
+  private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase') {
+    const s = this.store.session(pr.session_id)!;
+    const message = `Merge ${pr.head_ref}: ${pr.title}`;
+    if (repo.check_command) {
+      const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message });
+      if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
+    } else {
+      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge');
+      if (!res.ok) return { ok: false as const, conflict: res.conflict, output: res.output };
+    }
+    // a squash leaves the branch outside the history: say it is merged, do not work it out
+    const merged = await this.recordRow(s, repo, {
+      number: pr.number, url: pr.url, title: pr.title, state: 'merged', mergeable: pr.mergeable, mergeable_state: pr.mergeable_state, head_ref: pr.head_ref, head_sha: pr.head_sha,
+    });
+    await this.pushUpstreamAfterMerge(repo, s);
+    return { ok: true as const, pr: merged };
+  }
+
   /** Push the session branch (via the worker) and open a PR for it. */
   async createPr(s: Session, repoId: number) {
     const repo = this.store.repo(repoId);
     if (!repo || repo.project_id !== s.project_id || !s.branch) throw new Error('Unknown repo for this session');
     await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch });
-    if (repo.local_path) {
-      const pr = await this.syncLocal(s, repo);
+    if (repo.local_path || repo.kind === 'hosted') {
+      const pr = repo.kind === 'hosted' ? await this.syncHosted(s, repo) : await this.syncLocal(s, repo);
       if (!pr) throw new Error('The branch has no commits beyond the default branch yet');
       return pr;
     }

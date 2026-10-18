@@ -79,6 +79,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/sessions/:id/apply-update': 'sessions',
   'POST /api/sessions/:id/dismiss-proposal': 'sessions',
   'POST /api/prs/:id/merge': 'sessions',
+  'POST /api/prs/:id/github-pr': 'sessions',
   'POST /api/prs/:id/resolve-conflicts': 'sessions',
   'POST /api/cleanup': 'sessions',
   'POST /api/cleanup/check': 'sessions',

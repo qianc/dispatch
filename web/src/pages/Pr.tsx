@@ -46,8 +46,9 @@ export function PrView() {
     },
   });
   const resolve = useMutation({ mutationFn: () => api.post<Session>(`/prs/${id}/resolve-conflicts`), onSuccess: (s) => nav(`/s/${s.id}`) });
+  const toGithub = useMutation({ mutationFn: () => api.post<{ id: number }>(`/prs/${id}/github-pr`), onSuccess: (p) => nav(`/pr/${p.id}`, { replace: true }) });
   if (error) return <Page title="Pull request" back><ErrorText error={error} /></Page>;
-  if (!data) return <Page title="Pull request" back><Empty>Loading from GitHub…</Empty></Page>;
+  if (!data) return <Page title="Pull request" back><Empty>Loading…</Empty></Page>;
   const { pr } = data;
   const add = data.files.reduce((n, f) => n + f.additions, 0);
   const del = data.files.reduce((n, f) => n + f.deletions, 0);
@@ -81,13 +82,24 @@ export function PrView() {
           {how === 'github' && !pr.local && (
             <Segmented value={method} onChange={setMethod} options={[{ value: 'squash', label: 'Squash' }, { value: 'merge', label: 'Merge commit' }, { value: 'rebase', label: 'Rebase' }]} />
           )}
-          {(how === 'local' || pr.local) && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
+          {data.repo.kind === 'hosted' && pr.local ? (
+            <p className="text-[12px] text-muted">
+              Dispatch merges the branch into {data.base_ref} in its own repo
+              {data.repo.check_command ? `, after the session's worker runs the check (${data.repo.check_command})` : ''}
+              {data.repo.upstream ? `, then pushes ${data.base_ref} to ${data.repo.upstream} on GitHub` : ''}.
+            </p>
+          ) : (how === 'local' || pr.local) && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
           <Button variant="primary" className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
             {merge.isPending ? 'Merging…' : 'Merge'}
           </Button>
+          {data.repo.kind === 'hosted' && pr.local && data.repo.upstream && (
+            <Button className="w-full" disabled={toGithub.isPending} onClick={() => confirm(`Push ${pr.head_ref} to ${data.repo.upstream} and review it there as a pull request?`) && toGithub.mutate()}>
+              {toGithub.isPending ? 'Opening the PR…' : 'Open a PR on GitHub instead'}
+            </Button>
+          )}
           {result && !result.ok && <pre className="text-[12px] text-bad whitespace-pre-wrap max-h-40 overflow-y-auto">{result.output}</pre>}
           {conflict && <Button className="w-full" disabled={resolve.isPending} onClick={() => resolve.mutate()}>Start a session to resolve conflicts</Button>}
-          <ErrorText error={merge.error ?? resolve.error} />
+          <ErrorText error={merge.error ?? resolve.error ?? toGithub.error} />
         </div>
       )}
 
