@@ -29,7 +29,6 @@ async function hostedServer(extraEnv: Record<string, string> = {}) {
   const w = mkdtempSync(join(tmpdir(), 'dsp-p2w-'));
   const auth = ['-c', `http.extraHeader=Authorization: Bearer ${secret}`];
   expect((await gitAsync(w, ...auth, 'clone', '--quiet', url, '.')).code).toBe(0);
-  git(w, 'checkout', '--quiet', '-b', 'main');
   writeFileSync(join(w, 'a.txt'), 'one\n');
   git(w, 'add', '.');
   git(w, 'commit', '--quiet', '-m', 'one');

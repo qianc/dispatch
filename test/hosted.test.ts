@@ -23,12 +23,21 @@ const commit = (dir: string, file: string, text: string, msg = file) => {
 };
 
 describe('hosted repos on the server', () => {
+  it('a new repo has a first, empty commit on its default branch, so sessions have a base', async () => {
+    const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd0-')));
+    const r = repo(9, { default_branch: 'trunk' });
+    await h.create(r, 'trunk');
+    expect(git(h.dir(r), 'log', '--format=%s', 'trunk')).toBe('Start');
+    expect(git(h.dir(r), 'ls-tree', '-r', 'trunk')).toBe('');
+    const w = workClone(h, r);
+    expect(git(w, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('trunk');
+  });
+
   it('creates an empty repo, then shows, diffs and merges a pushed branch', async () => {
     const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
     const r = repo(1);
     await h.create(r, 'main');
     const w = workClone(h, r);
-    git(w, 'checkout', '--quiet', '-b', 'main');
     commit(w, 'a.txt', 'one\n');
     git(w, 'push', '--quiet', 'origin', 'main');
     git(w, 'checkout', '--quiet', '-b', 'dispatch/x-1');
@@ -53,7 +62,6 @@ describe('hosted repos on the server', () => {
     const r = repo(2);
     await h.create(r, 'main');
     const w = workClone(h, r);
-    git(w, 'checkout', '--quiet', '-b', 'main');
     commit(w, 'a.txt', 'one\n');
     git(w, 'push', '--quiet', 'origin', 'main');
     git(w, 'checkout', '--quiet', '-b', 'feat');
@@ -85,7 +93,6 @@ describe('hosted repos on the server', () => {
     const r = repo(3, { upstream_owner: 'me', upstream_name: 'up' });
     await h.create(r, 'main');
     const w = workClone(h, r);
-    git(w, 'checkout', '--quiet', '-b', 'main');
     commit(w, 'a.txt', 'one\n');
     git(w, 'push', '--quiet', 'origin', 'main');
 

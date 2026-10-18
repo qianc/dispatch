@@ -200,6 +200,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     closing = true;
     janitor.stop();
     github.stop();
+    ctx.sessions.stop();
     db.raw.close();
   });
 

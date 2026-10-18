@@ -38,7 +38,6 @@ describe('git over HTTP for workers', () => {
   it('a worker clones, pushes main and a branch, and fetches them back', async () => {
     const w = mkdtempSync(join(tmpdir(), 'dsp-gh-w-'));
     expect((await gitAuth(w, secret, 'clone', '--quiet', url, '.')).code).toBe(0);
-    git(w, 'checkout', '--quiet', '-b', 'main');
     writeFileSync(join(w, 'a.txt'), 'one\n');
     git(w, 'add', '.');
     git(w, 'commit', '--quiet', '-m', 'one');

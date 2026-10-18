@@ -524,7 +524,11 @@ export class Sessions {
     // Sessions stay in their state; onWorkerHello reconciles when the worker comes back.
     this.awaySince.set(workerId, Date.now());
     // still away after the grace time: the waiting sessions get their push then
-    setTimeout(() => !this.hub.isConnected(workerId) && this.dispatch(), this.workerGraceMs + 1000).unref();
+    const t = setTimeout(() => {
+      this.timers.delete(t);
+      if (!this.hub.isConnected(workerId)) this.dispatch();
+    }, this.workerGraceMs + 1000).unref();
+    this.timers.add(t);
     const name = this.workers.get(workerId)?.name ?? String(workerId);
     for (const s of this.liveSessions().filter((x) => x.worker_id === workerId && x.status === 'running')) {
       this.emitSession(this.store.updateSession(s.id, { waiting_reason: `Waiting for worker ${name}` }));
@@ -725,6 +729,13 @@ export class Sessions {
   private toldWaiting = new Set<number>();
   /** A worker away for less than this (a restart, a short sleep) is not worth a push. */
   workerGraceMs = 2 * 60_000;
+  private timers = new Set<NodeJS.Timeout>();
+
+  /** The server closes: no timer may touch the store after that. */
+  stop() {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+  }
   /** When each worker went away (workers never seen since the server started count from then). */
   private awaySince = new Map<number, number>();
   private readonly startedAt = Date.now();

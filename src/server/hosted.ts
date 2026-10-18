@@ -9,6 +9,9 @@ import type { BranchFile, BranchStatus, Repo } from '../shared/types.ts';
 
 type Env = Record<string, string | undefined>;
 
+/** git's empty tree (always known to git, also when not stored). */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
 interface Out { code: number; out: string; err: string; bytes: Buffer }
 
 /** Run git with GIT_DIR set to a bare repo; never through a shell. */
@@ -122,6 +125,9 @@ export class HostedGit {
     await mkdir(this.root, { recursive: true });
     await must(null, ['init', '--quiet', '--bare', dir]);
     await this.configure(dir, defaultBranch);
+    // a first, empty commit: sessions branch off the default branch, and an unborn one has nothing
+    const start = await must(dir, ['commit-tree', EMPTY_TREE, '-m', 'Start']);
+    await must(dir, ['update-ref', `refs/heads/${defaultBranch}`, start, '']);
     await this.ensureSafe(repo);
   }
 
