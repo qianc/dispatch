@@ -75,6 +75,7 @@ export function Project() {
     <div className="flex-1 min-h-0 flex">
     <div className="flex-1 min-w-0 flex flex-col">
     <Page
+      wide={!drawer}
       icon={<ProjectBadge project={project} size={32} />}
       title={project.name}
       subtitle={<span style={{ color: lookColor(project) }} className="font-semibold">{project.key}</span>}
@@ -254,6 +255,7 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
       onToggle={onToggle}
       onOpen={onOpen}
       active={it.id === openItem}
+      roomy={!openItem}
       onLongPress={markable ? (x) => { setSelectMode(true); if (!x.marked) onToggle(x); } : undefined}
     />
   );

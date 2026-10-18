@@ -47,7 +47,7 @@ export function Inbox() {
   const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
   const nothing = !data.inputs.length && !data.idle.length && !data.prs.length && !data.cleanup;
   return (
-    <Page title="Inbox" subtitle="Everything waiting on you">
+    <Page title="Inbox" subtitle="Everything waiting on you" wide>
       {worker && !worker.connected && (
         <div className="m-3 rounded-lg border border-bad/30 bg-bad/10 text-bad text-sm px-3 py-2">The worker is not connected. Sessions will start when it is back.</div>
       )}
@@ -77,11 +77,12 @@ export function Inbox() {
       )}
       {data.idle.length > 0 && (
         <Section title="Your turn">
-          <div className="space-y-2">
+          <div className="grid gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
             {[...data.idle].sort((a, b) => ORDER[a.attention.kind] - ORDER[b.attention.kind]).map((s) => <TurnCard key={s.id} s={s} />)}
           </div>
         </Section>
       )}
+      <div className="lg:grid lg:grid-cols-2 lg:items-start">
       {data.cleanup && <CleanupCard offer={data.cleanup} />}
       {data.prs.length > 0 && (
         <Section title="To review">
@@ -96,6 +97,7 @@ export function Inbox() {
           </Card>
         </Section>
       )}
+      </div>
     </Page>
   );
 }

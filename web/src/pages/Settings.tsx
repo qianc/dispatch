@@ -35,7 +35,9 @@ export function Settings() {
   const standalone = window.matchMedia('(display-mode: standalone)').matches;
 
   return (
-    <Page title="Settings">
+    <Page title="Settings" wide>
+      {/* desktop: sections flow into two columns */}
+      <div className="lg:columns-2 lg:gap-0">
       <AppearanceSection />
       <Section title="Notifications">
         <Card className="p-3 space-y-2">
@@ -77,6 +79,7 @@ export function Settings() {
       {!me?.auth_disabled && (
         <div className="px-3 mt-6"><Button variant="danger" className="w-full" onClick={() => logout.mutate()}>Sign out</Button></div>
       )}
+      </div>
     </Page>
   );
 }

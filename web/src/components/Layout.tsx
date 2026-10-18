@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
-import { useWide } from '../wide.ts';
+import { useVeryWide, useWide } from '../wide.ts';
 import { icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 
@@ -88,7 +88,8 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
     ...(inbox?.inputs ?? []).map((i) => ({ id: i.session_id, key: sessions.get(i.session_id)?.project_key ?? null, title: sessions.get(i.session_id)?.title ?? 'Question', tone: 'wait' as const })),
     ...(inbox?.idle ?? []).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: (s.attention.kind === 'merge_blocked' ? 'bad' : s.attention.kind === 'merged' ? 'ok' : 'wait') as 'wait' | 'bad' | 'ok' })),
   ];
-  const runningNow = live.filter((s) => s.status === 'running' || s.status === 'queued');
+  const runningNow = live.filter((s) => s.status === 'running');
+  const queuedNow = live.filter((s) => s.status === 'queued');
   const byKey = new Map(projects.map((p) => [p.key, p]));
   const recentList = [...recent.filter((k) => byKey.has(k)), ...projects.map((p) => p.key).filter((k) => !recent.includes(k))].slice(0, 6).map((k) => byKey.get(k)!);
   const here = loc.pathname;
@@ -112,10 +113,19 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
         {runningNow.length > 0 && (
           <SideGroup title="Running">
             {runningNow.slice(0, 10).map((s) => row(`/s/${s.id}`, <>
-              <span className={cx('size-1.5 rounded-full shrink-0', s.status === 'running' ? 'bg-run animate-pulse' : 'bg-faint')} />
+              <span className="size-1.5 rounded-full shrink-0 bg-run animate-pulse" />
               <ProjectKey k={s.project_key} className="text-[11px]" />
               <span className="truncate">{s.title}</span>
             </>, `r-${s.id}`))}
+          </SideGroup>
+        )}
+        {queuedNow.length > 0 && (
+          <SideGroup title="Queued">
+            {queuedNow.slice(0, 10).map((s) => row(`/s/${s.id}`, <>
+              <span className="size-1.5 rounded-full shrink-0 bg-faint" />
+              <ProjectKey k={s.project_key} className="text-[11px]" />
+              <span className="truncate" title={s.waiting_reason ?? undefined}>{s.title}</span>
+            </>, `q-${s.id}`))}
           </SideGroup>
         )}
         {recentList.length > 0 && (
@@ -147,9 +157,16 @@ function SideGroup({ title, children }: { title: string; children: ReactNode }) 
  * (path + query) and restored on return, retrying briefly while cached content renders.
  * `keepScroll={false}` for screens that manage scrolling themselves (chats pin to the bottom).
  */
-export function Page({ title, subtitle, icon, back, actions, children, footer, keepScroll = true }: { title: ReactNode; subtitle?: ReactNode; icon?: ReactNode; back?: string | true; actions?: ReactNode; children: ReactNode; footer?: ReactNode; keepScroll?: boolean }) {
+/**
+ * A screen: header, scrolling content, optional footer (chat input). On desktop, `wide` lets the
+ * content use more of the screen (pages lay out columns from `lg`), and `aside` adds a side panel
+ * from `xl` (the page shows the same content inline below that width).
+ */
+export function Page({ title, subtitle, icon, back, actions, children, footer, keepScroll = true, wide, aside }: { title: ReactNode; subtitle?: ReactNode; icon?: ReactNode; back?: string | true; actions?: ReactNode; children: ReactNode; footer?: ReactNode; keepScroll?: boolean; wide?: boolean; aside?: ReactNode }) {
   const nav = useNavigate();
   const loc = useLocation();
+  // the side panel exists only where it shows (no hidden copy for screen readers and tests)
+  const sidePanel = useVeryWide();
   const key = loc.pathname + loc.search;
   const main = useRef<HTMLElement>(null);
 
@@ -215,10 +232,16 @@ export function Page({ title, subtitle, icon, back, actions, children, footer, k
           <div className="flex items-center gap-1 shrink-0">{actions}</div>
         </div>
       </header>
-      <main ref={main} className="scroll-area">
-        <div className="mx-auto max-w-3xl pb-8">{children}</div>
-      </main>
-      {footer && <div className="shrink-0 border-t border-line bg-panel">{footer}</div>}
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-w-0">
+          <main ref={main} className="scroll-area">
+            <div className={cx('mx-auto pb-8', wide ? 'max-w-3xl lg:max-w-6xl lg:px-3' : 'max-w-3xl')}>{children}</div>
+          </main>
+          {/* the input lines up with the conversation above it */}
+          {footer && <div className="shrink-0 border-t border-line bg-panel"><div className="mx-auto max-w-3xl">{footer}</div></div>}
+        </div>
+        {aside && sidePanel && <aside className="flex flex-col w-[340px] shrink-0 min-h-0 overflow-y-auto border-l border-line bg-panel pb-6">{aside}</aside>}
+      </div>
     </>
   );
 }

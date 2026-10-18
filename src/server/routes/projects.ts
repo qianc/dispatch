@@ -4,7 +4,7 @@ import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { addLocalRepo, mergeNote } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub, github, workers }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -23,6 +23,8 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
           backlog: open.filter((i) => i.type === 'backlog').length,
           bugs: open.filter((i) => i.type === 'bug').length,
           active_sessions: sessions.length,
+          running: sessions.filter((s) => s.status === 'running').length,
+          queued: sessions.filter((s) => s.status === 'queued').length,
           waiting: sessions.filter((s) => s.status === 'waiting_input' || s.status === 'idle').length,
         },
       };
@@ -32,7 +34,9 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
   app.post('/api/projects', async (req) => {
     const input = projectInput.parse(req.body);
     if (store.projectByKey(input.key)) throw new HttpError(409, `Key ${input.key} is taken`);
-    return store.createProject(input);
+    const created = store.createProject(input);
+    bus.emit({ t: 'project', key: created.key });
+    return created;
   });
 
   app.get('/api/projects/:key', async (req) => {
@@ -56,7 +60,9 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     if (def && allowed?.length && !allowed.includes(def)) throw new HttpError(400, `The default Claude account "${def}" must be one of the allowed accounts`);
     if (rest.worker_id != null && (!workers.get(rest.worker_id) || workers.get(rest.worker_id)!.revoked_at)) throw new HttpError(400, `Unknown worker ${rest.worker_id}`);
     if (muted !== undefined) store.setMuted(p.id, muted);
-    return { ...store.updateProject(p.id, rest), muted: store.isMuted(p.id), repos: store.repos(p.id) };
+    const updated = store.updateProject(p.id, rest);
+    bus.emit({ t: 'project', key: p.key });
+    return { ...updated, muted: store.isMuted(p.id), repos: store.repos(p.id) };
   });
 
   app.post('/api/projects/:key/repos', async (req) => {
@@ -65,10 +71,13 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     if (body.local_path) {
       const input = z.object({ local_path: z.string().min(1), default_branch: z.string().optional(), check_command: z.string().nullable().optional(), worker_id: z.number().int().nullable().optional() }).parse(req.body);
       const { repo, info } = await addLocalRepo(store, hub, p, input.local_path, input);
+      bus.emit({ t: 'project', key: p.key });
       return { ...repo, note: mergeNote(info) };
     }
     const input = repoInput.parse(req.body);
-    return store.addRepo(p.id, input);
+    const repo = store.addRepo(p.id, input);
+    bus.emit({ t: 'project', key: p.key });
+    return repo;
   });
 
   app.patch('/api/repos/:id', async (req) => {
@@ -82,11 +91,16 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
       if (bad) throw new HttpError(400, `"${bad}" must be a folder inside the repo, e.g. reference-decks/library-work`);
       patch.read_dirs = [...new Set(patch.read_dirs.map((d) => d.replace(/\/+$/, '')))];
     }
-    return store.updateRepo(id, patch);
+    const updated = store.updateRepo(id, patch);
+    bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
+    return updated;
   });
 
   app.delete('/api/repos/:id', async (req) => {
-    store.deleteRepo(intParam((req.params as { id: string }).id));
+    const repo = store.repo(intParam((req.params as { id: string }).id));
+    if (!repo) throw notFound('Repo');
+    store.deleteRepo(repo.id);
+    bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
     return { ok: true };
   });
 }

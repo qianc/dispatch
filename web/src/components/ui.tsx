@@ -57,7 +57,7 @@ export function Empty({ children }: { children: ReactNode }) {
 
 export function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="mt-5">
+    <section className="pt-5 break-inside-avoid">
       <div className="flex items-center justify-between px-4 mb-1.5">
         <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {action}

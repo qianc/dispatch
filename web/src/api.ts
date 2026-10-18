@@ -58,7 +58,7 @@ export const api = {
 export type ProjectSummary = Project & {
   muted: boolean;
   repos: Repo[];
-  counts?: { backlog: number; bugs: number; active_sessions: number; waiting: number };
+  counts?: { backlog: number; bugs: number; active_sessions: number; waiting: number; running: number; queued: number };
 };
 
 export interface Comment { id: number; item_id: number; author: string; body_md: string; created_at: string }

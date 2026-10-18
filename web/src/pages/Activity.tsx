@@ -8,7 +8,8 @@ export function Activity() {
   const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>('/sessions?status=queued,running,waiting_input,idle') });
   const { data: recent = [] } = useQuery({ queryKey: ['sessions', 'recent'], queryFn: () => api.get<Session[]>('/sessions?status=completed,failed,stopped') });
   return (
-    <Page title="Activity" subtitle="Agent sessions across all projects">
+    <Page title="Activity" subtitle="Agent sessions across all projects" wide>
+      <div className="lg:grid lg:grid-cols-2 lg:items-start">
       <Section title={`Live (${live.length})`}>
         {live.length ? <Card>{live.map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card> : <Empty>No sessions running.</Empty>}
       </Section>
@@ -17,6 +18,7 @@ export function Activity() {
           <Card>{recent.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card>
         </Section>
       )}
+      </div>
     </Page>
   );
 }

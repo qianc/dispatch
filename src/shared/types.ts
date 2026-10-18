@@ -467,6 +467,8 @@ export type LiveEvent =
   | { t: 'input'; input: PendingInput }
   | { t: 'item'; item: Item }
   | { t: 'pr'; pr: PullRequest }
+  /** a project, or its repos, changed (lists and the project page refresh) */
+  | { t: 'project'; key: string }
   /** finished sessions' leftovers were cleaned up */
   | { t: 'cleanup' };
 

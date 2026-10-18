@@ -120,6 +120,7 @@ export class AssistantTools {
         const key = input.key ?? suggestKey(input.name, (k) => !!this.store.projectByKey(k));
         if (this.store.projectByKey(key)) throw new Error(`Key ${key} is taken; pick another.`);
         const project = this.store.createProject({ ...input, key });
+        this.bus.emit({ t: 'project', key: project.key });
         const added = [];
         for (const r of input.repos) added.push(await this.addRepo(project, r, undefined, null));
         return { ...this.projectSummary(project), added_repos: added };
@@ -134,7 +135,9 @@ export class AssistantTools {
           effort_scale: z.array(z.string().min(1)).min(2).max(10).optional(),
           default_force_plan: z.boolean().optional(),
         }).parse(p);
-        return this.projectSummary(this.store.updateProject(project.id, patch));
+        const updated = this.store.updateProject(project.id, patch);
+        this.bus.emit({ t: 'project', key: updated.key });
+        return this.projectSummary(updated);
       }
 
       case 'add_repo':
@@ -280,6 +283,7 @@ export class AssistantTools {
   private async addRepo(project: Project, input: string, branch: string | undefined, check: string | null) {
     if (looksLikePath(input)) {
       const { repo, info, already } = await addLocalRepo(this.store, this.hub, project, input, { default_branch: branch, check_command: check });
+      this.bus.emit({ t: 'project', key: project.key });
       if (already) return `${info.path} is already in ${project.key}`;
       return { repo: `local: ${repo.local_path}`, default_branch: repo.default_branch, note: mergeNote(info) ?? undefined };
     }
@@ -288,6 +292,7 @@ export class AssistantTools {
     const exists = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === info.owner.toLowerCase() && r.github_name.toLowerCase() === info.name.toLowerCase());
     if (exists) return `${info.owner}/${info.name} is already in ${project.key}`;
     const repo = this.store.addRepo(project.id, { github_owner: info.owner, github_name: info.name, default_branch, check_command: check });
+    this.bus.emit({ t: 'project', key: project.key });
     return { repo: `${repo.github_owner}/${repo.github_name}`, default_branch: repo.default_branch, verified_on_github: info.verified };
   }
 }

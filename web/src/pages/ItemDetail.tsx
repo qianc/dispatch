@@ -60,8 +60,11 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   const p = it.project;
   const busy = it.status === 'in_progress' || it.status === 'in_review';
 
+  // full page on desktop: the description on the left, sessions and comments in a side column
+  const cols = !drawer && !discussing;
   const page = (
     <Page
+      wide={cols}
       title={it.key}
       subtitle={p.name}
       back={drawer ? undefined : `/p/${p.key}${it.type === 'bug' ? '?tab=bugs' : ''}`}
@@ -72,6 +75,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
         {closeBtn}
       </>}
     >
+      <div className={cx(cols && 'lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-2 lg:items-start')}>
       <div className="px-4 pt-4">
         <h2 className="text-lg font-semibold leading-snug [overflow-wrap:anywhere]">{it.title}</h2>
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
@@ -99,7 +103,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
           <ErrorText error={upload.error ?? deleteImage.error} />
         </div>
         {wide ? (
-          <button onClick={() => setDiscuss(!discussing)} aria-pressed={discussing} className={cx('mt-4 w-full flex items-center justify-center gap-1.5 h-10 rounded-lg border font-medium', discussing ? 'border-accent bg-accent/15' : 'border-line bg-raised hover:bg-line')}>
+          <button onClick={() => setDiscuss(!discussing)} aria-pressed={discussing} className={cx('mt-4 w-full flex items-center justify-center gap-1.5 h-10 rounded-lg border font-medium', discussing ? 'border-accent bg-accent-soft' : 'border-line bg-raised hover:bg-line')}>
             <Icon name="discuss" size={20} /> {discussing ? 'Hide the discussion' : 'Discuss this'}
           </button>
         ) : (
@@ -116,6 +120,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
         <ErrorText error={patch.error} />
       </div>
 
+      <div className={cx(cols && 'lg:pt-1 lg:[&>section:first-child]:mt-3')}>
       {it.sessions.length > 0 && (
         <Section title="Sessions">
           <Card>{it.sessions.map((s) => <SessionRow key={s.id} s={s} />)}</Card>
@@ -137,6 +142,8 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
           </form>
         </div>
       </Section>
+      </div>
+      </div>
 
       <Sheet open={starting} onClose={() => setStarting(false)} title={`Start agent on ${it.key}`}>
         <BatchForm project={{ ...p, repos }} items={[it]} onStarted={(s) => nav(`/s/${s.id}`)} />

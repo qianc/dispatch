@@ -35,17 +35,19 @@ export function Projects() {
   const [adding, setAdding] = useState(false);
   const { data } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
   return (
-    <Page title="Projects" actions={<Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button>}>
+    <Page title="Projects" wide actions={<Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button>}>
       {data && !data.length && <Empty>No projects yet. Create one to start.</Empty>}
-      <Card className="mt-3">
+      {/* phone: one list; desktop: a grid of cards */}
+      <Card className="mt-3 lg:mt-5 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3 lg:border-0 lg:bg-transparent">
         {data?.map((p) => (
-          <Link key={p.id} to={`/p/${p.key}`} className="flex items-center gap-3 px-3 py-3 border-b border-line last:border-b-0 active:bg-raised">
+          <Link key={p.id} to={`/p/${p.key}`} className="flex items-center gap-3 px-3 py-3 border-b border-line last:border-b-0 active:bg-raised lg:rounded-xl lg:border lg:last:border-b lg:bg-panel lg:px-4 lg:py-4 hover:border-faint">
             <ProjectBadge project={p} size={36} />
             <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="flex-1 font-medium truncate">{p.name}</span>
               {!!p.counts?.waiting && <Chip tone="wait">{p.counts.waiting} waiting</Chip>}
-              {!!p.counts?.active_sessions && !p.counts.waiting && <Chip tone="run">{p.counts.active_sessions} live</Chip>}
+              {!!p.counts?.running && !p.counts.waiting && <Chip tone="run">{p.counts.running} running</Chip>}
+              {!!p.counts?.queued && !p.counts.waiting && !p.counts.running && <Chip>{p.counts.queued} queued</Chip>}
             </div>
             <div className="text-[13px] text-muted mt-0.5">
               <ProjectKey k={p.key} className="mr-1.5" />{p.counts?.backlog ?? 0} backlog · {p.counts?.bugs ?? 0} bugs · {p.repos.length} repo{p.repos.length === 1 ? '' : 's'}

@@ -116,6 +116,10 @@ function apply(qc: QueryClient, e: LiveEvent) {
       if (e.item.source_id) qc.invalidateQueries({ queryKey: ['source', e.item.source_id] });
       qc.invalidateQueries({ queryKey: ['projects'] });
       return;
+    case 'project':
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['project', e.key] });
+      return;
     case 'cleanup':
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;

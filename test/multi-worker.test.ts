@@ -187,6 +187,13 @@ describe('the queue with workers that come and go', () => {
     wb.close();
   });
 
+  it('project counts tell running from queued (a session waiting for its worker is not live)', async () => {
+    s.ctx.workers.setDefault(b.id);
+    await s.call('POST', '/projects/QW/batches', { prompt: 'waits' });
+    const qw = (await s.call('GET', '/projects')).data.find((p: { key: string }) => p.key === 'QW');
+    expect(qw.counts).toMatchObject({ running: 0, queued: 1 });
+  });
+
   it('a new chat for an absent worker is queued, not refused', async () => {
     const item = (await s.call('POST', '/projects/QW/items', { title: 'Talk about it' })).data;
     s.ctx.workers.setDefault(b.id);

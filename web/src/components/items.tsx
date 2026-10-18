@@ -22,7 +22,7 @@ const LONG_PRESS_MS = 450;
  * checkbox column marks it. On phones the key shows as its number only. `onOpen` replaces
  * navigation (the desktop drawer).
  */
-export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOpen, active, wrap }: {
+export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOpen, active, wrap, roomy }: {
   item: Item;
   project: Project;
   selectMode?: boolean;
@@ -31,6 +31,8 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
   onOpen?: (it: Item) => void;
   active?: boolean;
   wrap?: boolean;
+  /** the list has the full desktop width (no item drawer beside it) */
+  roomy?: boolean;
 }) {
   const effort = effortLabel(project, item.effort);
   const markable = item.status !== 'in_progress' && item.status !== 'in_review';
@@ -58,7 +60,7 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
             aria-pressed={item.marked}
           >
             <span className={cx('size-5 rounded-md border flex items-center justify-center', item.marked ? 'bg-accent-strong border-accent-strong' : 'border-faint/60')}>
-              {item.marked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="2"><path d="M2.5 6.5l2.5 2.5 4.5-6" /></svg>}
+              {item.marked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" className="text-on-accent"><path d="M2.5 6.5l2.5 2.5 4.5-6" /></svg>}
             </span>
           </button>
         ) : <span className="w-10 shrink-0" />
@@ -78,7 +80,7 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
         onPointerLeave={cancel}
         onPointerCancel={cancel}
         onContextMenu={(e) => onLongPress && e.preventDefault()}
-        className={cx('flex-1 min-w-0 flex gap-2.5 px-3 py-2.5 active:bg-raised', selectMode && 'pl-1', wrap ? 'items-start' : 'items-center')}
+        className={cx('flex-1 min-w-0 flex gap-2.5 px-3 py-2.5 hover:bg-raised/60 active:bg-raised', selectMode && 'pl-1', wrap ? 'items-start' : 'items-center')}
       >
         <span className={cx('flex items-center gap-2 shrink-0', wrap && 'pt-0.5')}>
           <ImportanceIcon value={item.importance} label={project.importance_scale[item.importance - 1]} />
@@ -96,6 +98,13 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
           )}
         </span>
         <span className={cx('flex items-center gap-1 shrink-0', wrap && 'pt-0.5')}>
+          {/* a wide desktop list has room for the modules and tags on the row */}
+          {!wrap && roomy && meta.length > 0 && (
+            <span className="hidden lg:flex items-center gap-1.5 mr-1.5 max-w-80 overflow-hidden">
+              {item.modules.map((m) => <span key={`m-${m}`} className="text-[12px] text-accent whitespace-nowrap">{m}</span>)}
+              {item.labels.map((t) => <span key={`t-${t}`} className="text-[12px] text-muted whitespace-nowrap">#{t}</span>)}
+            </span>
+          )}
           {effort && <Chip>{effort}</Chip>}
           {item.type === 'bug' && <Chip tone="bad">Bug</Chip>}
         </span>

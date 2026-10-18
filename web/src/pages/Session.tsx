@@ -12,6 +12,7 @@ import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
+import { useVeryWide } from '../wide.ts';
 import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
 export interface ChatMode {
@@ -54,6 +55,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   });
   const startNow = useMutation({ mutationFn: () => api.post(`/sessions/${id}/start-now`), onSuccess: refresh });
   const nav = useNavigate();
+  const sidePanel = useVeryWide();
   const { data: workerList } = useWorkers();
   const workers = workerList?.workers ?? [];
   const pause = useMutation({ mutationFn: (on: boolean) => api.post(`/sessions/${id}/${on ? 'pause' : 'resume'}`), onSuccess: refresh });
@@ -104,6 +106,47 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   return (
     <Page
+      aside={chat ? undefined : (
+        <div className="px-4 pt-4 space-y-5 text-[13px]">
+          <div>
+            <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+              <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} /></dd>
+              {workers.length > 0 && <><dt className="text-muted">Worker</dt><dd className="truncate">{workerName(workers, s.worker_id)}</dd></>}
+              {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
+              {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
+              {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
+              {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
+              {s.moved_from && <><dt className="text-muted">Moved from</dt><dd><Link className="text-accent" to={`/s/${s.moved_from}`}>#{s.moved_from}</Link></dd></>}
+              {s.usage?.cost_usd !== undefined && <><dt className="text-muted">Usage</dt><dd>${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} turns</dd></>}
+            </dl>
+          </div>
+          {(data.items.length > 0 || data.source) && (
+            <div>
+              <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Items</h2>
+              <ul className="space-y-1">
+                {data.items.map((i) => (
+                  <li key={i.id}><Link to={`/items/${i.id}`} className="flex gap-2 rounded-md px-1.5 py-1 -mx-1.5 hover:bg-raised"><span className="text-faint shrink-0">{i.key}</span><span className="min-w-0">{i.title}</span></Link></li>
+                ))}
+                {data.source && <li><Link to={`/sources/${data.source.id}`} className="block rounded-md px-1.5 py-1 -mx-1.5 hover:bg-raised text-muted">Source: {data.source.title}</Link></li>}
+              </ul>
+            </div>
+          )}
+          {data.prs.length > 0 && (
+            <div>
+              <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Pull requests</h2>
+              <ul className="space-y-1.5">
+                {data.prs.map((pr) => (
+                  <li key={pr.id}><Link to={`/pr/${pr.id}`} className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 hover:border-faint">
+                    <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
+                    <span className="flex-1 min-w-0 truncate">{pr.title}</span>
+                  </Link></li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
       title={chat ? chat.title : s.title}
       subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.branch}</span></span>}
       back={chat ? chat.back : true}
@@ -128,6 +171,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         />
       }
     >
+      {/* below xl these sit above the conversation; from xl they are in the side panel */}
+      {(chat || !sidePanel) && (<div>
       {(s.kind === 'work' || (accounts?.claude.length ?? 0) > 1 || workers.length > 1) && (
         <div className="px-4 pt-3 text-[12px] text-muted flex flex-wrap gap-x-2">
           {workers.length > 1 && <span>Worker: {workerName(workers, s.worker_id)}</span>}
@@ -137,7 +182,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
         </div>
       )}
+      </div>)}
       {chat?.intro}
+      {(chat || !sidePanel) && (<div>
       {!chat?.intro && (data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">
           {data.items.map((i) => (
@@ -158,6 +205,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           ))}
         </div>
       )}
+      </div>)}
       <Transcript session={s} events={data.events} inputs={data.inputs} project={project} />
       {s.status === 'queued' && (
         <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
