@@ -64,6 +64,8 @@ function toRepo(r: Row): Repo {
     read_dirs: json<string[]>(r.read_dirs, []),
     kind: (r.kind as Repo['kind']) ?? (r.local_path ? 'local' : 'github'),
     worker_id: numOrNull(r.worker_id),
+    upstream_owner: (r.upstream_owner as string | null) ?? null,
+    upstream_name: (r.upstream_name as string | null) ?? null,
     github_account: (r.project_github_account as string | null) ?? null,
   };
 }
@@ -120,7 +122,8 @@ function toPr(r: Row): PullRequest {
     head_ref: String(r.head_ref),
     head_sha: (r.head_sha as string | null) ?? null,
     last_synced: (r.last_synced as string | null) ?? null,
-    local: r.local_path !== null && r.local_path !== undefined,
+    // no GitHub PR: a local or hosted repo's session branch, offered for review in Dispatch
+    local: Number(r.number) < 0,
     // only while open and for the commit it was checked at
     blocked: r.state === 'open' && r.blocked && (r.blocked_sha ?? null) === (r.head_sha ?? null) ? String(r.blocked) : null,
     behind_at_merge: numOrNull(r.behind_at_merge),
@@ -197,19 +200,21 @@ export class Store {
     return r && toRepo(r);
   }
   /** A local repo belongs to a worker: `worker_id`, or the default worker when not given. */
-  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command' | 'kind' | 'worker_id'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command' | 'worker_id'>>): Repo {
-    const kind = r.local_path ? 'local' : 'github';
+  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command' | 'kind' | 'worker_id' | 'upstream_owner' | 'upstream_name'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command' | 'worker_id' | 'kind' | 'upstream_owner' | 'upstream_name'>>): Repo {
+    const kind = r.local_path ? 'local' : r.kind === 'hosted' ? 'hosted' : 'github';
     const workerId = kind === 'local' ? r.worker_id ?? this.defaultWorkerId() : null;
     const { lastId } = this.db.run(
-      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command, kind, worker_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command, kind, worker_id, upstream_owner, upstream_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null, kind, workerId,
+      r.upstream_owner ?? null, r.upstream_name ?? null,
     );
     return this.repo(lastId)!;
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };
-    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ? WHERE id = ?',
-      n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, n.read_dirs?.length ? JSON.stringify(n.read_dirs) : null, id);
+    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ?, upstream_owner = ?, upstream_name = ? WHERE id = ?',
+      n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, n.read_dirs?.length ? JSON.stringify(n.read_dirs) : null,
+      n.upstream_owner ?? null, n.upstream_name ?? null, id);
     return this.repo(id)!;
   }
   deleteRepo(id: number) {

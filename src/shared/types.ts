@@ -69,8 +69,11 @@ export interface Repo {
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */
   github_account?: string | null;
-  /** github: any worker clones it; local: a folder on one worker (`worker_id`) */
-  kind?: 'github' | 'local';
+  /** github: any worker clones it; local: a folder on one worker (`worker_id`); hosted: kept by the server */
+  kind?: 'github' | 'local' | 'hosted';
+  /** hosted repos: a GitHub repo the merged default branch is pushed to (or PRs are opened on) */
+  upstream_owner?: string | null;
+  upstream_name?: string | null;
   /** local repos: the worker whose machine holds the folder */
   worker_id?: number | null;
 }
