@@ -197,6 +197,9 @@ export class ServerLink {
       return;
     }
     this.starting.set(id, []);
+    // the slot is taken from the moment the start is accepted: setup (clone, npm ci) can take minutes
+    const holdsSlot = isStart && !CHAT_KINDS.includes(spec.kind);
+    if (holdsSlot) this.shared.slots.set(this.slotKey(id), true);
     try {
       let cwd: string;
       let extra: Pick<RunnerDeps, 'readDirs' | 'context'> = {};
@@ -241,6 +244,7 @@ export class ServerLink {
       for (const t of queued) runner.push(t);
     } catch (e) {
       this.starting.delete(id);
+      if (holdsSlot) this.shared.slots.set(this.slotKey(id), false);
       console.error(`[${this.entry.name}] session ${id} failed to start`, e);
       this.send({ t: 'status', session_id: id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
     }
@@ -250,9 +254,10 @@ export class ServerLink {
     const ws = this.workspaces;
     // the fake runner still does real git for files and local repos; it only skips GitHub pushes/merges
     const local = 'repo' in cmd && !!cmd.repo?.local_path;
-    if (local && 'repo' in cmd && cmd.repo?.local_path && !insideDirs(cmd.repo.local_path, this.entry.local_repo_dirs, '/')) {
-      throw new Error(`${cmd.repo.local_path} is outside the folders this worker allows for server ${this.entry.name}`);
-    }
+    // every local folder a command touches must be on this server's list (tidy and leftovers carry several)
+    const folders = [...('repo' in cmd && cmd.repo ? [cmd.repo] : []), ...('repos' in cmd ? cmd.repos : [])].flatMap((r) => (r.local_path ? [r.local_path] : []));
+    const outside = folders.find((f) => !insideDirs(f, this.entry.local_repo_dirs, '/'));
+    if (outside) throw new Error(`${outside} is outside the folders this worker allows for server ${this.entry.name}`);
     // leftovers / tidy only look at real folders, so they run in fake mode too
     if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy'].includes(cmd.c)) return { ok: true };
     switch (cmd.c) {

@@ -65,6 +65,11 @@ export class WorkerLink {
     this.ws.close(code, reason);
   }
 
+  /** Drop the socket without waiting for the other side's close frame. */
+  terminate() {
+    this.ws.terminate();
+  }
+
   failPending() {
     for (const [id, p] of this.pending) {
       clearTimeout(p.timer);
@@ -148,9 +153,15 @@ export class WorkerHub {
     return [...seen.values()];
   }
 
-  /** Close a worker's connection (revoked). */
+  /** Cut a worker off now (revoked): forget the link at once, so nothing it sends counts any more. */
   drop(workerId: number, reason: string) {
-    this.links.get(workerId)?.close(4001, reason);
+    const link = this.links.get(workerId);
+    if (!link) return;
+    this.links.delete(workerId);
+    link.failPending();
+    link.close(4001, reason);
+    link.terminate();
+    this.handlers.onDisconnect(workerId);
   }
 
   private async handle(link: WorkerLink, msg: WorkerToServer) {

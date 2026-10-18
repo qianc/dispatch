@@ -14,6 +14,8 @@ async function rawWorker(port: number, token: string, facts?: Record<string, unk
     // answer local repo checks like a worker whose LOCAL_REPO_DIRS holds everything
     if (m.t === 'cmd' && m.cmd?.c === 'inspect_local_repo') {
       ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: { path: m.cmd.path, name: m.cmd.path!.split('/').pop(), default_branch: 'main', receive_deny_current_branch: 'updateInstead' } }));
+    } else if (m.t === 'cmd') {
+      ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: { ok: true } }));
     }
   });
   await new Promise((r) => ws.once('open', r));

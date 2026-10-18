@@ -109,6 +109,7 @@ describe('the queue with workers that come and go', () => {
   afterEach(() => s.app.close());
 
   it('a session for an absent worker waits with the reason and one notice; others start meanwhile', async () => {
+    s.ctx.sessions.workerGraceMs = 0;
     const wa = await rawWorker(s.port, 'test-token');
     s.ctx.workers.setDefault(b.id);
     const forB = (await s.call('POST', '/projects/QW/batches', { prompt: 'for b' })).data;

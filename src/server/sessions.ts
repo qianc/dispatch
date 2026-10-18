@@ -37,6 +37,9 @@ function overlaps(a: Proposal, b: Proposal): boolean {
   return false;
 }
 
+/** Sent when a session's Claude conversation is picked up again without a message from the owner. */
+const RESUME_NOTE = 'The Dispatch worker restarted and this session was resumed. Any question you asked before was not answered; ask it again if you still need it, otherwise continue.';
+
 export class SessionError extends Error {
   readonly status: number;
 
@@ -114,7 +117,10 @@ export class Sessions {
    * it has, against those. null = the legacy default (one unnamed login).
    */
   claudeAccountFor(project: Project | null, requested: string | null | undefined, chat?: 'assistant', workerId?: number): string | null {
-    const known = (workerId !== undefined && this.hub.isConnected(workerId) ? this.hub.claudeAccounts(workerId) : this.hub.claudeAccounts()).map((a) => a.name);
+    // the target worker's accounts: live, or what it reported when it was last seen
+    const known = (workerId === undefined ? this.hub.claudeAccounts()
+      : this.hub.isConnected(workerId) ? this.hub.claudeAccounts(workerId)
+      : this.workers.get(workerId)?.facts?.claude_accounts ?? []).map((a) => a.name);
     const name = chat === 'assistant'
       ? requested ?? this.store.db.setting('assistant_claude_account') ?? null
       : requested ?? project?.claude_account ?? null;
@@ -122,7 +128,7 @@ export class Sessions {
     const chosen = name ?? (project?.claude_allowed?.length ? project.claude_allowed[0] : fallback);
     if (!chosen) return null;
     if (known.length && !known.includes(chosen)) {
-      const worker = workerId !== undefined && this.hub.isConnected(workerId) ? this.workers.get(workerId)?.name : undefined;
+      const worker = workerId !== undefined ? this.workers.get(workerId)?.name : undefined;
       throw new SessionError(worker ? `Worker ${worker} has no Claude account "${chosen}" (it has: ${known.join(', ')}).` : `Unknown Claude account "${chosen}". The worker has: ${known.join(', ')}.`);
     }
     if (project?.claude_allowed && !project.claude_allowed.includes(chosen)) {
@@ -391,6 +397,12 @@ export class Sessions {
     for (const id of live) {
       const s = this.store.session(id);
       if (s && s.worker_id !== workerId) continue; // another worker's session: not this one's to close
+      if (s && s.status === 'queued' && s.pending_prompt) {
+        // the runner kept going while the link was down, and the owner replied: deliver it there
+        this.hub.send(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null) });
+        this.setStatus(s.id, 'running', { waiting_reason: null, pending_prompt: null });
+        continue;
+      }
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
         this.hub.send(workerId, { t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
       }
@@ -407,7 +419,7 @@ export class Sessions {
         this.setStatus(s.id, 'queued');
         continue;
       }
-      const note = 'The Dispatch worker restarted and this session was resumed. Any question you asked before was not answered; ask it again if you still need it, otherwise continue.';
+      const note = RESUME_NOTE;
       this.addEvent(s.id, { kind: 'system', text: 'Worker restarted — session resumed.' });
       this.hub.send(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note) });
       this.setStatus(s.id, 'running', { waiting_reason: null });
@@ -512,6 +524,9 @@ export class Sessions {
 
   onWorkerDisconnect(workerId: number) {
     // Sessions stay in their state; onWorkerHello reconciles when the worker comes back.
+    this.awaySince.set(workerId, Date.now());
+    // still away after the grace time: the waiting sessions get their push then
+    setTimeout(() => !this.hub.isConnected(workerId) && this.dispatch(), this.workerGraceMs + 1000).unref();
     const name = this.workers.get(workerId)?.name ?? String(workerId);
     for (const s of this.liveSessions().filter((x) => x.worker_id === workerId && x.status === 'running')) {
       this.emitSession(this.store.updateSession(s.id, { waiting_reason: `Waiting for worker ${name}` }));
@@ -710,6 +725,11 @@ export class Sessions {
 
   /** Sessions already told about (push) that they wait for their worker. */
   private toldWaiting = new Set<number>();
+  /** A worker away for less than this (a restart, a short sleep) is not worth a push. */
+  workerGraceMs = 2 * 60_000;
+  /** When each worker went away (workers never seen since the server started count from then). */
+  private awaySince = new Map<number, number>();
+  private readonly startedAt = Date.now();
 
   /**
    * Start what can start. Each session waits for its own worker (connected, and with a free slot
@@ -724,11 +744,20 @@ export class Sessions {
         wait('Paused');
         continue;
       }
+      // an "after" batch first waits for the earlier batch, wherever that runs
+      if (next.kind === 'work' && next.options.start === 'after') {
+        const reason = this.waitingFor(next);
+        if (reason) {
+          wait(reason);
+          continue;
+        }
+      }
       const link = this.hub.link(next.worker_id);
       const name = this.workers.get(next.worker_id ?? -1)?.name ?? 'unknown';
       if (!link) {
         wait(`Waiting for worker ${name}`);
-        if (!this.toldWaiting.has(next.id)) {
+        const away = Date.now() - (this.awaySince.get(next.worker_id ?? -1) ?? this.startedAt);
+        if (!this.toldWaiting.has(next.id) && away >= this.workerGraceMs) {
           this.toldWaiting.add(next.id);
           this.notify(next, `${next.project_key ?? 'Dispatch'}: waiting for worker ${name}`, `"${next.title}" starts when ${name} connects.`, `worker-wait-${next.id}`);
         }
@@ -741,16 +770,11 @@ export class Sessions {
           wait(`Waiting for worker ${name} (busy)`);
           continue;
         }
-        if (next.kind === 'work' && next.options.start === 'after') {
-          const reason = this.waitingFor(next);
-          if (reason) {
-            wait(reason);
-            continue;
-          }
-        }
       }
-      const prompt = next.pending_prompt ?? next.initial_prompt;
-      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, null) });
+      // a conversation that already exists continues: with the owner's waiting reply, or a note
+      const note = next.sdk_session_id && !next.pending_prompt ? RESUME_NOTE : null;
+      const prompt = next.pending_prompt ?? note ?? next.initial_prompt;
+      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, note) });
       // until the worker reports again, count the slot as taken
       if (!chat && link.facts && link.facts.free_slots > 0) link.facts.free_slots--;
       this.toldWaiting.delete(next.id);
@@ -840,10 +864,11 @@ export class Sessions {
    * stays where its worktree and conversation are: it stops, and a new session on the other worker
    * picks the work up from the pushed branch. Local repos exist on one worker only.
    */
-  move(sessionId: number, workerId: number): Session {
+  async move(sessionId: number, workerId: number): Promise<Session> {
     const s = this.mustGet(sessionId);
     const target = this.workers.get(workerId);
     if (!target || target.revoked_at) throw new SessionError('Unknown worker');
+    if (FINAL_STATUSES.includes(s.status)) throw new SessionError('This session has ended; start a new batch instead.');
     if (s.worker_id === workerId) return s;
     const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
     if (project && this.store.repos(project.id).some((r) => r.kind === 'local')) {
@@ -858,9 +883,21 @@ export class Sessions {
     }
     if (s.kind !== 'work' || !s.branch) throw new SessionError('Only a work session can move once it has started.');
     const from = this.workers.get(s.worker_id ?? -1)?.name ?? 'another worker';
+    // the new worker starts from the pushed branch: push what the old one has, while it is there
+    let pushed = this.hub.isConnected(s.worker_id);
+    if (pushed) {
+      for (const repo of this.reposOf(s)) {
+        try {
+          await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch }, 120_000);
+        } catch {
+          pushed = false; // nothing to push in that repo, or it failed: say so below
+        }
+      }
+    }
+    const where = pushed ? 'and pushed' : `but ${from} was not reachable, so commits it had not pushed may be missing`;
     const next = this.store.createSession({
       project_id: s.project_id, kind: 'work', title: s.title, status: 'queued', force_plan: s.force_plan, branch: s.branch,
-      initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} and pushed. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}`.trim(),
+      initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} ${where}. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}`.trim(),
       source_id: s.source_id, item_ids: s.item_ids, options: { ...s.options, worker_id: workerId }, claude_account: s.claude_account,
       worker_id: workerId, moved_from: s.id,
     });
