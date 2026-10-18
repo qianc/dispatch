@@ -1,6 +1,6 @@
 # Several workers: design
 
-Date: 2026-10-18. Status: draft for review.
+Date: 2026-10-18. Status: draft for review (revised: a worker can serve several servers).
 
 ## Why
 
@@ -14,6 +14,10 @@ at home, is often asleep, and still has to take the work that needs it.
 
 The owner wants to start work from the app on several machines at once, without the machines
 going out of sync.
+
+The owner may also run more than one Dispatch server, for example one for home projects and one
+for work projects, each with its own projects and its own app. A worker machine (for example the
+Windows desktop) should be able to serve both.
 
 ## Anti-goal (the test of the whole design)
 
@@ -33,6 +37,7 @@ Every choice below is checked against this sentence.
 5. Each worker keeps its own Claude login and its own GitHub access.
 6. Three kinds of repo: GitHub, local (one worker only) and hosted (on the server).
 7. Work started on different workers does not drift apart (see "Staying in sync").
+8. One worker can connect to more than one server and take work from each.
 
 ## Non-goals
 
@@ -44,6 +49,13 @@ Every choice below is checked against this sentence.
   conversation are on one machine.
 - Handing Claude credentials from the server to workers. A subscription login stays on the
   machine where it was made.
+- Copying or syncing backlogs between servers. Each project lives on exactly one server.
+- One app that shows several servers together. Each server has its own app (its own home-screen
+  icon, sign-in and push), as it works today.
+- Keeping sessions from different servers apart on one worker. Agents have full tool access, so a
+  session from one server can in principle read the files of another server's projects on the
+  same machine. The owner accepts this. Real separation (one Linux user or container per server)
+  is a possible later step.
 - A VPN or tunnel built into Dispatch. A worker only needs to reach the server's address. How
   (public HTTPS with a token, WireGuard, or something else) is a deployment choice.
 
@@ -82,9 +94,10 @@ Every choice below is checked against this sentence.
 - At `hello` a worker also reports facts: its Claude accounts and their login state, its GitHub
   accounts, its local repos, its OS, and its free session slots. The server shows these with the
   worker and gives them to the planner. They are facts for warnings, not rules.
-- Each worker has its own slot count. It is set on the worker record; the default is the number
-  the worker reports at `hello`. The server-wide `MAX_CONCURRENT_SESSIONS` stays as an optional
-  overall limit. *(Builder's call, settled in review.)*
+- The worker owns its slot count (`MAX_CONCURRENT_SESSIONS` in the worker's config), because it
+  can serve more than one server (see below). It reports its free slots to the server at `hello`
+  and after each change. The server-wide `MAX_CONCURRENT_SESSIONS` stays as an optional overall
+  limit on that server.
 - Settings has a global default worker. The Assistant (which has no project) runs there, and a
   project without its own default uses it. *(Builder's call.)*
 
@@ -126,6 +139,28 @@ Every choice below is checked against this sentence.
   linked to the old one, that starts from the pushed branch with a fresh Claude conversation. The
   items and an open PR move to the new session. For a local repo there is no other worker, so
   the move is refused. *(Builder's call.)*
+
+### A worker on several servers
+
+- The worker's config lists the servers it connects to. Each entry has the server's address and
+  the worker token that server made for it. To each server, the worker is one of its workers, with
+  its own record, description and facts there.
+- The worker owns its slots. It reports its free slots live to every server it is connected to,
+  and it refuses a start when it is full. The server then keeps that session `queued`, with the
+  reason "Waiting for worker <name> (busy)", and offers it again when the worker reports a free
+  slot.
+- First come, first served between servers. *(Builder's call; a priority per server can come
+  later.)*
+- Each server entry in the worker's config has its own allow lists: the folders it may use as
+  local repos and read dirs (today's `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS`), and the Claude
+  and GitHub accounts it may use. The worker refuses a command from a server for a folder or
+  account that is not on that server's lists. It reports only that server's allowed accounts and
+  repos to it.
+- These lists stop a server from asking for the wrong things. They do not stop an agent from
+  reading other files on the machine (see Non-goals).
+- Session ids are per server, so the worker keys its sessions, worktrees and Claude conversation
+  folders by server and session id. *(Builder's call.)*
+- A worker with one server in its config behaves as a worker does today.
 
 ### Logins and tokens
 
@@ -192,8 +227,11 @@ These rules serve the anti-goal:
    and its local repos stay local there). Phase 1 makes room for a second worker, a Linux one
    elsewhere, for work that does not need Windows. It builds: several worker connections, worker
    records and tokens, a session's worker, placement by the planner, waiting and pausing, local
-   repos tied to a worker, the per-worker facts. Today's worker becomes the worker "default" with
-   all of today's local repos. The server stays where it is.
+   repos tied to a worker, the per-worker facts, and the worker's config with a list of servers,
+   per-server allow lists and worker-owned slots. Today's worker becomes the worker "default"
+   with all of today's local repos. The server stays where it is. *(Builder's call: the
+   several-servers part is in phase 1 because slot ownership and the session keys are cheaper to
+   get right from the start.)*
 2. **The cloud move.** Server and a Linux worker on the VM. Hosted repos, with review and merge
    in Dispatch and the optional push or PR to a GitHub remote. A route for `/worker` (and git
    over HTTPS) at the public address that does not go through the browser sign-in, as `/mcp`
@@ -211,4 +249,7 @@ so phase 2 has room; nothing else of hosted repos is built in phase 1. *(Builder
 - How the planner prompt carries the worker descriptions and the project text.
 - The exact screens, within the existing look: Settings → Workers, the worker on the proposal
   card and the start sheet, the waiting reason in the inbox.
-- Tests for each rule above, with the fake runner and two fake workers.
+- The worker's config file format for its list of servers and allow lists. Today's environment
+  variables keep working as a config with one server.
+- Tests for each rule above, with the fake runner, two fake workers, and one worker on two
+  servers.
