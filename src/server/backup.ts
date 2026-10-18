@@ -33,6 +33,13 @@ export async function backupOnce(dataDir: string, outDir: string, keepDays: numb
     renameSync(join(outDir, `${tgz}.tmp`), join(outDir, tgz));
     made.push(tgz);
   }
+  // hosted repos (the server keeps their only copy unless they push to a GitHub upstream)
+  if (existsSync(join(dataDir, 'git'))) {
+    const tgz = `dispatch-git-${stamp}.tgz`;
+    execFileSync('tar', ['czf', join(outDir, `${tgz}.tmp`), '-C', dataDir, 'git']);
+    renameSync(join(outDir, `${tgz}.tmp`), join(outDir, tgz));
+    made.push(tgz);
+  }
   const cutoff = now.getTime() - keepDays * 86_400_000;
   for (const f of readdirSync(outDir)) {
     if (f.startsWith('dispatch-') && !made.includes(f) && statSync(join(outDir, f)).mtimeMs < cutoff) rmSync(join(outDir, f));

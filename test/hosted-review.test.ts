@@ -152,3 +152,20 @@ describe('review and merge of hosted repos in Dispatch', () => {
     }
   });
 });
+
+describe('hosted repos elsewhere in the app', () => {
+  it('repo file links read from the server, and merged branches are deleted there', async () => {
+    const { s, repo, session } = await setup();
+    try {
+      const r = await fetch(`${s.base}/api/projects/HV/file?path=a.txt`);
+      expect(r.status).toBe(200);
+      expect(await r.text()).toBe('one\n');
+      const [row] = await s.ctx.github.syncSession(session);
+      await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
+      expect(await s.ctx.github.deleteRemoteBranch(repo, session.branch!)).toBe(true);
+      expect(await s.ctx.hosted.branchStatus(repo, session.branch!)).toMatchObject({ exists: false });
+    } finally {
+      await s.app.close();
+    }
+  });
+});

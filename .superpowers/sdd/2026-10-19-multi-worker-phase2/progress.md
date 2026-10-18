@@ -12,3 +12,7 @@ Task 3: Ruling: GITHUB_GIT_BASE setting (default https://github.com) — lets te
 Task 3: Ruling: GitHub credentials for server-side git go through an env-based credential helper — keeps tokens out of URLs, argv and files — cost if wrong: none
 Task 4: complete (commits 33e5455..f4ab91d, tests: npx vitest run → 191/191 pass)
 Task 4: Ruling: hosted repos allow partial clones (uploadpack.allowFilter) — the worker clones with --filter=blob:none — cost if wrong: none
+Task 5: complete (commits f4ab91d..5e3855d, tests: npx vitest run → 196/196 pass)
+Task 5: Ruling: a hosted merge records the review row as merged itself — a squash merge leaves the branch outside the history, so ancestry cannot tell — cost if wrong: none
+Task 5: Ruling: 'rebase' as merge method for hosted repos merges (no server-side rebase) — keeps the server merge simple — cost if wrong: a merge commit where a rebase was chosen
+Task 5: Ruling: PrDetail gains repo { kind, upstream, check_command } — the PR page needs to explain a hosted merge — cost if wrong: none

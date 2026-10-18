@@ -19,7 +19,7 @@ export function safeRelPath(p: string): string {
   return clean;
 }
 
-export function fileRoutes(app: FastifyInstance, { store, hub }: Ctx) {
+export function fileRoutes(app: FastifyInstance, { store, hub, hosted }: Ctx) {
   app.get('/api/projects/:key/file', async (req, reply) => {
     const project = store.projectByKey((req.params as { key: string }).key);
     if (!project) throw notFound('Project');
@@ -33,7 +33,12 @@ export function fileRoutes(app: FastifyInstance, { store, hub }: Ctx) {
     if (!tries.length) throw new HttpError(404, 'This project has no repo or source folder to read files from');
     for (const t of tries) {
       try {
-        // a local repo is on its worker; GitHub repos and source folders on the project's
+        // a hosted repo is read here; a local repo on its worker; GitHub repos and source folders on the project's
+        if (t.repo?.kind === 'hosted') {
+          const bytes = await hosted.readFile(t.repo, path);
+          reply.header('cache-control', 'private, max-age=300');
+          return reply.type(mime(path)).send(bytes);
+        }
         const worker = t.repo?.worker_id ?? project.worker_id ?? store.defaultWorkerId();
         const res = await hub.cmd<{ base64: string }>(worker, { c: 'read_file', ...t, path }, 60_000);
         reply.header('cache-control', 'private, max-age=300');

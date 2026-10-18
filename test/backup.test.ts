@@ -39,3 +39,15 @@ describe('backup errors', () => {
     await expect(backupOnce(data, '/nonexistent/backups', 14)).rejects.toThrow(/cannot write the copy into \/nonexistent\/backups/);
   });
 });
+
+describe('backup of hosted repos', () => {
+  it('tars the git folder too', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'dsp-bk-data-'));
+    const out = mkdtempSync(join(tmpdir(), 'dsp-bk-out-'));
+    new DatabaseSync(join(data, 'dispatch.db')).exec('CREATE TABLE t (v TEXT)');
+    mkdirSync(join(data, 'git', 'r1.git'), { recursive: true });
+    writeFileSync(join(data, 'git', 'r1.git', 'HEAD'), 'ref: refs/heads/main\n');
+    const made = await backupOnce(data, out, 14, new Date('2026-10-19T01:15:00Z'));
+    expect(made.some((f) => /^dispatch-git-\d{8}-\d{6}\.tgz$/.test(f))).toBe(true);
+  });
+});
