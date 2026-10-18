@@ -404,3 +404,30 @@ test('a second worker: made in Settings, picked on the batch sheet, waits while 
   await page.getByRole('button', { name: 'Resume' }).click();
   await expect(page.getByText('Waiting for worker desk')).toBeVisible();
 });
+
+test('on the phone, nothing in the Inbox is wider than the screen', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  // earlier tests leave sessions holding the fake worker's slots: stop them so this one starts
+  for (const old of await (await page.request.get('/api/sessions?status=queued,running,waiting_input,idle')).json()) {
+    await page.request.post(`/api/sessions/${old.id}/finish`, { data: { status: 'stopped' } });
+  }
+  await page.request.post('/api/projects', { data: { key: 'WIDE', name: 'Wide' } });
+  await page.request.post('/api/projects/WIDE/repos', { data: { github_owner: 'me', github_name: 'wide' } });
+  const long = 'Night run: test-suite and verification-build measurements with a very long title that does not fit';
+  const s = await (await page.request.post('/api/projects/WIDE/batches', { data: { title: long, prompt: 'go' } })).json();
+  // answer the fake agent's question, so the session finishes its turn and lands under "Your turn"
+  await expect.poll(async () => (await (await page.request.get(`/api/sessions/${s.id}`)).json()).inputs.length, { timeout: 15_000 }).toBeGreaterThan(0);
+  const d = await (await page.request.get(`/api/sessions/${s.id}`)).json();
+  const q = d.inputs[0];
+  await page.request.post(`/api/inputs/${q.id}/answer`, { data: { kind: 'question', answers: { [q.payload.questions[0].question]: 'Small fix' } } });
+  await page.goto('/');
+  await expect(page.getByText(long)).toBeVisible();
+  const overflow = await page.evaluate(() => {
+    const main = document.querySelector('main')!;
+    return { scroll: main.scrollWidth, client: main.clientWidth };
+  });
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
+});

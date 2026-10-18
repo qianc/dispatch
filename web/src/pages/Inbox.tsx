@@ -77,7 +77,7 @@ export function Inbox() {
       )}
       {data.idle.length > 0 && (
         <Section title="Your turn">
-          <div className="grid gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
             {[...data.idle].sort((a, b) => ORDER[a.attention.kind] - ORDER[b.attention.kind]).map((s) => <TurnCard key={s.id} s={s} />)}
           </div>
         </Section>
