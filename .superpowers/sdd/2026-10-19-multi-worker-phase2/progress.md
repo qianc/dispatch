@@ -7,3 +7,6 @@ Task 1: Ruling: PullRequest.local is now number < 0 (review rows of local AND ho
 Task 1: complete (commits 22424cc, tests: npx vitest run → 184/184 pass)
 Task 2: complete (commits 22424cc..766a09e, tests: npx vitest run → see log)
 Task 2: Ruling: tests run git asynchronously — the test server shares the process, so sync git deadlocks — cost if wrong: none
+Task 3: complete (commits 766a09e..33e5455, tests: npx vitest run → see /tmp/h3.log, all pass)
+Task 3: Ruling: GITHUB_GIT_BASE setting (default https://github.com) — lets tests use a folder for GitHub — cost if wrong: none
+Task 3: Ruling: GitHub credentials for server-side git go through an env-based credential helper — keeps tokens out of URLs, argv and files — cost if wrong: none

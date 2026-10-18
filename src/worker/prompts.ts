@@ -52,7 +52,8 @@ function repoLines(spec: StartSpec) {
   const single = spec.repos.length === 1;
   return spec.repos
     .map((r) => {
-      const where = !r.local_path ? `${r.github_owner}/${r.github_name}`
+      const where = r.kind === 'hosted' ? `${r.github_name} (hosted by Dispatch: origin is the Dispatch server, no GitHub)`
+        : !r.local_path ? `${r.github_owner}/${r.github_name}`
         : r.attached ? `${r.github_name} (local repo at ${r.local_path}; this checkout is a git worktree of it, so its tools see that checkout as main)`
         : `${r.github_name} (local repo, no GitHub: origin is ${r.local_path})`;
       const extra = r.local_path && r.read_dirs?.length
@@ -85,6 +86,9 @@ export function workPrompt(spec: StartSpec): string {
     '- Do not merge the PR yourself; the owner merges from Dispatch.',
     ...(spec.repos.some((r) => r.local_path && r.attached)
       ? [`- Local repos where this checkout is a worktree of the owner's repo: the branch \`${spec.branch}\` already lives in that repo. Commit and stop; do not push and do not run \`gh\`. Dispatch shows the branch to the owner for review and merges it from there.`]
+      : []),
+    ...(spec.repos.some((r) => r.kind === 'hosted')
+      ? [`- Repos hosted by Dispatch get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it there.`]
       : []),
     ...(spec.repos.some((r) => r.local_path && !r.attached)
       ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it from there.`]

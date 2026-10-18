@@ -76,8 +76,8 @@ export class HostedGit {
     await must(dir, ['symbolic-ref', 'HEAD', `refs/heads/${defaultBranch}`]);
     // pushes over HTTP (http-backend allows them once the request is authenticated)
     await must(dir, ['config', 'http.receivepack', 'true']);
-    // never rewrite or delete the default branch from a push
-    await must(dir, ['config', 'receive.denyNonFastForwards', 'false']);
+    // workers clone with --filter=blob:none
+    await must(dir, ['config', 'uploadpack.allowFilter', 'true']);
   }
 
   async create(repo: Repo, defaultBranch: string) {

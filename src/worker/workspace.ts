@@ -18,6 +18,14 @@ const procEnv = () => {
   return extra ? { ...process.env, ...extra } : process.env;
 };
 
+/** ws(s)://host/worker → http(s)://host/git: where a server serves its hosted repos. */
+export function hostedGitBase(workerUrl: string) {
+  const u = new URL(workerUrl);
+  u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  u.pathname = u.pathname.replace(/\/worker\/?$/, '') + '/git';
+  return u.toString().replace(/\/$/, '');
+}
+
 export interface RunResult {
   code: number;
   out: string;
@@ -62,7 +70,7 @@ export class Workspaces {
   private withRepo<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
     const key = `${repo.github_owner}/${repo.github_name}`;
     const prev = this.locks.get(key) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => repoEnv.run(this.gitEnv(repo), fn));
+    const next = prev.catch(() => undefined).then(() => repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, fn));
     this.locks.set(key, next);
     return next;
   }
@@ -70,18 +78,41 @@ export class Workspaces {
   /** git environment for a repo (its project's GitHub account); empty = the worker's own */
   private gitEnv: (repo: Repo) => Record<string, string | undefined>;
 
-  constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({})) {
+  /** the server this worker serves: where its hosted repos are, and the worker's token for them */
+  private hosted: { base: string; token: string } | null;
+
+  constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({}), hosted: { base: string; token: string } | null = null) {
     this.root = root;
     this.remoteBase = remoteBase;
     this.gitEnv = gitEnv;
+    this.hosted = hosted;
   }
 
-  /** Where to clone/fetch from: the local folder for local repos, GitHub otherwise. */
+  /**
+   * git's access to the server's hosted repos: the worker token as a header, through the
+   * environment, so it is in no URL and in no repo config.
+   */
+  hostedEnv(repo?: Repo): Record<string, string> {
+    if (!this.hosted || (repo && repo.kind !== 'hosted')) return {};
+    const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+    return {
+      GIT_CONFIG_COUNT: String(n + 1),
+      [`GIT_CONFIG_KEY_${n}`]: `http.${this.hosted.base}/.extraHeader`,
+      [`GIT_CONFIG_VALUE_${n}`]: `Authorization: Bearer ${this.hosted.token}`,
+    };
+  }
+
+  /** Where to clone/fetch from: the local folder for local repos, the server for hosted ones, GitHub otherwise. */
   remoteUrl(repo: Repo) {
+    if (repo.kind === 'hosted') {
+      if (!this.hosted) throw new Error(`${repo.github_name} is hosted by the Dispatch server, but this worker has no server address for it`);
+      return `${this.hosted.base}/r${repo.id}.git`;
+    }
     return repo.local_path ?? `${this.remoteBase}/${repo.github_owner}/${repo.github_name}.git`;
   }
 
   cacheDir(repo: Repo) {
+    if (repo.kind === 'hosted') return join(this.root, 'cache', 'hosted', `${repo.github_name}-${repo.id}`);
     if (repo.local_path) return join(this.root, 'cache', 'local', `${repo.github_name}-${repo.id}`);
     return join(this.root, 'cache', repo.github_owner, repo.github_name);
   }

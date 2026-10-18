@@ -12,7 +12,7 @@ import { CHAT_KINDS, type WorkerFacts } from '../shared/types.ts';
 import type { ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
-import { run, Workspaces } from './workspace.ts';
+import { hostedGitBase, run, Workspaces } from './workspace.ts';
 
 /** Agent sessions running on this worker, over all servers. Chats take no slot (as on the server). */
 export class Slots {
@@ -72,9 +72,18 @@ export class ServerLink {
   constructor(entry: ServerEntry, shared: LinkShared) {
     this.entry = entry;
     this.shared = shared;
-    this.opts = { ...shared.opts, assistantReadDirs: entry.read_dirs };
     const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
-    this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv);
+    // this server's hosted repos are at its own address, with this worker's token for it
+    this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv, { base: hostedGitBase(entry.url), token: entry.token });
+    this.opts = {
+      ...shared.opts,
+      assistantReadDirs: entry.read_dirs,
+      // agents push the branch of a hosted repo themselves: give their git the same access
+      sessionEnv: (spec) => ({
+        ...shared.opts.sessionEnv?.(spec),
+        ...(spec.repos.some((r) => r.kind === 'hosted') ? this.workspaces.hostedEnv() : {}),
+      }),
+    };
   }
 
   private slotKey(id: number) {
