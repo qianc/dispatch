@@ -1,7 +1,7 @@
 // GitHub: link PRs to sessions by branch, sync item status, show diffs, merge.
 import { Octokit } from '@octokit/rest';
 import type { GithubAccount } from '../shared/accounts.ts';
-import type { BranchFile, BranchStatus, PullRequest, Repo, Session } from '../shared/types.ts';
+import type { BranchFile, BranchStatus, MergeEvent, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
@@ -17,6 +17,8 @@ export interface PrFile {
 
 export interface PrDetail {
   pr: PullRequest;
+  /** times the owner's hands were needed for this session's merges */
+  hands: MergeEvent[];
   body: string;
   base_ref: string;
   files: PrFile[];
@@ -270,6 +272,7 @@ export class GitHub {
         if (!this.autoMergeNoted.has(key)) {
           this.autoMergeNoted.add(key);
           this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge into ${repoName} waits for ${ref}: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
+          this.store.addMergeEvent(s.id, 'asked_update', pr.id, `${behind} commit${behind === 1 ? '' : 's'} behind`);
           this.onBehind?.(s, repo, behind);
           this.tell(s.id); // the agent goes on working: no "waiting for you" yet
         }
@@ -347,7 +350,7 @@ export class GitHub {
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) {
       const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
-      return { pr, body: '', base_ref: repo.default_branch, files, checks: [] };
+      return { pr, hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
     }
     const o = { owner: repo.github_owner, repo: repo.github_name };
     const [{ data: p }, files, checks] = await Promise.all([
@@ -359,6 +362,7 @@ export class GitHub {
     ]);
     return {
       pr,
+      hands: this.store.mergeEvents(pr.session_id),
       body: p.body ?? '',
       base_ref: p.base.ref,
       files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch ?? null })),
@@ -372,6 +376,8 @@ export class GitHub {
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) how = 'local';
+    // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
+    this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).catch(() => null));
     if (how === 'github') {
       await this.gh(repo).pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
     } else {

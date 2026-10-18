@@ -8,6 +8,7 @@ import {
   type Item,
   type ItemImage,
   type ItemStatus,
+  type MergeEvent,
   type PendingInput,
   type PendingInputPayload,
   type Project,
@@ -122,6 +123,7 @@ function toPr(r: Row): PullRequest {
     local: r.local_path !== null && r.local_path !== undefined,
     // only while open and for the commit it was checked at
     blocked: r.state === 'open' && r.blocked && (r.blocked_sha ?? null) === (r.head_sha ?? null) ? String(r.blocked) : null,
+    behind_at_merge: numOrNull(r.behind_at_merge),
   };
 }
 
@@ -509,6 +511,21 @@ export class Store {
   }
 
   /** Remember why auto-merge stopped on this PR (at its current head commit). */
+  setPrBehindAtMerge(id: number, behind: number | null) {
+    this.db.run('UPDATE pull_requests SET behind_at_merge = ? WHERE id = ?', behind, id);
+  }
+
+  addMergeEvent(sessionId: number, kind: MergeEvent['kind'], prId: number | null = null, detail: string | null = null) {
+    this.db.run('INSERT INTO merge_events (session_id, pr_id, kind, detail) VALUES (?, ?, ?, ?)', sessionId, prId, kind, detail);
+  }
+
+  mergeEvents(sessionId: number): MergeEvent[] {
+    return this.db.all('SELECT * FROM merge_events WHERE session_id = ? ORDER BY id', sessionId).map((r) => ({
+      id: Number(r.id), session_id: Number(r.session_id), pr_id: numOrNull(r.pr_id), kind: r.kind as MergeEvent['kind'],
+      detail: (r.detail as string | null) ?? null, created_at: String(r.created_at),
+    }));
+  }
+
   setPrBlocked(id: number, why: string | null) {
     this.db.run('UPDATE pull_requests SET blocked = ?, blocked_sha = head_sha WHERE id = ?', why, id);
   }

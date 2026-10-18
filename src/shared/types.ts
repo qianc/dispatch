@@ -293,6 +293,18 @@ export interface PullRequest {
   local: boolean;
   /** why auto-merge stopped, while that still holds (open, same head commit) */
   blocked: string | null;
+  /** commits the default branch had that the branch lacked, when it was merged */
+  behind_at_merge: number | null;
+}
+
+/** A time the owner's hands were needed to get work merged. */
+export interface MergeEvent {
+  id: number;
+  session_id: number;
+  pr_id: number | null;
+  kind: 'asked_update' | 'resolve_conflicts' | 'manual_merge';
+  detail: string | null;
+  created_at: string;
 }
 
 /** An image on an item (or on one of its comments). `url` serves it; `file` stays on the server. */
