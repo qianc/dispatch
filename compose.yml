@@ -28,7 +28,7 @@ services:
       # a folder the Assistant may read (retros, notes); read-only
       - ${NOTES_DIR:-./docs}:/host/notes:ro
       # local repos (no GitHub): mount them and set LOCAL_REPO_DIRS=/host/repos
-      # - ${HOME}/projects:/host/repos
+      # - ${HOME}/repos:/host/repos
     restart: unless-stopped
 
 volumes:

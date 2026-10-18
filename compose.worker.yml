@@ -13,7 +13,7 @@ services:
       - workspaces:/workspaces
       - claude-home:/home/node/.claude
       # - ./worker.json:/config/worker.json:ro     # with WORKER_CONFIG=/config/worker.json
-      # - ${HOME}/projects:/host/repos              # local repos, with LOCAL_REPO_DIRS=/host/repos
+      # - ${HOME}/repos:/host/repos              # local repos, with LOCAL_REPO_DIRS=/host/repos
     restart: unless-stopped
 
 volumes:

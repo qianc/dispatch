@@ -15,7 +15,7 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   projects.
 - Review the PR diff on your phone and **merge** on GitHub, or merge locally on the worker and push.
 - An **Assistant** tab (Haiku by default) that runs the tracker for you: "new project Decks for
-  github.com/me/decks", "read ~/projects/notes/retro.md and file the issues under Decks". It changes
+  github.com/me/decks", "read ~/notes/retro.md and file the issues under Decks". It changes
   projects, repos, items and sources at once. To start agent work it shows a card you confirm. It
   can read files only in `ASSISTANT_READ_DIRS` and cannot edit files or run commands.
 - **Discuss this** on any item: a read-only Haiku chat (`DISCUSS_MODEL`) that knows the item and the
@@ -130,7 +130,7 @@ The worker shows as online in **Settings → Workers**. On each project, **Setti
 sets its default worker and the rules the planner follows when it proposes where a batch runs. A
 session for a worker that is asleep waits in the queue and starts when the worker connects.
 
-**One worker, several servers** (for example a home and a work instance): give the worker a
+**One worker, several servers** (separate environments, each with its own server and app): give the worker a
 [`worker.json`](docs/examples/worker.json) with one entry per server (address, token file, the
 folders and accounts that server may use) and set `WORKER_CONFIG` to its path. Its session limit
 counts over all servers.
@@ -209,7 +209,7 @@ A server can have several workers, for example a Linux VM for most work and a Wi
 - **Logins stay on the worker.** Each worker uses its own Claude login and GitHub token. The
   server never sends credentials to a worker.
 
-**A worker that serves several servers** (for example a home server and a work server) reads a
+**A worker that serves several servers** (separate environments, each with its own server) reads a
 JSON file named by `WORKER_CONFIG`. The worker owns its slots (`max_concurrent`, over all
 servers), and each server gets only the folders and accounts listed for it:
 
@@ -217,10 +217,10 @@ servers), and each server gets only the folders and accounts listed for it:
 {
   "max_concurrent": 3,
   "servers": [
-    { "name": "home", "url": "wss://dispatch.example.com/worker", "token_file": "~/.config/dispatch/worker-home.token",
-      "local_repo_dirs": ["~/projects"], "read_dirs": ["~/projects"] },
-    { "name": "work", "url": "wss://dispatch.work.example/worker", "token_file": "~/.config/dispatch/worker-work.token",
-      "local_repo_dirs": ["~/work"], "claude_accounts": ["work"], "github_accounts": ["work"] }
+    { "name": "server-a", "url": "wss://dispatch-a.example.com/worker", "token_file": "~/.config/dispatch/worker-server-a.token",
+      "local_repo_dirs": ["~/repos/a"], "read_dirs": ["~/repos/a"] },
+    { "name": "server-b", "url": "wss://dispatch-b.example.com/worker", "token_file": "~/.config/dispatch/worker-server-b.token",
+      "local_repo_dirs": ["~/repos/b"], "claude_accounts": ["account-b"], "github_accounts": ["account-b"] }
   ]
 }
 ```
