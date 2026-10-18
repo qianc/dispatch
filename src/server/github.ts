@@ -53,6 +53,29 @@ export class GitHub {
   }
 
   /** The client for a repo: its project's GitHub account, else the first account. */
+  /** where git reaches GitHub (set from the config; a folder in tests) */
+  gitBase = 'https://github.com';
+
+  /** A GitHub repo's git URL. Credentials never go in it (see gitEnv). */
+  gitUrl(owner: string, name: string) {
+    return `${this.gitBase}/${owner}/${name}.git`;
+  }
+
+  /**
+   * Environment for git commands that reach GitHub as the project's account: a credential helper
+   * reads the token from the environment, so it is in no URL, argument or file.
+   */
+  gitEnv(repo: Pick<Repo, 'github_account'>): Record<string, string> {
+    const account = this.accounts.find((a) => a.name === repo.github_account) ?? this.accounts[0];
+    if (!account) return {};
+    return {
+      DISPATCH_GH_TOKEN: account.token,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!f() { echo username=x-access-token; echo "password=$DISPATCH_GH_TOKEN"; }; f',
+    };
+  }
+
   clientFor(repo: Pick<Repo, 'github_account'> | null): Octokit | null {
     return (repo?.github_account && this.clients.get(repo.github_account)) || this.octo;
   }

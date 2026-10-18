@@ -2,9 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
-import { addLocalRepo, mergeNote } from '../repos.ts';
+import { addHostedRepo, addLocalRepo, mergeNote, ownerName } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus, hosted }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -67,7 +67,13 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
 
   app.post('/api/projects/:key/repos', async (req) => {
     const p = project((req.params as { key: string }).key);
-    const body = (req.body ?? {}) as { local_path?: string };
+    const body = (req.body ?? {}) as { local_path?: string; hosted?: unknown };
+    if (body.hosted) {
+      const { hosted: input } = z.object({ hosted: z.object({ name: z.string().min(1), default_branch: z.string().min(1).optional(), import: z.string().optional(), upstream: z.string().optional(), check_command: z.string().nullable().optional() }) }).parse(req.body);
+      const repo = await addHostedRepo(store, hosted, github, p, input);
+      bus.emit({ t: 'project', key: p.key });
+      return repo;
+    }
     if (body.local_path) {
       const input = z.object({ local_path: z.string().min(1), default_branch: z.string().optional(), check_command: z.string().nullable().optional(), worker_id: z.number().int().nullable().optional() }).parse(req.body);
       const { repo, info } = await addLocalRepo(store, hub, p, input.local_path, input);
@@ -84,7 +90,12 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const id = intParam((req.params as { id: string }).id);
     const repo = store.repo(id);
     if (!repo) throw notFound('Repo');
-    const patch = repoPatch.parse(req.body);
+    const { upstream, ...patch } = repoPatch.extend({ upstream: z.string().nullable().optional() }).parse(req.body) as ReturnType<typeof repoPatch.parse> & { upstream?: string | null };
+    if (upstream !== undefined) {
+      if (repo.kind !== 'hosted') throw new HttpError(400, 'Only a repo hosted by Dispatch has an upstream.');
+      const up = upstream ? ownerName(upstream) : null;
+      Object.assign(patch, { upstream_owner: up?.owner ?? null, upstream_name: up?.name ?? null });
+    }
     if (patch.read_dirs?.length) {
       if (!repo.local_path) throw new HttpError(400, 'Extra readable folders are for local repos only: a GitHub repo has no checkout of yours to read.');
       const bad = patch.read_dirs.find((d) => !isRepoSubdir(d));
@@ -100,6 +111,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const repo = store.repo(intParam((req.params as { id: string }).id));
     if (!repo) throw notFound('Repo');
     store.deleteRepo(repo.id);
+    if (repo.kind === 'hosted') await hosted.retire(repo); // the data stays on disk, renamed
     bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
     return { ok: true };
   });

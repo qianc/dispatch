@@ -124,3 +124,45 @@ describe('hosted repos on the server', () => {
     expect(git(h.dir(r), 'symbolic-ref', 'HEAD')).toBe('refs/heads/trunk');
   });
 });
+
+describe('making hosted repos', () => {
+  it('creates an empty one, imports one from GitHub, links and unlinks an upstream, and keeps the data on delete', async () => {
+    const { startServer } = await import('./helpers.ts');
+    const { existsSync, readdirSync } = await import('node:fs');
+    // a folder stands in for github.com: <base>/<owner>/<name>.git
+    const gh = mkdtempSync(join(tmpdir(), 'dsp-ghbase-'));
+    const src = join(gh, 'me', 'old.git');
+    execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', src]);
+    const w = mkdtempSync(join(tmpdir(), 'dsp-srcw-'));
+    git(w, 'clone', '--quiet', src, '.');
+    git(w, 'checkout', '--quiet', '-b', 'main');
+    commit(w, 'readme.md', '# old\n');
+    git(w, 'push', '--quiet', 'origin', 'main');
+
+    const data = mkdtempSync(join(tmpdir(), 'dsp-hdata-'));
+    const s = await startServer({ DATA_DIR: data, GITHUB_GIT_BASE: gh });
+    try {
+      await s.call('POST', '/projects', { key: 'HR', name: 'Hosted' });
+      const blank = await s.call('POST', '/projects/HR/repos', { hosted: { name: 'app' } });
+      expect(blank.status).toBe(200);
+      expect(blank.data).toMatchObject({ kind: 'hosted', github_owner: 'hosted', github_name: 'app', default_branch: 'main', upstream_owner: null });
+      expect(s.ctx.hosted.exists(blank.data)).toBe(true);
+
+      const imported = await s.call('POST', '/projects/HR/repos', { hosted: { name: 'old', import: 'me/old', upstream: 'me/old' } });
+      expect(imported.status).toBe(200);
+      expect(imported.data).toMatchObject({ kind: 'hosted', upstream_owner: 'me', upstream_name: 'old' });
+      expect((await s.ctx.hosted.readFile(s.ctx.store.repo(imported.data.id)!, 'readme.md')).toString()).toBe('# old\n');
+
+      expect((await s.call('PATCH', `/repos/${blank.data.id}`, { upstream: 'me/new' })).data).toMatchObject({ upstream_owner: 'me', upstream_name: 'new' });
+      expect((await s.call('PATCH', `/repos/${blank.data.id}`, { upstream: null })).data).toMatchObject({ upstream_owner: null });
+      expect((await s.call('PATCH', `/repos/${blank.data.id}`, { upstream: 'not a repo' })).status).toBe(400);
+      expect((await s.call('POST', '/projects/HR/repos', { hosted: { name: 'bad/name' } })).status).toBe(400);
+
+      expect((await s.call('DELETE', `/repos/${blank.data.id}`)).status).toBe(200);
+      expect(existsSync(s.ctx.hosted.dir(blank.data))).toBe(false);
+      expect(readdirSync(join(data, 'git')).some((f) => f.startsWith(`r${blank.data.id}.deleted-`))).toBe(true);
+    } finally {
+      await s.app.close();
+    }
+  });
+});

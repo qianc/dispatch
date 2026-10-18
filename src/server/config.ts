@@ -37,6 +37,8 @@ export interface Config {
    * only the proxy itself counts as the proxy.
    */
   proxySecret: string | null;
+  /** where hosted repos import from and push to (GITHUB_GIT_BASE; tests point it at a folder) */
+  githubGitBase: string;
   proxySecretHeader: string;
 }
 
@@ -82,6 +84,7 @@ export function loadConfig(raw = process.env): Config {
     authUsers: list(env.AUTH_USERS),
     remoteTokenScopes: env.TOKEN_REMOTE_SCOPES !== undefined ? list(env.TOKEN_REMOTE_SCOPES) : ['read', 'tracker'],
     proxySecret: env.PROXY_SECRET || null,
+    githubGitBase: (env.GITHUB_GIT_BASE ?? 'https://github.com').replace(/\/$/, ''),
     proxySecretHeader: (env.PROXY_SECRET_HEADER ?? 'X-Proxy-Secret').toLowerCase(),
   };
   if (cfg.proxySecret && cfg.proxySecret.length < 24) throw new Error('PROXY_SECRET must be at least 24 characters.');

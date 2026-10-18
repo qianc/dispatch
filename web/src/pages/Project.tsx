@@ -437,6 +437,11 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     onSuccess: refresh,
   });
   const [repo, setRepo] = useState({ full: '', default_branch: '', check_command: '', worker_id: '' });
+  const [hostedForm, setHostedForm] = useState<{ on: boolean; name: string; import: string; upstream: string }>({ on: false, name: '', import: '', upstream: '' });
+  const addHosted = useMutation({
+    mutationFn: () => api.post('/projects/' + project.key + '/repos', { hosted: { name: hostedForm.name.trim(), import: hostedForm.import.trim() || undefined, upstream: hostedForm.upstream.trim() || undefined, default_branch: repo.default_branch || undefined } }),
+    onSuccess: () => { setHostedForm({ on: false, name: '', import: '', upstream: '' }); refresh(); },
+  });
   const isPath = /^(\/|~\/|\.\.?\/)/.test(repo.full.trim());
   const { data: workerList } = useWorkers();
   const workers = workerList?.workers ?? [];
@@ -462,7 +467,8 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
             <div key={r.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line">
               <div className="flex-1 min-w-0">
                 <div className="truncate">
-                  {r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</> : `${r.github_owner}/${r.github_name}`}
+                  {r.kind === 'hosted' ? <><Chip className="mr-1.5">hosted</Chip>{r.github_name}{r.upstream_owner && <span className="text-muted"> → {r.upstream_owner}/{r.upstream_name}</span>}</>
+                    : r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</> : `${r.github_owner}/${r.github_name}`}
                 </div>
                 <div className="text-[12px] text-muted truncate">
                   base {r.default_branch}
@@ -476,6 +482,21 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
               <Button small variant="ghost" onClick={() => setEditing(r)}>Edit</Button>
             </div>
           ))}
+          <label className="flex items-center gap-2 px-3 pt-3 text-[14px]">
+            <input type="checkbox" checked={hostedForm.on} onChange={(e) => setHostedForm({ ...hostedForm, on: e.target.checked })} className="size-4 accent-[var(--color-accent-strong)]" />
+            Keep the repo in Dispatch (hosted)
+          </label>
+          {hostedForm.on ? (
+            <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addHosted.mutate(); }}>
+              <p className="text-[12px] text-muted">Dispatch keeps the repo itself. Workers clone and push to it, and you review and merge here. Optionally copy an existing GitHub repo, and push merges on to a GitHub repo.</p>
+              <input className={inputCls} placeholder="name, e.g. app" value={hostedForm.name} onChange={(e) => setHostedForm({ ...hostedForm, name: e.target.value })} aria-label="Hosted repo name" />
+              <input className={inputCls} placeholder="copy from GitHub (optional): owner/name" value={hostedForm.import} onChange={(e) => setHostedForm({ ...hostedForm, import: e.target.value })} aria-label="Copy from GitHub" />
+              <input className={inputCls} placeholder="push merges to GitHub (optional): owner/name" value={hostedForm.upstream} onChange={(e) => setHostedForm({ ...hostedForm, upstream: e.target.value })} aria-label="Push merges to GitHub" />
+              <input className={inputCls} placeholder="base branch (main)" value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
+              <ErrorText error={addHosted.error} />
+              <Button className="w-full" disabled={!hostedForm.name.trim() || addHosted.isPending}>{addHosted.isPending ? 'Making the repo…' : 'Add hosted repo'}</Button>
+            </form>
+          ) : (
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
             <input className={inputCls} placeholder="owner/repo, or a local folder like ~/projects/x" value={repo.full} onChange={(e) => setRepo({ ...repo, full: e.target.value })} aria-label="Repository" />
             {isPath && <p className="text-[12px] text-muted">Local repo: agents push their branches into this folder, and you review and merge them here. No GitHub needed.</p>}
@@ -494,6 +515,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
             {repoNote && <p className="text-[12px] text-wait">{repoNote}</p>}
             <Button className="w-full" disabled={!repo.full.includes('/') || addRepo.isPending}>Add repo</Button>
           </form>
+          )}
         </Card>
       </Section>
       <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing ? `Repo ${editing.github_name}` : 'Repo'}>
@@ -592,6 +614,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     setup_command: repo.setup_command ?? '',
     worktree_from: repo.worktree_from ?? 'repo',
     read_dirs: (repo.read_dirs ?? []).join('\n'),
+    upstream: repo.upstream_owner ? `${repo.upstream_owner}/${repo.upstream_name}` : '',
   });
   const save = useMutation({
     mutationFn: () => api.patch(`/repos/${repo.id}`, {
@@ -599,13 +622,19 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       check_command: f.check_command.trim() || null,
       setup_command: f.setup_command.trim() || null,
       ...(repo.local_path ? { worktree_from: f.worktree_from, read_dirs: f.read_dirs.split('\n').map((d) => d.trim()).filter(Boolean) } : {}),
+      ...(repo.kind === 'hosted' ? { upstream: f.upstream.trim() || null } : {}),
     }),
     onSuccess: onDone,
   });
   return (
     <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-      <p className="text-[13px] text-muted mb-3 break-all">{repo.local_path ?? `${repo.github_owner}/${repo.github_name}`}</p>
+      <p className="text-[13px] text-muted mb-3 break-all">{repo.kind === 'hosted' ? `${repo.github_name} · hosted by Dispatch` : repo.local_path ?? `${repo.github_owner}/${repo.github_name}`}</p>
       <Field label="Base branch"><input className={inputCls} value={f.default_branch} onChange={(e) => setF({ ...f, default_branch: e.target.value })} /></Field>
+      {repo.kind === 'hosted' && (
+        <Field label="GitHub repo to push merges to (optional)" hint="After a merge in Dispatch, the base branch is pushed there, with the project's GitHub account. You can also open PRs there instead of merging in Dispatch.">
+          <input className={inputCls} value={f.upstream} onChange={(e) => setF({ ...f, upstream: e.target.value })} placeholder="owner/name" aria-label="Upstream GitHub repo" />
+        </Field>
+      )}
       {repo.local_path && (
         <Field
           label="Session worktrees"
