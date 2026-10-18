@@ -9,6 +9,7 @@ import type { Notifier } from '../notify.ts';
 import type { Sessions } from '../sessions.ts';
 import type { Store } from '../store.ts';
 import type { WorkerHub } from '../workerHub.ts';
+import type { Workers } from '../workers.ts';
 
 export interface Ctx {
   cfg: Config;
@@ -17,6 +18,7 @@ export interface Ctx {
   access: Access;
   bus: Bus;
   hub: WorkerHub;
+  workers: Workers;
   sessions: Sessions;
   github: GitHub;
   notifier: Notifier;

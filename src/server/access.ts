@@ -96,6 +96,11 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/tokens': 'user',
   'POST /api/tokens': 'user',
   'DELETE /api/tokens/:id': 'user',
+  'GET /api/workers': 'read',
+  'POST /api/workers': 'user',
+  'PATCH /api/workers/:id': 'user',
+  'DELETE /api/workers/:id': 'user',
+  'PUT /api/settings/default-worker': 'user',
   'GET /api/oauth/grants': 'user',
   'DELETE /api/oauth/grants/:id': 'user',
 };

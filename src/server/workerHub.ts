@@ -63,6 +63,13 @@ export class WorkerHub {
     });
   }
 
+  /** (replaced by per-worker links in the multi-worker hub) */
+  isConnected(_workerId: number) {
+    return this.connected;
+  }
+
+  drop(_workerId: number, _reason: string) {}
+
   send(msg: ServerToWorker): boolean {
     if (this.ws?.readyState !== 1 /* OPEN */) return false;
     this.ws.send(JSON.stringify(msg));

@@ -1,6 +1,7 @@
 // Data access. All SQL lives here; routes and services work with domain types.
 import type { Db, Row } from './db.ts';
 import { now } from './db.ts';
+import { Workers } from './workers.ts';
 import {
   itemKey,
   type InputAnswer,
@@ -42,6 +43,8 @@ function toProject(r: Row): Project {
     claude_allowed: json<string[] | null>(r.claude_allowed, null),
     color: (r.color as string | null) ?? null,
     icon: (r.icon as string | null) ?? null,
+    worker_id: numOrNull(r.worker_id),
+    placement_md: String(r.placement_md ?? ''),
     created_at: String(r.created_at),
   };
 }
@@ -58,6 +61,8 @@ function toRepo(r: Row): Repo {
     worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
     setup_command: (r.setup_command as string | null) ?? null,
     read_dirs: json<string[]>(r.read_dirs, []),
+    kind: (r.kind as Repo['kind']) ?? (r.local_path ? 'local' : 'github'),
+    worker_id: numOrNull(r.worker_id),
     github_account: (r.project_github_account as string | null) ?? null,
   };
 }
@@ -156,7 +161,7 @@ export class Store {
     const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon'>>): Project {
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
@@ -167,9 +172,9 @@ export class Store {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(
-      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ? WHERE id = ?',
+      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ?, worker_id = ?, placement_md = ? WHERE id = ?',
       n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
-      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, id,
+      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, id,
     );
     return this.project(id)!;
   }
@@ -189,10 +194,13 @@ export class Store {
     const r = this.db.get(`${REPO_SELECT} WHERE r.id = ?`, id);
     return r && toRepo(r);
   }
-  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command'>>): Repo {
+  /** A local repo belongs to a worker: `worker_id`, or the default worker when not given. */
+  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command' | 'kind' | 'worker_id'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command' | 'worker_id'>>): Repo {
+    const kind = r.local_path ? 'local' : 'github';
+    const workerId = kind === 'local' ? r.worker_id ?? this.defaultWorkerId() : null;
     const { lastId } = this.db.run(
-      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null,
+      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command, kind, worker_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null, kind, workerId,
     );
     return this.repo(lastId)!;
   }
@@ -333,6 +341,11 @@ export class Store {
     this.db.run('DELETE FROM item_images WHERE id = ?', id);
   }
 
+  /** The default worker: the setting, if it names a live worker, else the legacy one (no hash). */
+  defaultWorkerId(): number {
+    return new Workers(this.db).defaultId();
+  }
+
   // ---------- sessions ----------
   private toSession(r: Row): Session {
     return {
@@ -352,6 +365,10 @@ export class Store {
       usage: json(r.usage, null),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       claude_account: (r.claude_account as string | null) ?? null,
+      worker_id: numOrNull(r.worker_id),
+      paused: bool(r.paused),
+      pending_prompt: (r.pending_prompt as string | null) ?? null,
+      moved_from: numOrNull(r.moved_from),
       item_ids: json<number[]>(r.item_ids, []),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
@@ -379,22 +396,24 @@ export class Store {
       .all(`${SESSION_SELECT} WHERE ${k} AND s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, ...(kind ? [kind] : []), itemId)
       .map((r) => this.toSession(r));
   }
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null }): Session {
+  /** `worker_id` defaults to the default worker. */
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
+        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`);
-      params.push(k === 'usage' || k === 'options' ? JSON.stringify(v) : (v as string | null));
+      params.push(k === 'usage' || k === 'options' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | null));
     }
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;

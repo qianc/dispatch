@@ -1,3 +1,4 @@
+import type { ClaudeAccountInfo } from './accounts.ts';
 import { PROJECT_COLOR_NAMES, PROJECT_ICONS, type ProjectColor } from './projectLook.ts';
 import { z } from 'zod';
 
@@ -42,6 +43,10 @@ export interface Project {
   /** look in lists (names from projectLook.ts); null = default colour from the key / its first letter */
   color: string | null;
   icon: string | null;
+  /** default worker for its sessions (null = the global default) */
+  worker_id: number | null;
+  /** prose for the planner: when to use which worker */
+  placement_md: string;
   created_at: string;
 }
 
@@ -64,6 +69,10 @@ export interface Repo {
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */
   github_account?: string | null;
+  /** github: any worker clones it; local: a folder on one worker (`worker_id`) */
+  kind?: 'github' | 'local';
+  /** local repos: the worker whose machine holds the folder */
+  worker_id?: number | null;
 }
 
 export interface Source {
@@ -147,10 +156,43 @@ export interface Session {
   options: RunOptions;
   /** Claude account this session runs on; fixed once started (null = legacy default) */
   claude_account: string | null;
+  /** the worker it runs on, for its whole life */
+  worker_id: number | null;
+  /** a queued session the owner paused: it does not start until resumed */
+  paused: boolean;
+  /** a reply sent while the worker was away; delivered when it starts */
+  pending_prompt: string | null;
+  /** the session this one was moved from (Move to another worker) */
+  moved_from: number | null;
   item_ids: number[];
   created_at: string;
   updated_at: string;
   ended_at: string | null;
+}
+
+/** What a worker reported about itself at hello (names only, never credentials). */
+export interface WorkerFacts {
+  os: string;
+  hostname: string;
+  slots: number;
+  free_slots: number;
+  claude_accounts: ClaudeAccountInfo[];
+  github_accounts: string[];
+  local_repo_dirs: string[];
+}
+
+export interface WorkerRecord {
+  id: number;
+  name: string;
+  description: string;
+  prefix: string;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+  facts: WorkerFacts | null;
+  /** the legacy worker connects with the server's WORKER_TOKEN */
+  legacy: boolean;
+  connected?: boolean;
 }
 
 /** Compact, UI-ready transcript event. */
