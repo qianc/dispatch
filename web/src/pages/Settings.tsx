@@ -65,7 +65,7 @@ export function Settings() {
           )}
         </Card>
       </Section>
-      <AccountsSection />
+      <ServerGithubSection />
       <WorkersSection />
       <AccessSection />
       <Section title="Status">
@@ -100,61 +100,26 @@ function AppearanceSection() {
   );
 }
 
-function AccountsSection() {
-  const qc = useQueryClient();
+/** The server's own GitHub access: it follows PRs and merges. Workers clone and push with theirs. */
+function ServerGithubSection() {
   const { data } = useAccounts();
-  const setAssistant = useMutation({
-    mutationFn: (name: string | null) => api.patch('/settings', { assistant_claude_account: name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
-  });
   if (!data) return null;
   return (
-    <>
-      <Section title="Claude accounts">
-        <Card>
-          {data.claude.map((a) => (
-            <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
-              <div className="flex items-center gap-2">
-                <span className="flex-1 font-medium">{a.label}</span>
-                <Chip tone={a.logged_in === false ? 'bad' : a.logged_in ? 'ok' : 'neutral'}>{a.logged_in === false ? 'needs login' : a.logged_in ? 'logged in' : a.kind}</Chip>
-              </div>
-              <div className="text-[12px] text-muted break-all">
-                {a.name} · {a.kind === 'config_dir' ? `login in ${a.config_dir}` : a.kind === 'oauth_token' ? 'setup-token' : a.kind === 'api_key' ? 'API key' : `this machine (${a.config_dir ?? '~/.claude'})`}
-              </div>
-              {a.logged_in === false && a.config_dir && (
-                <div className="text-[12px] text-wait mt-1">On the worker machine: <code>CLAUDE_CONFIG_DIR={a.config_dir} claude</code>, then /login</div>
-              )}
+    <Section title="GitHub (server)">
+      <Card>
+        {data.github.map((a) => (
+          <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 font-medium">{a.name}</span>
+              <Chip tone={a.login ? 'ok' : 'bad'}>{a.login ? `@${a.login}` : 'token not working'}</Chip>
             </div>
-          ))}
-          {!data.claude.length && <p className="p-3 text-[13px] text-muted">The worker has not connected yet.</p>}
-        </Card>
-        {data.claude.length > 1 && (
-          <div className="mx-3 mt-3">
-            <Field label="Assistant runs on" group hint="The Assistant only manages the tracker; it does not read project code.">
-              <Segmented
-                value={data.assistant_claude_account ?? ''}
-                onChange={(v) => setAssistant.mutate(v || null)}
-                options={[{ value: '', label: `Default · ${data.claude[0]?.label}` }, ...data.claude.slice(1).map((a) => ({ value: a.name, label: a.label }))]}
-              />
-            </Field>
+            <div className="text-[12px] text-muted">{[a.git_name, a.git_email].filter(Boolean).join(' · ') || 'commits use the worker default identity'}</div>
           </div>
-        )}
-      </Section>
-      <Section title="GitHub accounts">
-        <Card>
-          {data.github.map((a) => (
-            <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
-              <div className="flex items-center gap-2">
-                <span className="flex-1 font-medium">{a.name}</span>
-                <Chip tone={a.login ? 'ok' : 'bad'}>{a.login ? `@${a.login}` : 'token not working'}</Chip>
-              </div>
-              <div className="text-[12px] text-muted">{[a.git_name, a.git_email].filter(Boolean).join(' · ') || 'commits use the worker default identity'}</div>
-            </div>
-          ))}
-          {!data.github.length && <p className="p-3 text-[13px] text-muted">No GitHub account configured (GITHUB_ACCOUNTS or GITHUB_TOKEN).</p>}
-        </Card>
-      </Section>
-    </>
+        ))}
+        {!data.github.length && <p className="p-3 text-[13px] text-muted">No GitHub account configured (GITHUB_ACCOUNTS or GITHUB_TOKEN).</p>}
+      </Card>
+      <p className="mx-4 mt-1.5 text-[12px] text-muted">The server uses this to follow PRs and merge them. Each worker clones and pushes with its own GitHub access, listed under Workers.</p>
+    </Section>
   );
 }
 
@@ -168,6 +133,38 @@ const SCOPE_INFO: Record<string, string> = {
   admin: 'Projects, repos, settings',
 };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
+
+/** A worker's own logins: its Claude accounts (with how to log in when one needs it) and GitHub accounts. */
+function WorkerAccounts({ w }: { w: WorkerRow }) {
+  const claude = w.facts?.claude_accounts ?? [];
+  const github = w.facts?.github_accounts ?? [];
+  if (!claude.length && !github.length) return null;
+  return (
+    <div className="mt-2 rounded-lg bg-bg border border-line divide-y divide-line">
+      {claude.map((a) => (
+        <div key={a.name} className="px-2.5 py-1.5">
+          <div className="flex items-center gap-2 text-[13px]">
+            <span className="text-muted shrink-0">Claude</span>
+            <span className="flex-1 min-w-0 truncate">{a.label}</span>
+            <Chip tone={a.logged_in === false ? 'bad' : a.logged_in ? 'ok' : 'neutral'}>{a.logged_in === false ? 'needs login' : a.logged_in ? 'logged in' : a.kind}</Chip>
+          </div>
+          <div className="text-[12px] text-muted break-all">
+            {a.name} · {a.kind === 'config_dir' ? `login in ${a.config_dir}` : a.kind === 'oauth_token' ? 'setup-token' : a.kind === 'api_key' ? 'API key' : `login in ${a.config_dir ?? '~/.claude'}`}
+          </div>
+          {a.logged_in === false && a.config_dir && (
+            <div className="text-[12px] text-wait mt-0.5">On {w.name}: <code>CLAUDE_CONFIG_DIR={a.config_dir} claude</code>, then /login</div>
+          )}
+        </div>
+      ))}
+      {github.length > 0 && (
+        <div className="px-2.5 py-1.5 flex items-center gap-2 text-[13px]">
+          <span className="text-muted shrink-0">GitHub</span>
+          <span className="flex-1 min-w-0 truncate">{github.join(', ')}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** The machines that run agents: each has its own token and a description the planner reads. */
 function WorkersSection() {
@@ -185,6 +182,13 @@ function WorkersSection() {
   const revoke = useMutation({ mutationFn: (id: number) => api.del(`/workers/${id}`), onSuccess: refresh });
   const setDefault = useMutation({ mutationFn: (id: number) => api.put('/settings/default-worker', { worker_id: id }), onSuccess: refresh });
   const workers = data?.workers ?? [];
+  const { data: accounts } = useAccounts();
+  const setAssistant = useMutation({
+    mutationFn: (name: string | null) => api.patch('/settings', { assistant_claude_account: name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
+  });
+  // the Assistant runs on the default worker, with one of its Claude logins
+  const assistantChoices = workers.find((w) => w.id === data?.default_worker_id)?.facts?.claude_accounts ?? [];
   return (
     <Section title="Workers">
       <Card>
@@ -198,7 +202,6 @@ function WorkersSection() {
                   {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}
                   {w.facts?.slots ? ` · ${w.facts.free_slots}/${w.facts.slots} slots free` : ''}
-                  {w.facts?.claude_accounts.length ? ` · Claude: ${w.facts.claude_accounts.map((a) => a.label).join(', ')}` : ''}
                   {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
                 </div>
               </div>
@@ -215,9 +218,21 @@ function WorkersSection() {
                 {w.description || 'Add a description: what this machine has, and when to use it. The planner reads it.'}
               </button>
             )}
+            <WorkerAccounts w={w} />
           </div>
         ))}
       </Card>
+      {assistantChoices.length > 1 && (
+        <div className="mx-3 mt-3">
+          <Field label="Assistant runs on" group hint="The Assistant runs on the default worker. It only manages the tracker; it does not read project code.">
+            <Segmented
+              value={accounts?.assistant_claude_account ?? ''}
+              onChange={(v) => setAssistant.mutate(v || null)}
+              options={[{ value: '', label: `Default · ${assistantChoices[0]?.label}` }, ...assistantChoices.slice(1).map((a) => ({ value: a.name, label: a.label }))]}
+            />
+          </Field>
+        </div>
+      )}
       <form className="mx-3 mt-3 rounded-xl border border-line bg-panel p-3" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <Field label="New worker" hint="Lowercase letters, digits and dashes."><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. desktop" /></Field>
         <Field label="Description"><textarea className={cx(inputCls, 'min-h-16')} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Windows desktop in WSL. Has PowerPoint. Often asleep." /></Field>

@@ -12,7 +12,7 @@ import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
 describe('accounts from env', () => {
   it('keeps today\'s single login and token as the "default" account', () => {
-    expect(claudeAccounts({})).toEqual([{ name: 'default', label: "This machine's Claude login", kind: 'machine' }]);
+    expect(claudeAccounts({})).toEqual([{ name: 'default', label: 'Default Claude login', kind: 'machine' }]);
     expect(githubAccounts({ GITHUB_TOKEN: 't', GIT_AUTHOR_NAME: 'J', GIT_AUTHOR_EMAIL: 'j@x' })).toEqual([{ name: 'default', token: 't', git_name: 'J', git_email: 'j@x' }]);
     expect(githubAccounts({})).toEqual([]);
   });

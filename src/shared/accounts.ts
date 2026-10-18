@@ -64,7 +64,7 @@ export function claudeAccounts(env: Env): ClaudeAccount[] {
   const names = list(env.CLAUDE_ACCOUNTS);
   if (!names.length) {
     const kind: ClaudeAccountKind = env.CLAUDE_CODE_OAUTH_TOKEN ? 'oauth_token' : env.ANTHROPIC_API_KEY ? 'api_key' : 'machine';
-    return [{ name: 'default', label: "This machine's Claude login", kind }];
+    return [{ name: 'default', label: 'Default Claude login', kind }];
   }
   return names.map((name) => {
     const k = `CLAUDE_ACCOUNT_${envKey(name)}_`;
