@@ -170,7 +170,7 @@ export class GitHub {
    * branch lacks, is shown as a review entry (number = -session id) until it is merged.
    */
   private async syncLocal(s: Session, repo: Repo): Promise<PullRequest | null> {
-    const st = await this.hub.cmd<BranchStatus>({ c: 'branch_status', repo, branch: s.branch! }, 120_000);
+    const st = await this.hub.cmd<BranchStatus>(s.worker_id, { c: 'branch_status', repo, branch: s.branch! }, 120_000);
     const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id);
     if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
     if (st.merged && !known) return null; // nothing was ever offered for review
@@ -189,13 +189,18 @@ export class GitHub {
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
+  /** The worker that holds a PR's branch: its session's. */
+  private workerOf(pr: PullRequest) {
+    return this.store.session(pr.session_id)?.worker_id ?? null;
+  }
+
   /** Called when auto-merge waits because the branch is behind (app.ts sends the agent a message). */
   onBehind: ((s: Session, repo: Repo, behind: number) => void) | null = null;
 
   /** Commits on the default branch that the PR / local branch does not have yet. */
   private async behindBy(repo: Repo, pr: PullRequest): Promise<number> {
     if (repo.local_path) {
-      const st = await this.hub.cmd<BranchStatus>({ c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
+      const st = await this.hub.cmd<BranchStatus>(this.workerOf(pr), { c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
       return st.behind;
     }
     const { data } = await this.gh(repo).repos.compareCommits({ owner: repo.github_owner, repo: repo.github_name, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
@@ -341,7 +346,7 @@ export class GitHub {
     const pr = await this.syncPr(prId);
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) {
-      const files = await this.hub.cmd<BranchFile[]>({ c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
+      const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
       return { pr, body: '', base_ref: repo.default_branch, files, checks: [] };
     }
     const o = { owner: repo.github_owner, repo: repo.github_name };
@@ -370,7 +375,7 @@ export class GitHub {
     if (how === 'github') {
       await this.gh(repo).pulls.merge({ owner: repo.github_owner, repo: repo.github_name, pull_number: pr.number, merge_method: method });
     } else {
-      const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>({
+      const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>(this.workerOf(pr), {
         c: 'merge_local', repo, branch: pr.head_ref, message: pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`,
       });
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
@@ -388,7 +393,7 @@ export class GitHub {
   async createPr(s: Session, repoId: number) {
     const repo = this.store.repo(repoId);
     if (!repo || repo.project_id !== s.project_id || !s.branch) throw new Error('Unknown repo for this session');
-    await this.hub.cmd({ c: 'push_branch', repo, session_id: s.id, branch: s.branch });
+    await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch });
     if (repo.local_path) {
       const pr = await this.syncLocal(s, repo);
       if (!pr) throw new Error('The branch has no commits beyond the default branch yet');

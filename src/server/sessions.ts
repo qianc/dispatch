@@ -22,7 +22,8 @@ import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
-import type { WorkerHub } from './workerHub.ts';
+import type { WorkerEvent, WorkerHub } from './workerHub.ts';
+import type { Workers } from './workers.ts';
 
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {
@@ -88,12 +89,14 @@ export class Sessions {
   private hub: WorkerHub;
   private notifier: Notifier;
   private maxConcurrent: number;
+  private workers: Workers;
   /** Where tool-result images are stored (set by app.ts). */
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
 
-  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, maxConcurrent: number) {
+  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, maxConcurrent: number, workers: Workers) {
+    this.workers = workers;
     this.store = store;
     this.bus = bus;
     this.hub = hub;
@@ -109,7 +112,7 @@ export class Sessions {
    * it has, against those. null = the legacy default (one unnamed login).
    */
   claudeAccountFor(project: Project | null, requested: string | null | undefined, chat?: 'assistant'): string | null {
-    const known = this.hub.claudeAccounts.map((a) => a.name);
+    const known = this.hub.claudeAccounts().map((a) => a.name);
     const name = chat === 'assistant'
       ? requested ?? this.store.db.setting('assistant_claude_account') ?? null
       : requested ?? project?.claude_account ?? null;
@@ -221,10 +224,13 @@ export class Sessions {
       this.send(open.id, text);
       return this.store.session(open.id)!;
     }
-    if (!this.hub.connected) throw new SessionError('Worker is not connected.', 503);
     const s = create();
+    if (!this.hub.isConnected(s.worker_id)) {
+      this.store.db.run('DELETE FROM sessions WHERE id = ?', s.id);
+      throw new SessionError('Worker is not connected.', 503);
+    }
     this.addEvent(s.id, { kind: 'user', text });
-    this.hub.send({ t: 'start', spec: this.spec(s, text, null, null) });
+    this.hub.send(s.worker_id, { t: 'start', spec: this.spec(s, text, null, null) });
     this.setStatus(s.id, 'running');
     return this.store.session(s.id)!;
   }
@@ -281,7 +287,7 @@ export class Sessions {
     if (s.status === 'waiting_input') throw new SessionError('Answer the open question first.');
     this.addEvent(sessionId, { kind: 'user', text });
     const reopen = FINAL_STATUSES.includes(s.status);
-    if (!this.hub.send({ t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
+    if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
       throw new SessionError('Worker is not connected.', 503);
     }
     this.setStatus(sessionId, 'running', { ended_at: reopen ? null : s.ended_at, waiting_reason: null });
@@ -292,7 +298,7 @@ export class Sessions {
     if (!input) throw new SessionError('Unknown input', 404);
     if (input.answered_at || input.expired) throw new SessionError('This question is already closed.', 409);
     if (input.payload.kind !== answer.kind) throw new SessionError('Answer kind does not match the question.');
-    if (!this.hub.send({ t: 'answer', session_id: input.session_id, local_id: input.local_id, answer })) {
+    if (!this.hub.send(this.store.session(input.session_id)?.worker_id, { t: 'answer', session_id: input.session_id, local_id: input.local_id, answer })) {
       throw new SessionError('Worker is not connected.', 503);
     }
     const saved = this.store.answerInput(inputId, answer);
@@ -303,8 +309,8 @@ export class Sessions {
   }
 
   interrupt(sessionId: number) {
-    this.mustGet(sessionId);
-    this.hub.send({ t: 'interrupt', session_id: sessionId });
+    const s = this.mustGet(sessionId);
+    this.hub.send(s.worker_id, { t: 'interrupt', session_id: sessionId });
   }
 
   /** End a session. `completed` = you are done with it; `stopped` = abandoned. */
@@ -314,7 +320,7 @@ export class Sessions {
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false) {
     const s = this.mustGet(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
-    this.hub.send({ t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -328,16 +334,17 @@ export class Sessions {
 
   // ---------- worker events ----------
 
-  onWorkerHello(live: number[]) {
+  onWorkerHello(workerId: number, live: number[]) {
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
       const s = this.store.session(id);
+      if (s && s.worker_id !== workerId) continue; // another worker's session: not this one's to close
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
-        this.hub.send({ t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
+        this.hub.send(workerId, { t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
       }
     }
-    // Anything we believe is live but the worker does not know about was lost (worker restart): resume it.
-    const lost = this.store.sessions({ statuses: ['running', 'waiting_input'] }).filter((s) => !live.includes(s.id));
+    // Anything of this worker's we believe is live but it does not know about was lost (worker restart): resume it.
+    const lost = this.liveSessions().filter((s) => s.worker_id === workerId && !live.includes(s.id));
     for (const s of lost) {
       for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
       if (!s.sdk_session_id) {
@@ -346,18 +353,23 @@ export class Sessions {
       }
       const note = 'The Dispatch worker restarted and this session was resumed. Any question you asked before was not answered; ask it again if you still need it, otherwise continue.';
       this.addEvent(s.id, { kind: 'system', text: 'Worker restarted — session resumed.' });
-      this.hub.send({ t: 'start', spec: this.spec(s, note, s.sdk_session_id, note) });
+      this.hub.send(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note) });
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
   }
 
-  onWorkerMessage(msg: Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' }>) {
+  /** Agent sessions with a runner (chats are not resumed). */
+  private liveSessions() {
+    return this.store.sessions({ statuses: ['running', 'waiting_input'] });
+  }
+
+  onWorkerMessage(workerId: number, msg: WorkerEvent) {
     const s = this.store.session(msg.session_id);
-    if (!s) return;
+    if (!s || s.worker_id !== workerId) return; // not this worker's session
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
-      if (msg.t !== 'status') this.hub.send({ t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
       return;
     }
     switch (msg.t) {
@@ -439,13 +451,29 @@ export class Sessions {
     }
   }
 
-  onWorkerDisconnect() {
+  onWorkerDisconnect(_workerId: number) {
     // Sessions stay in their state; onWorkerHello reconciles when the worker comes back.
+    this.dispatch(); // queued sessions for it now show that they wait
   }
 
-  /** The `dispatch` MCP tools the agent calls. */
-  async rpc(sessionId: number, method: string, params: unknown): Promise<unknown> {
+  /** The worker did not start a session: it waits in the queue again. */
+  onRefused(workerId: number, sessionId: number, reason: string) {
+    const s = this.store.session(sessionId);
+    if (!s || s.worker_id !== workerId || s.status !== 'running') return;
+    const name = this.workers.get(workerId)?.name ?? String(workerId);
+    if (reason === 'busy') {
+      this.setStatus(s.id, 'queued', { waiting_reason: `Waiting for worker ${name} (busy)` });
+      return;
+    }
+    this.addEvent(s.id, { kind: 'error', text: reason });
+    this.setStatus(s.id, 'failed', { ended_at: new Date().toISOString(), waiting_reason: null });
+    this.notify(s, `${s.project_key ?? 'Dispatch'}: session failed`, reason, `failed-${s.id}`);
+  }
+
+  /** The `dispatch` MCP tools the agent calls. `workerId`: the worker that asks (must be the session's). */
+  async rpc(sessionId: number, method: string, params: unknown, workerId?: number): Promise<unknown> {
     const s = this.mustGet(sessionId);
+    if (workerId !== undefined && s.worker_id !== workerId) throw new Error('This session runs on another worker.');
     const p = (params ?? {}) as Record<string, unknown>;
     if (s.kind === 'assistant') {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
@@ -618,9 +646,9 @@ export class Sessions {
   }
 
   dispatch() {
-    if (!this.hub.connected) return;
     for (const next of this.store.queued()) {
       if (this.store.countActive() >= this.maxConcurrent) return;
+      if (!this.hub.isConnected(next.worker_id)) continue; // its worker is away: others may start
       if (next.kind === 'work' && next.options.start === 'after') {
         const reason = this.waitingFor(next);
         if (reason) {
@@ -628,7 +656,7 @@ export class Sessions {
           continue;
         }
       }
-      this.hub.send({ t: 'start', spec: this.spec(next, next.initial_prompt, next.sdk_session_id, null) });
+      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, next.initial_prompt, next.sdk_session_id, null) });
       this.setStatus(next.id, 'running', { waiting_reason: null });
     }
   }

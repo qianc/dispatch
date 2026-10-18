@@ -33,7 +33,9 @@ export function fileRoutes(app: FastifyInstance, { store, hub }: Ctx) {
     if (!tries.length) throw new HttpError(404, 'This project has no repo or source folder to read files from');
     for (const t of tries) {
       try {
-        const res = await hub.cmd<{ base64: string }>({ c: 'read_file', ...t, path }, 60_000);
+        // a local repo is on its worker; GitHub repos and source folders on the project's
+        const worker = t.repo?.worker_id ?? project.worker_id ?? store.defaultWorkerId();
+        const res = await hub.cmd<{ base64: string }>(worker, { c: 'read_file', ...t, path }, 60_000);
         reply.header('cache-control', 'private, max-age=300');
         return reply.type(mime(path)).send(Buffer.from(res.base64, 'base64'));
       } catch {

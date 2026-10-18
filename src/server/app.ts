@@ -51,7 +51,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const hub = new WorkerHub();
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store);
-  const sessions = new Sessions(store, bus, hub, notifier, cfg.maxConcurrent);
+  const sessions = new Sessions(store, bus, hub, notifier, cfg.maxConcurrent, workers);
   const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub);
   const assistant = new AssistantTools(store, bus, github, sessions, hub);
   const attachments = new Attachments(cfg.dataDir);
@@ -74,15 +74,20 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     await github.syncSession(s).catch((e) => console.warn('PR sync failed:', (e as Error).message));
     return github.toldCount(s.id) > before;
   };
+  let closing = false;
   hub.handlers = {
-    onHello: (live) => {
-      sessions.onWorkerHello(live);
+    onHello: (workerId, live, facts) => {
+      workers.seen(workerId, facts);
+      sessions.onWorkerHello(workerId, live);
       // look for leftovers soon after the worker is (back) online
       setTimeout(() => void janitor.check().catch((e) => console.warn('cleanup check failed:', (e as Error).message)), 30_000).unref();
     },
-    onMessage: (m) => sessions.onWorkerMessage(m),
-    onRpc: (id, method, params) => sessions.rpc(id, method, params),
-    onDisconnect: () => sessions.onWorkerDisconnect(),
+    onMessage: (workerId, m) => sessions.onWorkerMessage(workerId, m),
+    onRpc: (workerId, id, method, params) => sessions.rpc(id, method, params, workerId),
+    onRefused: (workerId, id, reason) => sessions.onRefused(workerId, id, reason),
+    onSlots: () => sessions.dispatch(),
+    // after app.close() the database is gone: links closing then have nothing to update
+    onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
   };
   const access = new Access(cfg, db, auth);
   const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, sessions, github, notifier, attachments, janitor };
@@ -142,10 +147,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl });
 
   app.get('/worker', { websocket: true }, (socket, req) => {
+    // a worker's own token (dsw_…), or the server's WORKER_TOKEN for the legacy worker
     const token = String(req.headers['x-worker-token'] ?? '');
-    const ok = token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
-    if (!ok) return socket.close(4001, 'bad worker token');
-    hub.attach(socket);
+    const legacy = !!cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
+    const worker = legacy ? workers.legacy() : workers.verify(token);
+    if (!worker) return socket.close(4001, 'bad worker token');
+    hub.attach(socket, worker);
   });
 
   authRoutes(app, ctx);
@@ -184,6 +191,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   }
 
   app.addHook('onClose', async () => {
+    closing = true;
     janitor.stop();
     github.stop();
     db.raw.close();

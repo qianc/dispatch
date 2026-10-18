@@ -56,9 +56,9 @@ export class Janitor {
    */
   async tidy(s: Session, opts: { deleteMerged: boolean; force: boolean }): Promise<TidyResult[]> {
     const repos = this.reposOf(s);
-    if (!repos.length || !this.hub.connected) return [];
+    if (!repos.length || !this.hub.isConnected(s.worker_id)) return [];
     const merged = this.mergedRepoIds(s);
-    const results = await this.hub.cmd<TidyResult[]>({ c: 'tidy', session_id: s.id, repos, branch: s.branch, merged_repo_ids: merged, delete_merged: opts.deleteMerged, force: opts.force }, 120_000);
+    const results = await this.hub.cmd<TidyResult[]>(s.worker_id, { c: 'tidy', session_id: s.id, repos, branch: s.branch, merged_repo_ids: merged, delete_merged: opts.deleteMerged, force: opts.force }, 120_000);
     if (opts.deleteMerged && s.branch) {
       for (const repo of repos.filter((r) => !r.local_path && merged.includes(r.id))) {
         const gone = await this.github.deleteRemoteBranch(repo, s.branch).catch(() => false);
@@ -99,7 +99,8 @@ export class Janitor {
     for (const s of finished) {
       const repos = this.reposOf(s);
       if (!repos.length) continue;
-      const left = await this.hub.cmd<Leftover[]>({ c: 'leftovers', session_id: s.id, repos, branch: s.branch, merged_repo_ids: this.mergedRepoIds(s) }, 60_000);
+      if (!this.hub.isConnected(s.worker_id)) continue;
+      const left = await this.hub.cmd<Leftover[]>(s.worker_id, { c: 'leftovers', session_id: s.id, repos, branch: s.branch, merged_repo_ids: this.mergedRepoIds(s) }, 60_000);
       const removable = (l: Leftover) => l.worktree && (s.kind !== 'work' || !(l.dirty || (l.untracked && !(l.branch && l.merged))));
       const worktrees = left.filter(removable).length;
       const branches = left.filter((l) => l.branch && l.merged).length;

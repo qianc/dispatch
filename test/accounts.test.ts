@@ -74,7 +74,7 @@ describe('Claude accounts on projects and batches', () => {
   beforeAll(async () => {
     s = await startServer();
     worker = startWorker(s.port, { CLAUDE_ACCOUNTS: 'private,work', CLAUDE_ACCOUNT_PRIVATE_OAUTH_TOKEN: 'x', CLAUDE_ACCOUNT_WORK_CONFIG_DIR: '/tmp/none-work' });
-    await waitFor(() => s.ctx.hub.claudeAccounts.length === 2, 'worker accounts');
+    await waitFor(() => s.ctx.hub.claudeAccounts().length === 2, 'worker accounts');
     await s.call('POST', '/projects', { key: 'SLD', name: 'SLD' });
     await s.call('POST', '/projects/SLD/repos', { github_owner: 'me', github_name: 'r' });
   });
@@ -96,7 +96,7 @@ describe('Claude accounts on projects and batches', () => {
     await s.call('PATCH', '/projects/SLD', { claude_allowed: ['work'], claude_account: 'work' });
     const sent: unknown[] = [];
     const orig = s.ctx.hub.send.bind(s.ctx.hub);
-    s.ctx.hub.send = (m) => { sent.push(m); return orig(m); };
+    s.ctx.hub.send = (w, m) => { sent.push(m); return orig(w, m); };
     const a = (await s.call('POST', '/projects/SLD/batches', { prompt: 'x' })).data;
     expect(a.claude_account).toBe('work');
     expect(sent).toContainEqual(expect.objectContaining({ t: 'start', spec: expect.objectContaining({ claude_account: 'work' }) }));
@@ -121,7 +121,7 @@ describe('Claude accounts on projects and batches', () => {
 
   it('shows worker notices in the session and pushes them', async () => {
     const sess = (await s.call('GET', '/sessions?project=SLD')).data[0];
-    s.ctx.sessions.onWorkerMessage({ t: 'notice', session_id: sess.id, title: 'Work account needs attention', body: 'log in again' });
+    s.ctx.sessions.onWorkerMessage(s.ctx.workers.legacy().id, { t: 'notice', session_id: sess.id, title: 'Work account needs attention', body: 'log in again' });
     const ev = (await s.call('GET', `/sessions/${sess.id}`)).data.events.at(-1);
     expect(ev.body).toMatchObject({ kind: 'error', text: expect.stringContaining('Work account needs attention') });
     expect(s.ctx.notifier.sent.some((n) => n.title.includes('Work account needs attention'))).toBe(true);

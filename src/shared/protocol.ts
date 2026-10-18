@@ -1,5 +1,6 @@
 // Messages on the internal WebSocket between server and worker.
 import type { ClaudeAccountInfo } from './accounts.ts';
+import type { WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
@@ -51,7 +52,11 @@ export type WorkerCommand =
   | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
 
 export type WorkerToServer =
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[] }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts }
+  /** the worker's free session slots changed (it can serve several servers) */
+  | { t: 'slots'; free: number }
+  /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */
+  | { t: 'refused'; session_id: number; reason: string }
   /** something the owner should know now (login needed, rate limit): shown in the session and pushed */
   | { t: 'notice'; session_id: number; title: string; body: string }
   | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string }

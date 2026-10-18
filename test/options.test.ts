@@ -42,7 +42,7 @@ describe('start modes', () => {
   it('stores options, passes them to the worker, and "now" runs alongside other work', async () => {
     const sent: unknown[] = [];
     const orig = s.ctx.hub.send.bind(s.ctx.hub);
-    s.ctx.hub.send = (m) => { sent.push(m); return orig(m); };
+    s.ctx.hub.send = (w, m) => { sent.push(m); return orig(w, m); };
     const a = (await s.call('POST', '/projects/PA/batches', { prompt: 'one', options: { model: 'opus', effort: 'high', subagents: 'none' } })).data as Session;
     expect(a.options).toMatchObject({ model: 'opus', effort: 'high', subagents: 'none', start: 'now', auto_merge: 'off' });
     expect(sent).toContainEqual(expect.objectContaining({ t: 'start', spec: expect.objectContaining({ options: expect.objectContaining({ model: 'opus', effort: 'high' }) }) }));
@@ -144,7 +144,7 @@ describe('auto-merge', () => {
       const { s, session } = await setup(checks);
       if (!withPr) Object.defineProperty(s.ctx.github, 'octo', { value: { pulls: { list: async () => ({ data: [] }) } } });
       s.ctx.store.updateSession(session.id, { status: 'running', last_text: 'Fixed the legend.' });
-      s.ctx.sessions.onWorkerMessage({ t: 'status', session_id: session.id, status: 'idle' });
+      s.ctx.sessions.onWorkerMessage(s.ctx.workers.legacy().id, { t: 'status', session_id: session.id, status: 'idle' });
       await new Promise((r) => setTimeout(r, 300));
       const titles = s.ctx.notifier.sent.map((n) => `${n.title} | ${n.body}`);
       await s.app.close();

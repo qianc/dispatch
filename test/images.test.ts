@@ -22,7 +22,7 @@ describe('images in tool results', () => {
     it('stores them as files and serves them; nothing else under that route', async () => {
       await s.call('POST', '/projects', { key: 'IM', name: 'Img' });
       const sess = s.ctx.store.createSession({ project_id: 1, kind: 'work', title: 't', status: 'running', force_plan: false, branch: 'b', initial_prompt: '', source_id: null, item_ids: [] });
-      s.ctx.sessions.onWorkerMessage({ t: 'event', session_id: sess.id, body: { kind: 'tool_result', tool_use_id: 'u', is_error: false, text: '' }, images: [{ media_type: 'image/png', data: PNG }] });
+      s.ctx.sessions.onWorkerMessage(s.ctx.workers.legacy().id, { t: 'event', session_id: sess.id, body: { kind: 'tool_result', tool_use_id: 'u', is_error: false, text: '' }, images: [{ media_type: 'image/png', data: PNG }] });
       const ev = (await s.call('GET', `/sessions/${sess.id}`)).data.events.at(-1);
       expect(ev.body.images).toHaveLength(1);
       const res = await fetch(`${s.base}${ev.body.images[0].url}`);

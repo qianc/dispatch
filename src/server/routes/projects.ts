@@ -47,7 +47,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github }: Ctx)
     if (rest.github_account && !github.accounts.some((a) => a.name === rest.github_account)) {
       throw new HttpError(400, `Unknown GitHub account "${rest.github_account}" (configured: ${github.accounts.map((a) => a.name).join(', ') || 'none'})`);
     }
-    const known = hub.claudeAccounts.map((a) => a.name);
+    const known = hub.claudeAccounts().map((a) => a.name);
     for (const n of [rest.claude_account, ...(rest.claude_allowed ?? [])]) {
       if (n && known.length && !known.includes(n)) throw new HttpError(400, `Unknown Claude account "${n}" (the worker has: ${known.join(', ')})`);
     }

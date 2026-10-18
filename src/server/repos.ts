@@ -9,10 +9,11 @@ export const looksLikePath = (s: string) => /^(\/|~\/|~$|\.\.?\/)/.test(s.trim()
 export interface LocalRepoInfo { path: string; name: string; default_branch: string; receive_deny_current_branch: string }
 
 /** Add a local repo after the worker has checked it (inside LOCAL_REPO_DIRS, is a git repo). */
-export async function addLocalRepo(store: Store, hub: WorkerHub, project: Project, path: string, opts: { default_branch?: string; check_command?: string | null } = {}) {
+export async function addLocalRepo(store: Store, hub: WorkerHub, project: Project, path: string, opts: { default_branch?: string; check_command?: string | null; worker_id?: number | null } = {}) {
+  const workerId = opts.worker_id ?? project.worker_id ?? store.defaultWorkerId();
   let info: LocalRepoInfo;
   try {
-    info = await hub.cmd<LocalRepoInfo>({ c: 'inspect_local_repo', path }, 30_000);
+    info = await hub.cmd<LocalRepoInfo>(workerId, { c: 'inspect_local_repo', path }, 30_000);
   } catch (e) {
     throw new HttpError(400, (e as Error).message);
   }
@@ -20,7 +21,7 @@ export async function addLocalRepo(store: Store, hub: WorkerHub, project: Projec
   if (existing) return { repo: existing, info, already: true };
   const repo: Repo = store.addRepo(project.id, {
     github_owner: 'local', github_name: info.name, default_branch: opts.default_branch ?? info.default_branch,
-    check_command: opts.check_command ?? null, local_path: info.path,
+    check_command: opts.check_command ?? null, local_path: info.path, worker_id: workerId,
   });
   return { repo, info, already: false };
 }

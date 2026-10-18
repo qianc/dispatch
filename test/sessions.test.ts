@@ -154,12 +154,12 @@ describe('worker reconnect edge cases', () => {
     // simulate the close message being lost: mark it finished directly, then have the worker say hello again
     const sent: unknown[] = [];
     const orig = s.ctx.hub.send.bind(s.ctx.hub);
-    s.ctx.hub.send = (m) => { sent.push(m); return orig(m); };
+    s.ctx.hub.send = (w, m) => { sent.push(m); return orig(w, m); };
     s.ctx.store.updateSession(a.id, { status: 'completed', ended_at: new Date().toISOString() });
-    s.ctx.sessions.onWorkerHello([a.id]);
+    s.ctx.sessions.onWorkerHello(s.ctx.workers.legacy().id, [a.id]);
     expect(sent).toContainEqual(expect.objectContaining({ t: 'close', session_id: a.id }));
     // late messages from that runner do not reopen it
-    s.ctx.sessions.onWorkerMessage({ t: 'input_request', session_id: a.id, local_id: 'x', payload: { kind: 'plan_approval', plan: '' } });
+    s.ctx.sessions.onWorkerMessage(s.ctx.workers.legacy().id, { t: 'input_request', session_id: a.id, local_id: 'x', payload: { kind: 'plan_approval', plan: '' } });
     expect((await s.call('GET', `/sessions/${a.id}`)).data.session.status).toBe('completed');
     await stopWorker(worker);
     await s.app.close();

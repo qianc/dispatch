@@ -4,7 +4,7 @@ import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../..
 import { attentionOf } from '../../shared/attention.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
-export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, github, bus, janitor }: Ctx) {
+export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -39,7 +39,10 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, gith
     });
   });
 
-  app.get('/api/worker', async () => ({ connected: hub.connected }));
+  app.get('/api/worker', async () => ({
+    connected: hub.connected,
+    workers: workers.list().map((w) => ({ id: w.id, name: w.name, connected: hub.isConnected(w.id) })),
+  }));
 
   app.post('/api/projects/:key/batches', async (req) => sessions.startBatch(project((req.params as { key: string }).key), batchInput.parse(req.body)));
 
