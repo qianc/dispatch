@@ -17,3 +17,5 @@ Task 5: Ruling: a hosted merge records the review row as merged itself — a squ
 Task 5: Ruling: 'rebase' as merge method for hosted repos merges (no server-side rebase) — keeps the server merge simple — cost if wrong: a merge commit where a rebase was chosen
 Task 5: Ruling: PrDetail gains repo { kind, upstream, check_command } — the PR page needs to explain a hosted merge — cost if wrong: none
 Task 6: complete (commits 5e3855d..d029abf, tests: npx vitest run → all pass)
+Task 7 (code+docs): complete (commits d029abf..12c537b, tests: vitest 200/200, e2e 27/27)
+Task 7: Ruling: added GITHUB_API_URL — the spec's enterprise GitHub needs the API address too, not only git — cost if wrong: none

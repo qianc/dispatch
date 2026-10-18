@@ -65,8 +65,11 @@ export async function addHostedRepo(store: Store, hosted: HostedGit, github: Git
     kind: 'hosted', upstream_owner: up?.owner ?? null, upstream_name: up?.name ?? null,
   });
   try {
-    if (from) await hosted.importFrom(repo, github.gitUrl(from.owner, from.name), github.gitEnv(repo));
-    else await hosted.create(repo, repo.default_branch);
+    if (from) {
+      // the copy keeps the source's default branch (master, trunk…) unless one was given
+      const branch = await hosted.importFrom(repo, github.gitUrl(from.owner, from.name), github.gitEnv(repo), input.default_branch);
+      if (branch !== repo.default_branch) store.updateRepo(repo.id, { default_branch: branch });
+    } else await hosted.create(repo, repo.default_branch);
   } catch (e) {
     store.deleteRepo(repo.id);
     throw new HttpError(400, `Could not ${from ? `import ${input.import}` : 'create the repo'}: ${(e as Error).message}`);

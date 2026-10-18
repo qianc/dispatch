@@ -30,6 +30,7 @@ export function gitRoutes(app: FastifyInstance, { cfg, store, workers, hosted }:
     if (!worker) return reply.status(401).header('www-authenticate', 'Bearer realm="dispatch git"').send({ error: 'A worker token is needed' });
     const repo = store.repo(Number(id));
     if (!repo || repo.kind !== 'hosted' || !hosted.exists(repo)) return reply.status(404).send({ error: 'Not found' });
+    await hosted.ensureSafe(repo);
 
     const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?') + 1) : '';
     const cgi = spawn('git', ['http-backend'], {
@@ -48,19 +49,36 @@ export function gitRoutes(app: FastifyInstance, { cfg, store, workers, hosted }:
       },
     });
     const body = req.body as NodeJS.ReadableStream | undefined;
-    if (body && typeof (body as { pipe?: unknown }).pipe === 'function') body.pipe(cgi.stdin);
-    else cgi.stdin.end();
-
     reply.hijack();
     const res = reply.raw;
-    let head = Buffer.alloc(0);
     let headersDone = false;
-    cgi.stdout.on('data', (chunk: Buffer) => {
-      if (headersDone) return void res.write(chunk);
+    const fail = (why: string) => {
+      if (!headersDone && !res.headersSent) {
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        res.end(`git failed: ${why}`);
+      } else res.destroy();
+    };
+    // git may stop reading early (a bad pack, a full disk, a broken gzip body): the pipe then breaks,
+    // which must end this request, never the server
+    cgi.stdin.on('error', () => undefined);
+    cgi.on('error', (e) => fail(e.message));
+    if (body && typeof (body as { pipe?: unknown }).pipe === 'function') {
+      body.on('error', () => cgi.kill());
+      body.pipe(cgi.stdin);
+    } else cgi.stdin.end();
+    // the client went away before the end (a dropped fetch): stop git
+    res.on('close', () => {
+      if (!res.writableFinished) cgi.kill();
+    });
+
+    // CGI headers first, then the body streams through with backpressure (pipe)
+    let head = Buffer.alloc(0);
+    const onHead = (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
-      const end = head.indexOf('\r\n\r\n') >= 0 ? head.indexOf('\r\n\r\n') : head.indexOf('\n\n');
+      const crlf = head.indexOf('\r\n\r\n');
+      const end = crlf >= 0 ? crlf : head.indexOf('\n\n');
       if (end < 0) return;
-      const sep = head[end] === 0x0d ? 4 : 2;
+      const sep = crlf >= 0 ? 4 : 2;
       let status = 200;
       for (const line of head.subarray(0, end).toString('latin1').split(/\r?\n/)) {
         const i = line.indexOf(':');
@@ -72,21 +90,25 @@ export function gitRoutes(app: FastifyInstance, { cfg, store, workers, hosted }:
       }
       res.writeHead(status);
       headersDone = true;
-      const restBytes = head.subarray(end + sep);
-      if (restBytes.length) res.write(restBytes);
-    });
+      cgi.stdout.off('data', onHead);
+      const rest = head.subarray(end + sep);
+      if (rest.length) res.write(rest);
+      cgi.stdout.pipe(res);
+    };
+    cgi.stdout.on('data', onHead);
     let errText = '';
     cgi.stderr.on('data', (d) => (errText += d));
     cgi.on('close', (code) => {
-      if (!headersDone) {
-        res.writeHead(500, { 'content-type': 'text/plain' });
-        res.end(`git failed${code ? ` (${code})` : ''}`);
-        if (errText) console.warn('git http-backend:', errText.trim().slice(0, 500));
-        return;
+      // git is done: whatever the client still sends is read and dropped, so it gets its answer
+      if (body && typeof (body as { unpipe?: unknown }).unpipe === 'function') {
+        body.unpipe(cgi.stdin);
+        (body as NodeJS.ReadableStream & { resume(): void }).resume();
       }
-      res.end();
+      if (!headersDone) {
+        if (errText) console.warn('git http-backend:', errText.trim().slice(0, 500));
+        fail(code ? `exit ${code}` : 'no response');
+      }
     });
-    req.raw.on('aborted', () => cgi.kill());
   };
 
   app.route({ method: ['GET', 'POST'], url: '/git/:repo/*', handler });

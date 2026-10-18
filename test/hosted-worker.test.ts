@@ -59,9 +59,9 @@ describe('a worker on a hosted repo', () => {
     expect(await s.ctx.hosted.branchStatus(repo, 'dispatch/hw-7-x')).toMatchObject({ merged: true });
   });
 
-  it('tells the agent to push the branch and not to open a PR', () => {
+  it('tells the agent to commit, not to push or open a PR', () => {
     const text = workPrompt({ session_id: 1, kind: 'work', project_key: 'HW', project_name: 'HW', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/hw-1-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null });
     expect(text).toContain('app (hosted by Dispatch');
-    expect(text).toMatch(/Repos hosted by Dispatch get no PR: when done, push the branch \(`git push -u origin dispatch\/hw-1-x`\)/);
+    expect(text).toMatch(/Repos hosted by Dispatch: commit your work and stop; do not push/);
   });
 });

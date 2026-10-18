@@ -75,15 +75,8 @@ export class ServerLink {
     const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
     // this server's hosted repos are at its own address, with this worker's token for it
     this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv, { base: hostedGitBase(entry.url), token: entry.token });
-    this.opts = {
-      ...shared.opts,
-      assistantReadDirs: entry.read_dirs,
-      // agents push the branch of a hosted repo themselves: give their git the same access
-      sessionEnv: (spec) => ({
-        ...shared.opts.sessionEnv?.(spec),
-        ...(spec.repos.some((r) => r.kind === 'hosted') ? this.workspaces.hostedEnv() : {}),
-      }),
-    };
+    // agents get no worker token: they commit, and the worker pushes hosted branches (pushHostedBranches)
+    this.opts = { ...shared.opts, assistantReadDirs: entry.read_dirs };
   }
 
   private slotKey(id: number) {
@@ -181,6 +174,25 @@ export class ServerLink {
     return { dirs: [...dirs, ...extra], context, cwd };
   }
 
+  /** A work session's branches of hosted repos, pushed to the server (the agent has no access itself). */
+  async pushHostedBranches(spec: StartSpec) {
+    if (!spec.branch) return;
+    for (const repo of spec.repos.filter((r) => r.kind === 'hosted')) {
+      try {
+        await this.workspaces.pushBranch(repo, spec.session_id, spec.branch);
+      } catch (e) {
+        this.send({ t: 'event', session_id: spec.session_id, body: { kind: 'error', text: `Could not push ${spec.branch} of ${repo.github_name} to Dispatch: ${(e as Error).message}` } });
+      }
+    }
+  }
+
+  /** Before a turn: fetch hosted repos, so the agent can merge origin/<base> without network access. */
+  private async fetchHosted(spec: StartSpec) {
+    for (const repo of spec.repos.filter((r) => r.kind === 'hosted')) {
+      await this.workspaces.refresh(repo).catch((e) => console.warn(`fetch of ${repo.github_name} failed:`, (e as Error).message));
+    }
+  }
+
   /** Why this server may not run this spec here, or null. */
   private refusal(spec: StartSpec): string | null {
     if (!this.allowedClaude(spec.claude_account)) return `This worker does not allow the Claude account "${spec.claude_account ?? 'default'}" for server ${this.entry.name}.`;
@@ -195,7 +207,10 @@ export class ServerLink {
     const id = spec.session_id;
     this.kinds.set(id, spec.kind);
     const live = this.runners.get(id);
-    if (live) return live.push(text);
+    if (live) {
+      if (!this.shared.fake) await this.fetchHosted(spec);
+      return live.push(text);
+    }
     const waiting = this.starting.get(id);
     if (waiting) return void waiting.push(text); // still preparing: deliver after start
     const refused = this.refusal(spec);
@@ -235,8 +250,13 @@ export class ServerLink {
           if (!res.ok) text = `Note from Dispatch: the worktree setup command \`${repo.setup_command}\` failed in ${repo.github_name}. Its output:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
         }
       }
+      const hostedWork = spec.kind === 'work' && !!spec.branch && spec.repos.some((r) => r.kind === 'hosted') && !this.shared.fake;
       const deps: RunnerDeps = {
-        emit: (m) => this.send(m),
+        // a finished turn of work on a hosted repo: push its branch first, so the server sees it
+        emit: (m) => {
+          if (hostedWork && m.t === 'status' && m.status === 'idle') void this.pushHostedBranches(spec).finally(() => this.send(m));
+          else this.send(m);
+        },
         rpc: this.rpcFor(id),
         cwd,
         onClosed: () => {

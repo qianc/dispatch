@@ -88,7 +88,7 @@ export function workPrompt(spec: StartSpec): string {
       ? [`- Local repos where this checkout is a worktree of the owner's repo: the branch \`${spec.branch}\` already lives in that repo. Commit and stop; do not push and do not run \`gh\`. Dispatch shows the branch to the owner for review and merges it from there.`]
       : []),
     ...(spec.repos.some((r) => r.kind === 'hosted')
-      ? [`- Repos hosted by Dispatch get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it there.`]
+      ? [`- Repos hosted by Dispatch: commit your work and stop; do not push and do not run \`gh\` for them (you have no access). Dispatch pushes the branch at the end of your turn and shows it to the owner for review. Before each turn Dispatch fetches them, so \`origin/<base branch>\` is current: to bring the base branch in, \`git merge origin/<base branch>\` without fetching.`]
       : []),
     ...(spec.repos.some((r) => r.local_path && !r.attached)
       ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it from there.`]

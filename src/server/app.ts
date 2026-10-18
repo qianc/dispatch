@@ -63,7 +63,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   sessions.attachments = attachments;
   sessions.assistantRpc = (s, method, params) => assistant.call(s, method, params);
   github.onBehind = (s, repo, behind) => {
-    const text = `(From Dispatch, not the owner:) before auto-merge, your branch must include the latest ${repo.default_branch}: it is ${behind} commit${behind === 1 ? '' : 's'} behind. Merge ${repo.default_branch} into your branch${repo.local_path ? '' : ` (git fetch origin, then merge origin/${repo.default_branch})`}, resolve any conflicts, re-run the tests the change touches${repo.local_path ? '' : ', and push'}. Dispatch merges once the branch is up to date and checks pass.`;
+    const text = `(From Dispatch, not the owner:) before auto-merge, your branch must include the latest ${repo.default_branch}: it is ${behind} commit${behind === 1 ? '' : 's'} behind. Merge ${repo.default_branch} into your branch${repo.kind === 'hosted' ? ` (merge origin/${repo.default_branch}: Dispatch fetched it; do not fetch or push)` : repo.local_path ? '' : ` (git fetch origin, then merge origin/${repo.default_branch})`}, resolve any conflicts, re-run the tests the change touches${repo.local_path || repo.kind === 'hosted' ? '' : ', and push'}. Dispatch merges once the branch is up to date and checks pass.`;
     try {
       sessions.send(s.id, text);
     } catch (e) {

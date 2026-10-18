@@ -185,6 +185,11 @@ export class Workspaces {
     return dir;
   }
 
+  /** Fetch a repo's clone now (hosted repos before each turn). */
+  refresh(repo: Repo) {
+    return this.withRepo(repo, () => this.ensureCache(repo));
+  }
+
   /**
    * Make sure every repo of the session has its worktree; returns the cwd for Claude.
    * New worktrees are added to `created` (their setup command runs before the agent starts).

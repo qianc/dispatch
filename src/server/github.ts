@@ -159,6 +159,15 @@ export class GitHub {
           if (t && this.clientFor(repo)) {
             const { data } = await this.gh(repo).pulls.list({ owner: t.owner, repo: t.repo, head: `${t.owner}:${s.branch}`, state: 'all', per_page: 5 });
             for (const p of data) out.push(await this.record(s, repo, p as GhPull));
+            // the review moved to GitHub, but sessions push to Dispatch's repo: bring new commits over
+            const open = out.find((p) => p.repo_id === repo.id && p.number > 0 && p.state === 'open');
+            if (open) {
+              const st = await this.hosted!.branchStatus(repo, s.branch);
+              if (st.exists && st.head_sha !== open.head_sha) {
+                const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${s.branch}`], this.gitEnv(repo));
+                if (!pushed.ok) console.warn(`could not update ${t.owner}/${t.repo} ${s.branch}:`, pushed.output.slice(0, 200));
+              }
+            }
           }
           const pr = await this.syncHosted(s, repo);
           if (pr) out.push(pr);

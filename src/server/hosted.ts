@@ -3,7 +3,7 @@
 // need no worker. A linked GitHub repo ("upstream") gets the merged default branch pushed to it.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rename } from 'node:fs/promises';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BranchFile, BranchStatus, Repo } from '../shared/types.ts';
 
@@ -46,6 +46,24 @@ async function must(gitDir: string | null, args: string[], env: Env = {}, cwd?: 
   return r.out.trim();
 }
 
+/**
+ * pre-receive hook: the default branch only moves forward. A push cannot rewrite it (force-push)
+ * or delete it; other branches are free. The server's own merges (update-ref) do not run hooks.
+ */
+const GUARD_HOOK = `#!/bin/sh
+# Dispatch: the default branch only moves forward (no force-push, no delete)
+default=$(git symbolic-ref --short HEAD)
+while read old new ref; do
+  [ "$ref" = "refs/heads/$default" ] || continue
+  case "$new" in *[!0]*) ;; *) echo "Dispatch: $default cannot be deleted" >&2; exit 1;; esac
+  case "$old" in *[!0]*) ;; *) continue;; esac
+  if ! git merge-base --is-ancestor "$old" "$new"; then
+    echo "Dispatch: $default only moves forward here (no force-push)" >&2; exit 1
+  fi
+done
+exit 0
+`;
+
 export type MergeResult = { ok: true; sha: string } | { ok: false; conflict: boolean; output: string };
 
 export class HostedGit {
@@ -72,6 +90,24 @@ export class HostedGit {
     return next;
   }
 
+  private safe = new Set<number>();
+
+  /** The guard hook and a ref log, also for repos made before they existed (once per process). */
+  async ensureSafe(repo: Pick<Repo, 'id'>) {
+    if (this.safe.has(repo.id)) return;
+    const dir = this.dir(repo);
+    await must(dir, ['config', 'core.logAllRefUpdates', 'always']);
+    await mkdir(join(dir, 'hooks'), { recursive: true });
+    await writeFile(join(dir, 'hooks', 'pre-receive'), GUARD_HOOK);
+    await chmod(join(dir, 'hooks', 'pre-receive'), 0o755);
+    this.safe.add(repo.id);
+  }
+
+  /** The repo's default branch (HEAD), e.g. after a change in the app. */
+  async setDefaultBranch(repo: Pick<Repo, 'id'>, branch: string) {
+    await must(this.dir(repo), ['symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+  }
+
   private async configure(dir: string, defaultBranch: string) {
     await must(dir, ['symbolic-ref', 'HEAD', `refs/heads/${defaultBranch}`]);
     // pushes over HTTP (http-backend allows them once the request is authenticated)
@@ -86,15 +122,28 @@ export class HostedGit {
     await mkdir(this.root, { recursive: true });
     await must(null, ['init', '--quiet', '--bare', dir]);
     await this.configure(dir, defaultBranch);
+    await this.ensureSafe(repo);
   }
 
-  /** A copy of an existing repo (all branches and tags), e.g. from GitHub. */
-  async importFrom(repo: Repo, url: string, env: Env) {
+  /**
+   * A copy of an existing repo (all branches and tags), e.g. from GitHub. Its default branch is the
+   * source's, unless one is given. Returns the default branch.
+   */
+  async importFrom(repo: Repo, url: string, env: Env, defaultBranch?: string): Promise<string> {
     const dir = this.dir(repo);
     if (this.exists(repo)) throw new Error(`Hosted repo ${dir} already exists`);
     await mkdir(this.root, { recursive: true });
-    await must(null, ['clone', '--quiet', '--bare', url, dir], env);
-    await this.configure(dir, repo.default_branch);
+    try {
+      await must(null, ['clone', '--quiet', '--bare', url, dir], env);
+      const branch = defaultBranch ?? ((await git(dir, ['symbolic-ref', '--short', 'HEAD'])).out.trim() || 'main');
+      await this.configure(dir, branch);
+      await this.ensureSafe(repo);
+      return branch;
+    } catch (e) {
+      // leave nothing half-made behind (the next try with this id would find it)
+      await rename(dir, `${dir}.failed-${Date.now()}`).catch(() => undefined);
+      throw e;
+    }
   }
 
   /** Keep the data when a repo is removed from a project. */
