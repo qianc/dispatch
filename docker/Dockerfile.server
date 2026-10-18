@@ -9,6 +9,8 @@ RUN npm run build
 FROM node:24-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data WEB_DIST=/app/dist/web PORT=3000
+# git for hosted repos (the server keeps them, serves them to workers, merges in them)
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 # no dev deps and no optional deps: the server does not run Claude, so skip the bundled CLI binary
 RUN npm ci --omit=dev --omit=optional && npm cache clean --force

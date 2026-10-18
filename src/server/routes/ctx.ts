@@ -10,6 +10,7 @@ import type { Sessions } from '../sessions.ts';
 import type { Store } from '../store.ts';
 import type { WorkerHub } from '../workerHub.ts';
 import type { Workers } from '../workers.ts';
+import type { HostedGit } from '../hosted.ts';
 
 export interface Ctx {
   cfg: Config;
@@ -19,6 +20,7 @@ export interface Ctx {
   bus: Bus;
   hub: WorkerHub;
   workers: Workers;
+  hosted: HostedGit;
   sessions: Sessions;
   github: GitHub;
   notifier: Notifier;

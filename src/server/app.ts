@@ -34,6 +34,8 @@ import { streamRoutes } from './routes/stream.ts';
 import { fileRoutes } from './routes/files.ts';
 import { workerRoutes } from './routes/workers.ts';
 import { Workers } from './workers.ts';
+import { HostedGit } from './hosted.ts';
+import { gitRoutes } from './routes/git.ts';
 
 
 declare module 'fastify' {
@@ -47,6 +49,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const db = new Db(opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db'));
   const store = new Store(db);
   const workers = new Workers(db);
+  const hosted = new HostedGit(cfg.dataDir);
   const bus = new Bus();
   const hub = new WorkerHub();
   const auth = new Auth(cfg, db);
@@ -90,7 +93,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
   };
   const access = new Access(cfg, db, auth);
-  const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, sessions, github, notifier, attachments, janitor };
+  const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor };
   if (!opts.dbFile || opts.dbFile !== ':memory:') janitor.start();
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
@@ -165,6 +168,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   streamRoutes(app, ctx);
   fileRoutes(app, ctx);
   workerRoutes(app, ctx);
+  gitRoutes(app, ctx);
   imageRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
