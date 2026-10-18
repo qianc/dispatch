@@ -135,6 +135,26 @@ session for a worker that is asleep waits in the queue and starts when the worke
 folders and accounts that server may use) and set `WORKER_CONFIG` to its path. Its session limit
 counts over all servers.
 
+### Repos hosted by Dispatch
+
+A project's repo can live on GitHub, in a folder on one worker (a local repo), or in Dispatch itself.
+A **hosted** repo is kept by the server (`DATA_DIR/git`, included in the nightly backup):
+
+- Add it in the project's **Settings → Repos → Keep the repo in Dispatch**: empty, or copied from
+  a GitHub repo.
+- Workers clone it from the server and push their session branches back to it
+  (`/git/r<id>.git`, with their worker token), so it works with any worker, also one that has no
+  GitHub access.
+- You review the branch in Dispatch (files and diffs) and **Merge** there; the server merges, with
+  no worker needed. With a check command, the session's worker merges instead and runs the check
+  first.
+- Optionally link a **GitHub repo** (for example on an enterprise GitHub): every merge in Dispatch
+  is pushed to it, or you can **Open a PR on GitHub instead** and review there. When that PR is
+  merged, the result comes back into Dispatch's repo.
+
+For an enterprise GitHub, set `GITHUB_GIT_BASE` and `GITHUB_API_URL` on the server. Behind a sign-in
+proxy, route `/git/` around the browser sign-in like `/worker`.
+
 ## Configuration
 
 All settings are environment variables (`server.env`, `worker.env`). Any secret can also come from a
@@ -151,6 +171,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `VAPID_SUBJECT` | `mailto:admin@example.com` | Sender of push notifications. |
 | `PORT`, `DATA_DIR` | `3000`, `./data` | Where it listens and keeps the database. |
 | `GITHUB_POLL_SECONDS` | `120` | How often PRs are checked. |
+| `GITHUB_GIT_BASE`, `GITHUB_API_URL` | `https://github.com`, `https://api.github.com` | Another GitHub (enterprise) for hosted repos' upstreams. |
 | `AUTH_MODE` | `password` | `proxy` behind a sign-in proxy; `DISABLE_AUTH=1` turns sign-in off (testing only). |
 | `TRUSTED_PROXIES`, `AUTH_USERS`, `AUTH_HEADER`, `PROXY_SECRET`, `PROXY_SECRET_HEADER` | | Proxy mode, see [Sign-in](#sign-in-tokens-and-claude-connectors). |
 | `TOKEN_REMOTE_SCOPES` | `read,tracker` | What personal tokens may do from another machine. |
@@ -283,8 +304,9 @@ tokens). Settings → Connected apps lists them and disconnects them.
 
 Behind a proxy, route these paths **around** the proxy's sign-in, because the client is not a
 browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for tokens,
-`/api/*` requests that carry `Authorization: Bearer dsp_…`; and `/worker` (the WebSocket that
-workers on other machines connect to, with their worker token). Keep `/authorize` (the consent
+`/api/*` requests that carry `Authorization: Bearer dsp_…`; `/worker` (the WebSocket that
+workers on other machines connect to, with their worker token); and `/git/` (hosted repos, also with
+worker tokens). Keep `/authorize` (the consent
 page) and everything else **behind** it. Dispatch checks all of these itself.
 
 ## Tools for agents

@@ -44,9 +44,9 @@ export class GitHub {
   readonly accounts: GithubAccount[];
   private clients = new Map<string, Octokit>();
 
-  constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub) {
+  constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub, apiUrl = 'https://api.github.com') {
     this.accounts = accounts;
-    for (const a of accounts) this.clients.set(a.name, new Octokit({ auth: a.token, userAgent: 'dispatch' }));
+    for (const a of accounts) this.clients.set(a.name, new Octokit({ auth: a.token, userAgent: 'dispatch', baseUrl: apiUrl }));
     this.store = store;
     this.bus = bus;
     this.notifier = notifier;

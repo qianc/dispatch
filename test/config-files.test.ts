@@ -21,3 +21,16 @@ describe('secrets from files (swarm secrets)', () => {
     expect(() => loadConfig({ WORKER_TOKEN_FILE: '/nonexistent/worker', APP_PASSWORD: 'x' })).toThrow(/WORKER_TOKEN_FILE/);
   });
 });
+
+describe('an enterprise GitHub', () => {
+  it('git and the API can point at another GitHub', async () => {
+    const { startServer } = await import('./helpers.ts');
+    const s = await startServer({ GITHUB_TOKEN: 'x', GITHUB_GIT_BASE: 'https://github.example.com', GITHUB_API_URL: 'https://github.example.com/api/v3' });
+    try {
+      expect(s.ctx.github.gitUrl('team', 'app')).toBe('https://github.example.com/team/app.git');
+      expect(s.ctx.github.octo!.request.endpoint.DEFAULTS.baseUrl).toBe('https://github.example.com/api/v3');
+    } finally {
+      await s.app.close();
+    }
+  });
+});
