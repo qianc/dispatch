@@ -56,6 +56,28 @@ describe('proposal cards that were revised', () => {
     expect((await s.call('GET', `/sessions/${p.id}`)).data.session.status).toBe('idle');
   });
 
+  it('a revised batch in the same turn replaces the first version; starting it completes the chat', async () => {
+    const p = planner();
+    const [a, b, c] = await Promise.all(['Time a build', 'Measure the gap', 'Suite fails at random'].map(async (title) => (await s.call('POST', '/projects/VER/items', { title })).data));
+    s.ctx.store.addEvent(p.id, { kind: 'user', text: 'what suits a night run?' });
+    await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Night run', item_ids: [a.id, b.id] });
+    await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Night run', item_ids: [a.id, c.id] }); // same turn: a revision
+    // a separate batch with nothing in common stays on offer next to it
+    const other = (await s.call('POST', '/projects/VER/items', { title: 'Unrelated' })).data;
+    await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Day work', item_ids: [other.id] });
+    let ev = (await s.call('GET', `/sessions/${p.id}`)).data.events as { id: number; body: { kind: string; event_id?: number; note?: string; proposal?: { title: string; item_ids: number[] } } }[];
+    const cards = ev.filter((e) => e.body.kind === 'proposal');
+    const note = (id: number) => ev.find((e) => e.body.kind === 'proposal_done' && e.body.event_id === id)?.body.note ?? null;
+    expect(cards.map((c) => note(c.id))).toEqual(['Replaced by a newer proposal below', null, null]);
+    // the owner starts the night run and dismisses the day work: nothing is left open, the chat completes
+    expect((await s.call('POST', `/sessions/${p.id}/dismiss-proposal`, { event_id: cards[2].id })).status).toBe(200);
+    await s.call('POST', '/projects/VER/repos', { github_owner: 'me', github_name: 'ver' }).catch(() => undefined);
+    expect((await s.call('POST', '/projects/VER/batches', { title: 'Night run', item_ids: [a.id, c.id], prompt: '', proposal: { session_id: p.id, event_id: cards[1].id } })).status).toBe(200);
+    ev = (await s.call('GET', `/sessions/${p.id}`)).data.events;
+    expect(note(cards[1].id)).toMatch(/^Started session #\d+$/);
+    expect((await s.call('GET', `/sessions/${p.id}`)).data.session.status).toBe('completed');
+  });
+
   it('accepting a card closes open cards from earlier turns (chats from before this rule)', async () => {
     const p = planner();
     s.ctx.store.addEvent(p.id, { kind: 'user', text: 'plan it' });

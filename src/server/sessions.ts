@@ -9,6 +9,7 @@ import {
   proposedItemSchema,
   type InputAnswer,
   type ItemChanges,
+  type Proposal,
   DEFAULT_RUN_OPTIONS,
   type Project,
   type ProposedItem,
@@ -22,6 +23,18 @@ import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
+
+/** Two cards of the same kind are versions of one another: same title, or items in common. */
+function overlaps(a: Proposal, b: Proposal): boolean {
+  if (a.type === 'batch' && b.type === 'batch') {
+    return a.title.trim().toLowerCase() === b.title.trim().toLowerCase() || a.item_ids.some((id) => b.item_ids.includes(id));
+  }
+  if (a.type === 'items' && b.type === 'items') {
+    const titles = new Set(a.items.map((i) => i.title.trim().toLowerCase()));
+    return b.items.some((i) => titles.has(i.title.trim().toLowerCase()));
+  }
+  return false;
+}
 
 export class SessionError extends Error {
   readonly status: number;
@@ -139,13 +152,15 @@ export class Sessions {
     const newer = events.find((e) => e.seq === seq);
     // only the same kind of card is a revision: a new batch replaces a batch, a new item list an
     // item list; filing an extra item leaves the batch on offer
-    const type = newer?.body.kind === 'proposal' ? newer.body.proposal.type : null;
+    if (newer?.body.kind !== 'proposal') return;
+    const card = newer.body.proposal;
     const turnStart = Math.max(0, ...events.filter((e) => e.body.kind === 'user' && e.seq < seq).map((e) => e.seq));
     const done = new Set(events.flatMap((e) => (e.body.kind === 'proposal_done' ? [e.body.event_id] : [])));
     for (const e of events) {
-      if (e.body.kind === 'proposal' && e.body.proposal.type === type && e.seq < turnStart && !done.has(e.id)) {
-        this.addEvent(sessionId, { kind: 'proposal_done', event_id: e.id, note });
-      }
+      if (e.body.kind !== 'proposal' || e.seq >= seq || done.has(e.id) || e.body.proposal.type !== card.type) continue;
+      // from an earlier turn, or a version of the same card (same title or shared items) in this one;
+      // cards with nothing in common in one turn are meant side by side
+      if (e.seq < turnStart || overlaps(e.body.proposal, card)) this.addEvent(sessionId, { kind: 'proposal_done', event_id: e.id, note });
     }
   }
 

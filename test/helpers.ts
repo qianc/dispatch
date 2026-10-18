@@ -31,7 +31,9 @@ export async function startServer(env: Record<string, string> = {}) {
 
 export function startWorker(port: number, env: Record<string, string> = {}): ChildProcess {
   const child = spawn(process.execPath, ['src/worker/main.ts'], {
-    env: { ...process.env, SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', ...env },
+    // WINDOWS_PATH off: test workers need no Windows tools, and asking Windows for its PATH is slow
+    // when many test workers start at once
+    env: { ...process.env, SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', WINDOWS_PATH: 'off', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr?.on('data', (d) => process.env.DEBUG_WORKER && process.stderr.write(d));
