@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { githubAccounts, type GithubAccount } from '../shared/accounts.ts';
 
 export interface Config {
@@ -42,7 +43,27 @@ export interface Config {
 
 const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
-export function loadConfig(env = process.env): Config {
+/**
+ * Swarm and Kubernetes pass secrets as files: NAME_FILE=/run/secrets/x fills NAME (when NAME is not
+ * set itself), so the stack's environment holds no secret values.
+ */
+function withFileSecrets(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const [key, path] of Object.entries(env)) {
+    if (!key.endsWith('_FILE') || !path) continue;
+    const name = key.slice(0, -'_FILE'.length);
+    if (out[name]) continue;
+    try {
+      out[name] = readFileSync(path, 'utf8').replace(/\r?\n$/, '');
+    } catch (e) {
+      throw new Error(`${key}: cannot read ${path} (${(e as Error).message})`);
+    }
+  }
+  return out;
+}
+
+export function loadConfig(raw = process.env): Config {
+  const env = withFileSecrets(raw);
   const cfg: Config = {
     port: Number(env.PORT ?? 3000),
     dataDir: env.DATA_DIR ?? './data',
