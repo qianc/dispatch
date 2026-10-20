@@ -84,16 +84,33 @@ initTheme();
 // without this the message box and the newest messages sit under the keyboard. Also mark
 // "keyboard open" (the tab bar hides) and announce the change so chats can stay pinned to the bottom.
 const vv = window.visualViewport;
+// Only our own focused field can open the keyboard here. Back from another app that had its keyboard
+// up, iOS still reports the shrunk visual viewport until the next touch: without a focused field,
+// ignore that and use the full height.
+const typing = () => {
+  const el = document.activeElement as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+};
 const fitViewport = () => {
-  const h = vv ? vv.height : window.innerHeight;
+  const kb = !!vv && typing() && window.innerHeight - vv.height > 120;
+  const h = vv && typing() ? vv.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
-  document.documentElement.classList.toggle('kb-open', !!vv && window.innerHeight - vv.height > 120);
+  document.documentElement.classList.toggle('kb-open', kb);
   if (vv?.offsetTop) window.scrollTo(0, 0);
   window.dispatchEvent(new Event('dispatch:viewport'));
 };
 vv?.addEventListener('resize', fitViewport);
 vv?.addEventListener('scroll', fitViewport);
 window.addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
+// back in the app: measure again, also after iOS has settled the viewport
+const refit = () => {
+  fitViewport();
+  setTimeout(fitViewport, 100);
+  setTimeout(fitViewport, 500);
+};
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refit(); });
+window.addEventListener('pageshow', refit);
+window.addEventListener('focus', refit);
 fitViewport();
 
 // The document is locked (only .scroll-area scrolls). If iOS scrolls it anyway (keyboard, focus),
