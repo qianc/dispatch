@@ -1,5 +1,8 @@
 // The in-process `dispatch` MCP server: tracker tools for the agent, backed by server RPC.
 import { createSdkMcpServer, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
+import { existsSync } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
@@ -36,7 +39,32 @@ const itemShape = {
   effort: z.number().int().min(0).nullable().describe('Index into the project effort scale, or null if unknown'),
 };
 
-const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): SdkMcpToolDefinition<any>[] => {
+export interface FolderEntry { name: string; path: string; type: 'folder' | 'file'; git_repo?: true }
+
+const MAX_ENTRIES = 500;
+
+/**
+ * One level of a folder: its folders (marked when they are git repos) and files, by name.
+ * Glob only matches files, so the assistant needs this to find a project folder by name.
+ */
+export async function listFolder(dir: string, name?: string): Promise<{ path: string; entries: FolderEntry[]; more?: number }> {
+  const want = name?.toLowerCase();
+  const all = (await readdir(dir, { withFileTypes: true }))
+    .filter((e) => !e.name.startsWith('.') && (!want || e.name.toLowerCase().includes(want)))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const entries = await Promise.all(all.slice(0, MAX_ENTRIES).map(async (e): Promise<FolderEntry> => {
+    const path = join(dir, e.name);
+    // follow symlinks: a linked project folder is still a folder
+    const folder = e.isDirectory() || (e.isSymbolicLink() && (await stat(path).then((st) => st.isDirectory(), () => false)));
+    if (!folder) return { name: e.name, path, type: 'file' };
+    return existsSync(join(path, '.git')) ? { name: e.name, path, type: 'folder', git_repo: true } : { name: e.name, path, type: 'folder' };
+  }));
+  return all.length > MAX_ENTRIES ? { path: dir, entries, more: all.length - MAX_ENTRIES } : { path: dir, entries };
+}
+
+type ListFolder = (path: string, name?: string) => ReturnType<typeof listFolder>;
+
+const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, list: ListFolder): SdkMcpToolDefinition<any>[] => {
   const label = z.union([z.number(), z.string()]);
   const newItem = z.object({
     type: z.enum(['backlog', 'bug']).default('backlog'),
@@ -69,7 +97,17 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>): 
       effort_scale: z.array(z.string()).optional(),
       default_force_plan: z.boolean().optional(),
     }, call(rpc, 'update_project')),
-    tool('add_repo', 'Add a repo to a project: a GitHub repo (verified, default branch looked up), or a local git folder on this machine (absolute or ~/ path; must be inside LOCAL_REPO_DIRS). Agents push their branches into a local repo and the owner reviews and merges them in Dispatch.', {
+    tool('list_folder', 'List the folders and files directly in a folder (one level, not recursive), e.g. ~/projects. Folders that are git repos are marked git_repo. Use it to find a project folder by name: Glob matches only files, never folders.', {
+      path: z.string().describe('Folder path, e.g. ~/projects'),
+      name: z.string().optional().describe('Only entries whose name contains this text (any case), e.g. "dispatch"'),
+    }, async (p) => {
+      try {
+        return ok(await list(p.path, p.name));
+      } catch (e) {
+        return fail(e);
+      }
+    }),
+    tool('add_repo', 'Add a repo to a project: a GitHub repo (verified, default branch looked up), or a local git folder on this machine (absolute or ~/ path, e.g. the path list_folder gives; must be inside LOCAL_REPO_DIRS). Agents push their branches into a local repo and the owner reviews and merges them in Dispatch.', {
       project_key: z.string(),
       repo: z.string().describe('owner/name, a github.com URL, or a local path like ~/projects/x'),
       default_branch: z.string().optional(),
@@ -148,8 +186,8 @@ const noFiles = async () => {
   throw new Error('File reading is not available here');
 };
 
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles) {
-  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile) });
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles) {
+  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
       name: 'dispatch',

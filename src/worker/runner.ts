@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { query, type CanUseTool, type HookCallback, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
-import { dispatchMcp, type Rpc } from './mcp.ts';
+import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
 import { existsSync, globSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -253,7 +253,7 @@ export class ClaudeRunner implements AgentRunner {
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         disallowedTools: planner ? PLANNER_TOOLS_DENIED : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p)) },
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name)) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
@@ -275,10 +275,19 @@ export class ClaudeRunner implements AgentRunner {
 
   /** File reads for chat tools, limited to the chat's folders. */
   private async readAllowed(path: string): Promise<string> {
+    return readFile(this.allowedPath(path), 'utf8');
+  }
+
+  /** Folder listings for the assistant, limited to the chat's folders. */
+  private async listAllowed(path: string, name?: string) {
+    return listFolder(this.allowedPath(path), name);
+  }
+
+  private allowedPath(path: string) {
     if (!insideDirs(path, this.readDirs(), this.deps.cwd)) {
       throw new Error(`Reading ${path} is not allowed. Allowed folders: ${this.readDirs().join(', ') || 'none'}.`);
     }
-    return readFile(resolve(this.deps.cwd, path.replace(/^~(?=$|\/)/, homedir())), 'utf8');
+    return resolve(this.deps.cwd, path.replace(/^~(?=$|\/)/, homedir()));
   }
 
   push(text: string) {
