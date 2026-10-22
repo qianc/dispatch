@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
+import { listFolder } from '../src/worker/mcp.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
@@ -93,6 +94,33 @@ describe('local repos end to end on the server', () => {
     const dir = localRepo(root);
     const r = (await s.call('POST', '/projects/LOC/repos', { local_path: dir })).data;
     expect(r).toMatchObject({ github_owner: 'local', github_name: 'tpl', default_branch: 'main', local_path: dir, note: null });
+  });
+
+  it('lets the assistant find a project folder by name in the projects folder and add it (DISP-7)', async () => {
+    // a projects folder like the owner's: many repos, plain folders and files, and a linked repo
+    const projects = mkdtempSync(join(root, 'projects-'));
+    const dir = localRepo(projects, 'dispatch');
+    localRepo(projects, 'docs-site');
+    mkdirSync(join(projects, 'notes'));
+    writeFileSync(join(projects, 'CLAUDE.md'), 'x\n');
+    symlinkSync(localRepo(root, 'linked'), join(projects, 'linked-repo'));
+    // Glob only matches files, so the assistant needs a folder listing to see "dispatch"
+    expect((await listFolder(projects)).entries).toEqual([
+      { name: 'CLAUDE.md', path: join(projects, 'CLAUDE.md'), type: 'file' },
+      { name: 'dispatch', path: dir, type: 'folder', git_repo: true },
+      { name: 'docs-site', path: join(projects, 'docs-site'), type: 'folder', git_repo: true },
+      { name: 'linked-repo', path: join(projects, 'linked-repo'), type: 'folder', git_repo: true },
+      { name: 'notes', path: join(projects, 'notes'), type: 'folder' },
+    ]);
+    const found = (await listFolder(projects, 'Dispatch')).entries;
+    expect(found.map((e) => e.name)).toEqual(['dispatch']);
+
+    await s.call('POST', '/projects', { key: 'DISP', name: 'Dispatch' });
+    const chat = (await s.call('POST', '/assistant/messages', { text: 'add the dispatch repo from the projects folder' })).data;
+    const session = s.ctx.store.session(chat.id)!;
+    const added = await s.ctx.sessions.assistantRpc!(session, 'add_repo', { project_key: 'DISP', repo: found[0].path });
+    expect(added).toMatchObject({ repo: `local: ${dir}`, default_branch: 'main' });
+    expect((await s.call('GET', '/projects/DISP')).data.repos).toEqual([expect.objectContaining({ github_owner: 'local', github_name: 'dispatch', local_path: dir })]);
   });
 
   it('shows a pushed session branch for review, with its diff, and merges it into the folder', async () => {

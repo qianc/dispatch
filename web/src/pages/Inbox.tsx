@@ -8,10 +8,12 @@ import { NextSteps } from '../components/nextSteps.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
-const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, turn: 2, merged: 3 };
-const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string }> = {
+const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, turn: 2, merged: 3, checking: 4 };
+const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string; spin?: boolean }> = {
   merge_blocked: { tone: 'bad', label: 'Merge stopped', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
-  review: { tone: 'run', label: 'Ready to review', icon: 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9' },
+  // in progress, like a running session: Dispatch checks and merges it, nothing to do yet
+  checking: { tone: 'run', label: 'Checking', icon: 'M21 12a9 9 0 1 1-6.219-8.56', spin: true },
+  review: { tone: 'wait', label: 'Ready to review', icon: 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9' },
   turn: { tone: 'wait', label: 'Your reply', icon: 'M4 5h16v11H9l-5 4z' },
   merged: { tone: 'ok', label: 'Done and merged', icon: 'M5 12.5l4.5 4.5L19 7.5' },
 };
@@ -30,7 +32,7 @@ function TurnCard({ s }: { s: Idle }) {
           <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
         </div>
         <div className={cx('flex items-start gap-1.5 mt-1.5 text-[14px] font-medium', TONE_TEXT[look.tone])}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 mt-0.5"><path d={look.icon} /></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={cx('shrink-0 mt-0.5', look.spin && 'animate-spin')}><path d={look.icon} /></svg>
           <span><span className="sr-only">{look.label}: </span>{s.attention.text}</span>
         </div>
         {s.last_text && <p className="text-[13px] text-muted mt-1 line-clamp-2">{s.last_text}</p>}
@@ -45,6 +47,8 @@ export function Inbox() {
   const { data: worker } = useQuery({ queryKey: ['worker'], queryFn: () => api.get<{ connected: boolean }>('/worker'), refetchInterval: 15_000 });
   if (!data) return <Page title="Inbox"><Empty>Loading…</Empty></Page>;
   const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
+  const checking = data.idle.filter((s) => s.attention.kind === 'checking');
+  const yours = data.idle.filter((s) => s.attention.kind !== 'checking');
   const nothing = !data.inputs.length && !data.idle.length && !data.prs.length && !data.cleanup;
   return (
     <Page title="Inbox" subtitle="Everything waiting on you" wide>
@@ -75,10 +79,17 @@ export function Inbox() {
           </Card>
         </Section>
       )}
-      {data.idle.length > 0 && (
+      {yours.length > 0 && (
         <Section title="Your turn">
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
-            {[...data.idle].sort((a, b) => ORDER[a.attention.kind] - ORDER[b.attention.kind]).map((s) => <TurnCard key={s.id} s={s} />)}
+            {yours.sort((a, b) => ORDER[a.attention.kind] - ORDER[b.attention.kind]).map((s) => <TurnCard key={s.id} s={s} />)}
+          </div>
+        </Section>
+      )}
+      {checking.length > 0 && (
+        <Section title="Checking and merging">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
+            {checking.map((s) => <TurnCard key={s.id} s={s} />)}
           </div>
         </Section>
       )}

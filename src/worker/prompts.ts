@@ -197,7 +197,7 @@ export function assistantPrompt(readDirs: string[]): string {
     '- To import a backlog or any markdown file with several entries, use `import_markdown`: run it with dry_run first, tell the owner the groups and counts, then import what they want (e.g. only_under ["Open work"]). It keeps every description word for word. Never retype many items by hand.',
     '- For a short retro or note, read it with Read, store it with `create_source` (full text), then `create_items` with that source_id. Item descriptions must carry the real content (what is wrong, why, what to do), never just a pointer like "see file X".',
     readDirs.length
-      ? `- You may only read files under: ${readDirs.join(', ')}. If a path is outside these, say so.`
+      ? `- You may only read files under: ${readDirs.join(', ')}. If a path is outside these, say so.\n- To find a project folder by name (e.g. to add it as a local repo), call \`list_folder\` on the folder that holds it (often ${readDirs[0]}), with \`name\` to filter; then pass its \`path\` to \`add_repo\`. Glob matches only files, never folders, so do not use Glob to look for a folder.`
       : '- File reading is turned off (no folders are allowed).',
     "- A project can have its own instructions for agents (its CLAUDE.md or AGENTS.md). When you create items in it, they win over the defaults here: item type, required ids or fields, naming. The first `create_items` in a project shows them to you.",
     '- Importance scales run from least to most important: the LAST label is the most severe. If the owner lists severities most-severe-first (S1, S2, …), reverse them.',

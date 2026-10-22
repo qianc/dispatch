@@ -95,6 +95,7 @@ export interface PrDetail {
   base_ref: string;
   files: { filename: string; status: string; additions: number; deletions: number; patch: string | null }[];
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
+  auto_merge: Session['options']['auto_merge'];
 }
 
 export interface Me { authed: boolean; user: string | null; auth_mode: 'password' | 'proxy' | 'off'; auth_disabled: boolean; password_login: boolean; vapid_public_key: string }

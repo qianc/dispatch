@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type PrDetail, type Session } from '../api.ts';
+import { autoMergePending } from '../../../src/shared/attention.ts';
 import { Page } from '../components/Layout.tsx';
+import { PrStateChip } from '../components/PrState.tsx';
 import { Button, Chip, Empty, ErrorText, Md, Section, Segmented, cx } from '../components/ui.tsx';
 
 function Patch({ patch }: { patch: string }) {
@@ -54,11 +56,13 @@ export function PrView() {
   const del = data.files.reduce((n, f) => n + f.deletions, 0);
   const result = merge.data;
   const conflict = pr.mergeable === false || (result && !result.ok && result.conflict);
+  // auto-merge still has it: the owner need not act (the Merge button stays, as a way to merge sooner)
+  const checking = autoMergePending(data.auto_merge, pr);
 
   return (
     <Page title={pr.title} subtitle={pr.local ? `local branch ${pr.head_ref} → ${data.base_ref}` : `${pr.repo_full_name}#${pr.number} · ${pr.head_ref} → ${data.base_ref}`} back actions={<Button small variant="ghost" onClick={() => refetch()} disabled={isFetching}>↻</Button>}>
       <div className="px-4 pt-3 flex flex-wrap items-center gap-1.5">
-        <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
+        <PrStateChip pr={pr} autoMerge={data.auto_merge} />
         {pr.state === 'open' && pr.mergeable_state && <Chip tone={pr.mergeable ? 'ok' : 'wait'}>{pr.mergeable_state}</Chip>}
         <Chip><span className="text-ok">+{add}</span> <span className="text-bad">−{del}</span></Chip>
         {!pr.local && <a href={pr.url} target="_blank" rel="noreferrer" className="text-[13px] text-accent ml-auto">Open on GitHub ↗</a>}
@@ -76,6 +80,13 @@ export function PrView() {
         </div>
       )}
 
+      {checking && (
+        <p className="mx-4 mt-3 text-[13px] text-run animate-pulse">
+          Auto-merge is on: Dispatch merges this when the agent is done and {pr.local || data.repo.check_command ? 'the check passes' : 'every check passed'}. Nothing to do yet.
+        </p>
+      )}
+      {pr.blocked && <p className="mx-4 mt-3 text-[13px] text-bad">Auto-merge stopped: {pr.blocked}.</p>}
+
       {pr.state === 'open' && (
         <div className="mx-3 mt-4 rounded-xl border border-line bg-panel p-3 space-y-2">
           {!pr.local && <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />}
@@ -89,7 +100,7 @@ export function PrView() {
               {data.repo.upstream ? `, then pushes ${data.base_ref} to ${data.repo.upstream} on GitHub` : ''}.
             </p>
           ) : (how === 'local' || pr.local) && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
-          <Button variant="primary" className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
+          <Button variant={checking ? undefined : 'primary'} className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
             {merge.isPending ? 'Merging…' : 'Merge'}
           </Button>
           {data.repo.kind === 'hosted' && pr.local && data.repo.upstream && (
