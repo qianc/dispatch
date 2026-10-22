@@ -8,12 +8,13 @@ import { NextSteps } from '../components/nextSteps.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
-const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, turn: 2, merged: 3, checking: 4 };
+const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, proposal: 2, turn: 3, merged: 4, checking: 5 };
 const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string; spin?: boolean }> = {
   merge_blocked: { tone: 'bad', label: 'Merge stopped', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
   // in progress, like a running session: Dispatch checks and merges it, nothing to do yet
   checking: { tone: 'run', label: 'Checking', icon: 'M21 12a9 9 0 1 1-6.219-8.56', spin: true },
   review: { tone: 'wait', label: 'Ready to review', icon: 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9' },
+  proposal: { tone: 'wait', label: 'Proposal to act on', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
   turn: { tone: 'wait', label: 'Your reply', icon: 'M4 5h16v11H9l-5 4z' },
   merged: { tone: 'ok', label: 'Done and merged', icon: 'M5 12.5l4.5 4.5L19 7.5' },
 };
@@ -37,7 +38,7 @@ function TurnCard({ s }: { s: Idle }) {
         </div>
         {s.last_text && <p className="text-[13px] text-muted mt-1 line-clamp-2">{s.last_text}</p>}
       </Link>
-      <NextSteps sessionId={s.id} attention={s.attention} />
+      <NextSteps sessionId={s.id} projectKey={s.project_key} attention={s.attention} />
     </div>
   );
 }

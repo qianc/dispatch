@@ -101,7 +101,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
-  const attention = attentionOf(s, data.prs);
+  const attention = attentionOf(s, data.prs, data.events);
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   const canSend = s.status !== 'queued' && s.status !== 'waiting_input';

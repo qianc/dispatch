@@ -19,7 +19,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   /** Everything waiting on you, across projects. */
   app.get('/api/inbox', async () => {
     const inputs = store.openInputs();
-    const idle = store.sessions({ statuses: ['idle'] }).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id })) }));
+    // a planning chat's open proposal cards decide what it offers
+    const idle = store.sessions({ statuses: ['idle'] }).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : []) }));
     const idleIds = new Set(idle.map((s) => s.id));
     // PRs of idle sessions are shown on their session's card
     const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id));

@@ -339,6 +339,38 @@ test('a session opened from another tab does not trap the Projects tab', async (
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
 });
 
+for (const [where, width] of [['phone', 0], ['desktop', 1280]] as const) {
+  test(`${where}: the menu highlights Activity when it reopens its last chat`, async ({ page }) => {
+    if (width) await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await page.getByLabel('Password').fill('e2e-pass');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+    const key = `HL${where[0].toUpperCase()}`;
+    await page.request.post('/api/projects', { data: { key, name: `Highlight ${where}` } });
+    await page.request.post(`/api/projects/${key}/repos`, { data: { github_owner: 'me', github_name: key.toLowerCase() } });
+    const s = await (await page.request.post(`/api/projects/${key}/batches`, { data: { prompt: 'go' } })).json();
+    // the visible menu: the tab bar on a phone, the left menu on a desktop
+    const menu = page.getByRole('navigation', { name: 'Main' });
+    const tab = (name: string) => menu.getByRole('link', { name: new RegExp(name) });
+    const active = menu.locator('[aria-current="page"]');
+
+    await tab('Activity').click();
+    await page.locator(`main a[href="/s/${s.id}"]`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/s/${s.id}$`));
+    await expect(active).toHaveText(/Activity/);
+    await tab('Assistant').click();
+    await expect(active).toHaveText(/Assistant/);
+    // Activity reopens the chat, and is the highlighted tab
+    await tab('Activity').click();
+    await expect(page).toHaveURL(new RegExp(`/s/${s.id}$`));
+    await expect(active).toHaveText(/Activity/);
+    // back: Assistant again
+    await page.goBack();
+    await expect(active).toHaveText(/Assistant/);
+  });
+}
+
 test('a long chat offers a button back to the newest message', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Password').fill('e2e-pass');
