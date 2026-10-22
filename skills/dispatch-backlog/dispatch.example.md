@@ -4,7 +4,8 @@ project: HC
 #                                     # its token goes in ~/.config/dispatch/tokens/dispatch.example.com
 changelog: CHANGELOG.md
 release_label_prefix: "rel:"
-images: when_possible               # always | when_possible | off: attach example images to items
+# images: always | when_possible | off: when to attach example images to items
+images: when_possible
 ---
 
 How Claude keeps this project's backlog and changelog in Dispatch. Copy this file to the repo root
