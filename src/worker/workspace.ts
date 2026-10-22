@@ -320,11 +320,13 @@ export class Workspaces {
     return this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
       const sha = await run('git', ['rev-parse', '--verify', '--quiet', head], dir);
-      if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, head_sha: null };
+      if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, differs: false, head_sha: null };
       const counts = (await git(['rev-list', '--left-right', '--count', `${base}...${head}`], dir)).split(/\s+/).map(Number);
       const merged = (await run('git', ['merge-base', '--is-ancestor', head, base], dir)).code === 0;
       const conflicts = !merged && (await run('git', ['merge-tree', '--write-tree', base, head], dir)).code === 1;
-      return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, head_sha: sha.out.trim() };
+      // same tree as the default branch: nothing to review, even if the commits differ (DISP-33)
+      const differs = (await git(['rev-parse', `${base}^{tree}`], dir)) !== (await git(['rev-parse', `${head}^{tree}`], dir));
+      return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim() };
     });
   }
 

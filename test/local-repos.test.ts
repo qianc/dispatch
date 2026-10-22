@@ -48,6 +48,19 @@ describe('local repos in the worker', () => {
     expect(await ws.branchStatus(repo, 'dispatch/l-5-x')).toMatchObject({ merged: true });
   });
 
+  it('a branch with the same tree as a rewritten main does not differ from it (DISP-33)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
+    const dir = localRepo(root);
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
+    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: null, local_path: dir, worktree_from: null, setup_command: null };
+    git(dir, 'branch', 'untouched');
+    git(dir, 'commit', '--amend', '-m', 'init, rewritten'); // same tree, new SHA
+    expect(await ws.branchStatus(repo, 'untouched')).toMatchObject({ exists: true, ahead: 1, behind: 1, merged: false, differs: false });
+    writeFileSync(join(dir, 'a.txt'), 'changed\n');
+    git(dir, 'commit', '-am', 'change');
+    expect(await ws.branchStatus(repo, 'untouched')).toMatchObject({ differs: true });
+  });
+
   it('refuses to merge into a dirty checkout and says how to fix it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
     const dir = localRepo(root);

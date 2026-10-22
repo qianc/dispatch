@@ -452,7 +452,8 @@ export const sourcePatch = z.object({
 
 export interface BranchFile { filename: string; status: string; additions: number; deletions: number; patch: string | null }
 /** State of a session branch in a local repo (the stand-in for a PR). */
-export interface BranchStatus { exists: boolean; ahead: number; behind: number; merged: boolean; conflicts: boolean; head_sha: string | null }
+/** `differs`: the branch's tree is not the default branch's (false when only the commits differ, e.g. main was rewritten). */
+export interface BranchStatus { exists: boolean; ahead: number; behind: number; merged: boolean; conflicts: boolean; differs: boolean; head_sha: string | null }
 
 export const sourceInput = z.object({
   kind: z.enum(SOURCE_KINDS).default('retro'),
