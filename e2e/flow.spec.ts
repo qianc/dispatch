@@ -60,6 +60,11 @@ test('phone flow: project → items → batch → answer → planner card → st
   await page.getByLabel('Message').fill('looks good');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('(fake) You said: looks good')).toBeVisible();
+  // each message shows when it was sent (today: HH:MM), the full date and time on hover
+  const sent = page.getByText('looks good', { exact: true }).locator('xpath=..').locator('time');
+  await expect(sent).toHaveText(/^\d\d:\d\d$/);
+  await expect(sent).toHaveAttribute('title', /\d{4}/);
+  await expect(page.getByText('(fake) You said: looks good').locator('xpath=ancestor::div[time][1]/time')).toHaveText(/^\d\d:\d\d$/);
 
   // inbox shows it, with a badge
   await page.getByRole('link', { name: /Inbox/ }).click();

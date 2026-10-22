@@ -9,6 +9,7 @@ import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
 import { useProposalActions } from './proposals.ts';
+import { fullTime, messageTime } from '../time.ts';
 import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
 
 
@@ -77,6 +78,11 @@ function WorkGroup({ events, live, render, results }: { events: SessionEvent[]; 
   );
 }
 
+/** When a message was sent: small, under it; the full date and time on hover or long-press. */
+function MessageTime({ at }: { at: string }) {
+  return <time dateTime={at} title={fullTime(at)} className="block mt-0.5 text-[11px] leading-4 text-faint tabular-nums">{messageTime(at)}</time>;
+}
+
 export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
@@ -92,12 +98,18 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
     switch (b.kind) {
       case 'user':
         return (
-          <div key={e.seq} className="flex justify-end">
+          <div key={e.seq} className="flex flex-col items-end">
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft border border-accent/25 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
+            <MessageTime at={e.created_at} />
           </div>
         );
       case 'assistant':
-        return <AssistantText key={e.seq} text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />;
+        return (
+          <div key={e.seq}>
+            <AssistantText text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />
+            <MessageTime at={e.created_at} />
+          </div>
+        );
       case 'tool_use':
         return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
       case 'tool_result':
