@@ -7,6 +7,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
+import { maxVersion, VERSION_RE } from '../shared/release.ts';
 
 /**
  * Extra environment for commands run on behalf of a repo (its GitHub account's token and commit
@@ -223,6 +224,47 @@ export class Workspaces {
       });
     }
     return spec.repos.length === 1 ? this.repoDir(spec.session_id, spec.repos[0]) : this.sessionDir(spec.session_id);
+  }
+
+  /**
+   * Where a release runs; returns the cwd. A local repo: the owner's own checkout (its remotes and
+   * the machine's credentials are there), which must be on the default branch with no uncommitted
+   * changes. A GitHub repo: a worktree of the clone on the default branch, tracking origin; an
+   * existing one is kept as it is (a reopened release keeps its commits).
+   */
+  async prepareRelease(spec: StartSpec): Promise<string> {
+    const repo = spec.repos[0];
+    if (!repo || spec.repos.length !== 1) throw new Error('A release needs exactly one repo');
+    if (repo.kind === 'hosted') throw new Error('Releases of hosted repos are not supported');
+    if (repo.local_path) {
+      const dir = repo.local_path;
+      const branch = (await run('git', ['branch', '--show-current'], dir)).out.trim();
+      const dirty = (await run('git', ['status', '--porcelain', '--untracked-files=no'], dir)).out.trim();
+      if (branch !== repo.default_branch || dirty) throw new Error(`A release needs ${dir} on ${repo.default_branch} with no uncommitted changes (it is on ${branch || 'a detached HEAD'}${dirty ? ', with changes' : ''})`);
+      return dir;
+    }
+    await mkdir(this.sessionDir(spec.session_id), { recursive: true });
+    const wt = this.repoDir(spec.session_id, repo);
+    await this.withRepo(repo, async () => {
+      const owner = await this.ensureCache(repo);
+      if (existsSync(wt)) return;
+      await run('git', ['worktree', 'prune'], owner);
+      await git(['worktree', 'add', '-B', repo.default_branch, wt, `origin/${repo.default_branch}`], owner);
+      await git(['branch', '--set-upstream-to', `origin/${repo.default_branch}`, repo.default_branch], wt);
+    });
+    return wt;
+  }
+
+  /** The newest version tag on a repo's default branch, and its VERSION file (null when there is none). */
+  releaseVersion(repo: Repo): Promise<{ tag: string | null; file: string | null }> {
+    return this.withRepo(repo, async () => {
+      const dir = repo.local_path ?? (await this.ensureCache(repo));
+      const base = repo.local_path ? `refs/heads/${repo.default_branch}` : `origin/${repo.default_branch}`;
+      const tags = await run('git', ['tag', '--merged', base, '--list', 'v[0-9]*', '[0-9]*'], dir);
+      const file = await run('git', ['show', `${base}:VERSION`], dir);
+      const v = file.out.trim();
+      return { tag: tags.code === 0 ? maxVersion(tags.out.split('\n')) : null, file: file.code === 0 && VERSION_RE.test(v) ? v : null };
+    });
   }
 
   /** Run a repo's setup command in a new worktree. */
