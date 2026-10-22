@@ -3,6 +3,7 @@
 import { dirname, extname, isAbsolute, normalize } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { readRepoFile } from '../projectRules.ts';
 import { HttpError, notFound, type Ctx } from './ctx.ts';
 
 const MIME: Record<string, string> = {
@@ -33,16 +34,11 @@ export function fileRoutes(app: FastifyInstance, { store, hub, hosted }: Ctx) {
     if (!tries.length) throw new HttpError(404, 'This project has no repo or source folder to read files from');
     for (const t of tries) {
       try {
-        // a hosted repo is read here; a local repo on its worker; GitHub repos and source folders on the project's
-        if (t.repo?.kind === 'hosted') {
-          const bytes = await hosted.readFile(t.repo, path);
-          reply.header('cache-control', 'private, max-age=300');
-          return reply.type(mime(path)).send(bytes);
-        }
-        const worker = t.repo?.worker_id ?? project.worker_id ?? store.defaultWorkerId();
-        const res = await hub.cmd<{ base64: string }>(worker, { c: 'read_file', ...t, path }, 60_000);
+        // a source folder is read on the project's worker
+        const bytes = t.repo ? await readRepoFile({ store, hub, hosted }, project, t.repo, path)
+          : Buffer.from((await hub.cmd<{ base64: string }>(project.worker_id ?? store.defaultWorkerId(), { c: 'read_file', ...t, path }, 60_000)).base64, 'base64');
         reply.header('cache-control', 'private, max-age=300');
-        return reply.type(mime(path)).send(Buffer.from(res.base64, 'base64'));
+        return reply.type(mime(path)).send(bytes);
       } catch {
         // not in this place; try the next
       }

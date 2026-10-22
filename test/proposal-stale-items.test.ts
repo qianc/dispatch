@@ -24,7 +24,10 @@ describe('starting a proposal whose items moved on', () => {
   };
 
   it('drops done, canceled and busy items and leaves them as they are', async () => {
-    const [open, done, canceled, busy] = await Promise.all(['Still open', 'Closed meanwhile', 'Dropped meanwhile', 'Taken meanwhile'].map(item));
+    const open = await item('Still open');
+    const done = await item('Closed meanwhile');
+    const canceled = await item('Dropped meanwhile');
+    const busy = await item('Taken meanwhile');
     const p = planner();
     const ev = await card(p.id, [open.id, done.id, canceled.id, busy.id]);
     // meanwhile, other sessions moved on

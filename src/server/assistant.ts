@@ -33,6 +33,10 @@ export class AssistantTools {
   private github: GitHub;
   private sessions: Sessions;
   private hub: WorkerHub;
+  /** A project's own instructions (its CLAUDE.md, AGENTS.md); set by the app. */
+  rules: (p: Project) => Promise<string> = async () => '';
+  /** "session:project" pairs whose instructions the assistant has been shown. */
+  private rulesShown = new Set<string>();
 
   constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub) {
     this.hub = hub;
@@ -73,6 +77,23 @@ export class AssistantTools {
     const it = this.store.itemByNumber(this.project(pk).id, Number(n));
     if (!it) throw new Error(`No item ${String(key)}`);
     return it;
+  }
+
+  /**
+   * The first time a chat files items in a project with its own instructions, refuse once and hand
+   * them over: their rules on item type, ids and fields win over Dispatch's defaults.
+   */
+  private async showRulesFirst(s: Session, project: Project) {
+    const seen = `${s.id}:${project.id}`;
+    if (this.rulesShown.has(seen)) return;
+    const rules = await this.rules(project);
+    this.rulesShown.add(seen);
+    if (!rules) return;
+    throw new Error([
+      `Nothing created yet. ${project.key} has its own instructions for agents (below). Apply what they say about items (type, required ids or fields, naming, conventions): they win over Dispatch's defaults, such as "bug" for defects. Then call create_items again.`,
+      '',
+      rules,
+    ].join('\n'));
   }
 
   async inspectRepo(input: string, account: string | null = null) {
@@ -175,6 +196,7 @@ export class AssistantTools {
         })).min(1).parse(p.items);
         const sourceId = p.source_id ? Number(p.source_id) : null;
         if (sourceId && this.store.source(sourceId)?.project_id !== project.id) throw new Error(`Source ${sourceId} is not in ${project.key}`);
+        await this.showRulesFirst(s, project);
         const created = items.map((it) => {
           const item = this.store.createItem(project.id, {
             type: it.type, title: it.title, body_md: it.body_md, status: it.type === 'bug' ? 'triage' : 'backlog',

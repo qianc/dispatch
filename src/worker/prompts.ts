@@ -112,7 +112,18 @@ export function workPrompt(spec: StartSpec): string {
   return lines.join('\n');
 }
 
-export function plannerPrompt(spec: StartSpec): string {
+/** A project's CLAUDE.md / AGENTS.md: its rules for items beat Dispatch's defaults. */
+function projectRuleLines(context: { label: string; text: string }[]): string[] {
+  if (!context.length) return [];
+  return [
+    "## The project's own instructions",
+    'These come from the repos. Where they say how items must look (type, required ids or fields, naming, conventions), follow them over the defaults in this prompt, in every item you propose (`propose_items`, `new_items` of `propose_batch`).',
+    '',
+    ...context.flatMap((c) => [`### ${c.label}`, '', c.text.trim(), '']),
+  ];
+}
+
+export function plannerPrompt(spec: StartSpec, context: { label: string; text: string }[] = []): string {
   const lines = [
     '# Dispatch planner',
     `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. The owner chats with you from their phone.`,
@@ -134,7 +145,7 @@ export function plannerPrompt(spec: StartSpec): string {
       spec.source.body_md,
       '```',
       '',
-      'Split this source into separate tracker items. One item = one problem or one change. Use type "bug" for defects and "backlog" for improvements. Put the relevant quote and context in the body. Check `list_items` first so you do not duplicate open items. When ready, call `propose_items` with source_id ' + spec.source.id + '.',
+      'Split this source into separate tracker items. One item = one problem or one change. Use type "bug" for defects and "backlog" for improvements, unless the project\'s own instructions say otherwise. Put the relevant quote and context in the body. Check `list_items` first so you do not duplicate open items. When ready, call `propose_items` with source_id ' + spec.source.id + '.',
     );
   } else {
     lines.push(
@@ -146,6 +157,7 @@ export function plannerPrompt(spec: StartSpec): string {
     );
   }
   if (spec.workers?.length || spec.placement_md?.trim()) lines.push('', ...whereWorkRuns(spec));
+  if (context.length) lines.push('', ...projectRuleLines(context));
   return lines.join('\n');
 }
 
@@ -187,6 +199,7 @@ export function assistantPrompt(readDirs: string[]): string {
     readDirs.length
       ? `- You may only read files under: ${readDirs.join(', ')}. If a path is outside these, say so.`
       : '- File reading is turned off (no folders are allowed).',
+    "- A project can have its own instructions for agents (its CLAUDE.md or AGENTS.md). When you create items in it, they win over the defaults here: item type, required ids or fields, naming. The first `create_items` in a project shows them to you.",
     '- Importance scales run from least to most important: the LAST label is the most severe. If the owner lists severities most-severe-first (S1, S2, …), reverse them.',
     '- You cannot edit files or run commands.',
     '',
