@@ -20,6 +20,7 @@ import {
   type Session,
   type SessionEvent,
   type SessionEventBody,
+  type ReleaseInfo,
   type SessionKind,
   type SessionStatus,
   type Source,
@@ -377,6 +378,7 @@ export class Store {
       pending_prompt: (r.pending_prompt as string | null) ?? null,
       moved_from: numOrNull(r.moved_from),
       item_ids: json<number[]>(r.item_ids, []),
+      release: json(r.release_info, null),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
@@ -404,12 +406,12 @@ export class Store {
       .map((r) => this.toSession(r));
   }
   /** `worker_id` defaults to the default worker. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null; release?: ReleaseInfo | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
-        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null,
+        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
