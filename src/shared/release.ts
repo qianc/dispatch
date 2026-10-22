@@ -53,9 +53,11 @@ export function highestLabelVersion(items: Item[], prefix: string): string | nul
   return maxVersion(items.flatMap((i) => i.labels.filter((l) => l.startsWith(prefix)).map((l) => l.slice(prefix.length))));
 }
 
-/** Minor when the release holds backlog work, patch for fixes only. */
-export function proposeVersion(last: string | null, items: Item[]): { version: string; bump: 'minor' | 'patch' | 'first' } {
+/** Minor when the release holds backlog work, patch for fixes only; after a pre-release, its release. */
+export function proposeVersion(last: string | null, items: Item[]): { version: string; bump: 'minor' | 'patch' | 'first' | 'release' } {
   if (!last) return { version: 'v0.1.0', bump: 'first' };
+  const p = parseVersion(last);
+  if (p?.pre) return { version: `${p.v ? 'v' : ''}${p.nums.join('.')}`, bump: 'release' };
   const part = items.some((i) => i.type === 'backlog') ? 'minor' : 'patch';
   return { version: bump(last, part), bump: part };
 }

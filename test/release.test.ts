@@ -50,5 +50,6 @@ describe('release versions', () => {
     expect(proposeVersion('v1.4.2', [item('A-1'), item('A-2', { type: 'bug' })])).toEqual({ version: 'v1.5.0', bump: 'minor' });
     expect(proposeVersion('v1.4.2', [item('A-2', { type: 'bug' })])).toEqual({ version: 'v1.4.3', bump: 'patch' });
     expect(proposeVersion(null, [item('A-1')])).toEqual({ version: 'v0.1.0', bump: 'first' });
+    expect(proposeVersion('v2.0.0-rc.2', [item('A-1')])).toEqual({ version: 'v2.0.0', bump: 'release' });
   });
 });

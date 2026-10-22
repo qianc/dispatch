@@ -38,6 +38,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/projects/:key/facets': 'read',
   'GET /api/projects/:key/file': 'read',
   'GET /api/projects/:key/sources': 'read',
+  'GET /api/projects/:key/releases': 'read',
+  'GET /api/projects/:key/releases/proposal': 'read',
   'GET /api/items/:id': 'read',
   'GET /api/items/by-key/:key': 'read',
   'GET /api/items/:id/discuss': 'read',
@@ -61,6 +63,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
 
   'POST /api/projects/:key/batches': 'sessions',
   'POST /api/projects/:key/planner': 'sessions',
+  'POST /api/projects/:key/releases': 'sessions',
   'POST /api/assistant/messages': 'sessions',
   'POST /api/assistant/new': 'sessions',
   'POST /api/items/:id/discuss': 'sessions',

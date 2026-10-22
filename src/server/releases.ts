@@ -69,7 +69,7 @@ export function labelReleased(store: Store, projectId: number, prefix: string, v
 export interface ReleaseProposal {
   last: { version: string; from: 'tag' | 'file' | 'label' } | null;
   proposed: string;
-  bump: 'minor' | 'patch' | 'first';
+  bump: 'minor' | 'patch' | 'first' | 'release';
   items: Pick<Item, 'id' | 'key' | 'type' | 'title'>[];
   label_prefix: string;
   command: string | null;
