@@ -1,5 +1,6 @@
 // Releases: which connected worker can release which of a project's repos (from the releases
 // in each worker's own config), and labelling the items a release holds.
+import { compareVersions, highestLabelVersion, maxVersion, proposeVersion, unreleased } from '../shared/release.ts';
 import type { Item, Project, ReleaseCapability, Repo } from '../shared/types.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -63,4 +64,44 @@ export function labelReleased(store: Store, projectId: number, prefix: string, v
     emit?.(up);
   }
   return targets;
+}
+
+export interface ReleaseProposal {
+  last: { version: string; from: 'tag' | 'file' | 'label' } | null;
+  proposed: string;
+  bump: 'minor' | 'patch' | 'first';
+  items: Pick<Item, 'id' | 'key' | 'type' | 'title'>[];
+  label_prefix: string;
+  command: string | null;
+  notes: string | null;
+  warning?: string;
+}
+
+/**
+ * The last release (newest of the repo's version tag, its VERSION file and the project's release
+ * labels, so a version already used is never proposed again) and the next version.
+ */
+export async function releaseProposal(deps: { store: Store; hub: WorkerHub }, project: Project, opt: ReleaseOption): Promise<ReleaseProposal> {
+  const repo = deps.store.repo(opt.repo_id)!;
+  const all = deps.store.items(project.id);
+  let found: { tag: string | null; file: string | null } = { tag: null, file: null };
+  let warning: string | undefined;
+  try {
+    const res = await deps.hub.cmd<{ tag?: string | null; file?: string | null }>(opt.worker_id, { c: 'release_version', repo }, 60_000);
+    found = { tag: res?.tag ?? null, file: res?.file ?? null };
+  } catch (e) {
+    warning = `Could not read the version tags of ${opt.repo} on ${opt.worker}: ${(e as Error).message}`;
+  }
+  const label = highestLabelVersion(all, opt.label_prefix);
+  const candidates = [['tag', found.tag], ['file', found.file], ['label', label]] as const;
+  const best = maxVersion(candidates.map(([, v]) => v));
+  const last = best ? { version: best, from: candidates.find(([, v]) => v && compareVersions(v, best) === 0)![0] } : null;
+  const items = unreleased(all, opt.label_prefix);
+  const next = proposeVersion(last?.version ?? null, items);
+  return {
+    last, proposed: next.version, bump: next.bump,
+    items: items.map((i) => ({ id: i.id, key: i.key, type: i.type, title: i.title })),
+    label_prefix: opt.label_prefix, command: opt.command, notes: opt.notes,
+    ...(warning ? { warning } : {}),
+  };
 }
