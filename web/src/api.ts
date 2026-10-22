@@ -104,3 +104,26 @@ export interface Accounts {
   github: { name: string; login: string | null; git_name: string | null; git_email: string | null }[];
   assistant_claude_account: string | null;
 }
+
+/** A connected worker that can release one of the project's repos (from its own config). */
+export interface ReleaseOption {
+  worker_id: number;
+  worker: string;
+  repo_id: number;
+  repo: string;
+  cap_repo: string;
+  label_prefix: string;
+  command: string | null;
+  notes: string | null;
+}
+
+export interface ReleaseProposal {
+  last: { version: string; from: 'tag' | 'file' | 'label' } | null;
+  proposed: string;
+  bump: 'minor' | 'patch' | 'first' | 'release';
+  items: Pick<Item, 'id' | 'key' | 'type' | 'title'>[];
+  label_prefix: string;
+  command: string | null;
+  notes: string | null;
+  warning?: string;
+}

@@ -7,7 +7,7 @@ import { z } from 'zod';
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
 export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled'] as const;
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
-export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss'] as const;
+export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss', 'release'] as const;
 /** Light read-only chats: no worker slot, not listed as agent work, no push when a reply is ready. */
 export const CHAT_KINDS: SessionKind[] = ['assistant', 'discuss'];
 export const SESSION_STATUSES = ['queued', 'running', 'waiting_input', 'idle', 'completed', 'failed', 'stopped'] as const;
@@ -170,9 +170,33 @@ export interface Session {
   /** the session this one was moved from (Move to another worker) */
   moved_from: number | null;
   item_ids: number[];
+  /** release sessions: what is being released, fixed at creation */
+  release: ReleaseInfo | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
+}
+
+/** A release a worker offers, from its own config: `repo` is owner/name, a repo name, or a local path. */
+export interface ReleaseCapability {
+  repo: string;
+  /** the label the released items get, before the version: rel:, convert: */
+  label_prefix: string;
+  /** the repo's release step; {version} is replaced. null: the agent follows the repo's own docs */
+  command: string | null;
+  notes: string | null;
+}
+
+/** A release session's release: the repo, the agreed version and the capability it runs under. */
+export interface ReleaseInfo {
+  repo_id: number;
+  /** the capability's `repo`, as the worker's config names it */
+  cap_repo: string;
+  version: string;
+  label_prefix: string;
+  command: string | null;
+  notes: string | null;
+  last_version: string | null;
 }
 
 /** What a worker reported about itself at hello (names only, never credentials). */
@@ -184,6 +208,8 @@ export interface WorkerFacts {
   claude_accounts: ClaudeAccountInfo[];
   github_accounts: string[];
   local_repo_dirs: string[];
+  /** releases it can run (missing from workers older than releases) */
+  releases?: ReleaseCapability[];
 }
 
 export interface WorkerRecord {

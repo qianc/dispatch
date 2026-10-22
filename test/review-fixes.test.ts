@@ -128,7 +128,7 @@ describe('review fixes', () => {
 });
 
 describe('review fixes in the worker', () => {
-  const entry = { name: 'home', url: 'ws://127.0.0.1:1/worker', token: 't', local_repo_dirs: ['/allowed'], read_dirs: [], claude_accounts: null, github_accounts: null };
+  const entry = { name: 'home', url: 'ws://127.0.0.1:1/worker', token: 't', local_repo_dirs: ['/allowed'], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [] };
   const link = (slots: Slots) => new ServerLink(entry, {
     fake: false, opts: { assistantReadDirs: [] } as never, workspacesDir: '/tmp/dsp-rf-ws', first: true, slots,
     claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',

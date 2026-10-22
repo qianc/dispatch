@@ -15,10 +15,10 @@ import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type Runne
 import { hostedGitBase, run, Workspaces } from './workspace.ts';
 
 /** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
-async function ruleFiles(dirs: string[]) {
+async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
   const out: { label: string; text: string }[] = [];
   for (const d of dirs) {
-    for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+    for (const name of names) {
       const f = resolve(d, name);
       if (existsSync(f)) out.push({ label: `${name} from ${d}`, text: (await readFile(f, 'utf8')).slice(0, 30_000) });
     }
@@ -106,6 +106,7 @@ export class ServerLink {
       claude_accounts: claude,
       github_accounts: this.shared.githubAccounts.filter((a) => this.allowedGithub(a)),
       local_repo_dirs: this.entry.local_repo_dirs,
+      releases: this.entry.releases,
     };
   }
 
@@ -206,7 +207,14 @@ export class ServerLink {
     if (spec.github_account && !this.allowedGithub(spec.github_account)) return `This worker does not allow the GitHub account "${spec.github_account}" for server ${this.entry.name}.`;
     const outside = spec.repos.find((r) => r.local_path && !insideDirs(r.local_path, this.entry.local_repo_dirs, '/'));
     if (outside) return `${outside.local_path} is outside the folders this worker allows for server ${this.entry.name}.`;
+    if (spec.kind === 'release' && !this.releaseCapability(spec)) return `This worker does not offer releases of ${spec.release?.cap_repo ?? 'this repo'} (${spec.release?.label_prefix ?? '?'}) for server ${this.entry.name}.`;
     return null;
+  }
+
+  /** The release in this worker's own config that a release spec runs under. */
+  private releaseCapability(spec: StartSpec) {
+    const r = spec.release;
+    return r ? this.entry.releases.find((c) => c.repo === r.cap_repo && c.label_prefix === r.label_prefix) : undefined;
   }
 
   async launch(spec: StartSpec, text: string, isStart: boolean) {
@@ -222,6 +230,9 @@ export class ServerLink {
     if (waiting) return void waiting.push(text); // still preparing: deliver after start
     const refused = this.refusal(spec);
     if (refused) return this.send({ t: 'status', session_id: id, status: 'failed', error: refused });
+    // a release runs the command and notes of this worker's own config, never what a server sends
+    const cap = spec.kind === 'release' ? this.releaseCapability(spec) : undefined;
+    if (cap && spec.release) spec = { ...spec, release: { ...spec.release, command: cap.command, notes: cap.notes } };
     // the worker owns its slots: a new agent session waits when they are all taken (by any server)
     if (isStart && !CHAT_KINDS.includes(spec.kind) && !this.shared.slots.has(this.slotKey(id)) && this.shared.slots.free <= 0) {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'refused', session_id: id, reason: 'busy' } satisfies WorkerToServer));
@@ -239,6 +250,9 @@ export class ServerLink {
         const c = await this.discussContext(spec);
         cwd = c.cwd;
         extra = { readDirs: c.dirs, context: c.context };
+      } else if (spec.kind === 'release' && (!this.shared.fake || spec.repos.every((r) => r.local_path))) {
+        cwd = await this.workspaces.prepareRelease(spec);
+        extra = { context: await ruleFiles([cwd], ['AGENTS.md', '.dispatch.md']) };
       } else if (this.shared.fake) cwd = process.cwd();
       else if (spec.kind === 'assistant') {
         // the assistant reads only allow-listed folders; give it an empty working dir
@@ -299,6 +313,8 @@ export class ServerLink {
     // leftovers / tidy only look at real folders, so they run in fake mode too
     if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy'].includes(cmd.c)) return { ok: true };
     switch (cmd.c) {
+      case 'release_version':
+        return ws.releaseVersion(cmd.repo);
       case 'leftovers':
         return ws.leftovers(cmd.session_id, cmd.repos, cmd.branch, cmd.merged_repo_ids);
       case 'tidy':

@@ -445,3 +445,32 @@ test('browser-drawn controls (checkboxes, scrollbars) follow the theme, also on 
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
   expect(await scheme()).toBe('dark');
 });
+
+test('a release from the project page: review the version, edit it, create it', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  const api = (method: 'post' | 'patch', path: string, data: unknown) => page.request[method](`/api${path}`, { data }).then((r) => r.json());
+  await api('post', '/projects', { key: 'RL', name: 'Releasable' });
+  await api('post', '/projects/RL/repos', { github_owner: 'me', github_name: 'e2e-rel' });
+  const it = await api('post', '/projects/RL/items', { title: 'Shiny feature' });
+  await api('patch', `/items/${it.id}`, { status: 'done' });
+
+  await page.goto('/p/RL');
+  await page.getByRole('button', { name: 'Create release' }).click();
+  const d = page.getByRole('dialog');
+  await expect(d.getByText('on worker default')).toBeVisible();
+  await expect(d.getByText('./release.sh {version} --yes')).toBeVisible();
+  await expect(d.getByText('Shiny feature')).toBeVisible();
+  await expect(d.getByLabel('Version')).toHaveValue('v0.1.0');
+  await d.getByLabel('Version').fill('1.0.0');
+  await expect(d.getByText('rel:v1.0.0')).toBeVisible();
+  await d.getByRole('button', { name: 'Create release v1.0.0' }).click();
+
+  await expect(page.getByText('release v1.0.0')).toBeVisible();
+  await expect(page.getByText(/Released v1\.0\.0; labelled RL-1/)).toBeVisible();
+  const item = await page.request.get(`/api/items/${it.id}`).then((r) => r.json());
+  expect(item.labels).toContain('rel:v1.0.0');
+});
+

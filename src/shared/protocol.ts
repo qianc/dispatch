@@ -1,6 +1,6 @@
 // Messages on the internal WebSocket between server and worker.
 import type { ClaudeAccountInfo } from './accounts.ts';
-import type { WorkerFacts } from './types.ts';
+import type { ReleaseInfo, WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
@@ -28,6 +28,8 @@ export interface StartSpec {
   /** planner sessions: the workers it can place work on, and the project's text on where work runs */
   workers?: PlannerWorker[];
   placement_md?: string;
+  /** release sessions: what to release (the worker takes command and notes from its own config) */
+  release?: ReleaseInfo;
 }
 
 export interface PlannerWorker {
@@ -61,6 +63,8 @@ export type WorkerCommand =
   /** what a finished session left on disk (worktrees, its branch, merged or not) */
   | { c: 'leftovers'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[] }
   /** remove a finished session's worktrees, and its branch where merged */
+  /** the newest version tag on a repo's default branch, and its VERSION file */
+  | { c: 'release_version'; repo: Repo }
   | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
 
 export type WorkerToServer =
@@ -79,7 +83,7 @@ export type WorkerToServer =
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
-export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | AssistantMethod;
+export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items' | AssistantMethod;
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'add_repo' | 'remove_repo'

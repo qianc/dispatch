@@ -10,6 +10,7 @@ import type { Principal } from './access.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { OAuth } from './oauth.ts';
+import { labelReleased } from './releases.ts';
 import type { Store } from './store.ts';
 
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
@@ -232,10 +233,8 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     inputSchema: { project: z.string(), version: z.string().min(1), keys: z.array(z.string()).optional(), prefix: z.string().default('rel:') },
   }, guard(true, (a: { project: string; version: string; keys?: string[]; prefix: string }) => {
     const p = project(a.project);
-    const tag = `${a.prefix}${a.version}`;
-    const targets = a.keys?.length ? a.keys.map(item) : store.items(p.id, { status: ['done'] }).filter((i) => !i.labels.some((l) => l.startsWith(a.prefix)));
-    for (const it of targets) if (!it.labels.includes(tag)) emit(store.updateItem(it.id, { labels: [...it.labels, tag] }));
-    return text({ released: targets.map((i) => i.key), label: tag });
+    const targets = labelReleased(store, p.id, a.prefix, a.version, a.keys?.map(item), emit);
+    return text({ released: targets.map((i) => i.key), label: `${a.prefix}${a.version}` });
   }));
 
   return server;

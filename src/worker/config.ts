@@ -1,16 +1,22 @@
 // Which servers this worker serves, and what each may use. WORKER_CONFIG names a JSON file; without
-// it, today's environment variables are a config with one server named "default".
+// it, today's environment variables are a config with one server named "default" (RELEASES holds
+// its releases list as JSON).
 //
 // {
 //   "max_concurrent": 3,                       // agent sessions at once, over all servers
 //   "servers": [
 //     { "name": "home", "url": "wss://dispatch.example.com/worker", "token_file": "~/.config/dispatch/worker-home.token",
 //       "local_repo_dirs": ["~/projects"], "read_dirs": ["~/projects"],
-//       "claude_accounts": null, "github_accounts": null }      // null = every account this worker has
+//       "claude_accounts": null, "github_accounts": null,       // null = every account this worker has
+//       "releases": [                                           // releases this server may start here
+//         { "repo": "me/app", "label_prefix": "rel:", "command": "./release.sh {version} --yes",
+//           "notes": "The upload credential is on this machine." } ] }
 //   ]
 // }
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
+import type { ReleaseCapability } from '../shared/types.ts';
 import { expandDirs } from './runner.ts';
 
 export interface ServerEntry {
@@ -24,6 +30,8 @@ export interface ServerEntry {
   /** account names this server may use; null = all */
   claude_accounts: string[] | null;
   github_accounts: string[] | null;
+  /** releases this server may start on this worker */
+  releases: ReleaseCapability[];
 }
 
 export interface WorkerConfig {
@@ -32,6 +40,24 @@ export interface WorkerConfig {
 }
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+const releasesSchema = z.array(z.object({
+  /** owner/name, a repo name, or a local path */
+  repo: z.string().min(1),
+  label_prefix: z.string().min(1).max(20).default('rel:'),
+  command: z.string().min(1).optional(),
+  notes: z.string().max(2000).optional(),
+})).default([]);
+
+/** A repo given as a path (~, /, .) is expanded so it compares with a local repo's path. */
+function releases(list: z.infer<typeof releasesSchema>, home: string | undefined): ReleaseCapability[] {
+  return list.map((r) => ({
+    repo: /^[~/.]/.test(r.repo) ? resolve(r.repo.replace(/^~(?=\/|$)/, home ?? '~')).replace(/\/+$/, '') : r.repo,
+    label_prefix: r.label_prefix,
+    command: r.command ?? null,
+    notes: r.notes ?? null,
+  }));
+}
 
 const fileSchema = z.object({
   max_concurrent: z.number().int().min(1).optional(),
@@ -44,6 +70,7 @@ const fileSchema = z.object({
     read_dirs: z.array(z.string()).default([]),
     claude_accounts: z.array(z.string()).nullable().default(null),
     github_accounts: z.array(z.string()).nullable().default(null),
+    releases: releasesSchema,
   })),
 });
 
@@ -63,6 +90,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
         read_dirs: expandDirs(env.ASSISTANT_READ_DIRS ?? ''),
         claude_accounts: null,
         github_accounts: null,
+        releases: releases(releasesSchema.parse(env.RELEASES ? JSON.parse(env.RELEASES) : []), env.HOME),
       }],
     };
   }
@@ -79,6 +107,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
       name: s.name, url: s.url, token,
       local_repo_dirs: dirs(s.local_repo_dirs), read_dirs: dirs(s.read_dirs),
       claude_accounts: s.claude_accounts, github_accounts: s.github_accounts,
+      releases: releases(s.releases, env.HOME),
     };
   });
   return { max_concurrent: raw.max_concurrent ?? max, servers };

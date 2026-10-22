@@ -34,6 +34,7 @@ import { pushRoutes } from './routes/push.ts';
 import { streamRoutes } from './routes/stream.ts';
 import { fileRoutes } from './routes/files.ts';
 import { workerRoutes } from './routes/workers.ts';
+import { releaseRoutes } from './routes/releases.ts';
 import { Workers } from './workers.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
@@ -172,6 +173,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   streamRoutes(app, ctx);
   fileRoutes(app, ctx);
   workerRoutes(app, ctx);
+  releaseRoutes(app, ctx);
   gitRoutes(app, ctx);
   imageRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {

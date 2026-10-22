@@ -15,6 +15,8 @@ import {
   type Project,
   type ProposedItem,
   type RunOptions,
+  type ReleaseInfo,
+  type Repo,
   type Session,
   type SessionStatus,
 } from '../shared/types.ts';
@@ -22,6 +24,7 @@ import { z } from 'zod';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
+import { labelReleased } from './releases.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
@@ -346,6 +349,28 @@ export class Sessions {
     return this.store.session(session.id)!;
   }
 
+  /**
+   * A release, on the worker whose config offers it (not the project's usual worker). Callers
+   * check the capability, version and items (routes/releases.ts). branch stays null: tidy treats
+   * a session's merged branch as deletable, and a release works on the default branch itself.
+   */
+  startRelease(project: Project, input: { workerId: number; repo: Repo; release: ReleaseInfo; items: Item[] }): Session {
+    const live = this.store.sessions({ project_id: project.id, kind: 'release' })
+      .find((s) => !FINAL_STATUSES.includes(s.status) && s.release?.repo_id === input.repo.id);
+    if (live) throw new SessionError(`Release #${live.id} of ${input.repo.github_name} is not finished yet.`, 409);
+    const claudeAccount = this.claudeAccountFor(project, null, undefined, input.workerId);
+    this.checkAccounts(input.workerId, claudeAccount, project);
+    const session = this.store.createSession({
+      project_id: project.id, kind: 'release', title: `Release ${input.repo.github_name} ${input.release.version}`, status: 'queued',
+      force_plan: false, branch: null, initial_prompt: `Release ${input.release.version} of ${input.repo.github_name}.`, source_id: null,
+      item_ids: input.items.map((i) => i.id), options: { ...DEFAULT_RUN_OPTIONS, worker_id: input.workerId },
+      claude_account: claudeAccount, worker_id: input.workerId, release: input.release,
+    });
+    this.emitSession(session);
+    this.dispatch();
+    return this.store.session(session.id)!;
+  }
+
   // ---------- user actions ----------
 
   send(sessionId: number, text: string) {
@@ -575,6 +600,8 @@ export class Sessions {
     }
     if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image', 'propose'].includes(method)) throw new Error('A discussion is read-only.');
     if (s.kind === 'discuss' && method === 'propose' && (p as { type?: string }).type !== 'item_update') throw new Error('A discussion can only suggest item changes.');
+    if (s.kind === 'release' && !['get_item', 'list_items', 'get_image', 'add_comment', 'release_items'].includes(method)) throw new Error(`A release session cannot call ${method}.`);
+    if (method === 'release_items' && (s.kind !== 'release' || !s.release)) throw new Error('Only a release session labels released items.');
     const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => {
       const n = Number(String(key).split('-').pop());
@@ -627,6 +654,19 @@ export class Sessions {
         const item = this.store.createProposedItems(project.id, [parsed], this.agentSource(s).id)[0];
         this.bus.emit({ t: 'item', item });
         return { key: item.key, id: item.id };
+      }
+      case 'release_items': {
+        // the version and the label come from the session, never from the agent
+        const r = s.release!;
+        const keys = Array.isArray(p.keys) ? [...new Set((p.keys as unknown[]).map((k) => String(k).toUpperCase()))] : [];
+        if (!keys.length) throw new Error('Give the keys of the items in this release, e.g. ["HC-3"]');
+        const items = keys.map(byKey);
+        const open = items.filter((i) => i.status !== 'done');
+        if (open.length) throw new Error(`Only done items can be released: ${open.map((i) => `${i.key} is ${i.status}`).join(', ')}`);
+        const released = labelReleased(this.store, project.id, r.label_prefix, r.version, items, (it) => this.bus.emit({ t: 'item', item: it }));
+        const label = `${r.label_prefix}${r.version}`;
+        this.addEvent(s.id, { kind: 'system', text: `Labelled ${released.map((i) => i.key).join(', ')} with ${label}` });
+        return { released: released.map((i) => i.key), label };
       }
       case 'propose':
         return this.propose(s, p);
@@ -709,7 +749,9 @@ export class Sessions {
   // ---------- internals ----------
 
   private reposOf(s: Session) {
-    return s.project_id ? this.store.repos(s.project_id) : [];
+    const repos = s.project_id ? this.store.repos(s.project_id) : [];
+    // a release works on its one repo
+    return s.release ? repos.filter((r) => r.id === s.release!.repo_id) : repos;
   }
 
   /**
@@ -863,6 +905,7 @@ export class Sessions {
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(), placement_md: project?.placement_md ?? '' } : {}),
+      ...(s.release ? { release: s.release } : {}),
     };
   }
 
