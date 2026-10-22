@@ -31,7 +31,8 @@ function proposalText(open: OpenProposal[]): string {
  */
 export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 'kind'>>, prs: PullRequest[], events: Pick<SessionEvent, 'id' | 'body'>[] = []): Attention {
   const open = prs.filter((p) => p.state === 'open');
-  const label = (p: PullRequest) => (p.local ? `Branch ${p.head_ref}` : `PR #${p.number}`);
+  // a batch can have the same branch in several repos: name the repo
+  const label = (p: PullRequest) => (p.local ? `${p.repo_full_name.split('/').pop()} branch ${p.head_ref}` : `PR #${p.number}`);
   const stuck = open.find((p) => p.blocked || p.mergeable === false);
   if (stuck) {
     const why = stuck.blocked ?? 'it has merge conflicts';

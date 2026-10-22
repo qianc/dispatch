@@ -51,6 +51,12 @@ describe('attentionOf (DISP-21)', () => {
     expect(attentionOf(work, [], [ev(2, { kind: 'proposal', proposal: batch })]).kind).toBe('turn');
   });
 
+  it('a local branch is named with its repo: a batch can have the same branch in several (DISP-32)', () => {
+    const am = { kind: 'work' as const, options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'local' as const } };
+    expect(attentionOf(am, [pr({ local: true, head_ref: 'dispatch/x', repo_full_name: 'me/convert', blocked: 'it is still 3 commits behind main' })]).text)
+      .toBe('Auto-merge stopped: convert branch dispatch/x — it is still 3 commits behind main.');
+  });
+
   it('PRs come first', () => {
     expect(attentionOf(planner, [pr({})], [ev(2, { kind: 'proposal', proposal: batch })]).kind).toBe('review');
     expect(attentionOf(planner, [pr({ state: 'merged' })], [ev(2, { kind: 'proposal', proposal: batch })]).kind).toBe('merged');
