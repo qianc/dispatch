@@ -10,6 +10,7 @@ import { normalizeVersion, VERSION_RE } from '../../../src/shared/release.ts';
 import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
+import { Schedules } from '../components/schedules.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { noteProject } from '../nav.ts';
@@ -419,7 +420,14 @@ function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary;
 
 function ProjectSessions({ project }: { project: ProjectSummary }) {
   const { data = [] } = useQuery({ queryKey: ['sessions', 'project', project.key], queryFn: () => api.get<Session[]>(`/sessions?project=${project.key}`) });
-  return data.length ? <Card className="mt-3">{data.map((s) => <SessionRow key={s.id} s={s} />)}</Card> : <Empty>No sessions yet.</Empty>;
+  return (
+    <>
+      <Schedules project={project} />
+      <Section title="Sessions">
+        {data.length ? <Card>{data.map((s) => <SessionRow key={s.id} s={s} />)}</Card> : <Empty>No sessions yet.</Empty>}
+      </Section>
+    </>
+  );
 }
 
 function Sources({ project }: { project: ProjectSummary }) {

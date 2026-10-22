@@ -107,6 +107,7 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['projects'] });
       if (e.session.kind === 'assistant') qc.invalidateQueries({ queryKey: ['assistant'] });
       if (e.session.kind === 'discuss') qc.invalidateQueries({ queryKey: ['discuss'] });
+      if (e.session.schedule_id) qc.invalidateQueries({ queryKey: ['schedules', e.session.project_key] });
       return;
     case 'input':
       qc.setQueryData<SessionDetail>(['session', e.input.session_id], (d) =>
@@ -123,6 +124,7 @@ function apply(qc: QueryClient, e: LiveEvent) {
     case 'project':
       qc.invalidateQueries({ queryKey: ['projects'] });
       qc.invalidateQueries({ queryKey: ['project', e.key] });
+      qc.invalidateQueries({ queryKey: ['schedules', e.key] });
       return;
     case 'cleanup':
       qc.invalidateQueries({ queryKey: ['inbox'] });

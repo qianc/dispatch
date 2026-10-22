@@ -537,3 +537,42 @@ test('a release from the project page: review the version, edit it, create it', 
   expect(item.labels).toContain('rel:v1.0.0');
 });
 
+
+test('a schedule on the project page: add it, run it now, see what it started (DISP-13)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  const api = (path: string, data: unknown) => page.request.post(`/api${path}`, { data }).then((r) => r.json());
+  await api('/projects', { key: 'NT', name: 'Nightly' });
+  await api('/projects/NT/repos', { github_owner: 'me', github_name: 'nt' });
+  await api('/projects/NT/items', { title: 'Held work', status: 'hold' });
+  await api('/projects/NT/items', { title: 'Fix the chart' });
+
+  await page.goto('/p/NT?tab=sessions');
+  await page.getByRole('button', { name: '+ Add schedule' }).click();
+  const d = page.getByRole('dialog');
+  await d.getByLabel('Schedule name').fill('Night run');
+  await d.getByLabel('Time').fill('03:30');
+  await d.getByRole('button', { name: 'Sat' }).click();
+  await d.getByRole('button', { name: 'Sun' }).click();
+  await d.getByLabel('Scope').fill('Small fixes only.');
+  await d.getByRole('button', { name: 'Add schedule' }).click();
+  const row = page.getByRole('button', { name: 'Schedule Night run' });
+  await expect(row).toContainText('03:30 · weekdays');
+  await expect(row).toContainText('Next:');
+
+  await row.click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Run now' }).click();
+  await expect(page.getByRole('dialog').getByText(/Started session #\d+/)).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+  // the run ends by itself, with what it started as its result; the held item stays out
+  await expect(page.getByRole('link', { name: /Scheduled: Night run/ })).toContainText('Started session #');
+  await expect(page.getByRole('link', { name: /^\(fake\) Night batch/ })).toBeVisible();
+  const items = await page.request.get('/api/projects/NT/items').then((r) => r.json()) as { key: string; status: string }[];
+  expect(items.find((i) => i.key === 'NT-1')?.status).toBe('hold');
+  expect(items.find((i) => i.key === 'NT-2')?.status).toBe('in_progress');
+  // free the worker slot for the tests after this one
+  const work = (await page.request.get('/api/sessions?project=NT').then((r) => r.json()) as { id: number; kind: string }[]).find((x) => x.kind === 'work')!;
+  await page.request.post(`/api/sessions/${work.id}/finish`, { data: { status: 'stopped' } });
+});

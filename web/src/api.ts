@@ -1,5 +1,5 @@
 import type {
-  Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source,
+  Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 
 export type { Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
@@ -114,6 +114,12 @@ export interface Accounts {
 }
 
 /** A connected worker that can release one of the project's repos (from its own config). */
+/** A scheduled planner run, with its next run and its last run's session. */
+export type ScheduleView = Schedule & {
+  next_run: string | null;
+  last_session: Pick<Session, 'id' | 'status' | 'title' | 'last_text' | 'created_at'> | null;
+};
+
 export interface ReleaseOption {
   worker_id: number;
   worker: string;
