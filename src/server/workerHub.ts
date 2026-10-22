@@ -168,7 +168,7 @@ export class WorkerHub {
     switch (msg.t) {
       case 'hello':
         // older workers send only their Claude accounts
-        link.facts = msg.facts ?? (msg.claude_accounts ? { os: '', hostname: '', slots: 0, free_slots: -1, claude_accounts: msg.claude_accounts, github_accounts: [], local_repo_dirs: [] } : null);
+        link.facts = msg.facts ?? (msg.claude_accounts ? { os: '', hostname: '', slots: 0, free_slots: -1, claude_accounts: msg.claude_accounts, github_accounts: [], local_repo_dirs: [], releases: [] } : null);
         link.ready = true;
         return this.handlers.onHello(link.workerId, msg.live, link.facts);
       case 'cmd_result': {

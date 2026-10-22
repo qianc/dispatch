@@ -126,7 +126,7 @@ describe('phase 2 review fixes', () => {
   it('#5 agents get no worker token: they commit, and the worker pushes the branch at the end of the turn', async () => {
     const { s, repo, secret } = await hostedServer();
     try {
-      const entry = { name: 'default', url: `ws://127.0.0.1:${s.port}/worker`, token: secret, local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null };
+      const entry = { name: 'default', url: `ws://127.0.0.1:${s.port}/worker`, token: secret, local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [] };
       const link = new ServerLink(entry, {
         fake: false, opts: { assistantReadDirs: [], sessionEnv: () => ({ A: '1' }) } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-p2l-')), first: true, slots: new Slots(1),
         claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',

@@ -106,6 +106,7 @@ export class ServerLink {
       claude_accounts: claude,
       github_accounts: this.shared.githubAccounts.filter((a) => this.allowedGithub(a)),
       local_repo_dirs: this.entry.local_repo_dirs,
+      releases: this.entry.releases,
     };
   }
 
