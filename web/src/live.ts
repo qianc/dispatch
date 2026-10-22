@@ -127,6 +127,9 @@ function apply(qc: QueryClient, e: LiveEvent) {
     case 'cleanup':
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;
+    case 'notice':
+      window.dispatchEvent(new CustomEvent('dispatch:notice', { detail: e.notice }));
+      return;
     case 'pr':
       qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
       qc.invalidateQueries({ queryKey: ['inbox'] });

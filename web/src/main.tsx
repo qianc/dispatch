@@ -6,6 +6,7 @@ import { registerSW } from 'virtual:pwa-register';
 import './styles.css';
 import { api, ApiError, type Me } from './api.ts';
 import { connectLive, liveHealthy } from './live.ts';
+import { trackPresence } from './presence.ts';
 import { initTheme } from './theme.ts';
 import { Layout } from './components/Layout.tsx';
 import { Login, SignedOut } from './pages/Login.tsx';
@@ -61,6 +62,15 @@ const router = createBrowserRouter([
   },
 ]);
 
+// a tapped notification: the service worker asks this window to show the chat it is about
+navigator.serviceWorker?.addEventListener('message', (e: MessageEvent<{ type?: string; url?: string }>) => {
+  if (e.data?.type !== 'navigate' || !e.data.url) return;
+  const to = new URL(e.data.url, location.origin);
+  if (to.origin === location.origin) void router.navigate(to.pathname + to.search + to.hash);
+  e.ports[0]?.postMessage('ok');
+});
+navigator.serviceWorker?.startMessages();
+
 function App() {
   const client = useQueryClient();
   const { data: me, error: meError } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
@@ -70,6 +80,7 @@ function App() {
     return () => window.removeEventListener('dispatch:unauthorized', onUnauthorized);
   }, [client]);
   useEffect(() => (me?.authed ? connectLive(client) : undefined), [me?.authed, client]);
+  useEffect(() => (me?.authed ? trackPresence() : undefined), [me?.authed]);
   // a sign-in proxy turned even /api/me away: its session expired
   if (!me && meError instanceof ApiError && meError.foreign) return <SignedOut />;
   if (!me) return null;
