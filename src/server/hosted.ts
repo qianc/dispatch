@@ -165,12 +165,14 @@ export class HostedGit {
     const dir = this.dir(repo);
     const head = `refs/heads/${branch}`;
     const sha = await git(dir, ['rev-parse', '--verify', '--quiet', head]);
-    if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, head_sha: null };
+    if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, differs: false, head_sha: null };
     const base = this.base(repo);
     const counts = (await must(dir, ['rev-list', '--left-right', '--count', `${base}...${head}`])).split(/\s+/).map(Number);
     const merged = (await git(dir, ['merge-base', '--is-ancestor', head, base])).code === 0;
     const conflicts = !merged && (await git(dir, ['merge-tree', '--write-tree', base, head])).code === 1;
-    return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, head_sha: sha.out.trim() };
+    // same tree as the default branch: nothing to review, even if the commits differ (DISP-33)
+    const differs = (await must(dir, ['rev-parse', `${base}^{tree}`])) !== (await must(dir, ['rev-parse', `${head}^{tree}`]));
+    return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim() };
   }
 
   async branchDiff(repo: Repo, branch: string): Promise<BranchFile[]> {

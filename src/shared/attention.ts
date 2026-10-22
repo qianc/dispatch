@@ -24,15 +24,23 @@ function proposalText(open: OpenProposal[]): string {
   return 'Claude proposes a batch. Start it, or open the chat to change it.';
 }
 
+/** Whether a session with this attention waits on the owner: not while Dispatch checks or merges it (DISP-31). */
+export function waitsOnOwner(a: Attention): boolean {
+  return a.kind !== 'checking' && a.kind !== 'merging';
+}
+
 /**
  * What an idle session needs from you: a stuck merge, a review, a check after merging, a planning
- * chat's proposal, or a reply; or nothing yet while auto-merge runs. `events`: the transcript, for
- * planning chats (their open proposal cards).
+ * chat's proposal, or a reply; or nothing yet while auto-merge runs or a merge is under way.
+ * `events`: the transcript, for planning chats (their open proposal cards). `mergingNow`: ids of
+ * PRs being merged at this moment.
  */
-export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 'kind'>>, prs: PullRequest[], events: Pick<SessionEvent, 'id' | 'body'>[] = []): Attention {
+export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 'kind'>>, prs: PullRequest[], events: Pick<SessionEvent, 'id' | 'body'>[] = [], mergingNow: ReadonlySet<number> = new Set()): Attention {
   const open = prs.filter((p) => p.state === 'open');
   // a batch can have the same branch in several repos: name the repo
   const label = (p: PullRequest) => (p.local ? `${p.repo_full_name.split('/').pop()} branch ${p.head_ref}` : `PR #${p.number}`);
+  const inMerge = open.find((p) => mergingNow.has(p.id));
+  if (inMerge) return { kind: 'merging', pr_id: inMerge.id, text: `Merging ${label(inMerge)}.` };
   const stuck = open.find((p) => p.blocked || p.mergeable === false);
   if (stuck) {
     const why = stuck.blocked ?? 'it has merge conflicts';

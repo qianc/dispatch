@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Repo, type RunOptions } from '../src/shared/types.ts';
 import { startServer } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
@@ -13,7 +13,7 @@ const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: 
  * A server with a hosted repo (one commit on main), a work session on it, and the session's branch
  * pushed into the server's repo, as a worker would. `gh` is a folder standing in for github.com.
  */
-async function setup(opts: { upstream?: boolean; check?: string } = {}) {
+async function setup(opts: { upstream?: boolean; check?: string; options?: Partial<RunOptions> } = {}) {
   const gh = mkdtempSync(join(tmpdir(), 'dsp-hrgh-'));
   const upstream = join(gh, 'me', 'app.git');
   execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', upstream]);
@@ -31,7 +31,7 @@ async function setup(opts: { upstream?: boolean; check?: string } = {}) {
   const item = (await s.call('POST', '/projects/HV/items', { title: 'Add b' })).data;
   const session = s.ctx.store.createSession({
     project_id: p.id, kind: 'work', title: 'Add b', status: 'idle', force_plan: false, branch: 'dispatch/hv-1-add-b',
-    initial_prompt: '', source_id: null, item_ids: [item.id], options: DEFAULT_RUN_OPTIONS,
+    initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, ...opts.options },
   });
   // the worker's push of the session branch
   const w = mkdtempSync(join(tmpdir(), 'dsp-hrw-'));
@@ -54,6 +54,48 @@ describe('review and merge of hosted repos in Dispatch', () => {
       expect(detail.files.map((f: { filename: string }) => f.filename)).toEqual(['b.txt']);
       expect(detail.base_ref).toBe('main');
       expect(s.ctx.hub.connected).toBe(false);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a branch the batch did not change is not offered for review when main was rewritten (DISP-33)', async () => {
+    const { s, repo, session } = await setup();
+    try {
+      const bare = s.ctx.hosted.dir(repo);
+      // a second session that changed nothing: its branch is the old main
+      const s2 = s.ctx.store.createSession({ project_id: repo.project_id, kind: 'work', title: 'Nothing', status: 'idle', force_plan: false, branch: 'dispatch/hv-2-nothing', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      git(bare, 'branch', s2.branch!, 'main');
+      // main rewritten: the same tree, a new SHA
+      const rewritten = git(bare, 'commit-tree', 'main^{tree}', '-m', 'one, rewritten');
+      git(bare, 'update-ref', 'refs/heads/main', rewritten);
+      const st = await s.ctx.hosted.branchStatus(repo, s2.branch!);
+      expect(st).toMatchObject({ exists: true, ahead: 1, behind: 1, merged: false, differs: false });
+      expect(await s.ctx.github.syncSession(s2)).toEqual([]);
+      // the session that did change something is still offered
+      expect(await s.ctx.hosted.branchStatus(repo, session.branch!)).toMatchObject({ differs: true });
+      expect(await s.ctx.github.syncSession(session)).toEqual([expect.objectContaining({ state: 'open', head_ref: session.branch })]);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('auto-merge does not ask to update a branch whose tree main already has (DISP-33)', async () => {
+    const { s, repo, session } = await setup({ options: { auto_merge: 'local', base_check: true } });
+    try {
+      s.ctx.store.updateSession(session.id, { status: 'running' }); // offered while the agent works
+      const [row] = await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(row).toMatchObject({ state: 'open' });
+      s.ctx.store.updateSession(session.id, { status: 'idle' });
+      // main gets the same change another way: behind by one, but no diff
+      const bare = s.ctx.hosted.dir(repo);
+      git(bare, 'update-ref', 'refs/heads/main', git(bare, 'commit-tree', `${session.branch}^{tree}`, '-p', 'main', '-m', 'b, elsewhere'));
+      expect(await s.ctx.hosted.branchStatus(repo, session.branch!)).toMatchObject({ behind: 1, differs: false });
+      const asked: number[] = [];
+      s.ctx.github.onBehind = (_s, _r, n) => asked.push(n);
+      await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(asked).toEqual([]);
+      expect(s.ctx.store.pr(row.id)).toMatchObject({ state: 'merged' });
     } finally {
       await s.app.close();
     }
@@ -82,6 +124,24 @@ describe('review and merge of hosted repos in Dispatch', () => {
       const r = await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
       expect(asked).toEqual(['merge_local']);
       expect(r.data).toMatchObject({ ok: false, output: 'Check failed (npm test)' });
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('while the check and merge run, the inbox shows the session as merging, not waiting on you (DISP-31)', async () => {
+    const { s, session } = await setup({ check: 'npm test' });
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      expect((await s.call('GET', '/inbox')).data.idle[0].attention.kind).toBe('review');
+      let during: string | undefined;
+      s.ctx.hub.cmd = (async () => {
+        during = (await s.call('GET', '/inbox')).data.idle[0].attention.kind;
+        return { ok: false, output: 'Check failed (npm test)' };
+      }) as typeof s.ctx.hub.cmd;
+      await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
+      expect(during).toBe('merging');
+      expect((await s.call('GET', '/inbox')).data.idle[0].attention.kind).toBe('review');
     } finally {
       await s.app.close();
     }

@@ -102,11 +102,12 @@ const SESSION_LABEL: Record<SessionStatus, string> = {
   queued: 'Queued', running: 'Running', waiting_input: 'Needs you', idle: 'Your turn', completed: 'Done', failed: 'Failed', stopped: 'Stopped',
 };
 
-export function SessionStatusChip({ status }: { status: SessionStatus }) {
+/** `busy`: an idle session that Dispatch checks or merges, shown in progress like a running one. */
+export function SessionStatusChip({ status, busy }: { status: SessionStatus; busy?: string }) {
   return (
-    <Chip tone={SESSION_TONE[status]}>
-      {status === 'running' && <span className="size-1.5 rounded-full bg-run animate-pulse" />}
-      {SESSION_LABEL[status]}
+    <Chip tone={busy ? 'run' : SESSION_TONE[status]}>
+      {(status === 'running' || busy) && <span className="size-1.5 rounded-full bg-run animate-pulse" />}
+      {busy ?? SESSION_LABEL[status]}
     </Chip>
   );
 }

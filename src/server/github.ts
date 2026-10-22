@@ -245,6 +245,7 @@ export class GitHub {
     const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id);
     if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
     if (st.merged && !known) return null; // nothing was ever offered for review
+    if (!st.differs && !known) return null; // same tree as the default branch (rewritten under it): nothing to review, DISP-33
     return this.recordRow(s, repo, {
       number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
       mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
@@ -262,6 +263,7 @@ export class GitHub {
     const st = await this.hosted!.branchStatus(repo, s.branch!);
     if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
     if (st.merged && !known) return null;
+    if (!st.differs && !known) return null; // same tree as the default branch: nothing to review, DISP-33
     return this.recordRow(s, repo, {
       number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
       mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
@@ -335,16 +337,22 @@ export class GitHub {
   /** Called when auto-merge waits because the branch is behind (app.ts sends the agent a message). */
   onBehind: ((s: Session, repo: Repo, behind: number) => void) | null = null;
 
-  /** Commits on the default branch that the PR / local branch does not have yet. */
-  private async behindBy(repo: Repo, pr: PullRequest): Promise<number> {
+  /**
+   * Commits on the default branch that the PR / local branch does not have yet, and whether its
+   * tree differs from the default branch's (always true for GitHub PRs: not checked there).
+   */
+  private async behindBy(repo: Repo, pr: PullRequest): Promise<{ behind: number; differs: boolean }> {
     if (repo.local_path) {
       const st = await this.hub.cmd<BranchStatus>(this.workerOf(pr), { c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
-      return st.behind;
+      return { behind: st.behind, differs: st.differs };
     }
-    if (repo.kind === 'hosted' && pr.local) return (await this.hosted!.branchStatus(repo, pr.head_ref)).behind;
+    if (repo.kind === 'hosted' && pr.local) {
+      const st = await this.hosted!.branchStatus(repo, pr.head_ref);
+      return { behind: st.behind, differs: st.differs };
+    }
     const t = this.mustTarget(repo);
     const { data } = await this.gh(repo).repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
-    return data.behind_by;
+    return { behind: data.behind_by, differs: true };
   }
 
   /** PRs already reported as not auto-mergeable, per head sha, so the owner is told once. */
@@ -404,8 +412,9 @@ export class GitHub {
     const repo = this.store.repo(pr.repo_id)!;
     if (s.options.base_check) {
       // tested against an older default branch? have the agent bring the branch up to date first
-      const behind = await this.behindBy(repo, pr);
-      if (behind > 0) {
+      const { behind, differs } = await this.behindBy(repo, pr);
+      // a branch with the default branch's tree has nothing to bring up to date (DISP-33)
+      if (behind > 0 && differs) {
         const key = `${pr.id}:${pr.head_sha}:behind`;
         const commits = `${behind} commit${behind === 1 ? '' : 's'}`;
         // asked already, and its turn ended on the same head: it did not update, so the owner decides
@@ -520,14 +529,29 @@ export class GitHub {
     };
   }
 
+  /** PRs being merged now (auto or by the owner), with the repo's check: the inbox shows them as merging. */
+  readonly mergingNow = new Set<number>();
+
   async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
+    this.mergingNow.add(prId);
+    this.bus.emit({ t: 'pr', pr });
+    try {
+      return await this.mergeOpen(pr, how, method);
+    } finally {
+      this.mergingNow.delete(prId);
+      this.bus.emit({ t: 'pr', pr: this.store.pr(prId)! });
+    }
+  }
+
+  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
+    const prId = pr.id;
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
-    this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).catch(() => null));
+    this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).then((b) => b.behind, () => null));
     if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
     if (how === 'github') {
       const t = this.mustTarget(repo);

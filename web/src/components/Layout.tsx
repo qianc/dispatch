@@ -8,6 +8,7 @@ import { api, type AssistantChat, type Inbox, type ProjectSummary, type Session 
 import { useVeryWide, useWide } from '../wide.ts';
 import { icons } from './icons.tsx';
 import { cx } from './ui.tsx';
+import { liveGroups, waitingCount } from '../activity.ts';
 
 
 const BADGE = {
@@ -48,8 +49,8 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
 
 export function Layout() {
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
-  // a session whose checks and auto-merge still run does not need you
-  const waiting = (inbox?.inputs.length ?? 0) + (inbox?.idle.filter((s) => s.attention.kind !== 'checking').length ?? 0);
+  // a session whose checks and merge still run does not need you
+  const waiting = waitingCount(inbox);
   // same query as the Activity page, so they share one cache entry
   const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>('/sessions?status=queued,running,waiting_input,idle') });
   const running = live.filter((s) => s.status === 'running').length;
@@ -96,13 +97,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
     return () => window.removeEventListener('dispatch:recent', on);
   }, []);
   if (!wide) return null;
-  const sessions = new Map((inbox?.sessions ?? []).map((s) => [s.id, s]));
-  const needs = [
-    ...(inbox?.inputs ?? []).map((i) => ({ id: i.session_id, key: sessions.get(i.session_id)?.project_key ?? null, title: sessions.get(i.session_id)?.title ?? 'Question', tone: 'wait' as const })),
-    ...(inbox?.idle ?? []).filter((s) => s.attention.kind !== 'checking').map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: (s.attention.kind === 'merge_blocked' ? 'bad' : s.attention.kind === 'merged' ? 'ok' : 'wait') as 'wait' | 'bad' | 'ok' })),
-  ];
-  const runningNow = live.filter((s) => s.status === 'running');
-  const queuedNow = live.filter((s) => s.status === 'queued');
+  const { needs, running: runningNow, queued: queuedNow } = liveGroups(live, inbox);
   const byKey = new Map(projects.map((p) => [p.key, p]));
   const recentList = [...recent.filter((k) => byKey.has(k)), ...projects.map((p) => p.key).filter((k) => !recent.includes(k))].slice(0, 6).map((k) => byKey.get(k)!);
   const here = loc.pathname;
@@ -125,10 +120,10 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
         )}
         {runningNow.length > 0 && (
           <SideGroup title="Running">
-            {runningNow.slice(0, 10).map((s) => row(`/s/${s.id}`, <>
+            {runningNow.slice(0, 10).map(({ session: s, attention }) => row(`/s/${s.id}`, <>
               <span className="size-1.5 rounded-full shrink-0 bg-run animate-pulse" />
               <ProjectKey k={s.project_key} className="text-[11px]" />
-              <span className="truncate">{s.title}</span>
+              <span className="truncate" title={attention?.text}>{s.title}</span>
             </>, `r-${s.id}`))}
           </SideGroup>
         )}

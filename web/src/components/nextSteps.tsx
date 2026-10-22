@@ -87,7 +87,7 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
       {attention.kind === 'merged' && (
         <Button small variant="primary" disabled={busy} onClick={() => complete.mutate()}>✓ Mark as complete</Button>
       )}
-      {(attention.kind === 'review' || attention.kind === 'merge_blocked' || attention.kind === 'checking') && (
+      {(attention.kind === 'review' || attention.kind === 'merge_blocked' || attention.kind === 'checking' || attention.kind === 'merging') && (
         <Link to={`/pr/${attention.pr_id}`} className="inline-flex items-center h-8 px-2.5 rounded-lg text-[13px] font-medium bg-raised border border-line active:bg-line">
           {attention.kind === 'review' ? 'Review & merge' : 'See the change'}
         </Link>
