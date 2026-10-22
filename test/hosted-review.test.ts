@@ -129,6 +129,24 @@ describe('review and merge of hosted repos in Dispatch', () => {
     }
   });
 
+  it('while the check and merge run, the inbox shows the session as merging, not waiting on you (DISP-31)', async () => {
+    const { s, session } = await setup({ check: 'npm test' });
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      expect((await s.call('GET', '/inbox')).data.idle[0].attention.kind).toBe('review');
+      let during: string | undefined;
+      s.ctx.hub.cmd = (async () => {
+        during = (await s.call('GET', '/inbox')).data.idle[0].attention.kind;
+        return { ok: false, output: 'Check failed (npm test)' };
+      }) as typeof s.ctx.hub.cmd;
+      await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
+      expect(during).toBe('merging');
+      expect((await s.call('GET', '/inbox')).data.idle[0].attention.kind).toBe('review');
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('pushes the merged default branch to the upstream; a failed push is told once', async () => {
     const { s, repo, session, upstream } = await setup({ upstream: true });
     try {

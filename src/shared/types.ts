@@ -355,6 +355,8 @@ export type Attention =
   | { kind: 'review'; text: string; pr_id: number }
   /** auto-merge waits for the checks, then merges: nothing to do yet (room for live test progress later) */
   | { kind: 'checking'; text: string; pr_id: number }
+  /** a merge runs now (the repo's check command, then the merge): nothing to do yet (DISP-31) */
+  | { kind: 'merging'; text: string; pr_id: number }
   | { kind: 'merged'; text: string }
   /** a planning chat with a batch or items card you have not acted on yet */
   | { kind: 'proposal'; text: string; proposals: OpenProposal[] }

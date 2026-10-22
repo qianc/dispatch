@@ -529,10 +529,25 @@ export class GitHub {
     };
   }
 
+  /** PRs being merged now (auto or by the owner), with the repo's check: the inbox shows them as merging. */
+  readonly mergingNow = new Set<number>();
+
   async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
+    this.mergingNow.add(prId);
+    this.bus.emit({ t: 'pr', pr });
+    try {
+      return await this.mergeOpen(pr, how, method);
+    } finally {
+      this.mergingNow.delete(prId);
+      this.bus.emit({ t: 'pr', pr: this.store.pr(prId)! });
+    }
+  }
+
+  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
+    const prId = pr.id;
     const repo = this.store.repo(pr.repo_id)!;
     if (repo.local_path) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
