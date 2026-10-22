@@ -42,7 +42,8 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
 
 export function Layout() {
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
-  const waiting = (inbox?.inputs.length ?? 0) + (inbox?.idle.length ?? 0);
+  // a session whose checks and auto-merge still run does not need you
+  const waiting = (inbox?.inputs.length ?? 0) + (inbox?.idle.filter((s) => s.attention.kind !== 'checking').length ?? 0);
   // same query as the Activity page, so they share one cache entry
   const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>('/sessions?status=queued,running,waiting_input,idle') });
   const running = live.filter((s) => s.status === 'running').length;
@@ -86,7 +87,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
   const sessions = new Map((inbox?.sessions ?? []).map((s) => [s.id, s]));
   const needs = [
     ...(inbox?.inputs ?? []).map((i) => ({ id: i.session_id, key: sessions.get(i.session_id)?.project_key ?? null, title: sessions.get(i.session_id)?.title ?? 'Question', tone: 'wait' as const })),
-    ...(inbox?.idle ?? []).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: (s.attention.kind === 'merge_blocked' ? 'bad' : s.attention.kind === 'merged' ? 'ok' : 'wait') as 'wait' | 'bad' | 'ok' })),
+    ...(inbox?.idle ?? []).filter((s) => s.attention.kind !== 'checking').map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: (s.attention.kind === 'merge_blocked' ? 'bad' : s.attention.kind === 'merged' ? 'ok' : 'wait') as 'wait' | 'bad' | 'ok' })),
   ];
   const runningNow = live.filter((s) => s.status === 'running');
   const queuedNow = live.filter((s) => s.status === 'queued');

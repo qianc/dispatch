@@ -10,6 +10,7 @@ import { Transcript } from '../components/transcript.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
+import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { useVeryWide } from '../wide.ts';
@@ -100,6 +101,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
+  const attention = attentionOf(s, data.prs);
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   const canSend = s.status !== 'queued' && s.status !== 'waiting_input';
@@ -138,7 +140,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               <ul className="space-y-1.5">
                 {data.prs.map((pr) => (
                   <li key={pr.id}><Link to={`/pr/${pr.id}`} className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 hover:border-faint">
-                    <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
+                    <PrStateChip pr={pr} autoMerge={s.options.auto_merge} />
                     <span className="flex-1 min-w-0 truncate">{pr.title}</span>
                   </Link></li>
                 ))}
@@ -197,7 +199,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <div className="px-3 pt-3 space-y-2">
           {data.prs.map((pr) => (
             <Link key={pr.id} to={`/pr/${pr.id}`} className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2.5 active:bg-raised">
-              <Chip tone={pr.state === 'merged' ? 'accent' : pr.state === 'open' ? 'ok' : 'neutral'}>{pr.state}</Chip>
+              <PrStateChip pr={pr} autoMerge={s.options.auto_merge} />
               <span className="text-[13px] text-faint">{pr.local ? `${pr.repo_full_name.split('/')[1]} · local branch` : `${pr.repo_full_name.split('/')[1]}#${pr.number}`}</span>
               <span className="flex-1 truncate text-[14px]">{pr.title}</span>
               <span className="text-muted">›</span>
@@ -233,7 +235,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
       {s.status === 'idle' && s.kind === 'work' && (
         <div className="px-4 pt-2 pb-1">
-          <NextSteps sessionId={s.id} attention={attentionOf(s, data.prs)} compact />
+          {attention.kind === 'checking' && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
+          <NextSteps sessionId={s.id} attention={attention} compact />
         </div>
       )}
       <ErrorText error={send.error} />

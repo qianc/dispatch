@@ -155,6 +155,23 @@ describe('auto-merge', () => {
     expect(await turnEnds([], false)).toEqual(['AM: waiting for you | Fixed the legend.']);
   });
 
+  it('shows "checking", not "ready to review", while auto-merge waits for the checks (DISP-1)', async () => {
+    const checks: Check[] = [{ name: 'test', status: 'in_progress', conclusion: null, html_url: null }];
+    const { s, session } = await setup(checks);
+    const card = async () => (await s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === session.id).attention;
+    await s.ctx.github.syncSession(session);
+    expect(await card()).toMatchObject({ kind: 'checking', text: 'Checking PR #7, then auto-merge.' });
+    // the long suite fails: now the owner has to act
+    checks[0] = { name: 'test', status: 'completed', conclusion: 'failure', html_url: null };
+    await s.ctx.github.syncSession(session);
+    expect(await card()).toMatchObject({ kind: 'merge_blocked', text: expect.stringContaining('checks failed (test)') });
+    // without auto-merge the same open PR waits for the owner's review
+    s.ctx.store.updateSession(session.id, { options: { ...session.options, auto_merge: 'off' } });
+    s.ctx.store.setPrBlocked(s.ctx.store.prs({ session_id: session.id })[0].id, null);
+    expect(await card()).toMatchObject({ kind: 'review', text: 'PR #7 is ready to review and merge.' });
+    await s.app.close();
+  });
+
   it('does not merge on failed checks or conflicts, and says why once', async () => {
     const failed = await setup([{ name: 'lint', status: 'completed', conclusion: 'failure', html_url: null }]);
     await failed.s.ctx.github.syncSession(failed.session);

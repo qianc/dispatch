@@ -26,6 +26,8 @@ export interface PrDetail {
   base_ref: string;
   files: PrFile[];
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
+  /** the session's auto-merge setting: while it is on, Dispatch checks and merges an open PR itself */
+  auto_merge: Session['options']['auto_merge'];
 }
 
 type GhPull = {
@@ -487,13 +489,14 @@ export class GitHub {
   async detail(prId: number): Promise<PrDetail> {
     const pr = await this.syncPr(prId);
     const repo = this.store.repo(pr.repo_id)!;
+    const auto_merge = this.store.session(pr.session_id)?.options.auto_merge ?? 'off';
     if (repo.local_path) {
       const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
-      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
+      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     if (repo.kind === 'hosted' && pr.local) {
       const files = await this.hosted!.branchDiff(repo, pr.head_ref);
-      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [] };
+      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     const o = this.mustTarget(repo);
     const [{ data: p }, files, checks] = await Promise.all([
@@ -511,6 +514,7 @@ export class GitHub {
       base_ref: p.base.ref,
       files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch ?? null })),
       checks: checks.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion ?? null, url: c.html_url ?? null })),
+      auto_merge,
     };
   }
 

@@ -353,6 +353,8 @@ export interface ItemImage {
 export type Attention =
   | { kind: 'merge_blocked'; text: string; pr_id: number }
   | { kind: 'review'; text: string; pr_id: number }
+  /** auto-merge waits for the checks, then merges: nothing to do yet (room for live test progress later) */
+  | { kind: 'checking'; text: string; pr_id: number }
   | { kind: 'merged'; text: string }
   | { kind: 'turn'; text: string };
 
