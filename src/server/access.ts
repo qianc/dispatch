@@ -40,6 +40,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/projects/:key/sources': 'read',
   'GET /api/projects/:key/releases': 'read',
   'GET /api/projects/:key/releases/proposal': 'read',
+  'GET /api/projects/:key/schedules': 'read',
   'GET /api/items/:id': 'read',
   'GET /api/items/by-key/:key': 'read',
   'GET /api/items/:id/discuss': 'read',
@@ -63,6 +64,11 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
 
   'POST /api/projects/:key/batches': 'sessions',
   'POST /api/projects/:key/planner': 'sessions',
+  // schedules start agent work on their own
+  'POST /api/projects/:key/schedules': 'sessions',
+  'PATCH /api/schedules/:id': 'sessions',
+  'DELETE /api/schedules/:id': 'sessions',
+  'POST /api/schedules/:id/run': 'sessions',
   'POST /api/projects/:key/releases': 'sessions',
   'POST /api/assistant/messages': 'sessions',
   'POST /api/assistant/new': 'sessions',

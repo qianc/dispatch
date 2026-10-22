@@ -156,7 +156,13 @@ export class FakeRunner implements AgentRunner {
   private async plannerTurn() {
     // like a real planner: only items that are free to start (not already in a batch)
     const items = (await this.deps.rpc('list_items', { status: ['triage', 'backlog', 'todo'] })) as { id: number; key: string; title: string }[];
-    if (this.spec.source) {
+    if (this.spec.schedule) {
+      // a scheduled run starts its pick itself, or nothing
+      const reply = items.length
+        ? String(await this.deps.rpc('propose', { type: 'batch', title: '(fake) Night batch', item_ids: [items[0].id], new_items: [], prompt: '', force_plan: false }))
+        : 'Nothing fits the scope.';
+      this.say(`(fake) Scheduled run: ${reply}`);
+    } else if (this.spec.source) {
       await this.deps.rpc('propose', {
         type: 'items', source_id: this.spec.source.id,
         items: [

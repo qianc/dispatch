@@ -82,6 +82,15 @@ for f in server.env worker.env; do sed "s/^WORKER_TOKEN=.*/WORKER_TOKEN=$T/" $f 
 4. Make a project, add a repo (`owner/name`), add a few items, and start a batch, or ask the
    planner what to do next (**Plan** on the project).
 
+**Scheduled runs.** On a project's Sessions tab, **Add schedule** makes the planner run at set times
+(for example every night at 02:00). Each schedule has its own scope in prose (modules, tags, "triage
+new bugs first"), a limit on the number of batches per run, and run options for those batches. The
+run asks nothing. It starts the batches it picks, or nothing if no work fits. It never starts items on
+hold, in progress or in review, and it cannot take an item off hold. It can triage items when the
+scope says so. The run shows in the session list, and its last message is the result. Times are in
+the server's local time zone (set `TZ` for the server). A run missed while the server was down
+starts when the server is back, if that is less than 6 hours after its time.
+
 The **phone app** and **push notifications** need HTTPS: put a reverse proxy in front and set
 `PUBLIC_URL` to the https address ([Caddy example](docs/examples/Caddyfile)). Then open the address
 on the phone and add it to the home screen. Data is in the Docker volumes (`dispatch-data` for the

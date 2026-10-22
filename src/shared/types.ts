@@ -172,9 +172,36 @@ export interface Session {
   item_ids: number[];
   /** release sessions: what is being released, fixed at creation */
   release: ReleaseInfo | null;
+  /** planner sessions a schedule started (null: started by hand, or the schedule was deleted) */
+  schedule_id: number | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
+}
+
+/** A planner run at set times on a project, which starts the work it picks (DISP-13). */
+export interface Schedule {
+  id: number;
+  project_id: number;
+  name: string;
+  /** HH:MM, the server's local time */
+  at_time: string;
+  /** weekdays it runs on, 0 = Sunday … 6 = Saturday */
+  days: number[];
+  /** what the planner may pick, in prose (modules, tags, "triage new bugs", …) */
+  scope_md: string;
+  /** the most batches one run may start */
+  max_batches: number;
+  /** run options for the batches it starts */
+  options: RunOptions;
+  enabled: boolean;
+  /** the last slot (ISO time) that ran or was passed over: each slot runs once */
+  last_slot: string | null;
+  last_session_id: number | null;
+  /** why the last run could not start */
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /** A release a worker offers, from its own config: `repo` is owner/name, a repo name, or a local path. */
@@ -393,6 +420,28 @@ export const projectPatch = z.object({
   effort_scale: scale().optional(),
   worker_id: z.number().int().nullable().optional(),
   placement_md: z.string().max(20_000).optional(),
+});
+
+const weekdays = z.array(z.number().int().min(0).max(6)).min(1).max(7).transform((d) => [...new Set(d)].sort());
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Time: HH:MM, 24-hour');
+
+export const scheduleInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  at_time: hhmm,
+  days: weekdays.default([0, 1, 2, 3, 4, 5, 6]),
+  scope_md: z.string().max(20_000).default(''),
+  max_batches: z.number().int().min(1).max(10).default(1),
+  options: runOptions.default(DEFAULT_RUN_OPTIONS),
+  enabled: z.boolean().default(true),
+});
+export const schedulePatch = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  at_time: hhmm.optional(),
+  days: weekdays.optional(),
+  scope_md: z.string().max(20_000).optional(),
+  max_batches: z.number().int().min(1).max(10).optional(),
+  options: runOptions.optional(),
+  enabled: z.boolean().optional(),
 });
 
 export const repoInput = z.object({

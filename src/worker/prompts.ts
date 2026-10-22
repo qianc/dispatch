@@ -126,7 +126,9 @@ function projectRuleLines(context: { label: string; text: string }[]): string[] 
 export function plannerPrompt(spec: StartSpec, context: { label: string; text: string }[] = []): string {
   const lines = [
     '# Dispatch planner',
-    `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. The owner chats with you from their phone.`,
+    spec.schedule
+      ? `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. This is the scheduled run "${spec.schedule.name}": nobody is watching it.`
+      : `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. The owner chats with you from their phone.`,
     'You can read the code (read-only checkouts of the default branches) and the tracker through the dispatch MCP tools. You do not change code or files.',
     '',
     'Repositories:',
@@ -136,7 +138,9 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
     `Effort scale (index): ${spec.effort_scale.map((l, i) => `${i}=${l}`).join(', ')}.`,
     '',
   ];
-  if (spec.source) {
+  if (spec.schedule) {
+    lines.push(...scheduledJob(spec.schedule));
+  } else if (spec.source) {
     lines.push(
       '## Source document to split',
       `${sourceLine(spec.source)} (source id ${spec.source.id})`,
@@ -159,6 +163,25 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
   if (spec.workers?.length || spec.placement_md?.trim()) lines.push('', ...whereWorkRuns(spec));
   if (context.length) lines.push('', ...projectRuleLines(context));
   return lines.join('\n');
+}
+
+/** A scheduled run (DISP-13): pick within the scope and start it, or start nothing. */
+function scheduledJob(s: NonNullable<StartSpec['schedule']>): string[] {
+  const n = s.max_batches;
+  return [
+    '## Your job: a scheduled run',
+    'Nobody is watching: do not ask questions, decide yourself. The owner reads what you did later, in the session list.',
+    '',
+    'The scope of this run, from the owner:',
+    '',
+    s.scope_md.trim() || '(no scope given: any open work in the project)',
+    '',
+    'Keep to the scope. Pick work that clearly fits it and is ready to do. Do not be greedy: starting nothing is a good result when nothing fits or nothing is ready. Never start an item that is on hold, in progress, in review, or already in a batch; Dispatch refuses those anyway.',
+    'Before you start a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner; an item that waits on the owner is not ready.',
+    `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together and keep each batch small enough to review on a phone. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
+    'When the scope asks for it (e.g. triage), change items with `update_item` (status, importance, effort, tags, modules, with a comment that says why). You cannot take an item off hold or close it. File new items you find with `create_item`.',
+    'End with a short summary: what you started and why, or why you started nothing. It is the result of this run.',
+  ];
 }
 
 /** The workers a batch can run on, and the project's own rules for choosing. */

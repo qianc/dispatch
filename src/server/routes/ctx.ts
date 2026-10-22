@@ -11,6 +11,7 @@ import type { Store } from '../store.ts';
 import type { WorkerHub } from '../workerHub.ts';
 import type { Workers } from '../workers.ts';
 import type { HostedGit } from '../hosted.ts';
+import type { Scheduler } from '../scheduler.ts';
 
 export interface Ctx {
   cfg: Config;
@@ -26,6 +27,7 @@ export interface Ctx {
   notifier: Notifier;
   attachments: Attachments;
   janitor: Janitor;
+  scheduler: Scheduler;
 }
 
 export class HttpError extends Error {

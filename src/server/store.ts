@@ -21,6 +21,7 @@ import {
   type SessionEvent,
   type SessionEventBody,
   type ReleaseInfo,
+  type Schedule,
   type SessionKind,
   type SessionStatus,
   type Source,
@@ -379,6 +380,7 @@ export class Store {
       moved_from: numOrNull(r.moved_from),
       item_ids: json<number[]>(r.item_ids, []),
       release: json(r.release_info, null),
+      schedule_id: numOrNull(r.schedule_id),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
@@ -406,12 +408,12 @@ export class Store {
       .map((r) => this.toSession(r));
   }
   /** `worker_id` defaults to the default worker. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null; release?: ReleaseInfo | null }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
-        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null,
+        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
@@ -436,6 +438,57 @@ export class Store {
     return this.db
       .all(`${SESSION_SELECT} WHERE s.project_id = ? AND s.id < ? AND s.kind = 'work' AND s.status NOT IN ('stopped','failed') ORDER BY s.id`, s.project_id ?? -1, s.id)
       .map((r) => this.toSession(r));
+  }
+
+  // ---------- schedules ----------
+  private toSchedule(r: Row): Schedule {
+    return {
+      id: Number(r.id),
+      project_id: Number(r.project_id),
+      name: String(r.name),
+      at_time: String(r.at_time),
+      days: json<number[]>(r.days, []),
+      scope_md: String(r.scope_md),
+      max_batches: Number(r.max_batches),
+      options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
+      enabled: bool(r.enabled),
+      last_slot: (r.last_slot as string | null) ?? null,
+      last_session_id: numOrNull(r.last_session_id),
+      last_error: (r.last_error as string | null) ?? null,
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+    };
+  }
+  /** One project's schedules, or every one (the scheduler). */
+  schedules(projectId?: number): Schedule[] {
+    return (projectId === undefined
+      ? this.db.all('SELECT * FROM schedules ORDER BY id')
+      : this.db.all('SELECT * FROM schedules WHERE project_id = ? ORDER BY at_time, id', projectId)).map((r) => this.toSchedule(r));
+  }
+  schedule(id: number): Schedule | undefined {
+    const r = this.db.get('SELECT * FROM schedules WHERE id = ?', id);
+    return r && this.toSchedule(r);
+  }
+  createSchedule(projectId: number, s: Pick<Schedule, 'name' | 'at_time' | 'days' | 'scope_md' | 'max_batches' | 'options' | 'enabled' | 'last_slot'>): Schedule {
+    const { lastId } = this.db.run(
+      'INSERT INTO schedules (project_id, name, at_time, days, scope_md, max_batches, options, enabled, last_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      projectId, s.name, s.at_time, JSON.stringify(s.days), s.scope_md, s.max_batches, JSON.stringify(s.options), s.enabled ? 1 : 0, s.last_slot,
+    );
+    return this.schedule(lastId)!;
+  }
+  updateSchedule(id: number, patch: Partial<Omit<Schedule, 'id' | 'project_id' | 'created_at' | 'updated_at'>>): Schedule {
+    const sets: string[] = ['updated_at = ?'];
+    const params: (string | number | null)[] = [now()];
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      sets.push(`${k} = ?`);
+      params.push(k === 'days' || k === 'options' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
+    }
+    this.db.run(`UPDATE schedules SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
+    return this.schedule(id)!;
+  }
+  deleteSchedule(id: number) {
+    this.db.run('DELETE FROM schedules WHERE id = ?', id);
   }
 
   // ---------- events ----------
