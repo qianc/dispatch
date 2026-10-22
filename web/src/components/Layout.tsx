@@ -8,6 +8,7 @@ import { api, type AssistantChat, type Inbox, type ProjectSummary, type Session 
 import { useVeryWide, useWide } from '../wide.ts';
 import { icons } from './icons.tsx';
 import { cx } from './ui.tsx';
+import { Notices } from './Notices.tsx';
 import { liveGroups, waitingCount } from '../activity.ts';
 
 
@@ -81,6 +82,7 @@ export function Layout() {
         </div>
       </div>
       <nav className="tabbar" aria-label="Main">{tabs}</nav>
+      <Notices />
     </>
   );
 }

@@ -509,7 +509,9 @@ export type LiveEvent =
   /** a project, or its repos, changed (lists and the project page refresh) */
   | { t: 'project'; key: string }
   /** finished sessions' leftovers were cleaned up */
-  | { t: 'cleanup' };
+  | { t: 'cleanup' }
+  /** a notification: open apps show it in the page (devices with the app in focus get no system notification) */
+  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } };
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;

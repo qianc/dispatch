@@ -9,6 +9,7 @@ import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
 import { useProposalActions } from './proposals.ts';
+import { ItemKeyLink } from './itemPeek.tsx';
 import { fullTime, messageTime } from '../time.ts';
 import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
 
@@ -314,7 +315,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId
   const replaced = !!done && /^(Replaced|Not used|Dismissed)/.test(done);
   return (
     <div className={cx('rounded-xl border border-accent/50 bg-panel shadow-sm p-3', replaced && 'opacity-60')}>
-      <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-1">Suggested change · {proposal.item_key}</div>
+      <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-1">Suggested change · <ItemKeyLink id={proposal.item_id} itemKey={proposal.item_key} className="uppercase" /></div>
       {proposal.reason && <p className="text-[13px] text-muted mb-2">{proposal.reason}</p>}
       <div className="space-y-1.5 text-[14px]">
         {fields.filter((f) => f !== 'body_md').map((f) => (
@@ -421,13 +422,15 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
         const gone = !done && goneIds.has(it.id);
         const on = picked.has(it.id) && !gone;
         return (
-          <button key={it.id} type="button" disabled={!!done || gone} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={on} className="w-full flex items-center gap-2 py-1.5 text-left">
+          // the key opens the item; the rest of the row picks it (a key inside the pick button would be a button in a button)
+          <div key={it.id} className="relative flex items-center gap-2 py-1.5">
+            <button type="button" disabled={!!done || gone} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={on} aria-label={it.title} className="absolute inset-0" />
             <span className={cx('size-4 rounded border shrink-0', on ? 'bg-accent-strong border-accent-strong' : 'border-line')} />
             <ImportanceIcon value={it.importance} />
-            <span className="text-[12px] text-faint">{it.key}</span>
+            <ItemKeyLink id={it.id} itemKey={it.key} className="relative text-[12px]" />
             <span className={cx('flex-1 min-w-0 truncate text-[14px]', gone && 'line-through text-faint')}>{it.title}</span>
             {gone ? <Chip>{it.status === 'done' || it.status === 'canceled' ? it.status : 'in progress'}</Chip> : effortLabel(project, it.effort) && <Chip>{effortLabel(project, it.effort)}</Chip>}
-          </button>
+          </div>
         );
       })}
       {!done && proposal.type === 'batch' && existing.length > 0 && existing.every((i) => goneIds.has(i.id)) && !newItems.length && (

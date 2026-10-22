@@ -98,6 +98,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/push/devices': 'admin',
   'POST /api/push/subscribe': 'admin',
   'POST /api/push/unsubscribe': 'admin',
+  'POST /api/push/presence': 'admin',
   'POST /api/push/keep-only': 'admin',
   'POST /api/push/test': 'admin',
 

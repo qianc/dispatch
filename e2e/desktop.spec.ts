@@ -414,3 +414,64 @@ test('phone: a long unbroken title wraps instead of making the page scroll sidew
     expect(await noSideways()).toBe(true);
   }
 });
+
+async function plannerWithCard(page: Page, key: string) {
+  await page.request.post('/api/projects', { data: { key, name: `Peek ${key}` } });
+  for (const title of ['Price alerts', 'Tariff import']) await page.request.post(`/api/projects/${key}/items`, { data: { title, body_md: `About ${title}.` } });
+  const s = await (await page.request.post(`/api/projects/${key}/planner`, { data: { prompt: '' } })).json();
+  await page.goto(`/s/${s.id}`);
+  await expect(page.getByText('Proposed batch')).toBeVisible();
+  return s.id as number;
+}
+
+test('desktop: an item key in a proposal card opens the item beside the chat (DISP-3)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  await plannerWithCard(page, 'PKD');
+  await page.getByRole('button', { name: 'Show PKD-1' }).click();
+  const panel = page.getByRole('complementary', { name: 'Item' });
+  await expect(panel.getByRole('heading', { name: 'Price alerts' })).toBeVisible();
+  await expect(panel.getByText('About Price alerts.')).toBeVisible();
+  await expect(page).toHaveURL(/peek=\d+/);
+  // the card stays, and the key did not pick or unpick the item
+  await expect(page.getByText('Proposed batch')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Price alerts' })).toHaveAttribute('aria-pressed', 'true');
+  await panel.getByRole('button', { name: 'Close item' }).click();
+  await expect(panel).toHaveCount(0);
+});
+
+test('phone: an item key in a proposal card opens the item page, Back returns to the card (DISP-3)', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 520 }); // a chat taller than the screen
+  await login(page);
+  const id = await plannerWithCard(page, 'PKM');
+  await expect(page.getByRole('button', { name: /Start batch/ })).toBeVisible();
+  // read a little further up the chat, so it is not just pinned to the newest message
+  const area = page.locator('.scroll-area');
+  await area.evaluate((el) => (el.scrollTop = el.scrollHeight - el.clientHeight - 150)); // more than near the bottom
+  await expect(page.getByRole('button', { name: 'Show PKM-2' })).toBeInViewport();
+  const scrolled = await area.evaluate((el) => el.scrollTop);
+  expect(scrolled).toBeGreaterThan(0);
+  const cardTop = async () => (await page.getByText('Proposed batch').boundingBox())!.y;
+  const before = await cardTop();
+  await page.getByRole('button', { name: 'Show PKM-2' }).click();
+  await expect(page).toHaveURL(/\/items\/\d+$/);
+  await expect(page.getByRole('heading', { name: 'Tariff import' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/s/${id}$`));
+  await expect(page.getByText('Proposed batch')).toBeInViewport();
+  await expect.poll(() => area.evaluate((el) => el.scrollTop)).toBe(scrolled);
+  expect(Math.abs((await cardTop()) - before)).toBeLessThan(2);
+});
+
+test('a notification while the app is open shows in the page (DISP-12)', async ({ page }) => {
+  await login(page);
+  await page.goto('/settings'); // the test notice is about the inbox: on the inbox there is nothing to show
+  const banner = page.getByRole('status', { name: 'Notification' });
+  // the live stream may still be connecting: send until one arrives
+  await expect(async () => {
+    await page.request.post('/api/push/test');
+    await expect(banner.getByText('Test notification')).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await banner.getByRole('button', { name: 'Dismiss notification' }).click();
+  await expect(banner).toHaveCount(0);
+});

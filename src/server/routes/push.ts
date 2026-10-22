@@ -11,6 +11,13 @@ export function pushRoutes(app: FastifyInstance, { store, notifier }: Ctx) {
   app.post('/api/push/unsubscribe', async (req) => {
     const { endpoint } = z.object({ endpoint: z.string() }).parse(req.body);
     store.removePushSubscription(endpoint);
+    notifier.setActive(endpoint, false);
+    return { ok: true };
+  });
+  /** This device's app gained or lost focus (renewed every 20 s while it has it): no system notifications while focused. */
+  app.post('/api/push/presence', async (req) => {
+    const { endpoint, active } = z.object({ endpoint: z.string(), active: z.boolean() }).parse(req.body);
+    notifier.setActive(endpoint, active);
     return { ok: true };
   });
   /** How many devices get notifications (an old, removed app install can still count here). */

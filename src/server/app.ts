@@ -55,7 +55,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const bus = new Bus();
   const hub = new WorkerHub();
   const auth = new Auth(cfg, db);
-  const notifier = new Notifier(cfg, db, store);
+  const notifier = new Notifier(cfg, db, store, bus);
   const sessions = new Sessions(store, bus, hub, notifier, workers);
   const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, cfg.githubApiUrl);
   github.gitBase = cfg.githubGitBase;

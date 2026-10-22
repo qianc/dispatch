@@ -30,19 +30,33 @@ self.addEventListener('push', (event) => {
   );
 });
 
+/** Asks an open window to show `url` with its own router (no reload); true when it answered. */
+function askToNavigate(c: WindowClient, url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    const t = setTimeout(() => resolve(false), 1500);
+    ch.port1.onmessage = () => {
+      clearTimeout(t);
+      resolve(true);
+    };
+    c.postMessage({ type: 'navigate', url }, [ch.port2]);
+  });
+}
+
+// open the chat the notification is about: in the app's window if it is open (focused first), else a new one
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = new URL(event.notification.data?.url ?? '/', self.location.origin).href;
   event.waitUntil(
     (async () => {
-      const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const c of all) {
-        if ('focus' in c) {
-          await (c as WindowClient).navigate(url).catch(() => undefined);
-          return (c as WindowClient).focus();
-        }
-      }
-      return self.clients.openWindow(url);
+      const all = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) as WindowClient[];
+      const c = all.find((w) => w.focused) ?? all.find((w) => w.visibilityState === 'visible') ?? all[0];
+      if (!c) return self.clients.openWindow(url);
+      const focused = await c.focus().catch(() => c);
+      if (await askToNavigate(focused, url)) return;
+      // a window without the message listener (an old version): load the page
+      const moved = await focused.navigate(url).catch(() => null);
+      if (!moved) await self.clients.openWindow(url);
     })(),
   );
 });
