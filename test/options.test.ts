@@ -212,6 +212,29 @@ describe('auto-merge', () => {
     await s.app.close();
   });
 
+  it('a branch still behind after the agent was asked waits for the owner, not "checking" (DISP-32)', async () => {
+    const { s, session, merges } = await setup([], true, 3);
+    s.ctx.github.onBehind = () => s.ctx.store.updateSession(session.id, { status: 'running' }); // the agent gets the ask
+    const card = async () => (await s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === session.id)?.attention;
+    await s.ctx.github.syncSession(session);
+    // the agent's turn ends, but the branch is still behind (it updated nothing, or another repo)
+    s.ctx.store.updateSession(session.id, { status: 'idle' });
+    await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    expect(merges).toHaveLength(0);
+    expect(await card()).toMatchObject({ kind: 'merge_blocked', text: expect.stringContaining('still 3 commits behind main') });
+    expect(s.ctx.notifier.sent.filter((n) => n.title === 'AM: not auto-merged')).toHaveLength(1);
+    await s.app.close();
+  });
+
+  it('the ask to update names the repo (DISP-32)', async () => {
+    const { s, session } = await setup([], true, 3);
+    s.ctx.store.updateSession(session.id, { sdk_session_id: 'sdk' });
+    await s.ctx.github.syncSession(session);
+    const asks = (await s.call('GET', `/sessions/${session.id}`)).data.events.filter((e: { body: { kind: string } }) => e.body.kind === 'user');
+    expect(asks[0]?.body.text).toContain('your branch in r must include the latest main');
+    await s.app.close();
+  });
+
   it('sessions from before the base check keep the old behaviour', async () => {
     const { s, session, merges } = await setup([], true, 3);
     s.ctx.store.db.run("UPDATE sessions SET options = json_set(options, '$.base_check', json('false')) WHERE id = ?", session.id);

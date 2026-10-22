@@ -407,13 +407,15 @@ export class GitHub {
       const behind = await this.behindBy(repo, pr);
       if (behind > 0) {
         const key = `${pr.id}:${pr.head_sha}:behind`;
-        if (!this.autoMergeNoted.has(key)) {
-          this.autoMergeNoted.add(key);
-          this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge into ${repoName} waits for ${ref}: the branch is ${behind} commit${behind === 1 ? '' : 's'} behind ${repo.default_branch}. Asked the agent to update it.` });
-          this.store.addMergeEvent(s.id, 'asked_update', pr.id, `${behind} commit${behind === 1 ? '' : 's'} behind`);
-          this.onBehind?.(s, repo, behind);
-          this.tell(s.id); // the agent goes on working: no "waiting for you" yet
-        }
+        const commits = `${behind} commit${behind === 1 ? '' : 's'}`;
+        // asked already, and its turn ended on the same head: it did not update, so the owner decides
+        // (else the batch would show "checking" with nothing left to check, DISP-32)
+        if (this.autoMergeNoted.has(key)) return note(`it is still ${commits} behind ${repo.default_branch} after Claude was asked to update it. It waits for you`);
+        this.autoMergeNoted.add(key);
+        this.store.addEvent(s.id, { kind: 'system', text: `Auto-merge into ${repoName} waits for ${ref}: the branch is ${commits} behind ${repo.default_branch}. Asked the agent to update it.` });
+        this.store.addMergeEvent(s.id, 'asked_update', pr.id, `${commits} behind`);
+        this.onBehind?.(s, repo, behind);
+        this.tell(s.id); // the agent goes on working: no "waiting for you" yet
         return;
       }
     }
