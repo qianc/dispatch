@@ -48,8 +48,18 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/projects/:key/planner', async (req) => sessions.startPlanner(project((req.params as { key: string }).key), plannerInput.parse(req.body)));
 
-  /** The assistant chat: the open thread (or null), send a message, start a new thread. */
-  app.get('/api/assistant', async () => ({ session_id: sessions.currentAssistant()?.id ?? null }));
+  /** The assistant chat: the open thread (or null) with its unread replies, send a message, start a new thread. */
+  app.get('/api/assistant', async () => {
+    const cur = sessions.currentAssistant();
+    return cur ? { session_id: cur.id, ...store.unread(cur.id) } : { session_id: null, unread: 0, last_seq: 0 };
+  });
+
+  /** The owner has seen the chat up to `seq`. */
+  app.post('/api/assistant/read', async (req) => {
+    const { session_id, seq } = z.object({ session_id: z.number().int(), seq: z.number().int().min(0) }).parse(req.body);
+    store.markRead(session(session_id).id, seq);
+    return store.unread(session_id);
+  });
 
   app.post('/api/assistant/messages', async (req) => {
     const { text } = z.object({ text: z.string().min(1) }).parse(req.body);

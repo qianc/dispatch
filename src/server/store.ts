@@ -452,6 +452,21 @@ export class Store {
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
   }
 
+  /** Claude's messages (replies, proposal cards) in a chat after the point the owner has read to. */
+  unread(sessionId: number): { unread: number; last_seq: number } {
+    const r = this.db.get<{ unread: number; last_seq: number }>(
+      `SELECT count(CASE WHEN e.seq > s.read_seq AND json_extract(e.body, '$.kind') IN ('assistant', 'proposal') THEN 1 END) AS unread,
+        coalesce(max(e.seq), 0) AS last_seq
+        FROM sessions s LEFT JOIN session_events e ON e.session_id = s.id WHERE s.id = ?`,
+      sessionId,
+    );
+    return { unread: Number(r?.unread ?? 0), last_seq: Number(r?.last_seq ?? 0) };
+  }
+  /** Mark a chat read up to `seq` (never backwards). */
+  markRead(sessionId: number, seq: number) {
+    this.db.run('UPDATE sessions SET read_seq = max(read_seq, ?) WHERE id = ?', seq, sessionId);
+  }
+
   // ---------- pending inputs ----------
   private toInput(r: Row): PendingInput & { local_id: string } {
     return {

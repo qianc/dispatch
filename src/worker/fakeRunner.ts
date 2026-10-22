@@ -154,7 +154,8 @@ export class FakeRunner implements AgentRunner {
   }
 
   private async plannerTurn() {
-    const items = (await this.deps.rpc('list_items', {})) as { id: number; key: string; title: string }[];
+    // like a real planner: only items that are free to start (not already in a batch)
+    const items = (await this.deps.rpc('list_items', { status: ['triage', 'backlog', 'todo'] })) as { id: number; key: string; title: string }[];
     if (this.spec.source) {
       await this.deps.rpc('propose', {
         type: 'items', source_id: this.spec.source.id,

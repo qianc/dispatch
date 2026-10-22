@@ -4,13 +4,19 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useQuery } from '@tanstack/react-query';
-import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { api, type AssistantChat, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 
 
-function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab: Tab; current: Tab; label: string; icon: ReactNode; badge?: number; badgeTone?: 'wait' | 'run' }) {
+const BADGE = {
+  wait: { bg: 'bg-wait text-on-status', label: 'waiting' },
+  run: { bg: 'bg-run text-on-status', label: 'running' },
+  unread: { bg: 'bg-accent-strong text-on-accent', label: 'unread' },
+};
+
+function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab: Tab; current: Tab; label: string; icon: ReactNode; badge?: number; badgeTone?: keyof typeof BADGE }) {
   const nav = useNavigate();
   const loc = useLocation();
   const active = tab === current;
@@ -28,8 +34,8 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
         <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 1.9 : 1.6} strokeLinejoin="round" strokeLinecap="round">{icon}</svg>
         {!!badge && (
           <span
-            className={cx('absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center', badgeTone === 'run' ? 'bg-run text-on-status' : 'bg-wait text-on-status')}
-            aria-label={badgeTone === 'run' ? `${badge} running` : `${badge} waiting`}
+            className={cx('absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center', BADGE[badgeTone].bg)}
+            aria-label={`${badge} ${BADGE[badgeTone].label}`}
           >
             {badge}
           </span>
@@ -47,6 +53,8 @@ export function Layout() {
   // same query as the Activity page, so they share one cache entry
   const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>('/sessions?status=queued,running,waiting_input,idle') });
   const running = live.filter((s) => s.status === 'running').length;
+  // same query as the Assistant page, which marks the replies read
+  const { data: assistant } = useQuery({ queryKey: ['assistant'], queryFn: () => api.get<AssistantChat>('/assistant') });
   const loc = useLocation();
   // keyed on loc.key too: navigating to the same path is still a navigation (tab change)
   const current = useMemo(() => trackLocation(loc.pathname, loc.search), [loc.pathname, loc.search, loc.key]);
@@ -54,7 +62,7 @@ export function Layout() {
     <>
       <TabLink tab="/" current={current} label="Inbox" icon={icons.inbox} badge={waiting} />
       <TabLink tab="/activity" current={current} label="Activity" icon={icons.activity} badge={running} badgeTone="run" />
-      <TabLink tab="/assistant" current={current} label="Assistant" icon={icons.assistant} />
+      <TabLink tab="/assistant" current={current} label="Assistant" icon={icons.assistant} badge={assistant?.unread} badgeTone="unread" />
       <TabLink tab="/projects" current={current} label="Projects" icon={icons.projects} />
       <TabLink tab="/settings" current={current} label="Settings" icon={icons.settings} />
     </>
