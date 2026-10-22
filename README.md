@@ -251,6 +251,51 @@ of one server from reading the other server's files on the same machine: agents 
 access. Use separate machines (or users) when that matters. Without `WORKER_CONFIG`, the worker
 uses `SERVER_WS_URL`, `WORKER_TOKEN`, `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS` as one server.
 
+## Releases
+
+A project page shows **Release** when a connected worker can release one of the project's repos.
+The sheet shows:
+- the last release
+- the done items since then
+- a proposed version, which you can edit
+- the release step the worker will run
+
+**Create release** starts a release session on that worker. Claude reads the repo's release rules
+(CLAUDE.md, AGENTS.md, `.dispatch.md`), writes and commits the changelog entry, and runs the release
+with exactly that version. Only after the release succeeds does it label the items
+`<prefix><version>` (e.g. `rel:v1.5.0`). If a step fails, it stops, labels nothing and asks you.
+
+Which releases a worker can run is set in the worker's own config, so a release that needs a
+credential on one machine is offered only there. Add `releases` to a server entry in
+`WORKER_CONFIG`, or set `RELEASES` to the same JSON list without a config file:
+
+```json
+"releases": [
+  { "repo": "me/slides", "label_prefix": "rel:", "command": "tools/release.sh {version}" },
+  { "repo": "me/slides-convert", "label_prefix": "convert:" },
+  { "repo": "~/projects/desktop-app", "command": "./release.sh {version} --yes",
+    "notes": "The upload credential is on this machine." }
+]
+```
+
+- **`repo`** can be `owner/name`, a repo name that is unique in the project, or the path of a local
+  repo on this worker. Repos hosted by Dispatch cannot be released yet.
+- **`label_prefix`** defaults to `rel:`. Use different prefixes for separate release lines in one
+  project.
+- **`command`** is optional, and `{version}` in it is replaced with the version. Without a command,
+  Claude follows the repo's documented steps, or tags and pushes. The worker always uses its own
+  `command` and `notes`, never ones sent by the server.
+- **The proposed version** starts from the newest of these:
+  - the repo's latest version tag on the default branch
+  - its `VERSION` file
+  - the project's labels with that prefix
+
+  It then bumps the minor number when the done items include backlog work, and the patch number
+  for bug fixes only. A version you type without `v` follows the style of the last release.
+- **Where it runs.** A local repo is released in your own checkout, which must be on its default
+  branch with no uncommitted changes. A GitHub repo is released in a checkout of the default branch
+  on the worker. One release per repo runs at a time.
+
 ## Run without Docker (development)
 
 Node 24+ (runs TypeScript directly, no build step for server/worker).

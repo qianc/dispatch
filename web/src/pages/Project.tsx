@@ -368,7 +368,7 @@ function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary;
     onSuccess: onStarted,
   });
   if (!opt) return <Empty>No worker offers a release of this project now.</Empty>;
-  const final = normalizeVersion(version, proposal?.last?.version ?? null);
+  const final = normalizeVersion(version, proposal?.last?.version ?? proposal?.proposed ?? null);
   const valid = VERSION_RE.test(final);
   const items = proposal?.items ?? [];
   return (

@@ -37,7 +37,8 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
     const input = create.parse(req.body);
     const opt = option(p, input);
     const proposal = await releaseProposal(ctx, p, opt);
-    const version = normalizeVersion(input.version, proposal.last?.version ?? null);
+    // typed without a v: follow the last release's style (for a first release, the proposal's)
+    const version = normalizeVersion(input.version, proposal.last?.version ?? proposal.proposed);
     if (!VERSION_RE.test(version)) throw new HttpError(400, `"${input.version}" is not a version like v1.2.3`);
     const label = `${opt.label_prefix}${version}`;
     const all = store.items(p.id);
