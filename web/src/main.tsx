@@ -87,12 +87,21 @@ const vv = window.visualViewport;
 // Only our own focused field can open the keyboard here. Back from another app that had its keyboard
 // up, iOS still reports the shrunk visual viewport until the next touch: without a focused field,
 // ignore that and use the full height.
+const NO_KEYBOARD = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image']);
 const typing = () => {
   const el = document.activeElement as HTMLElement | null;
-  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+  if (!el) return false;
+  if (el instanceof HTMLInputElement) return !NO_KEYBOARD.has(el.type);
+  return el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
 };
+// The full height for this width (a rotation changes both). Compared with this, not with innerHeight:
+// with interactive-widget=resizes-content the layout viewport shrinks along with the keyboard, so
+// innerHeight - visualViewport.height stays near 0 while the keyboard is up.
+const fullHeight = new Map<number, number>();
 const fitViewport = () => {
-  const kb = !!vv && typing() && window.innerHeight - vv.height > 120;
+  const full = Math.max(fullHeight.get(window.innerWidth) ?? 0, window.innerHeight);
+  fullHeight.set(window.innerWidth, full);
+  const kb = !!vv && typing() && full - vv.height > 120;
   const h = vv && typing() ? vv.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-h', `${Math.round(h)}px`);
   document.documentElement.classList.toggle('kb-open', kb);
@@ -111,6 +120,11 @@ const refit = () => {
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refit(); });
 window.addEventListener('pageshow', refit);
 window.addEventListener('focus', refit);
+// focus moving into or out of a field opens or closes the keyboard, and iOS does not always send a
+// viewport resize after it (e.g. focus lands after the resize, or the keyboard was already up):
+// measure again then, also once the keyboard has finished moving
+document.addEventListener('focusin', refit);
+document.addEventListener('focusout', () => setTimeout(refit, 0)); // activeElement is the next field by then
 fitViewport();
 
 // The document is locked (only .scroll-area scrolls). If iOS scrolls it anyway (keyboard, focus),
