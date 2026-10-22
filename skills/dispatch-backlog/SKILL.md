@@ -24,7 +24,9 @@ same rules, no token needed. The project's conventions are still in `.dispatch.m
 
 Run `dispatch config` first, once per conversation. It shows:
 
-- the server and whether a token is set
+- the server, and where that address came from (it also names a `url:` in `.dispatch.md` that
+  something else overrides)
+- whether the server takes the token: `valid`, `rejected` (with the reason) or `missing`
 - the project key (from `.dispatch.md` in the repo, searched upwards from the current folder)
 - the project's **conventions**: the text in `.dispatch.md`. Follow them exactly. They say how to
   name items, which tags and modules to use, and how to write the changelog.
@@ -33,10 +35,61 @@ If something is missing:
 
 | Problem | What to do |
 |---|---|
-| No `.dispatch.md`, but a `backlog.md` or similar | Ask the user if this repo should use Dispatch. Do not move a backlog on your own. If yes, offer to add `.dispatch.md` from `dispatch.example.md` in this skill. Existing markdown backlogs are best imported in the Dispatch app: ask its Assistant to import the file. |
+| No `.dispatch.md`, but a `backlog.md` or similar | Ask the user if this repo should use Dispatch. Do not move a backlog on your own. If yes, set it up as in 1a. Existing markdown backlogs are best imported in the Dispatch app: ask its Assistant to import the file. |
+| No `.dispatch.md` and no backlog, and the user asks to set the repo up | Follow 1a. |
 | No token | Each server has its own token file, named after its host: `~/.config/dispatch/tokens/<host>` (`:` written as `_`, e.g. `localhost_3000`). `dispatch config` shows the exact path. Tell the user to make a token in Dispatch → Settings → Tokens (scope `tracker` is enough) and save it there (`chmod 600`). Do not ask them to paste it in the chat. |
+| `token: rejected`, "not signed in", or "redirected to …" | Tokens are per server, see 1b. |
 | "This needs the … scope" | The token may not do that. Tracker work needs `tracker`; tokens used from another machine never get more than `read` and `tracker`. |
-| Cannot reach the server | The server is `DISPATCH_URL`, else `url:` in `.dispatch.md`, else this machine's `~/.config/dispatch/default-url`, else `http://localhost:3000`. Ask the user which address to use. |
+| Cannot reach the server | See the server order below. Ask the user which address to use. |
+
+**Which server.** The first of these that is set wins:
+
+1. `--url URL` on the command line
+2. `DISPATCH_URL`: an override for one shell or one run
+3. `url:` in the repo's `.dispatch.md`
+4. `~/.config/dispatch/default-url`: this machine's default server
+5. `http://localhost:3000`
+
+`dispatch config` says which one won. When `DISPATCH_URL` beats a different `url:` in
+`.dispatch.md`, it says so: `server: http://… (from DISPATCH_URL, overrides url: https://… in
+.dispatch.md)`. If that is not what the user wants, unset `DISPATCH_URL`. Use `default-url`, not
+`DISPATCH_URL`, for a machine's usual server.
+
+### 1a. Setting up a new repo
+
+1. **Check the server**: `dispatch config`. The server must answer and the token must be `valid`
+   (if not, see the table above and 1b).
+2. **List the projects**: `dispatch projects`. Find this repo's project. Do not guess the key.
+   **This script cannot create projects.** If there is none for the repo, ask the user to make one
+   in the Dispatch app, then go on.
+3. **Read the sibling repos' files for house style**: `ls ../*/.dispatch.md`, and read them. They
+   show how this user names modules and tags, what images to ask for, and how changelogs look. Copy
+   that style where it fits.
+4. **Write the file**: `dispatch init --project KEY` (add `--url URL` only if the repo must name
+   its server). Without `--project`, `init` lists the projects and suggests the one that matches
+   the folder name, but writes nothing. It writes `.dispatch.md` at the repo root from
+   `dispatch.example.md`, never overwrites one, and prints what is still to do: a missing token,
+   no `CHANGELOG.md`, the sibling files, and the example conventions to rewrite.
+5. Rewrite the conventions (the text after the frontmatter) for this repo, from what you read in
+   step 3 and in the repo. Show the user the result.
+
+### 1b. Tokens are per server
+
+A token works only on the server that made it. A token from the LAN address (e.g.
+`dispatch.home.example`) is refused by the public address (e.g. `dispatch.example.com`), even when
+both are the same Dispatch install. So each server address has its own token file,
+`~/.config/dispatch/tokens/<host>`.
+
+When a token is refused (`token: rejected`, "not signed in", or "redirected to …"):
+
+1. Run `dispatch config` and check the server. Is it the address the user means? A wrong
+   `DISPATCH_URL` or `url:` is the usual cause.
+2. If the address is right, the token for it is missing or old. Tell the user to make a token on
+   that server (Settings → Tokens, scope `tracker`) and save it in the file `config` names. Do not
+   copy a token from another server's file.
+3. "redirected to auth.…" means a sign-in proxy answered, not Dispatch. The token is not valid for
+   that host, or the host does not let tokens through. Use the address the token was made on, often
+   the LAN one.
 
 `dispatch scales` shows the project's importance labels (4 levels) and effort labels. Use those
 labels in `--importance` and `--effort`.
@@ -134,6 +187,13 @@ content: done items that are not in a release yet.
    Write for the people who use the project, not about the code.
 3. After the user agrees to the entry: `dispatch release v1.4.0 --unreleased` (or list the keys).
    This adds the release label (default `rel:v1.4.0`), so the next changelog starts after it.
+
+**No `CHANGELOG.md`.** Some repos have no changelog file and publish releases with GitHub's
+generated release notes (this is in their conventions, or `changelog:` is missing). Then skip
+step 2: do not create a `CHANGELOG.md`. To see what a past release held, read its notes with
+`gh release view v1.3.0` (or `gh release list`). Still do step 3 when a release is made, so
+`unreleased` stays correct. If the user wants written notes, give them the text to paste into the
+GitHub release.
 
 "What changed since v1.3?" → `dispatch list --status done --tag rel:v1.3.0`, or
 `dispatch unreleased` for the work since the last release.
