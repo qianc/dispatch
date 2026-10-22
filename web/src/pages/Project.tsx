@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
-import { api, type Item, type ProjectSummary, type Repo, type Session, type SourceSummary } from '../api.ts';
+import { api, type Item, type ProjectSummary, type ReleaseOption, type ReleaseProposal, type Repo, type Session, type SourceSummary } from '../api.ts';
+import { normalizeVersion, VERSION_RE } from '../../../src/shared/release.ts';
 import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
@@ -24,7 +25,7 @@ export function Project() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as Tab) ?? 'backlog';
   const nav = useNavigate();
-  const [sheet, setSheet] = useState<null | 'item' | 'batch' | 'planner'>(null);
+  const [sheet, setSheet] = useState<null | 'item' | 'batch' | 'planner' | 'release'>(null);
   const [selectMode, setSelectMode] = useState(false);
   const wide = useWide();
   const veryWide = useVeryWide();
@@ -54,6 +55,13 @@ export function Project() {
     queryFn: () => api.get<Item[]>(`/projects/${key}/items`),
     enabled: !!project,
   });
+  // the workers that can release one of this project's repos now
+  const { data: releases = [] } = useQuery({
+    queryKey: ['releases', key],
+    queryFn: () => api.get<ReleaseOption[]>(`/projects/${key}/releases`),
+    enabled: !!project,
+    staleTime: 15_000,
+  });
   const qc = useQueryClient();
   const toggle = useMutation({
     mutationFn: (it: Item) => api.patch<Item>(`/items/${it.id}`, { marked: !it.marked }),
@@ -82,6 +90,7 @@ export function Project() {
       back="/projects"
       actions={
         <>
+          {releases.length > 0 && <Button small variant="ghost" onClick={() => setSheet('release')} aria-label="Create release">Release</Button>}
           <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude"><Icon name="discuss" size={16} /> Plan</Button>
           {listTab && (wide ? (
             <Button small variant="primary" className="ml-1 pl-2" onClick={openNew}><Icon name="plus" size={18} strokeWidth={2} /> {tab === 'bugs' ? 'New bug' : 'New item'}</Button>
@@ -139,6 +148,9 @@ export function Project() {
       </Sheet>
       <Sheet open={sheet === 'planner'} onClose={() => setSheet(null)} title="Plan with Claude">
         <PlannerForm project={project} onStarted={(s) => nav(`/s/${s.id}`)} />
+      </Sheet>
+      <Sheet open={sheet === 'release'} onClose={() => setSheet(null)} title="Create release">
+        {sheet === 'release' && <ReleaseForm project={project} options={releases} onStarted={(s) => nav(`/s/${s.id}`)} />}
       </Sheet>
     </Page>
     </div>
@@ -334,6 +346,73 @@ function PlannerForm({ project, onStarted }: { project: ProjectSummary; onStarte
       </Field>
       <ErrorText error={start.error} />
       <Button variant="primary" className="w-full" disabled={start.isPending}>Start planning chat</Button>
+    </form>
+  );
+}
+
+const FROM = { tag: 'git tag', file: 'VERSION file', label: 'Dispatch labels' };
+
+/** Review the proposed version, edit it, and start the release on the worker that offers it. */
+function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary; options: ReleaseOption[]; onStarted: (s: Session) => void }) {
+  const [pick, setPick] = useState(0);
+  const opt = options[Math.min(pick, options.length - 1)];
+  const { data: proposal, error, isFetching } = useQuery({
+    queryKey: ['release-proposal', project.key, opt?.worker_id, opt?.repo_id],
+    queryFn: () => api.get<ReleaseProposal>(`/projects/${project.key}/releases/proposal?worker_id=${opt.worker_id}&repo_id=${opt.repo_id}`),
+    enabled: !!opt,
+  });
+  const [version, setVersion] = useState('');
+  useEffect(() => setVersion(proposal?.proposed ?? ''), [proposal?.proposed, opt?.worker_id, opt?.repo_id]);
+  const start = useMutation({
+    mutationFn: () => api.post<Session>(`/projects/${project.key}/releases`, { worker_id: opt.worker_id, repo_id: opt.repo_id, version }),
+    onSuccess: onStarted,
+  });
+  if (!opt) return <Empty>No worker offers a release of this project now.</Empty>;
+  const final = normalizeVersion(version, proposal?.last?.version ?? null);
+  const valid = VERSION_RE.test(final);
+  const items = proposal?.items ?? [];
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); start.mutate(); }}>
+      <p className="text-[13px] text-muted mb-3">Claude writes the changelog from the done items, runs the release on the worker, and labels the items once the release succeeded.</p>
+      {options.length > 1 ? (
+        <Field label="Release">
+          <select className={inputCls} value={pick} onChange={(e) => setPick(Number(e.target.value))}>
+            {options.map((o, i) => <option key={`${o.worker_id}-${o.repo_id}`} value={i}>{o.repo} · {o.worker} ({o.label_prefix})</option>)}
+          </select>
+        </Field>
+      ) : (
+        <div className="text-[14px] mb-3"><span className="font-medium">{opt.repo}</span> <span className="text-muted">on worker {opt.worker}</span></div>
+      )}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px] mb-3">
+        <dt className="text-muted">Last release</dt>
+        <dd>{proposal ? (proposal.last ? `${proposal.last.version} (${FROM[proposal.last.from]})` : 'none found') : isFetching ? 'reading…' : '—'}</dd>
+        <dt className="text-muted">Runs</dt>
+        <dd className="font-mono break-all">{opt.command ?? "the repo's own release steps"}</dd>
+        {opt.notes && <><dt className="text-muted">Notes</dt><dd>{opt.notes}</dd></>}
+      </dl>
+      {proposal?.warning && <p className="text-[13px] text-wait mb-3">{proposal.warning}</p>}
+      <ErrorText error={error} />
+      <Field label={`Version${proposal ? ` (proposed: ${proposal.proposed})` : ''}`}>
+        <input className={cx(inputCls, 'font-mono')} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="v1.2.3" aria-label="Version" />
+      </Field>
+      <p className={cx('text-[12px] -mt-2 mb-3', valid || !version ? 'text-muted' : 'text-bad')}>
+        {valid ? <>Items get the label <span className="font-mono">{opt.label_prefix}{final}</span></> : version ? 'A version looks like v1.2.3' : ''}
+      </p>
+      <Section title={`Done since the last release · ${items.length}`}>
+        {items.length ? (
+          <Card>
+            {items.map((it) => (
+              <div key={it.id} className="flex items-center gap-2 px-3 py-2 border-b border-line last:border-b-0 text-[14px]">
+                <span className="text-muted font-mono text-[12px]">{it.key}</span>
+                <span className="flex-1 min-w-0 truncate">{it.title}</span>
+                {it.type === 'bug' && <Chip tone="bad">bug</Chip>}
+              </div>
+            ))}
+          </Card>
+        ) : <Empty>{proposal ? 'Nothing done since the last release.' : 'Loading…'}</Empty>}
+      </Section>
+      <ErrorText error={start.error} />
+      <Button variant="primary" className="w-full mt-3" disabled={!proposal || !items.length || !valid || start.isPending}>Create release {valid ? final : ''}</Button>
     </form>
   );
 }
