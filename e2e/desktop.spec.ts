@@ -231,25 +231,84 @@ test('images on an item: add, view full size, delete', async ({ page }) => {
   await expect(page.getByText('Only PNG, JPEG, GIF and WebP images can be attached.')).toBeVisible();
 });
 
+/** What the iOS keyboard does: the visible area (visualViewport) shrinks; with `layout` the layout
+ * viewport (innerHeight) shrinks with it, as interactive-widget=resizes-content does. */
+async function keyboard(page: Page, h: number | null, { layout = false, event = true } = {}) {
+  await page.evaluate(({ h, layout, event }) => {
+    const vv = window.visualViewport!;
+    const w = window as unknown as { __fullH?: number };
+    w.__fullH ??= window.innerHeight;
+    const full = w.__fullH;
+    Object.defineProperty(vv, 'height', { configurable: true, get: () => h ?? full });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => (layout && h ? h : full) });
+    if (event) vv.dispatchEvent(new Event('resize'));
+  }, { h, layout, event });
+}
+const kbOpen = (page: Page) => page.evaluate(() => document.documentElement.classList.contains('kb-open'));
+
 test('phone: a sheet stays above the keyboard, with the field you type in visible', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'KBD', name: 'Keyboard' } });
   await page.goto('/p/KBD');
   await page.getByRole('button', { name: 'Plan with Claude' }).click();
-  // what the iOS keyboard does: the visible area shrinks (main.tsx sets --app-h from visualViewport)
-  await page.evaluate(() => {
-    document.documentElement.style.setProperty('--app-h', '420px');
-    document.documentElement.classList.add('kb-open');
-    window.dispatchEvent(new Event('dispatch:viewport'));
-  });
   const field = page.getByRole('dialog').locator('textarea');
   await field.click();
+  await keyboard(page, 420);
   await field.fill('quick wins before the release');
+  await expect.poll(() => kbOpen(page)).toBe(true);
   const fieldBox = (await field.boundingBox())!;
   const sheetBox = (await page.getByRole('dialog').locator('> div.relative').boundingBox())!;
   expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(421);
   expect(fieldBox.y + fieldBox.height).toBeLessThanOrEqual(421);
   expect(fieldBox.y).toBeGreaterThanOrEqual(0);
+});
+
+test('phone: the tab bar hides while the keyboard is up, and the page keeps its full height without it', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'KBN', name: 'Keyboard nav' } });
+  const it = await (await page.request.post('/api/projects/KBN/items', { data: { title: 'Type here' } })).json();
+  await page.goto(`/items/${it.id}/discuss`);
+  const tabs = page.getByRole('navigation', { name: 'Main' });
+  const field = page.getByLabel('Message');
+  const full = page.viewportSize()!.height;
+  const appH = () => page.evaluate(() => document.documentElement.style.getPropertyValue('--app-h'));
+
+  // the keyboard opens as you tap the field
+  await field.click();
+  await keyboard(page, 400);
+  await expect(tabs).toBeHidden();
+  expect(await appH()).toBe('400px');
+  // the keyboard closes
+  await field.blur();
+  await keyboard(page, null);
+  await expect(tabs).toBeVisible();
+  expect(await appH()).toBe(`${full}px`);
+
+  // the layout viewport shrinks along with the keyboard (interactive-widget=resizes-content)
+  await field.click();
+  await keyboard(page, 400, { layout: true });
+  await expect(tabs).toBeHidden();
+  await field.blur();
+  await keyboard(page, null);
+  await expect(tabs).toBeVisible();
+
+  // the viewport shrank before the field had focus, and no resize follows the focus
+  await keyboard(page, 400, { event: false });
+  await field.focus();
+  await expect(tabs).toBeHidden();
+  expect(await appH()).toBe('400px');
+
+  // back from another app that had its keyboard up: the viewport still reports it shrunk, but no
+  // field of ours has focus, so the page keeps its full height and the tab bar shows
+  await field.blur();
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+  await expect(tabs).toBeVisible();
+  await expect.poll(appH).toBe(`${full}px`);
+
+  // back with our own field focused and the keyboard up: tab bar hidden
+  await field.focus();
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+  await expect(tabs).toBeHidden();
 });
 
 test('projects get a colour and an icon, shown in the list', async ({ page }) => {

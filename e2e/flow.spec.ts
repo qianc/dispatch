@@ -65,13 +65,15 @@ test('phone flow: project → items → batch → answer → planner card → st
   await page.getByRole('link', { name: /Inbox/ }).click();
   await expect(page.getByText('Your turn').first()).toBeVisible();
 
-  // planner chat proposes a batch; start it from the card
+  // planner chat proposes a batch of what is still free to start (HC-1 and HC-2 are in the first
+  // batch); start it from the card
+  for (const title of ['Price alerts', 'Tariff import']) await page.request.post('/api/projects/HC/items', { data: { title } });
   await page.goto('/p/HC');
   await page.getByRole('button', { name: 'Plan with Claude' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Start planning chat' }).click();
   await expect(page.getByText('Proposed batch')).toBeVisible();
   // the card comes after Claude's explanation, so you read the reasons before Start
-  const reason = page.getByText(/\(fake\) I suggest/);
+  const reason = page.getByText(/\(fake\) I suggest HC-[34] \+ HC-[34]\./);
   await expect(reason).toBeVisible();
   const cardFollows = await reason.evaluate((el) => {
     const card = [...document.querySelectorAll('*')].find((n) => n.textContent === 'Proposed batch')!;
@@ -123,6 +125,28 @@ test('assistant creates a project from a chat message', async ({ page }) => {
   // the thread is still there when coming back
   await page.getByRole('link', { name: 'Assistant' }).click();
   await expect(page.getByText('create project Slides me/slides')).toBeVisible();
+});
+
+test('a reply in the assistant chat shows an unread badge on the Assistant menu until it is opened', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  // a reply arrives while you are elsewhere
+  await page.request.post('/api/assistant/messages', { data: { text: 'what projects do I have?' } });
+  await expect.poll(async () => (await (await page.request.get('/api/assistant')).json()).unread).toBeGreaterThan(0);
+  const { unread } = await (await page.request.get('/api/assistant')).json();
+  const tabBadge = page.getByRole('navigation', { name: 'Main' }).getByLabel(`${unread} unread`);
+  await expect(tabBadge).toBeVisible();
+  // and on desktop, in the left menu
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.getByRole('complementary', { name: 'Menu' }).getByLabel(`${unread} unread`)).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 664 });
+  // opening the Assistant reads the replies
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  await expect(page.getByText(/\(fake\) You have \d+ project/).last()).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Main' }).getByLabel(/unread/)).toHaveCount(0);
+  await expect.poll(async () => (await (await page.request.get('/api/assistant')).json()).unread).toBe(0);
 });
 
 test('sheet buttons are not covered by the tab bar', async ({ page }) => {
