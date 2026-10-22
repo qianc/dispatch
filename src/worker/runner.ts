@@ -4,7 +4,7 @@ import { query, type CanUseTool, type HookCallback, type Query, type SDKMessage,
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, type Rpc } from './mcp.ts';
-import { assistantPrompt, discussPrompt, plannerPrompt, workPrompt } from './prompts.ts';
+import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
 import { existsSync, globSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -236,7 +236,8 @@ export class ClaudeRunner implements AgentRunner {
     const chat = assistant || discuss;
     const append = assistant ? assistantPrompt(this.opts.assistantReadDirs)
       : discuss ? discussPrompt(this.spec, this.deps.context ?? [])
-      : planner ? plannerPrompt(this.spec, this.deps.context ?? []) : workPrompt(this.spec);
+      : planner ? plannerPrompt(this.spec, this.deps.context ?? [])
+      : this.spec.kind === 'release' ? releasePrompt(this.spec, this.deps.context ?? []) : workPrompt(this.spec);
     this.q = query({
       prompt: this.input,
       options: {

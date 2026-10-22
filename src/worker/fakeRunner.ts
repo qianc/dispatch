@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload } from '../shared/types.ts';
+import { releaseCommand } from './prompts.ts';
 import type { AgentRunner, RunnerDeps } from './runner.ts';
 
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -72,6 +73,7 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     if (this.closed) return;
     if (this.spec.kind === 'planner') return this.plannerTurn();
+    if (this.spec.kind === 'release' && this.turn === 1) return this.releaseTurn();
     if (this.spec.kind === 'assistant') return this.assistantTurn(text);
     if (this.spec.kind === 'discuss' && /which folders/i.test(text)) {
       // tests: what this chat may read, and the context it was given
@@ -117,6 +119,24 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 't1', is_error: false, text: 'All tests passed' } });
     this.say(`(fake) Done with "${choice}". In a real session I would now push and open a PR.`);
+    this.finishTurn();
+  }
+
+  /** Pretends to run the release command; a command with "fail" in it fails, and nothing is labelled. */
+  private async releaseTurn() {
+    const r = this.spec.release!;
+    const command = releaseCommand(this.spec) ?? `git tag -a ${r.version}`;
+    this.say(`(fake) Releasing ${this.spec.repos[0]?.github_name} ${r.version} in ${this.deps.cwd} | context: ${(this.deps.context ?? []).map((c) => c.label).join(', ')}`);
+    this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_use', tool_use_id: 'rel1', name: 'Bash', summary: command, input: { command } } });
+    await sleep(this.delay);
+    if (/fail/.test(command)) {
+      this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 'rel1', is_error: true, text: 'release failed' } });
+      this.say('(fake) The release command failed; I did not label the items.');
+      return this.finishTurn();
+    }
+    this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 'rel1', is_error: false, text: 'released' } });
+    const res = (await this.deps.rpc('release_items', { keys: this.spec.items.map((i) => i.key) })) as { released: string[]; label: string };
+    this.say(`(fake) Released ${r.version}; labelled ${res.released.join(', ')} with ${res.label}.`);
     this.finishTurn();
   }
 

@@ -193,7 +193,13 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       body: z.string(),
     }, call(rpc, 'add_comment')),
   ];
-  if (kind === 'work') {
+  if (kind === 'release') {
+    tools.push(
+      tool('release_items', 'Label these items as released, with the version of this release. Call it only after the release succeeded (the release command exited 0, and the commit and tag are pushed); never after a failure.', {
+        keys: z.array(z.string()).min(1).describe('Keys of the done items in this release, e.g. ["HC-3"]'),
+      }, call(rpc, 'release_items')),
+    );
+  } else if (kind === 'work') {
     tools.push(
       tool('add_to_batch', 'Add existing items to this batch when the owner asks you to also work on them (e.g. "also look at 100"). Dispatch then tracks them with this session and closes them when the branch merges.', {
         keys: z.array(z.string()).min(1).describe('Item keys, e.g. ["HC-3"]'),

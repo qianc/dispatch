@@ -226,3 +226,53 @@ export function discussPrompt(spec: StartSpec, context: { label: string; text: s
   for (const c of context) lines.push(`## ${c.label}`, '', c.text, '');
   return lines.join('\n');
 }
+
+const MAX_RELEASE_ITEMS = 100;
+
+/** The command a release runs: the worker's configured step with the version filled in. */
+export function releaseCommand(spec: StartSpec): string | null {
+  const r = spec.release;
+  return r?.command ? r.command.replaceAll('{version}', r.version) : null;
+}
+
+export function releasePrompt(spec: StartSpec, context: { label: string; text: string }[] = []): string {
+  const r = spec.release!;
+  const repo = spec.repos[0];
+  const label = `${r.label_prefix}${r.version}`;
+  const command = releaseCommand(spec);
+  const where = repo?.local_path
+    ? `${repo.github_name}: the owner's own checkout at ${repo.local_path}, on its default branch \`${repo.default_branch}\``
+    : `${repo?.github_owner}/${repo?.github_name}: a checkout of the default branch \`${repo?.default_branch}\`, tracking origin`;
+  const shown = spec.items.slice(0, MAX_RELEASE_ITEMS);
+  const lines = [
+    '# Dispatch release',
+    "You are running inside Dispatch, the owner's tracker. The owner asked for this release from their phone and follows it here. Every question you ask with AskUserQuestion sends them a push notification, so ask when you need a decision, and keep messages short and clear.",
+    '',
+    `Project: ${spec.project_name} (${spec.project_key})`,
+    `Repository: ${where}. There is no feature branch: the release is committed to \`${repo?.default_branch}\` and pushed.`,
+    `Version: \`${r.version}\`${r.last_version ? ` (last release: \`${r.last_version}\`)` : ' (the first release Dispatch knows of)'}`,
+    `Label for the released items: \`${label}\``,
+    command
+      ? `Release command (from this worker's configuration): \`${command}\``
+      : `No release command is configured: follow the repo's documented release steps. If it documents none, tag the changelog commit \`${r.version}\` (annotated) and push the commit and the tag.`,
+    ...(r.notes ? [`Notes from the worker's configuration: ${r.notes}`] : []),
+    '',
+    `## Done items not yet released with prefix \`${r.label_prefix}\``,
+    ...shown.map((it) => `- ${it.key} · ${it.type} · ${it.title}${it.modules.length ? ` (modules: ${it.modules.join(', ')})` : ''}`),
+    ...(spec.items.length > shown.length ? [`- …and ${spec.items.length - shown.length} more: list_items with status ["done"] shows them all.`] : []),
+    'Read an item with `get_item` when its title is not enough to write its changelog line.',
+    '',
+    '## How to release',
+    "1. Read the repo's release rules first: CLAUDE.md, AGENTS.md, .dispatch.md (below, if present) and any RELEASING or CONTRIBUTING docs. They decide the changelog file and its style, version files, the tag format and where to push, over the defaults here.",
+    `2. Check that the checkout is clean and current (\`git pull --ff-only\` when it has an upstream). If it is not, stop and tell the owner.`,
+    '3. Pick the listed items that belong to this release of this repo. A project can have several release lines: leave out items that clearly belong to another repo, and say which. Write the changelog entry from the items you keep (default: `## <version> — <date>`, then Added / Changed / Fixed, one line per item for the people who use it, ending with its key). Commit it.',
+    `4. Run the release${command ? ' command' : ''} with exactly version \`${r.version}\`. If any step fails, stop. Do not label anything. Report the error output and the state (commits, tags, pushes made) and ask the owner how to continue.`,
+    '5. Only after the release succeeded (the command exited 0, and the commit and tag are pushed), call `release_items` with the keys of the items in this release.',
+    '6. End with a short summary: the version, the tag, what was pushed, the release URL if there is one, and the items labelled.',
+    '',
+    `- Never pick another version yourself. If \`${r.version}\` is taken or the repo needs another format, ask the owner.`,
+    '- No other code changes, no branches or pull requests, no force-push, no deleting tags.',
+  ];
+  if (context.length) lines.push('', "## The project's own instructions", '', ...context.flatMap((c) => [`### ${c.label}`, '', c.text.trim(), '']));
+  return lines.join('\n');
+}
