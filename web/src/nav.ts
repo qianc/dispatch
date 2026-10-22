@@ -25,19 +25,33 @@ export function rootTab(pathname: string): Tab | null {
   return TABS.find((t) => t !== '/' && pathname === t) ?? null;
 }
 
-const state = read<{ current: Tab; last: Partial<Record<Tab, string>> }>('dispatch:tabs', { current: '/', last: {} });
+const state = read<{ current: Tab; last: Partial<Record<Tab, string>>; entries: Record<string, Tab> }>('dispatch:tabs', { current: '/', last: {}, entries: {} });
+
+/** History entries remembered (oldest dropped first). */
+const MAX_ENTRIES = 200;
 
 /**
- * Call on every navigation. Inner screens belong to whichever tab you were in, and to that tab
- * only: if another tab still remembers the same screen, it forgets it (otherwise tapping that
- * tab would "go" to the screen you are already on and seem dead).
+ * Call on every navigation; returns the tab the screen belongs to, which the menu highlights.
+ * Inner screens belong to whichever tab you were in, and to that tab only: if another tab still
+ * remembers the same screen, it forgets it (otherwise tapping that tab would "go" to the screen
+ * you are already on and seem dead).
+ *
+ * `tab`: the tab that was tapped to get here (a tab can reopen an inner screen it remembers).
+ * `key`: the history entry, which keeps its tab, so back and forward highlight the right one.
  */
-export function trackLocation(pathname: string, search: string): Tab {
+export function trackLocation(pathname: string, search: string, opts: { key?: string; tab?: Tab } = {}): Tab {
   const here = pathname + search;
-  const tab = rootTab(pathname) ?? (pathname.startsWith('/p/') ? '/projects' : state.current);
+  const remembered = opts.key ? state.entries[opts.key] : undefined;
+  const tab = rootTab(pathname) ?? (pathname.startsWith('/p/') ? '/projects' : opts.tab ?? remembered ?? state.current);
   state.current = tab;
   state.last[tab] = here;
   for (const t of TABS) if (t !== tab && state.last[t] === here) delete state.last[t];
+  if (opts.key) {
+    delete state.entries[opts.key];
+    state.entries[opts.key] = tab; // newest last
+    const keys = Object.keys(state.entries);
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ENTRIES))) delete state.entries[k];
+  }
   write('dispatch:tabs', state);
   return tab;
 }

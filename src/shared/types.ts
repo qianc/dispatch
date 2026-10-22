@@ -356,7 +356,12 @@ export type Attention =
   /** auto-merge waits for the checks, then merges: nothing to do yet (room for live test progress later) */
   | { kind: 'checking'; text: string; pr_id: number }
   | { kind: 'merged'; text: string }
+  /** a planning chat with a batch or items card you have not acted on yet */
+  | { kind: 'proposal'; text: string; proposals: OpenProposal[] }
   | { kind: 'turn'; text: string };
+
+/** A batch or items card that is still on offer in a planning chat. */
+export interface OpenProposal { event_id: number; proposal: Extract<Proposal, { type: 'batch' } | { type: 'items' }> }
 
 // ---------- API inputs ----------
 

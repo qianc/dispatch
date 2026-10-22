@@ -102,6 +102,40 @@ test('inbox: a finished turn says what it needs and can be marked complete', asy
   await expect(page.getByText('Turn work')).toHaveCount(0);
 });
 
+test('inbox: a planning chat with an open proposal offers its actions, not Mark as complete', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'PLN', name: 'Planning' } });
+  await page.request.post('/api/projects/PLN/repos', { data: { github_owner: 'me', github_name: 'pln' } });
+  for (const title of ['Plan one', 'Plan two']) await page.request.post('/api/projects/PLN/items', { data: { title } });
+  const planCard = async () => {
+    const s = await (await page.request.post('/api/projects/PLN/planner', { data: { prompt: '' } })).json();
+    await page.goto('/');
+    const card = page.locator('div.rounded-xl').filter({ hasText: 'Claude proposes a batch' }).filter({ has: page.locator(`a[href="/s/${s.id}"]`) });
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    return { s, card };
+  };
+  const status = async (id: number) => (await (await page.request.get(`/api/sessions/${id}`)).json()).session.status;
+
+  // dismiss: closes the card and the planning chat
+  const first = await planCard();
+  await expect(first.card.getByRole('button', { name: 'Start batch (2)' })).toBeVisible();
+  await expect(first.card.getByRole('link', { name: 'Open to edit' })).toHaveAttribute('href', `/s/${first.s.id}`);
+  await expect(first.card.getByRole('button', { name: 'Mark as complete' })).toHaveCount(0);
+  await first.card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(first.card).toHaveCount(0);
+  await expect.poll(() => status(first.s.id)).toBe('completed');
+
+  // start: the batch starts as proposed and opens, like Start on the card in the chat
+  const second = await planCard();
+  await second.card.getByRole('button', { name: 'Start batch (2)' }).click();
+  await expect(page).not.toHaveURL(/\/$/);
+  await expect(page.getByRole('button', { name: 'Session actions' })).toBeVisible();
+  await expect.poll(() => status(second.s.id)).toBe('completed');
+  // free the worker slot for the other tests
+  const started = page.url().match(/\/s\/(\d+)/)![1];
+  await page.request.post(`/api/sessions/${started}/finish`, { data: { status: 'stopped' } });
+});
+
 test('appearance: light, dark and auto', async ({ page }) => {
   await login(page);
   await page.getByRole('link', { name: 'Settings' }).click();

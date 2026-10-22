@@ -8,6 +8,8 @@ import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
+import { useProposalActions } from './proposals.ts';
+import { fullTime, messageTime } from '../time.ts';
 import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
 
 
@@ -76,6 +78,11 @@ function WorkGroup({ events, live, render, results }: { events: SessionEvent[]; 
   );
 }
 
+/** When a message was sent: small, under it; the full date and time on hover or long-press. */
+function MessageTime({ at }: { at: string }) {
+  return <time dateTime={at} title={fullTime(at)} className="block mt-0.5 text-[11px] leading-4 text-faint tabular-nums">{messageTime(at)}</time>;
+}
+
 export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
@@ -91,12 +98,18 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
     switch (b.kind) {
       case 'user':
         return (
-          <div key={e.seq} className="flex justify-end">
+          <div key={e.seq} className="flex flex-col items-end">
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft border border-accent/25 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
+            <MessageTime at={e.created_at} />
           </div>
         );
       case 'assistant':
-        return <AssistantText key={e.seq} text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />;
+        return (
+          <div key={e.seq}>
+            <AssistantText text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />
+            <MessageTime at={e.created_at} />
+          </div>
+        );
       case 'tool_use':
         return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
       case 'tool_result':
@@ -288,7 +301,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId
     qc.invalidateQueries({ queryKey: ['items', project.id] });
   };
   const apply = useMutation({ mutationFn: () => api.post(`/sessions/${session.id}/apply-update`, { event_id: eventId }), onSuccess: refresh });
-  const dismiss = useMutation({ mutationFn: () => api.post(`/sessions/${session.id}/dismiss-proposal`, { event_id: eventId }), onSuccess: refresh });
+  const { dismiss } = useProposalActions({ sessionId: session.id, eventId, project, onChange: refresh });
   const show = (field: string, v: unknown): string => {
     if (v === null || v === undefined || (Array.isArray(v) && !v.length)) return '—';
     if (field === 'importance') return project.importance_scale[Number(v) - 1] ?? String(v);
@@ -362,8 +375,6 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
 }
 
 function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' }>; session: Session; project: Project }) {
-  const qc = useQueryClient();
-  const nav = useNavigate();
   const { data: items = [] } = useQuery({
     queryKey: ['items', project.id],
     queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),
@@ -383,28 +394,11 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   // items can move on after the card was made (closed, or started in another session): leave them out
   const goneIds = new Set(items.filter((i) => ['done', 'canceled', 'in_progress', 'in_review'].includes(i.status)).map((i) => i.id));
   const usable = [...picked].filter((id) => !goneIds.has(id));
-  const start = useMutation({
-    mutationFn: () =>
-      api.post<Session>(`/projects/${project.key}/batches`, {
-        title, item_ids: usable, new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
-        proposal: { session_id: session.id, event_id: eventId },
-      }),
-    onSuccess: (s) => {
-      qc.invalidateQueries({ queryKey: ['items', project.id] });
-      nav(`/s/${s.id}`);
-    },
+  const { start, create } = useProposalActions({ sessionId: session.id, eventId, project });
+  const startBatch = () => start.mutate({
+    title, item_ids: usable, new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
   });
-  const create = useMutation({
-    mutationFn: () =>
-      api.post<Item[]>(`/sessions/${session.id}/accept-items`, {
-        items: newItems.filter((_, i) => pickedNew.has(i)),
-        source_id: proposal.type === 'items' ? proposal.source_id : null,
-        event_id: eventId,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['items', project.id] });
-    },
-  });
+  const createItems = () => create.mutate({ items: newItems.filter((_, i) => pickedNew.has(i)), source_id: proposal.type === 'items' ? proposal.source_id : null });
 
   const toggle = <T,>(set: Set<T>, v: T, apply: (s: Set<T>) => void) => {
     const n = new Set(set);
@@ -460,11 +454,11 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
       {done ? (
         <p className={cx('mt-2 text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
       ) : proposal.type === 'batch' ? (
-        <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!usable.length && !pickedNew.size)} onClick={() => start.mutate()}>
+        <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!usable.length && !pickedNew.size)} onClick={startBatch}>
           Start batch ({usable.length + pickedNew.size})
         </Button>
       ) : (
-        <Button variant="primary" className="w-full mt-3" disabled={create.isPending || !pickedNew.size} onClick={() => create.mutate()}>
+        <Button variant="primary" className="w-full mt-3" disabled={create.isPending || !pickedNew.size} onClick={createItems}>
           Create {pickedNew.size} items
         </Button>
       )}
