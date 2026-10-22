@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useNavigationType, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
@@ -7,6 +7,8 @@ import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
+import { useItemPeek } from '../components/itemPeek.tsx';
+import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
@@ -15,6 +17,9 @@ import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { useVeryWide } from '../wide.ts';
 import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
+
+/** Where each chat was scrolled to (null: at the newest message), for coming back to it. This app run only. */
+const chatScroll = new Map<number, number | null>();
 
 export interface ChatMode {
   id: number;
@@ -72,6 +77,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const pinned = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [unseen, setUnseen] = useState(false);
+  // Back from an item opened in a card (phone): the chat is where you left it, not at the newest message
+  const navType = useNavigationType();
+  const placed = useRef(false);
   useEffect(() => {
     const el = endRef.current?.closest('.scroll-area');
     if (!el) return;
@@ -92,12 +100,37 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     };
   }, [data?.session.id]);
   useLayoutEffect(() => {
+    const el = endRef.current?.closest('.scroll-area');
+    if (!el) return;
+    // a layout effect: its cleanup runs while the chat is still on the page and can be measured.
+    // The exact place unless right at the bottom (near it counts as pinned, but Back should not move the card).
+    return () => void chatScroll.set(id, el.scrollHeight - el.scrollTop - el.clientHeight < 2 ? null : el.scrollTop);
+  }, [data?.session.id]);
+  useLayoutEffect(() => {
     // set the chat area's own scrollTop: scrollIntoView() also scrolls the locked page on iOS,
     // which shifts the layout so taps on the tab bar land in the wrong place
     const el = endRef.current?.closest('.scroll-area');
-    if (pinned.current && el) el.scrollTop = el.scrollHeight;
-    else if (el) setUnseen(true); // something new arrived below while you read further up
+    if (!el) return;
+    if (!placed.current) {
+      placed.current = true;
+      const top = navType === 'POP' ? chatScroll.get(id) : undefined;
+      if (typeof top === 'number') {
+        let tries = 0;
+        let frame = 0;
+        const restore = () => {
+          el.scrollTop = top;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+          if (Math.abs(el.scrollTop - top) > 2 && tries++ < 60) frame = requestAnimationFrame(restore); // content still loading
+        };
+        restore();
+        return () => cancelAnimationFrame(frame);
+      }
+    }
+    if (pinned.current) el.scrollTop = el.scrollHeight;
+    else setUnseen(true); // something new arrived below while you read further up
   }, [data?.events.length, data?.inputs.length]);
+  // desktop: an item opened from a card shows beside the chat; in a narrow side panel, over it
+  const { peek, close: closePeek } = useItemPeek();
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
@@ -106,9 +139,13 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const final = FINAL_STATUSES.includes(s.status);
   const canSend = s.status !== 'queued' && s.status !== 'waiting_input';
 
+  const peekPanel = peek && <ItemDetail key={peek} itemId={peek} onClose={closePeek} />;
+  // one tree whether or not the item shows, so opening it does not rebuild the chat and lose its place
   return (
+    <div className="relative flex-1 min-h-0 flex">
+    <div className="flex-1 min-w-0 flex flex-col">
     <Page
-      aside={chat ? undefined : (
+      aside={chat || peek ? undefined : (
         <div className="px-4 pt-4 space-y-5 text-[13px]">
           <div>
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
@@ -287,5 +324,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       </Sheet>
     </Page>
+    </div>
+    {peekPanel && (chat?.onClose
+      ? <div className="absolute inset-0 z-10 flex flex-col bg-bg" role="region" aria-label="Item">{peekPanel}</div>
+      : <aside className="w-[min(560px,46%)] shrink-0 min-h-0 flex flex-col border-l border-line bg-bg" aria-label="Item">{peekPanel}</aside>)}
+    </div>
   );
 }
