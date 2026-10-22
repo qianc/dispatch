@@ -1,24 +1,33 @@
 #!/usr/bin/env node
 // Dispatch backlog CLI for Claude Code skills. No dependencies; Node 18+.
 //
-// Server: DISPATCH_URL, else `url:` in the repo's .dispatch.md, else ~/.config/dispatch/default-url,
-// else http://localhost:3000.
+// Server, first match wins: --url, else DISPATCH_URL (an override for one shell or one run), else
+// `url:` in the repo's .dispatch.md, else ~/.config/dispatch/default-url (this machine's default),
+// else http://localhost:3000. `config` says which one won, and names a url: it overrides.
 // Token: DISPATCH_TOKEN, else ~/.config/dispatch/tokens/<host> (host with ':' as '_', e.g.
 // localhost_3000), holding the API token from that server's Settings. Tokens never go in a repo.
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
 // (searched from the current folder upwards). Run `dispatch.mjs help` for the commands.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 const STATUSES = [...OPEN, 'hold', 'done', 'canceled'];
 
 const HELP = `dispatch.mjs <command> [args] [--project KEY]
 
+Setup
+  init [--project KEY] [--url URL]
+                                 check the server and token, list the projects, and write
+                                 .dispatch.md at the repo root from the example (never overwrites)
+
 Reading
-  config                         where the settings come from, and the project's conventions
+  config                         where the settings come from, whether the server takes the
+                                 token, and the project's conventions
   projects                       all projects
   scales                         the project's importance and effort labels
   list [filters]                 open items (one line each). Filters: --status a,b | --all
@@ -85,9 +94,25 @@ function readConfig(file) {
   const meta = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*?)\s*$/);
-    if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, '');
+    if (kv) meta[kv[1]] = configValue(kv[2]);
   }
   return { meta, body: m[2].trim() };
+}
+
+/** A frontmatter value: quotes removed; an unquoted value loses a trailing ` # comment`. */
+function configValue(raw) {
+  const quoted = raw.match(/^(["'])(.*)\1(?:\s+#.*)?$/);
+  if (quoted) return quoted[2];
+  return raw.replace(/(^|\s+)#.*$/, '');
+}
+
+/** The git repo's top folder, else the current folder. */
+function repoRoot() {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return process.cwd();
+  }
 }
 
 const cfgFile = findConfig(process.cwd());
@@ -97,7 +122,16 @@ const machineDefault = (() => {
   const f = join(homedir(), '.config', 'dispatch', 'default-url');
   return existsSync(f) ? readFileSync(f, 'utf8').trim() : '';
 })();
-const URL_BASE = (process.env.DISPATCH_URL || cfg.meta.url || machineDefault || 'http://localhost:3000').replace(/\/$/, '');
+const trimUrl = (u) => u.replace(/\/+$/, '');
+// the first of these that is set wins; DISPATCH_URL is an override for one shell or one run
+const SERVER = [
+  [flags.url, '--url'],
+  [process.env.DISPATCH_URL, 'DISPATCH_URL'],
+  [cfg.meta.url, '.dispatch.md'],
+  [machineDefault, '~/.config/dispatch/default-url'],
+  ['http://localhost:3000', 'default'],
+].find(([u]) => typeof u === 'string' && u);
+const URL_BASE = trimUrl(SERVER[0]);
 // one token file per server, named after its host: ~/.config/dispatch/tokens/localhost_3000
 const host = (() => {
   try {
@@ -114,22 +148,60 @@ const RELEASE_PREFIX = cfg.meta.release_label_prefix || 'rel:';
 const IMAGES = ['always', 'when_possible', 'off'].includes(cfg.meta.images) ? cfg.meta.images : 'when_possible';
 
 // ---------- http ----------
+const auth = () => (TOKEN ? { authorization: `Bearer ${TOKEN}` } : {});
+
+/**
+ * fetch() against the server, without following redirects: Dispatch never redirects its API, so
+ * a redirect means something in front of it (usually a sign-in proxy) answered instead.
+ * Throws an Error with a plain message when the server cannot be reached or redirects.
+ */
+async function send(url, init = {}) {
+  let res;
+  try {
+    res = await fetch(url, { ...init, redirect: 'manual' });
+  } catch (e) {
+    throw new Error(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message}). Is it running? Set DISPATCH_URL if it is elsewhere.`);
+  }
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get('location');
+    const where = to ? new URL(to, url).host : 'another page';
+    throw new Error(
+      `redirected to ${where}: a login proxy is in front of the API at ${URL_BASE}. Is the token valid for this host? ` +
+        `Tokens are per server; this one is read from ${process.env.DISPATCH_TOKEN ? 'DISPATCH_TOKEN' : tokenFile}.`,
+    );
+  }
+  return res;
+}
+
 async function api(method, path, body) {
   let res;
   try {
-    res = await fetch(`${URL_BASE}/api${path}`, {
+    res = await send(`${URL_BASE}/api${path}`, {
       method,
-      headers: { ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      headers: { ...auth(), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
-    die(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message}). Is it running? Set DISPATCH_URL if it is elsewhere.`);
+    die(e.message);
   }
   const data = await res.json().catch(() => null);
   if (res.status === 401) die(`not signed in to ${URL_BASE}: make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
   if (res.status === 403 && data?.error) die(`${method} ${path}: ${data.error}`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
   return data;
+}
+
+/** One cheap call to see whether the server takes the token: valid, rejected (why) or missing. */
+async function checkToken() {
+  if (!TOKEN) return { state: 'missing' };
+  try {
+    const res = await send(`${URL_BASE}/api/projects`, { headers: auth(), signal: AbortSignal.timeout(8000) });
+    if (res.ok) return { state: 'valid' };
+    if (res.status === 401 || res.status === 403) return { state: 'rejected', why: `the server answered ${res.status}` };
+    return { state: 'unknown', why: `the server answered ${res.status}` };
+  } catch (e) {
+    return e.message.startsWith('redirected') ? { state: 'rejected', why: e.message } : { state: 'unknown', why: e.message };
+  }
 }
 
 /** Upload image files to an item (optionally to one of its comments), signed "claude". */
@@ -141,13 +213,13 @@ async function attach(itemId, files, commentId) {
     if (commentId) q.set('comment_id', String(commentId));
     let res;
     try {
-      res = await fetch(`${URL_BASE}/api/items/${itemId}/images?${q}`, {
+      res = await send(`${URL_BASE}/api/items/${itemId}/images?${q}`, {
         method: 'POST',
-        headers: { ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}), 'content-type': 'application/octet-stream' },
+        headers: { ...auth(), 'content-type': 'application/octet-stream' },
         body: readFileSync(f),
       });
     } catch (e) {
-      die(`cannot reach Dispatch at ${URL_BASE} (${e.cause?.code ?? e.message})`);
+      die(e.message);
     }
     const data = await res.json().catch(() => null);
     if (!res.ok) die(`${basename(f)}: ${data?.error ?? res.statusText}`);
@@ -220,13 +292,65 @@ switch (cmd) {
     break;
 
   case 'config': {
-    console.log(`server:   ${URL_BASE}`);
-    console.log(`token:    ${process.env.DISPATCH_TOKEN ? 'from DISPATCH_TOKEN' : TOKEN ? tokenFile : `MISSING (expected in ${tokenFile})`}`);
+    const from = SERVER[1] === 'default' ? 'default' : `from ${SERVER[1]}`;
+    // a repo's url: that loses to --url or DISPATCH_URL is easy to miss, so name it
+    const repoUrl = cfg.meta.url ? trimUrl(cfg.meta.url) : '';
+    const beaten = repoUrl && SERVER[1] !== '.dispatch.md' && repoUrl !== URL_BASE ? `, overrides url: ${repoUrl} in .dispatch.md` : '';
+    console.log(`server:   ${URL_BASE} (${from}${beaten})`);
+    const tokenFrom = process.env.DISPATCH_TOKEN ? 'from DISPATCH_TOKEN' : tokenFile;
+    const t = await checkToken();
+    if (t.state === 'missing') console.log(`token:    missing (expected in ${tokenFile})`);
+    else console.log(`token:    ${t.state === 'unknown' ? 'not checked' : t.state} (${tokenFrom})${t.why ? `: ${t.why}` : ''}`);
     console.log(`config:   ${cfgFile ?? '(no .dispatch.md found)'}`);
     console.log(`project:  ${PROJECT || '(none)'}`);
     for (const [k, v] of Object.entries(cfg.meta)) if (!['project', 'url', 'images'].includes(k)) console.log(`${(k + ':').padEnd(10)}${v}`);
     console.log(`images:   ${IMAGES}${cfg.meta.images ? '' : ' (default)'}`);
     if (cfg.body) console.log(`\n--- project conventions ---\n${cfg.body}`);
+    break;
+  }
+
+  case 'init': {
+    const root = repoRoot();
+    const target = join(root, '.dispatch.md');
+    if (existsSync(target)) die(`${target} already exists; edit it instead (init never overwrites it).`);
+    const projects = await api('GET', '/projects');
+    console.log(`server:   ${URL_BASE}`);
+    console.log(`projects:`);
+    for (const p of projects) console.log(`  ${p.key.padEnd(6)} ${p.name}`);
+    if (!projects.length) console.log('  (none)');
+    const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const folder = basename(root);
+    const match = projects.find((p) => norm(p.key) === norm(folder) || norm(p.name) === norm(folder));
+    const create = 'This script cannot create projects: make one in the Dispatch app, then run init again.';
+    if (typeof flags.project !== 'string') {
+      die(match
+        ? `project ${match.key} matches the folder name "${folder}". If that is the one, run: dispatch init --project ${match.key}`
+        : `no project matches the folder name "${folder}". Pick one above and run: dispatch init --project KEY. ${create}`);
+    }
+    const chosen = projects.find((p) => p.key === PROJECT);
+    if (!chosen) die(`there is no project ${PROJECT} on ${URL_BASE}. ${create}`);
+
+    let text = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'dispatch.example.md'), 'utf8');
+    text = text.replace(/^project: .*$/m, `project: ${chosen.key}`);
+    if (typeof flags.url === 'string') text = text.replace(/^# url: .*\n(?:#\s+#.*\n)*/m, `url: ${URL_BASE}\n`);
+    writeFileSync(target, text);
+    console.log(`\nwrote ${target} for ${chosen.key} (${chosen.name})`);
+
+    const todo = [];
+    const t = await checkToken();
+    if (t.state === 'missing') todo.push(`token: none for this server. Make one in Dispatch → Settings → Tokens (scope "tracker") and save it in ${tokenFile} (chmod 600).`);
+    if (t.state === 'rejected') todo.push(`token: rejected by ${URL_BASE} (${t.why}). Tokens are per server: make one on this server and save it in ${tokenFile}.`);
+    if (!existsSync(join(root, 'CHANGELOG.md'))) todo.push('changelog: there is no CHANGELOG.md. Change or remove `changelog:` and the Changelog section (e.g. if releases use GitHub\'s generated notes).');
+    todo.push('conventions: the text after the frontmatter is the example\'s (modules, tags, images, changelog). Rewrite it for this repo.');
+    const siblings = (() => {
+      try {
+        return readdirSync(dirname(root)).map((d) => join(dirname(root), d, '.dispatch.md')).filter((f) => f !== target && existsSync(f));
+      } catch {
+        return [];
+      }
+    })();
+    if (siblings.length) todo.push(`house style: sibling repos have their own files; read them first:\n    ${siblings.join('\n    ')}`);
+    console.log(`\nstill to do:\n${todo.map((x) => `- ${x}`).join('\n')}`);
     break;
   }
 
@@ -363,7 +487,7 @@ switch (cmd) {
     const dir = typeof flags.save === 'string' ? flags.save : join(tmpdir(), 'dispatch-images', it.key);
     mkdirSync(dir, { recursive: true });
     for (const img of it.images) {
-      const res = await fetch(`${URL_BASE}${img.url}`, { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} });
+      const res = await send(`${URL_BASE}${img.url}`, { headers: auth() }).catch((e) => die(e.message));
       if (!res.ok) die(`image ${img.id}: ${res.statusText}`);
       const file = join(dir, `${img.id}-${img.name.replace(/[^\w.-]+/g, '_')}`);
       writeFileSync(file, Buffer.from(await res.arrayBuffer()));

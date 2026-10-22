@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +10,7 @@ import { startServer } from './helpers.ts';
 
 const run = promisify(execFile);
 const SCRIPT = resolve('skills/dispatch-backlog/scripts/dispatch.mjs');
+const EXAMPLE = resolve('skills/dispatch-backlog/dispatch.example.md');
 
 describe('dispatch-backlog skill script', () => {
   let s: Awaited<ReturnType<typeof startServer>>;
@@ -88,7 +91,11 @@ describe('dispatch-backlog skill script', () => {
       writeFileSync(file, `${authed.ctx.access.createToken('skill', ['tracker', 'read'], null).secret}\n`);
       writeFileSync(join(home, '.config/dispatch/tokens/localhost_3000'), 'wrong-server-token\n');
       expect((await run(process.execPath, [SCRIPT, 'projects'], { cwd: home, env })).stdout).toBe('');
-      expect((await run(process.execPath, [SCRIPT, 'config'], { cwd: home, env })).stdout).toContain(`token:    ${file}`);
+      expect((await run(process.execPath, [SCRIPT, 'config'], { cwd: home, env })).stdout).toContain(`token:    valid (${file})`);
+      writeFileSync(file, 'not-a-token\n');
+      expect((await run(process.execPath, [SCRIPT, 'config'], { cwd: home, env })).stdout).toContain(`token:    rejected (${file}): the server answered 401`);
+      const none = mkdtempSync(join(tmpdir(), 'dsp-home-'));
+      expect((await run(process.execPath, [SCRIPT, 'config'], { cwd: none, env: { ...env, HOME: none } })).stdout).toContain('token:    missing (expected in');
     } finally {
       await authed.app.close();
     }
@@ -114,6 +121,90 @@ describe('dispatch-backlog skill script', () => {
 
     expect(await fails('attach', key, join(repo, 'notes.txt'))).toContain('notes.txt: Only PNG, JPEG, GIF and WebP images can be attached.');
     expect(await cli('config')).toContain('images:   when_possible (default)');
+  });
+
+  const runIn = (cwd: string, env: Record<string, string>, ...args: string[]) =>
+    run(process.execPath, [SCRIPT, ...args], { cwd, env: { ...process.env, DISPATCH_TOKEN: '', ...env } }).then(
+      (r) => ({ out: r.stdout, err: r.stderr, ok: true }),
+      (e) => ({ out: String(e.stdout), err: String(e.stderr), ok: false }),
+    );
+
+  it('reads a copied example as meant, with # comments stripped from values', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsp-example-'));
+    copyFileSync(EXAMPLE, join(dir, '.dispatch.md'));
+    const { out } = await runIn(dir, { DISPATCH_URL: s.base, HOME: dir }, 'config');
+    expect(out).toContain('project:  HC\n');
+    expect(out).toContain('changelog:CHANGELOG.md\n');
+    expect(out).toContain('release_label_prefix:rel:\n');
+    expect(out).toContain('images:   when_possible\n');
+
+    writeFileSync(join(dir, '.dispatch.md'), '---\nproject: hc   # the key\nimages: off # for now\nrelease_label_prefix: "rel#" # quoted\nurl: http://x.test/a#b\n---\n');
+    const { out: commented } = await runIn(dir, { DISPATCH_URL: s.base, HOME: dir }, 'config');
+    expect(commented).toContain('project:  HC\n');
+    expect(commented).toContain('images:   off\n');
+    expect(commented).toContain('release_label_prefix:rel#\n');
+    expect(commented).toContain('overrides url: http://x.test/a#b in .dispatch.md');
+  });
+
+  it('says when DISPATCH_URL overrides the url: in .dispatch.md', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsp-url-'));
+    writeFileSync(join(dir, '.dispatch.md'), `---\nproject: cli\nurl: ${s.base}/\n---\n`);
+    expect((await runIn(dir, { DISPATCH_URL: s.base, HOME: dir }, 'config')).out).toContain(`server:   ${s.base} (from DISPATCH_URL)\n`);
+    expect((await runIn(dir, { DISPATCH_URL: '', HOME: dir }, 'config')).out).toContain(`server:   ${s.base} (from .dispatch.md)\n`);
+    writeFileSync(join(dir, '.dispatch.md'), '---\nproject: cli\nurl: https://dispatch.example.test\n---\n');
+    expect((await runIn(dir, { DISPATCH_URL: s.base, HOME: dir }, 'config')).out).toContain(
+      `server:   ${s.base} (from DISPATCH_URL, overrides url: https://dispatch.example.test in .dispatch.md)`,
+    );
+  });
+
+  it('names a login proxy when the API redirects', async () => {
+    const proxy = createServer((_req, res) => res.writeHead(302, { location: 'https://auth.example.test/login?rd=x' }).end());
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'dsp-proxy-'));
+      const res = await runIn(dir, { DISPATCH_URL: base, HOME: dir }, 'projects');
+      expect(res.ok).toBe(false);
+      expect(res.err).toContain(`redirected to auth.example.test: a login proxy is in front of the API at ${base}. Is the token valid for this host?`);
+      const cfgOut = (await runIn(dir, { DISPATCH_URL: base, HOME: dir, DISPATCH_TOKEN: 'lan-token' }, 'config')).out;
+      expect(cfgOut).toContain('token:    rejected (from DISPATCH_TOKEN): redirected to auth.example.test');
+    } finally {
+      proxy.close();
+    }
+  });
+
+  it('init lists the projects, suggests a match, and writes .dispatch.md once', async () => {
+    const root = join(mkdtempSync(join(tmpdir(), 'dsp-init-')), 'cli');
+    const sibling = join(root, '..', 'other');
+    await run('mkdir', ['-p', root, sibling]);
+    writeFileSync(join(sibling, '.dispatch.md'), '---\nproject: oth\n---\n');
+    const env = { DISPATCH_URL: s.base, HOME: root };
+
+    const ask = await runIn(root, env, 'init');
+    expect(ask.ok).toBe(false);
+    expect(ask.out).toMatch(/projects:\n {2}CLI +Cli/);
+    expect(ask.err).toContain('project CLI matches the folder name "cli". If that is the one, run: dispatch init --project CLI');
+    expect(existsSync(join(root, '.dispatch.md'))).toBe(false);
+
+    const unknown = await runIn(root, env, 'init', '--project', 'NOPE');
+    expect(unknown.err).toContain('there is no project NOPE');
+    expect(unknown.err).toContain('This script cannot create projects');
+
+    const done = await runIn(root, env, 'init', '--project', 'cli', '--url', s.base);
+    expect(done.ok).toBe(true);
+    expect(done.out).toContain(`wrote ${join(root, '.dispatch.md')} for CLI (Cli)`);
+    expect(done.out).toContain('token: none for this server');
+    expect(done.out).toContain('changelog: there is no CHANGELOG.md');
+    expect(done.out).toContain(join(sibling, '.dispatch.md'));
+    const written = readFileSync(join(root, '.dispatch.md'), 'utf8');
+    expect(written).toMatch(/^---\nproject: CLI\nurl: http:\/\/127\.0\.0\.1:\d+\nchangelog: CHANGELOG.md\n/);
+    const cfgOut = (await runIn(root, { ...env, DISPATCH_URL: '' }, 'config')).out;
+    expect(cfgOut).toContain('project:  CLI\n');
+    expect(cfgOut).toContain(`server:   ${s.base} (from .dispatch.md)`);
+
+    const again = await runIn(root, env, 'init', '--project', 'CLI');
+    expect(again.err).toContain('already exists');
+    expect(readFileSync(join(root, '.dispatch.md'), 'utf8')).toBe(written);
   });
 
   it('says plainly what is wrong', async () => {
