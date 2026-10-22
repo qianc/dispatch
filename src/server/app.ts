@@ -151,7 +151,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   // MCP for Claude on other machines: OAuth (/authorize, /token, …) and the tracker tools at /mcp
   const oauth = new OAuth(cfg, db, access);
   oauth.routes(app);
-  mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl });
+  mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl, rules: assistant.rules });
 
   app.get('/worker', { websocket: true }, (socket, req) => {
     // a worker's own token (dsw_…), or the server's WORKER_TOKEN for the legacy worker

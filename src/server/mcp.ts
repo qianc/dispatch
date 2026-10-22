@@ -18,7 +18,7 @@ const AUTHOR = 'claude';
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] });
 const failure = (e: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${(e as Error).message}` }], isError: true });
 
-export function trackerTools(store: Store, bus: Bus, attachments: Attachments | null, who: Principal): McpServer {
+export function trackerTools(store: Store, bus: Bus, attachments: Attachments | null, who: Principal, rules: (p: Project) => Promise<string> = async () => ''): McpServer {
   const server = new McpServer({ name: 'dispatch', version: '1.0.0' });
   const canWrite = who.scopes.has('tracker');
   const guard = <A,>(write: boolean, fn: (a: A) => unknown) => async (a: A) => {
@@ -120,8 +120,13 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     inputSchema: { project: z.string() },
   }, guard(false, (a: { project: string }) => text(store.facets(project(a.project).id))));
 
+  server.registerTool('project_instructions', {
+    description: "The project's own instructions for agents (CLAUDE.md, AGENTS.md of its repos). Read them before filing items: their rules on item type, ids, fields and naming win over this tool's defaults.",
+    inputSchema: { project: z.string() },
+  }, guard(false, async (a: { project: string }) => text((await rules(project(a.project))) || 'This project has no instructions of its own.')));
+
   server.registerTool('add_item', {
-    description: 'File a new backlog item or bug. Look for duplicates first (list_items with query).',
+    description: "File a new backlog item or bug. Look for duplicates first (list_items with query). Read project_instructions first: the project's own rules (type, ids, fields) win over the defaults here.",
     inputSchema: {
       project: z.string(),
       title: z.string().min(1).max(200),
@@ -237,7 +242,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
 }
 
 /** /mcp: Streamable HTTP, stateless (a fresh server per request), OAuth bearer tokens only. */
-export function mcpRoutes(app: FastifyInstance, deps: { store: Store; bus: Bus; attachments: Attachments | null; oauth: OAuth; publicUrl: string }) {
+export function mcpRoutes(app: FastifyInstance, deps: { store: Store; bus: Bus; attachments: Attachments | null; oauth: OAuth; publicUrl: string; rules?: (p: Project) => Promise<string> }) {
   const handle = async (req: FastifyRequest, reply: FastifyReply) => {
     const bearer = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
     const who = bearer ? deps.oauth.verify(bearer) : null;
@@ -245,7 +250,7 @@ export function mcpRoutes(app: FastifyInstance, deps: { store: Store; bus: Bus; 
       const meta = `${deps.publicUrl.replace(/\/$/, '')}/.well-known/oauth-protected-resource/mcp`;
       return reply.status(401).header('www-authenticate', `Bearer resource_metadata="${meta}"`).send({ error: 'invalid_token' });
     }
-    const server = trackerTools(deps.store, deps.bus, deps.attachments, who);
+    const server = trackerTools(deps.store, deps.bus, deps.attachments, who, deps.rules);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     reply.hijack();
     reply.raw.on('close', () => {
