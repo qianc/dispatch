@@ -25,7 +25,7 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
       href={tab}
       onClick={(e) => {
         e.preventDefault();
-        nav(tabTarget(tab, loc.pathname + loc.search));
+        nav(tabTarget(tab, loc.pathname + loc.search), { state: { tab } });
       }}
       aria-current={active ? 'page' : undefined}
       className={cx('tab', active ? 'text-fg' : 'text-faint')}
@@ -56,8 +56,12 @@ export function Layout() {
   // same query as the Assistant page, which marks the replies read
   const { data: assistant } = useQuery({ queryKey: ['assistant'], queryFn: () => api.get<AssistantChat>('/assistant') });
   const loc = useLocation();
-  // keyed on loc.key too: navigating to the same path is still a navigation (tab change)
-  const current = useMemo(() => trackLocation(loc.pathname, loc.search), [loc.pathname, loc.search, loc.key]);
+  // keyed on loc.key too: navigating to the same path is still a navigation (tab change).
+  // The one source for the highlighted tab, in the tab bar and the desktop menu alike.
+  const current = useMemo(
+    () => trackLocation(loc.pathname, loc.search, { key: loc.key, tab: (loc.state as { tab?: Tab } | null)?.tab }),
+    [loc.pathname, loc.search, loc.key, loc.state],
+  );
   const tabs = (
     <>
       <TabLink tab="/" current={current} label="Inbox" icon={icons.inbox} badge={waiting} />
