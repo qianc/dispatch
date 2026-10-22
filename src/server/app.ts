@@ -11,6 +11,7 @@ import { Bus } from './bus.ts';
 import type { Config } from './config.ts';
 import { Db } from './db.ts';
 import { AssistantTools } from './assistant.ts';
+import { projectRules } from './projectRules.ts';
 import { Attachments } from './attachments.ts';
 import { imageRoutes } from './routes/images.ts';
 import { Janitor } from './janitor.ts';
@@ -59,6 +60,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.gitBase = cfg.githubGitBase;
   github.hosted = hosted;
   const assistant = new AssistantTools(store, bus, github, sessions, hub);
+  assistant.rules = (p) => projectRules({ store, hub, hosted }, p);
   const attachments = new Attachments(cfg.dataDir);
   sessions.attachments = attachments;
   sessions.assistantRpc = (s, method, params) => assistant.call(s, method, params);
@@ -149,7 +151,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   // MCP for Claude on other machines: OAuth (/authorize, /token, …) and the tracker tools at /mcp
   const oauth = new OAuth(cfg, db, access);
   oauth.routes(app);
-  mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl });
+  mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl, rules: assistant.rules });
 
   app.get('/worker', { websocket: true }, (socket, req) => {
     // a worker's own token (dsw_…), or the server's WORKER_TOKEN for the legacy worker

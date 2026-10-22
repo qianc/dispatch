@@ -380,10 +380,13 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   const proposedWorker = proposal.type === 'batch' ? { name: proposal.worker, reason: proposal.worker_reason } : undefined;
   const [workerId, setWorkerId] = useChosenWorker(project, proposedWorker?.name);
 
+  // items can move on after the card was made (closed, or started in another session): leave them out
+  const goneIds = new Set(items.filter((i) => ['done', 'canceled', 'in_progress', 'in_review'].includes(i.status)).map((i) => i.id));
+  const usable = [...picked].filter((id) => !goneIds.has(id));
   const start = useMutation({
     mutationFn: () =>
       api.post<Session>(`/projects/${project.key}/batches`, {
-        title, item_ids: [...picked], new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
+        title, item_ids: usable, new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
         proposal: { session_id: session.id, event_id: eventId },
       }),
     onSuccess: (s) => {
@@ -420,15 +423,22 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
       {proposal.type === 'batch' && (
         <input className={cx(inputCls, 'mb-2 font-medium')} value={title} onChange={(e) => setTitle(e.target.value)} disabled={!!done} aria-label="Batch title" />
       )}
-      {existing.map((it) => (
-        <button key={it.id} type="button" disabled={!!done} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={picked.has(it.id)} className="w-full flex items-center gap-2 py-1.5 text-left">
-          <span className={cx('size-4 rounded border shrink-0', picked.has(it.id) ? 'bg-accent-strong border-accent-strong' : 'border-line')} />
-          <ImportanceIcon value={it.importance} />
-          <span className="text-[12px] text-faint">{it.key}</span>
-          <span className="flex-1 min-w-0 truncate text-[14px]">{it.title}</span>
-          {effortLabel(project, it.effort) && <Chip>{effortLabel(project, it.effort)}</Chip>}
-        </button>
-      ))}
+      {existing.map((it) => {
+        const gone = !done && goneIds.has(it.id);
+        const on = picked.has(it.id) && !gone;
+        return (
+          <button key={it.id} type="button" disabled={!!done || gone} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={on} className="w-full flex items-center gap-2 py-1.5 text-left">
+            <span className={cx('size-4 rounded border shrink-0', on ? 'bg-accent-strong border-accent-strong' : 'border-line')} />
+            <ImportanceIcon value={it.importance} />
+            <span className="text-[12px] text-faint">{it.key}</span>
+            <span className={cx('flex-1 min-w-0 truncate text-[14px]', gone && 'line-through text-faint')}>{it.title}</span>
+            {gone ? <Chip>{it.status === 'done' || it.status === 'canceled' ? it.status : 'in progress'}</Chip> : effortLabel(project, it.effort) && <Chip>{effortLabel(project, it.effort)}</Chip>}
+          </button>
+        );
+      })}
+      {!done && proposal.type === 'batch' && existing.length > 0 && existing.every((i) => goneIds.has(i.id)) && !newItems.length && (
+        <p className="mt-1 text-[13px] text-muted">Every item on this card is already closed or in progress elsewhere. There is nothing left to start.</p>
+      )}
       {newItems.length > 0 && proposal.type === 'batch' && <div className="text-[12px] text-muted mt-2">New items</div>}
       {newItems.map((it, i) => (
         <ProposedItemRow key={i} item={it} project={project} on={pickedNew.has(i)} toggle={() => !done && toggle(pickedNew, i, setPickedNew)} />
@@ -450,8 +460,8 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
       {done ? (
         <p className={cx('mt-2 text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
       ) : proposal.type === 'batch' ? (
-        <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!picked.size && !pickedNew.size)} onClick={() => start.mutate()}>
-          Start batch ({picked.size + pickedNew.size})
+        <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!usable.length && !pickedNew.size)} onClick={() => start.mutate()}>
+          Start batch ({usable.length + pickedNew.size})
         </Button>
       ) : (
         <Button variant="primary" className="w-full mt-3" disabled={create.isPending || !pickedNew.size} onClick={() => create.mutate()}>

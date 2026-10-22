@@ -15,7 +15,7 @@ export interface RunnerDeps {
   rpc: Rpc;
   cwd: string;
   onClosed(): void;
-  /** discuss chats: folders it may read, and CLAUDE.md-style context to put in its prompt */
+  /** discuss chats: folders it may read; discuss and planner chats: CLAUDE.md-style context to put in its prompt */
   readDirs?: string[];
   context?: { label: string; text: string }[];
 }
@@ -236,7 +236,7 @@ export class ClaudeRunner implements AgentRunner {
     const chat = assistant || discuss;
     const append = assistant ? assistantPrompt(this.opts.assistantReadDirs)
       : discuss ? discussPrompt(this.spec, this.deps.context ?? [])
-      : planner ? plannerPrompt(this.spec) : workPrompt(this.spec);
+      : planner ? plannerPrompt(this.spec, this.deps.context ?? []) : workPrompt(this.spec);
     this.q = query({
       prompt: this.input,
       options: {

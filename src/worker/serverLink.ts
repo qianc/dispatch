@@ -14,6 +14,18 @@ import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { hostedGitBase, run, Workspaces } from './workspace.ts';
 
+/** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
+async function ruleFiles(dirs: string[]) {
+  const out: { label: string; text: string }[] = [];
+  for (const d of dirs) {
+    for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+      const f = resolve(d, name);
+      if (existsSync(f)) out.push({ label: `${name} from ${d}`, text: (await readFile(f, 'utf8')).slice(0, 30_000) });
+    }
+  }
+  return out;
+}
+
 /** Agent sessions running on this worker, over all servers. Chats take no slot (as on the server). */
 export class Slots {
   readonly max: number;
@@ -163,12 +175,7 @@ export class ServerLink {
         ].join('\n'),
       });
     }
-    for (const d of dirs) {
-      for (const name of ['CLAUDE.md', 'AGENTS.md']) {
-        const f = resolve(d, name);
-        if (existsSync(f)) context.push({ label: `${name} from ${d}`, text: (await readFile(f, 'utf8')).slice(0, 30_000) });
-      }
-    }
+    context.push(...(await ruleFiles(dirs)));
     const cwd = dirs[0] ?? join(this.workspaces.root, 'assistant');
     await mkdir(cwd, { recursive: true });
     return { dirs: [...dirs, ...extra], context, cwd };
@@ -240,6 +247,8 @@ export class ServerLink {
       } else {
         const created: { repo: StartSpec['repos'][number]; wt: string }[] = [];
         cwd = await this.workspaces.prepare(spec, created);
+        // a planner files items: it gets the project's own rules for them (CLAUDE.md of every repo, not only the cwd's)
+        if (spec.kind === 'planner') extra = { context: await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r))) };
         // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
         spec = { ...spec, repos: spec.repos.map((r) => ({ ...r, attached: Workspaces.isAttached(this.workspaces.repoDir(spec.session_id, r), r) })) };
         // per-repo setup for new worktrees (venv, npm ci, ...), before the agent starts

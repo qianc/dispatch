@@ -8,6 +8,7 @@ import {
   itemPatch,
   proposedItemSchema,
   type InputAnswer,
+  type Item,
   type ItemChanges,
   type Proposal,
   DEFAULT_RUN_OPTIONS,
@@ -231,6 +232,12 @@ export class Sessions {
     else this.finish(s.id, 'completed');
   }
 
+  /** Done, canceled, or held by a work session that is not finished. */
+  private movedOn(item: Item): boolean {
+    return item.status === 'done' || item.status === 'canceled'
+      || this.store.sessionsForItem(item.id, 'work').some((s) => !FINAL_STATUSES.includes(s.status));
+  }
+
   startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }): Session {
     this.assertProposalOpen(input.proposal);
     let requested = input.options?.worker_id ?? null;
@@ -242,7 +249,13 @@ export class Sessions {
     const workerId = this.workerFor(project, requested);
     const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account, undefined, workerId);
     this.checkAccounts(workerId, claudeAccount, project);
-    const items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
+    let items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
+    // a card can be older than the items on it: never re-open or re-run what moved on since
+    const gone = input.proposal ? items.filter((i) => this.movedOn(i)) : [];
+    if (gone.length) {
+      items = items.filter((i) => !gone.includes(i));
+      if (!items.length && !input.new_items.length) throw new SessionError(`Nothing left to start: ${gone.map((i) => i.key).join(', ')} ${gone.length === 1 ? 'is' : 'are'} already closed or in progress elsewhere.`, 409);
+    }
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
     if (!all.length && !input.prompt.trim()) throw new SessionError('Pick at least one item or write a prompt.');
@@ -264,7 +277,8 @@ export class Sessions {
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
-    this.markProposalDone(input.proposal, `Started session #${session.id}`);
+    const left = gone.length ? ` (left out ${gone.map((i) => i.key).join(', ')}: closed or in progress elsewhere)` : '';
+    this.markProposalDone(input.proposal, `Started session #${session.id}${left}`);
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;

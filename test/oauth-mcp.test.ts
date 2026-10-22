@@ -71,8 +71,10 @@ describe('OAuth for MCP clients', () => {
       const tools = await mcp(s, t.access_token, 'tools/list');
       expect(tools.status).toBe(200);
       const names = tools.body.result.tools.map((x: { name: string }) => x.name);
-      expect(names).toEqual(expect.arrayContaining(['list_projects', 'list_items', 'get_item', 'add_item', 'update_item', 'add_comment', 'release_items']));
+      expect(names).toEqual(expect.arrayContaining(['list_projects', 'list_items', 'get_item', 'project_instructions', 'add_item', 'update_item', 'add_comment', 'release_items']));
       expect(names.some((n: string) => /batch|session|merge|setting/.test(n))).toBe(false);
+      const rules = await mcp(s, t.access_token, 'tools/call', { name: 'project_instructions', arguments: { project: 'MC' } });
+      expect(rules.body.result.content[0].text).toBe('This project has no instructions of its own.');
 
       const added = await mcp(s, t.access_token, 'tools/call', { name: 'add_item', arguments: { project: 'MC', title: 'Filed from claude.ai', importance: 'High', tags: ['mcp'] } });
       expect(JSON.parse(added.body.result.content[0].text)).toEqual({ created: 'MC-1' });
