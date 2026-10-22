@@ -196,3 +196,26 @@ describe('Discuss: the hook that sends Read and Glob to the extra folders', () =
     expect(await call('Grep', { pattern: 'x' })).toEqual({});
   });
 });
+
+describe('assistant unread count (DISP-4)', () => {
+  it('counts replies after the read point, and marking read clears them', async () => {
+    const s = await startServer();
+    expect((await s.call('GET', '/assistant')).data).toEqual({ session_id: null, unread: 0, last_seq: 0 });
+    const chat = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    s.ctx.store.addEvent(chat.id, { kind: 'user', text: 'hi' });
+    s.ctx.store.addEvent(chat.id, { kind: 'assistant', text: 'one' });
+    s.ctx.store.addEvent(chat.id, { kind: 'tool_use', tool_use_id: 't', name: 'x', summary: '', input: {} });
+    s.ctx.store.addEvent(chat.id, { kind: 'assistant', text: 'two' });
+    let a = (await s.call('GET', '/assistant')).data;
+    expect(a).toEqual({ session_id: chat.id, unread: 2, last_seq: 4 });
+    expect((await s.call('POST', '/assistant/read', { session_id: chat.id, seq: a.last_seq })).data.unread).toBe(0);
+    s.ctx.store.addEvent(chat.id, { kind: 'assistant', text: 'three' });
+    a = (await s.call('GET', '/assistant')).data;
+    expect(a.unread).toBe(1);
+    // an older read point does not move it back
+    await s.call('POST', '/assistant/read', { session_id: chat.id, seq: 1 });
+    expect((await s.call('GET', '/assistant')).data.unread).toBe(1);
+    expect((await s.call('POST', '/assistant/read', { session_id: 9999, seq: 1 })).status).toBe(404);
+    await s.app.close();
+  });
+});

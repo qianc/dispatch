@@ -66,6 +66,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/projects/:key/releases': 'sessions',
   'POST /api/assistant/messages': 'sessions',
   'POST /api/assistant/new': 'sessions',
+  'POST /api/assistant/read': 'read', // only moves the read point of the chat
   'POST /api/items/:id/discuss': 'sessions',
   'POST /api/items/:id/discuss/new': 'sessions',
   'POST /api/inputs/:id/answer': 'sessions',

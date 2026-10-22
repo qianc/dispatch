@@ -1,7 +1,7 @@
 // Server-sent events → React Query cache.
 import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
-import type { SessionDetail, SessionEvent } from './api.ts';
+import type { AssistantChat, SessionDetail, SessionEvent } from './api.ts';
 
 /** Recent live events per session, so a refetch that raced with them can't drop them. */
 const recent = new Map<number, SessionEvent[]>();
@@ -94,6 +94,10 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.setQueryData<SessionDetail>(['session', e.event.session_id], (d) =>
         d && !d.events.some((x) => x.seq === e.event.seq) ? { ...d, events: [...d.events, e.event] } : d,
       );
+      // a reply in the assistant chat: update the unread badge
+      if ((e.event.body.kind === 'assistant' || e.event.body.kind === 'proposal') && qc.getQueryData<AssistantChat>(['assistant'])?.session_id === e.event.session_id) {
+        qc.invalidateQueries({ queryKey: ['assistant'] });
+      }
       return;
     }
     case 'session':

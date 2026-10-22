@@ -77,6 +77,13 @@ export interface SessionDetail {
   project: Project | null;
 }
 
+/** The open assistant thread (or null), with Claude's replies since the owner last read it. */
+export interface AssistantChat {
+  session_id: number | null;
+  unread: number;
+  last_seq: number;
+}
+
 export interface Inbox {
   inputs: PendingInput[];
   idle: (Session & { attention: Attention })[];
