@@ -17,6 +17,7 @@ import {
   type RunOptions,
   type ReleaseInfo,
   type Repo,
+  type Schedule,
   type Session,
   type SessionStatus,
 } from '../shared/types.ts';
@@ -89,6 +90,14 @@ const proposalSchema = z.discriminatedUnion('type', [
     reason: z.string().default(''),
   }),
 ]);
+
+type BatchProposal = Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
+type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>;
+
+/** What a scheduled run may start: never items on hold, in review or closed (DISP-13). */
+const SCHEDULED_START = ['triage', 'backlog', 'todo'];
+/** The statuses a scheduled run may give an item: never done, and it cannot take one off hold. */
+const SCHEDULED_SET = ['triage', 'backlog', 'todo', 'hold', 'canceled'];
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -350,6 +359,62 @@ export class Sessions {
   }
 
   /**
+   * A schedule's run (DISP-13): a planner that starts the work it picks, with nobody watching. One
+   * run of a schedule at a time.
+   */
+  startScheduled(project: Project, schedule: Schedule): Session {
+    const open = this.store.sessions({ project_id: project.id, kind: 'planner' }).find((s) => s.schedule_id === schedule.id && !FINAL_STATUSES.includes(s.status));
+    if (open) throw new SessionError(`The last run of "${schedule.name}" (#${open.id}) has not finished yet.`, 409);
+    if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
+    const workerId = this.workerFor(project, null);
+    const session = this.store.createSession({
+      project_id: project.id, kind: 'planner', title: `Scheduled: ${schedule.name}`, status: 'queued', force_plan: false, branch: null,
+      initial_prompt: `It is time for the scheduled run "${schedule.name}". Follow the scope in your instructions: start the work that clearly fits it, or nothing.`,
+      source_id: null, item_ids: [], claude_account: this.claudeAccountFor(project, schedule.options.claude_account, undefined, workerId),
+      worker_id: workerId, schedule_id: schedule.id,
+    });
+    this.emitSession(session);
+    this.dispatch();
+    return this.store.session(session.id)!;
+  }
+
+  /**
+   * A scheduled run's propose_batch: the batch starts at once, with the schedule's run options.
+   * Items it may not start are left out; past the schedule's cap nothing starts. The card stays in
+   * the transcript with what happened, and the planner gets the same answer.
+   */
+  private startScheduledBatch(s: Session, schedule: Schedule, proposal: BatchProposal): string {
+    const project = this.store.project(s.project_id!)!;
+    const started = this.store.events(s.id).filter((e) => e.body.kind === 'proposal_done' && e.body.note.startsWith('Started session #')).length;
+    const ev = this.addEvent(s.id, { kind: 'proposal', proposal });
+    const refuse = (why: string) => {
+      this.addEvent(s.id, { kind: 'proposal_done', event_id: ev.id, note: `Not started: ${why}` });
+      return `Not started: ${why}`;
+    };
+    const max = schedule.max_batches;
+    if (started >= max) return refuse(`this run may start at most ${max} batch${max === 1 ? '' : 'es'}.`);
+    const items = this.store.itemsByIds(proposal.item_ids).filter((i) => i.project_id === project.id);
+    const ok = items.filter((i) => SCHEDULED_START.includes(i.status) && !this.movedOn(i));
+    const why = (i: Item) => (i.status === 'hold' ? 'on hold' : SCHEDULED_START.includes(i.status) ? 'in another batch' : i.status.replace('_', ' '));
+    const left = items.filter((i) => !ok.includes(i)).map((i) => `${i.key}: ${why(i)}`);
+    if (items.length && !ok.length && !proposal.new_items.length) return refuse(`nothing left to start (${left.join(', ')}).`);
+    let session: Session;
+    try {
+      session = this.startBatch(project, {
+        title: proposal.title, item_ids: ok.map((i) => i.id), new_items: proposal.new_items, prompt: proposal.prompt,
+        force_plan: proposal.force_plan || undefined, options: schedule.options, worker: proposal.worker, proposal: { session_id: s.id, event_id: ev.id },
+      });
+    } catch (e) {
+      return refuse((e as Error).message);
+    }
+    const more = max - started - 1;
+    return [
+      `Started session #${session.id} "${session.title}"${left.length ? ` (left out ${left.join(', ')})` : ''}.`,
+      more > 0 ? `You may start ${more} more batch${more === 1 ? '' : 'es'} in this run, only if more work clearly fits the scope.` : 'That was the last batch this run may start.',
+    ].join(' ');
+  }
+
+  /**
    * A release, on the worker whose config offers it (not the project's usual worker). Callers
    * check the capability, version and items (routes/releases.ts). branch stays null: tidy treats
    * a session's merged branch as deletable, and a release works on the default branch itself.
@@ -514,6 +579,14 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
+        // a scheduled run (DISP-13) sends no push: it ends with its turn, and its last message says what it did
+        if (s.schedule_id && msg.status !== 'running') {
+          this.proposalNotice.delete(s.id);
+          this.closeWhenIdle.delete(s.id);
+          if (msg.status === 'idle') this.finish(s.id, 'completed');
+          else this.dispatch();
+          return;
+        }
         const proposed = msg.status === 'running' ? undefined : this.proposalNotice.get(s.id);
         if (msg.status !== 'running') this.proposalNotice.delete(s.id);
         if (msg.status === 'idle' && this.closeWhenIdle.delete(s.id)) {
@@ -668,6 +741,8 @@ export class Sessions {
         this.addEvent(s.id, { kind: 'system', text: `Labelled ${released.map((i) => i.key).join(', ')} with ${label}` });
         return { released: released.map((i) => i.key), label };
       }
+      case 'update_item':
+        return this.scheduledItemUpdate(s, project, byKey(p.key), p);
       case 'propose':
         return this.propose(s, p);
       default:
@@ -680,6 +755,8 @@ export class Sessions {
     const parsed = proposalSchema.parse(raw);
     if (parsed.type === 'item_update') return this.proposeItemUpdate(s, parsed);
     const proposal = parsed;
+    const schedule = proposal.type === 'batch' && s.schedule_id ? this.store.schedule(s.schedule_id) : undefined;
+    if (proposal.type === 'batch' && schedule) return this.startScheduledBatch(s, schedule, proposal);
     if (proposal.type === 'items' && !proposal.source_id) proposal.source_id = s.source_id;
     const seq = this.addEvent(s.id, { kind: 'proposal', proposal })?.seq;
     if (seq) this.closeOlderProposals(s.id, seq, 'Replaced by a newer proposal below');
@@ -690,10 +767,43 @@ export class Sessions {
   }
 
   /** Discuss: show a suggested change to an item as a card; nothing changes until the owner applies it. */
-  private proposeItemUpdate(s: Session, p: Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>): string {
+  private proposeItemUpdate(s: Session, p: ItemUpdateProposal): string {
     const project = this.store.project(s.project_id!)!;
     const it = this.store.itemByNumber(project.id, Number(p.key.split('-').pop()));
     if (!it) throw new Error(`No item ${p.key} in project ${project.key}`);
+    const { changes, comment } = this.itemChanges(project, it, p);
+    const before: ItemChanges = {};
+    for (const k of Object.keys(changes) as (keyof ItemChanges)[]) {
+      const field = k === 'type' ? it.type : it[k as keyof typeof it];
+      (before as Record<string, unknown>)[k] = field;
+    }
+    this.addEvent(s.id, { kind: 'proposal', proposal: { type: 'item_update', item_id: it.id, item_key: it.key, changes, before, comment, reason: p.reason } });
+    return 'The change is shown to the owner as a card with Apply and Dismiss, below your reply. Nothing has changed yet. Say in one or two sentences what you propose and why, then stop.';
+  }
+
+  /**
+   * A scheduled run changes items itself (e.g. the scope says to triage them). It cannot take an
+   * item off hold, nor close one: SCHEDULED_SET.
+   */
+  private scheduledItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
+    if (s.kind !== 'planner' || !s.schedule_id) throw new Error('Only a scheduled planner run changes items directly.');
+    const p = proposalSchema.parse({ ...raw, type: 'item_update', key: it.key }) as ItemUpdateProposal;
+    const { changes, comment } = this.itemChanges(project, it, { ...p, title: undefined, body_md: undefined });
+    if (changes.status !== undefined) {
+      if (it.status === 'hold') throw new Error(`${it.key} is on hold: only the owner takes an item off hold.`);
+      if (!SCHEDULED_SET.includes(changes.status)) throw new Error(`A scheduled run cannot set an item to ${changes.status} (it may set: ${SCHEDULED_SET.join(', ')}).`);
+    }
+    const patch = itemPatch.parse(changes);
+    const updated = Object.keys(patch).length ? this.store.updateItem(it.id, patch) : it;
+    if (comment) this.store.addComment(it.id, 'claude', comment, s.id);
+    this.bus.emit({ t: 'item', item: updated });
+    const said = [...Object.keys(patch).map((k) => (k === 'labels' ? 'tags' : k)), comment ? 'comment' : ''].filter(Boolean);
+    this.addEvent(s.id, { kind: 'system', text: `Updated ${it.key}: ${said.join(', ')}` });
+    return { key: updated.key, status: updated.status, importance: project.importance_scale[updated.importance - 1], effort: updated.effort === null ? null : project.effort_scale[updated.effort], tags: updated.labels, modules: updated.modules };
+  }
+
+  /** The changes an item_update asks for, checked against the project's scales. */
+  private itemChanges(project: Project, it: Item, p: ItemUpdateProposal): { changes: ItemChanges; comment: string | null } {
     const scaleIndex = (scale: string[], v: number | string, offset: number) => {
       const byLabel = scale.findIndex((l) => l.toLowerCase() === String(v).toLowerCase());
       if (byLabel >= 0) return byLabel + offset;
@@ -719,13 +829,7 @@ export class Sessions {
     if (p.modules !== undefined && !same(p.modules, it.modules)) changes.modules = p.modules;
     const comment = p.comment?.trim() || null;
     if (!Object.keys(changes).length && !comment) throw new Error('Nothing to change: every value is already as proposed.');
-    const before: ItemChanges = {};
-    for (const k of Object.keys(changes) as (keyof ItemChanges)[]) {
-      const field = k === 'type' ? it.type : it[k as keyof typeof it];
-      (before as Record<string, unknown>)[k] = field;
-    }
-    this.addEvent(s.id, { kind: 'proposal', proposal: { type: 'item_update', item_id: it.id, item_key: it.key, changes, before, comment, reason: p.reason } });
-    return 'The change is shown to the owner as a card with Apply and Dismiss, below your reply. Nothing has changed yet. Say in one or two sentences what you propose and why, then stop.';
+    return { changes, comment };
   }
 
   /** The owner applied a suggested item change from a Discuss chat. */
@@ -881,6 +985,7 @@ export class Sessions {
 
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;
+    const schedule = s.kind === 'planner' && s.schedule_id ? this.store.schedule(s.schedule_id) : undefined;
     return {
       session_id: s.id,
       kind: s.kind,
@@ -905,6 +1010,7 @@ export class Sessions {
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(), placement_md: project?.placement_md ?? '' } : {}),
+      ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
     };
   }

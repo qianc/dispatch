@@ -252,8 +252,9 @@ export class ClaudeRunner implements AgentRunner {
         ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
-        disallowedTools: planner ? PLANNER_TOOLS_DENIED : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name)) },
+        // a scheduled run has nobody to answer a question
+        disallowedTools: planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),

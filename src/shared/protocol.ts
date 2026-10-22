@@ -28,6 +28,8 @@ export interface StartSpec {
   /** planner sessions: the workers it can place work on, and the project's text on where work runs */
   workers?: PlannerWorker[];
   placement_md?: string;
+  /** a scheduled planner run (DISP-13): it starts what it picks, within this scope, unwatched */
+  schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
   release?: ReleaseInfo;
 }

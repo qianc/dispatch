@@ -38,6 +38,8 @@ import { releaseRoutes } from './routes/releases.ts';
 import { Workers } from './workers.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
+import { scheduleRoutes } from './routes/schedules.ts';
+import { Scheduler } from './scheduler.ts';
 
 
 declare module 'fastify' {
@@ -98,8 +100,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
   };
   const access = new Access(cfg, db, auth);
-  const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor };
-  if (!opts.dbFile || opts.dbFile !== ':memory:') janitor.start();
+  const scheduler = new Scheduler(store, sessions, bus);
+  const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  if (!opts.dbFile || opts.dbFile !== ':memory:') {
+    janitor.start();
+    scheduler.start();
+  }
 
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
   /** every route, as "METHOD /path" (a test checks each /api one has an access rule) */
@@ -176,6 +182,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   releaseRoutes(app, ctx);
   gitRoutes(app, ctx);
   imageRoutes(app, ctx);
+  scheduleRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);
@@ -203,6 +210,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   app.addHook('onClose', async () => {
     closing = true;
     janitor.stop();
+    scheduler.stop();
     github.stop();
     ctx.sessions.stop();
     db.raw.close();

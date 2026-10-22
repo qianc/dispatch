@@ -186,7 +186,8 @@ const noFiles = async () => {
   throw new Error('File reading is not available here');
 };
 
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles) {
+/** `scheduled`: a scheduled planner run (DISP-13), which starts batches and changes items itself. */
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false) {
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
@@ -243,6 +244,29 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         keys: z.array(z.string()).min(1).describe('Item keys, e.g. ["HC-3"]'),
       }, call(rpc, 'add_to_batch')),
       tool('create_item', 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', itemShape, call(rpc, 'create_item')),
+    );
+  } else if (scheduled) {
+    tools.push(
+      tool('propose_batch', 'Start a batch now (this is a scheduled run: nobody approves it). A batch = one session, one branch, one PR. The answer says whether it started.', {
+        title: z.string().describe('Short name for the batch'),
+        item_ids: z.array(z.number().int()).describe('Numeric ids (from list_items) of existing items in the batch'),
+        new_items: z.array(z.object(itemShape)).default([]).describe('New items to create as part of the batch'),
+        prompt: z.string().describe('Extra instructions for the session that will do the work'),
+        force_plan: z.boolean().default(false).describe('True if the work needs a written plan, approved by the owner, before code'),
+        worker: z.string().optional().describe('Name of the worker to run it on (see "Where work runs" in your instructions)'),
+        worker_reason: z.string().optional().describe('One line: why that worker'),
+      }, async (p) => call(rpc, 'propose')({ type: 'batch', ...p })),
+      tool('update_item', 'Change an item now, e.g. to triage it: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.', {
+        key: z.string().describe('Item key, e.g. HC-42'),
+        item_type: z.enum(['backlog', 'bug']).optional(),
+        status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled']).optional(),
+        importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
+        effort: z.union([z.number(), z.string()]).nullable().optional().describe('A label of the project effort scale, or null'),
+        tags: z.array(z.string()).optional().describe('The full new tag list; reuse existing tags'),
+        modules: z.array(z.string()).optional().describe('The full new module list'),
+        comment: z.string().optional().describe('A comment to add (markdown): why you changed it'),
+      }, call(rpc, 'update_item')),
+      tool('create_item', 'File a new backlog item or bug you found. It is not started unless you put it in a batch.', itemShape, call(rpc, 'create_item')),
     );
   } else {
     tools.push(
