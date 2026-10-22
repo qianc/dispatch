@@ -373,6 +373,8 @@ for (const [where, width] of [['phone', 0], ['desktop', 1280]] as const) {
     // back: Assistant again
     await page.goBack();
     await expect(active).toHaveText(/Assistant/);
+    // free the worker slot for the tests after this one
+    await page.request.post(`/api/sessions/${s.id}/finish`, { data: { status: 'stopped' } });
   });
 }
 

@@ -131,6 +131,9 @@ test('inbox: a planning chat with an open proposal offers its actions, not Mark 
   await expect(page).not.toHaveURL(/\/$/);
   await expect(page.getByRole('button', { name: 'Session actions' })).toBeVisible();
   await expect.poll(() => status(second.s.id)).toBe('completed');
+  // free the worker slot for the other tests
+  const started = page.url().match(/\/s\/(\d+)/)![1];
+  await page.request.post(`/api/sessions/${started}/finish`, { data: { status: 'stopped' } });
 });
 
 test('appearance: light, dark and auto', async ({ page }) => {
