@@ -19,7 +19,8 @@ export interface CheckProgress {
 /** A check command running now for one session's branch. */
 export interface CheckRun {
   session_id: number;
-  pr_id: number;
+  /** null: the session's own check before its turn is reported done (DISP-15) */
+  pr_id: number | null;
   repo: string;
   command: string;
   started_at: string;

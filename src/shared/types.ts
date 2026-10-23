@@ -135,6 +135,8 @@ export const runOptions = z.object({
   auto_merge: z.enum(AUTO_MERGE).default('off'),
   /** before auto-merge: if the branch is behind the default branch, ask the agent to update it first */
   base_check: z.boolean().default(true),
+  /** before a turn is reported done: run the repo's check command, and send failures back to the agent (DISP-15) */
+  turn_check: z.boolean().default(true),
   /** Claude account for this batch; null = the project's default */
   claude_account: z.string().nullable().default(null),
   /** worker to run on; null = the project's (or the global) default */

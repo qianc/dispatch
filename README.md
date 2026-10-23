@@ -31,6 +31,11 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   command still gets the time estimate). Runs answered from a cache are left out of the estimate.
   The check runs without locking the repo, for up to `CHECK_TIMEOUT_MIN` on the worker; if the
   default branch moved on meanwhile, nothing is pushed and you merge again.
+- **Check before done**: when a work session's turn ends, the check command of each repo the
+  session changed runs in its worktree before the turn is reported done (with the same live
+  progress). A failure goes back to the agent with its output as the next turn, up to
+  `CHECK_RETRIES` fix turns; then you get a push that it still fails. An unchanged worktree is not
+  checked again. A batch can turn this off ("Run the repo's check before done").
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
@@ -204,7 +209,8 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `CLAUDE_ACCOUNTS` + `CLAUDE_ACCOUNT_<NAME>_…` | | Several Claude accounts (see `.env.example`). |
 | `GITHUB_TOKEN` or `GITHUB_ACCOUNTS` + … | | Clone, push and open PRs. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_…` | | Commit identity. |
-| `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run before a merge. |
+| `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run (before a merge, or before a turn is reported done). |
+| `CHECK_RETRIES` | `3` | Fix turns an agent gets when the check fails at the end of its turn, before you are told. |
 | `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
 | `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |

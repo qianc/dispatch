@@ -46,7 +46,7 @@ export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 
  * Run a shell command and read its output as it comes: `onProgress` gets the test progress read
  * from it (DISP-5), at most about once a second while it changes, and once at the end.
  */
-export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void): Promise<RunResult & { progress: CheckProgress; duration_ms: number; timed_out: boolean }> {
+export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal): Promise<RunResult & { progress: CheckProgress; duration_ms: number; timed_out: boolean }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new CheckParser();
@@ -75,13 +75,19 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
     // the whole process group: a test runner's own children must not outlive the timeout
+    const killAll = () => {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+    };
     const kill = setTimeout(() => {
       timedOut = true;
-      try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+      killAll();
     }, timeoutMs);
+    // stopped from outside (the owner sent a message or stopped the session while it ran)
+    signal?.addEventListener('abort', killAll, { once: true });
     const done = (code: number) => {
       clearInterval(tick);
       clearTimeout(kill);
+      signal?.removeEventListener('abort', killAll);
       parser.write('\n');
       const progress = parser.progress(Date.now() - started);
       if (onProgress) onProgress(progress);
@@ -335,6 +341,29 @@ export class Workspaces {
   async setup(repo: Repo, wt: string): Promise<{ ok: boolean; output: string }> {
     const r = await repoEnv.run(this.gitEnv(repo), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
+  }
+
+  /**
+   * A session worktree as the turn check sees it (DISP-15): its HEAD and uncommitted changes, or
+   * null when it has nothing beyond the default branch (no worktree, no change: nothing to check).
+   */
+  async turnState(repo: Repo, sessionId: number): Promise<string | null> {
+    const wt = this.repoDir(sessionId, repo);
+    if (!existsSync(wt)) return null;
+    const head = await run('git', ['rev-parse', 'HEAD'], wt);
+    if (head.code !== 0) return null;
+    const base = Workspaces.isAttached(wt, repo) ? `refs/heads/${repo.default_branch}` : `origin/${repo.default_branch}`;
+    const status = await run('git', ['status', '--porcelain'], wt);
+    // the working tree against the default branch: a branch that only merged it in has no change
+    const differs = (await run('git', ['diff', '--quiet', base, '--'], wt)).code !== 0;
+    if (!differs && !status.out) return null;
+    return `${head.out}\n${status.out}`;
+  }
+
+  /** Run a repo's check command in a session's worktree, as its account (DISP-15). */
+  sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal) {
+    const wt = this.repoDir(sessionId, repo);
+    return repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, () => runCheck(repo.check_command!, wt, checkTimeoutMs(), onProgress, signal));
   }
 
   async pushBranch(repo: Repo, sessionId: number, branch: string) {

@@ -59,6 +59,10 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
       <Field label="When done" group hint={value.auto_merge !== 'off' ? 'Merges the PR when the agent is done, it is mergeable and every check passed. Otherwise you get a push saying why not.' : undefined}>
         <Segmented value={value.auto_merge} onChange={(auto_merge) => set({ auto_merge })} options={opts('auto_merge')} />
       </Field>
+      <label className="flex items-start gap-2 mb-3 text-[14px]">
+        <input type="checkbox" checked={value.turn_check} onChange={(e) => set({ turn_check: e.target.checked })} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+        <span>Run the repo’s check before done<span className="block text-[12px] text-muted">When a turn ends, the repo’s check command runs in the session. If it fails, the agent gets the output to fix it, for up to 3 fix turns.</span></span>
+      </label>
       {value.auto_merge !== 'off' && (
         <label className="flex items-start gap-2 mb-3 text-[14px]">
           <input type="checkbox" checked={value.base_check} onChange={(e) => set({ base_check: e.target.checked })} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
@@ -113,6 +117,7 @@ export function runOptionsSummary(o: RunOptions): string[] {
   if (o.subagents !== 'auto') out.push(LABELS.subagents[o.subagents].toLowerCase());
   if (o.start === 'after') out.push('after running ones');
   if (o.auto_merge !== 'off') out.push(o.auto_merge === 'github' ? 'auto-merge' : 'auto-merge locally');
+  if (o.turn_check === false) out.push('no check before done');
   return out;
 }
 
