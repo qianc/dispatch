@@ -19,6 +19,11 @@ export interface RunnerDeps {
   /** discuss chats: folders it may read; discuss and planner chats: CLAUDE.md-style context to put in its prompt */
   readDirs?: string[];
   context?: { label: string; text: string }[];
+  /**
+   * Work sessions: runs when a turn ends, before it is reported done (the repo's check, DISP-15).
+   * A text: send it as the next turn instead.
+   */
+  beforeIdle?: () => Promise<string | null>;
 }
 
 export interface AgentRunner {
@@ -255,6 +260,8 @@ export class ClaudeRunner implements AgentRunner {
   /** A ScheduleWakeup the agent set: keep the process alive until then. */
   private wakeAt = 0;
   private bgIdleTimer: NodeJS.Timeout | null = null;
+  /** counts the messages sent to Claude: a check that ends after a newer message speaks for no turn */
+  private sent = 0;
 
   constructor(spec: StartSpec, deps: RunnerDeps, opts: RunnerOptions) {
     this.sessionId = spec.session_id;
@@ -329,6 +336,7 @@ export class ClaudeRunner implements AgentRunner {
   push(text: string) {
     this.clearIdle();
     this.betweenTurns = false; // the server already marked the session running for this message
+    this.sent++;
     this.input.push(text);
   }
 
@@ -426,10 +434,7 @@ export class ClaudeRunner implements AgentRunner {
         // tasks done; Claude normally starts a new turn on their notification. If it does not, it is idle.
         if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
         this.bgIdleTimer = setTimeout(() => {
-          if (this.betweenTurns && this.bgTasks === 0) {
-            this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
-            this.armIdle();
-          }
+          if (this.betweenTurns && this.bgTasks === 0) void this.endTurn();
         }, 30_000);
       }
       return;
@@ -492,9 +497,29 @@ export class ClaudeRunner implements AgentRunner {
         this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
         return;
       }
-      this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
-      this.armIdle();
+      void this.endTurn();
     }
+  }
+
+  /** The turn is over: report it done, unless the check before that sends the agent back to work. */
+  private async endTurn() {
+    if (this.deps.beforeIdle) {
+      const turn = this.sent;
+      const fix = await this.deps.beforeIdle().catch((e) => {
+        this.event({ kind: 'error', text: `The check before reporting the turn done could not run: ${(e as Error).message}` });
+        return null;
+      });
+      // closed, or the owner sent a message meanwhile: that turn runs now
+      if (this.closed || turn !== this.sent || !this.betweenTurns || this.bgTasks > 0) return;
+      if (fix) {
+        this.betweenTurns = false;
+        this.sent++;
+        this.input.push(fix);
+        return;
+      }
+    }
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
+    this.armIdle();
   }
 
   private armIdle() {

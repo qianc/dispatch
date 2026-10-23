@@ -12,7 +12,8 @@ import { CHAT_KINDS, type WorkerFacts } from '../shared/types.ts';
 import type { ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
-import { hostedGitBase, run, Workspaces } from './workspace.ts';
+import { checkRetries, TurnCheck } from './turnCheck.ts';
+import { checkTimeoutMs, hostedGitBase, run, Workspaces } from './workspace.ts';
 
 /** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
 async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
@@ -75,6 +76,8 @@ export class ServerLink {
   /** sessions whose workspace is still being prepared; messages for them wait here */
   private starting = new Map<number, string[]>();
   private kinds = new Map<number, StartSpec['kind']>();
+  /** work sessions' checks before a turn is reported done (DISP-15); kept across runner restarts */
+  private turnChecks = new Map<number, TurnCheck>();
   /** messages produced while the server connection is down; flushed on reconnect so nothing is lost */
   private outbox: WorkerToServer[] = [];
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -125,7 +128,8 @@ export class ServerLink {
       if (['idle', 'failed', 'completed', 'stopped'].includes(msg.status)) this.shared.slots.set(this.slotKey(msg.session_id), false);
     }
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
-    else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress') this.outbox.push(msg); // rpc calls time out on their own and are retried by the agent
+    // rpc calls time out on their own and are retried by the agent; old progress is of no use
+    else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress' && !(msg.t === 'session_check' && msg.progress)) this.outbox.push(msg);
   }
 
   sendSlots() {
@@ -223,6 +227,7 @@ export class ServerLink {
     this.kinds.set(id, spec.kind);
     const live = this.runners.get(id);
     if (live) {
+      this.turnChecks.get(id)?.ownerTurn();
       if (!this.shared.fake) await this.fetchHosted(spec);
       return live.push(text);
     }
@@ -282,6 +287,7 @@ export class ServerLink {
         },
         rpc: this.rpcFor(id),
         cwd,
+        ...(this.turnCheck(spec) ? { beforeIdle: () => this.turnCheck(spec)!.gate() } : {}),
         onClosed: () => {
           if (this.runners.get(id) === runner) this.runners.delete(id);
           this.shared.slots.set(this.slotKey(id), false);
@@ -300,6 +306,27 @@ export class ServerLink {
       console.error(`[${this.entry.name}] session ${id} failed to start`, e);
       this.send({ t: 'status', session_id: id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
     }
+  }
+
+  /**
+   * A work session's check before its turn is reported done (DISP-15): when the batch wants it
+   * and a repo has a check command. Not in fake mode: there are no worktrees to check.
+   */
+  private turnCheck(spec: StartSpec): TurnCheck | null {
+    const id = spec.session_id;
+    const repos = spec.repos.filter((r) => r.check_command);
+    if (spec.kind !== 'work' || !spec.branch || !spec.options.turn_check || !repos.length || this.shared.fake) return null;
+    let tc = this.turnChecks.get(id);
+    if (!tc) {
+      tc = new TurnCheck({
+        sessionId: id, repos, retries: checkRetries(), timeoutMin: Math.round(checkTimeoutMs() / 60_000),
+        state: (repo) => this.workspaces.turnState(repo, id),
+        check: (repo, onProgress, signal) => this.workspaces.sessionCheck(repo, id, onProgress, signal),
+        send: (m) => this.send(m),
+      });
+      this.turnChecks.set(id, tc);
+    }
+    return tc;
   }
 
   /** `onProgress`: a long command's progress, sent to the server as it runs */
@@ -367,9 +394,12 @@ export class ServerLink {
       case 'answer':
         return this.runners.get(msg.session_id)?.answer(msg.local_id, msg.answer);
       case 'interrupt':
+        this.turnChecks.get(msg.session_id)?.cancel();
         return this.runners.get(msg.session_id)?.interrupt();
       case 'close': {
         this.starting.delete(msg.session_id);
+        this.turnChecks.get(msg.session_id)?.cancel();
+        this.turnChecks.delete(msg.session_id);
         const r = this.runners.get(msg.session_id);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);

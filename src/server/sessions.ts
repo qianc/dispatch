@@ -644,6 +644,11 @@ export class Sessions {
         if (msg.status !== 'running') this.dispatch();
         return;
       }
+      case 'session_check': {
+        const repo = this.store.repo(msg.repo_id);
+        if (repo && repo.project_id === s.project_id) this.onTurnCheck?.(s, repo, msg);
+        return;
+      }
       case 'input_request': {
         const input = this.store.createInput(s.id, msg.local_id, msg.payload);
         this.addEvent(s.id, { kind: 'input_request', input_id: input.id });
@@ -1060,6 +1065,9 @@ export class Sessions {
    * if the owner was already told something about this turn (auto-merge result).
    */
   onWorkIdle: ((s: Session) => Promise<boolean>) | null = null;
+
+  /** A work session's check before its turn is reported done (app.ts wires it to the check runs, DISP-15). */
+  onTurnCheck: ((s: Session, repo: Repo, msg: Extract<WorkerEvent, { t: 'session_check' }>) => void) | null = null;
 
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;

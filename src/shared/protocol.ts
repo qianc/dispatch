@@ -1,5 +1,6 @@
 // Messages on the internal WebSocket between server and worker.
 import type { ClaudeAccountInfo } from './accounts.ts';
+import type { CheckProgress } from './checkProgress.ts';
 import type { ReleaseInfo, WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
@@ -81,6 +82,11 @@ export type WorkerToServer =
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }
+  /**
+   * the repo's check command, run in the session's worktree before a turn is reported done (DISP-15):
+   * its progress while it runs, then `done` (no `done` and no progress: it was stopped)
+   */
+  | { t: 'session_check'; session_id: number; repo_id: number; progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }
   | { t: 'rpc'; req_id: string; session_id: number; method: RpcMethod; params: unknown }
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
   /** a long command's progress so far (merge_local: its check command's test progress, DISP-5) */

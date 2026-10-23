@@ -103,6 +103,10 @@ export function workPrompt(spec: StartSpec): string {
     none: '- Implementation: do not use subagents. Run the plan inline yourself (superpowers:executing-plans). Do not ask the owner which execution method to use.',
   }[spec.options.subagents];
   lines.push(exec);
+  const checked = spec.options.turn_check ? spec.repos.filter((r) => r.check_command) : [];
+  if (checked.length) {
+    lines.push(`- When your turn ends, Dispatch runs the repo's check command (${checked.map((r) => `${r.github_name}: \`${r.check_command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
+  }
   if (spec.options.auto_merge !== 'off') {
     lines.push('- The owner chose auto-merge: when you open the PR and its checks pass, Dispatch merges it. Only open the PR when the work is complete and verified.');
   }
