@@ -1,6 +1,7 @@
 import type {
   Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
+import type { CheckRun } from '../../src/shared/checkProgress.ts';
 
 export type { Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
 
@@ -75,6 +76,8 @@ export interface SessionDetail {
   repos: Repo[];
   source: Source | null;
   project: Project | null;
+  /** check commands running now for this session's merges (DISP-5) */
+  checks?: CheckRun[];
 }
 
 /** The open assistant thread (or null), with Claude's replies since the owner last read it. */

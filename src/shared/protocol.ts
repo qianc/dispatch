@@ -82,7 +82,9 @@ export type WorkerToServer =
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }
   | { t: 'rpc'; req_id: string; session_id: number; method: RpcMethod; params: unknown }
-  | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string };
+  | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
+  /** a long command's progress so far (merge_local: its check command's test progress, DISP-5) */
+  | { t: 'cmd_progress'; req_id: string; data: unknown };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
 export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items' | AssistantMethod;

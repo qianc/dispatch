@@ -61,8 +61,14 @@ describe('Workspaces (git)', () => {
     git(cwd, 'add', '.');
     git(cwd, 'commit', '-m', 'add b');
     await ws.pushBranch(repo, 1, 'feat');
-    const res = await ws.mergeLocal({ ...repo, check_command: 'test -f b.txt' }, 'feat', 'Merge #1');
-    expect(res).toEqual({ ok: true });
+    const seen: number[] = [];
+    const check = "printf ' ✓ test/a.test.ts (2 tests) 1ms\\n'; sleep 1.2; printf ' ✓ test/b.test.ts (1 test) 1ms\\n'; test -f b.txt";
+    const res = await ws.mergeLocal({ ...repo, check_command: check }, 'feat', 'Merge #1', (p) => seen.push(p.units));
+    expect(res).toMatchObject({ ok: true, check: { ok: true, units: 2 } });
+    expect(res.check!.duration_ms).toBeGreaterThanOrEqual(1000);
+    // progress while it ran (the first file before the pause), and at the end
+    expect(seen[0]).toBe(1);
+    expect(seen.at(-1)).toBe(2);
     expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('Merge #1');
   });
 

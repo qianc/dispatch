@@ -1,0 +1,163 @@
+// Live progress of a repo's check command (the test suite run before a local merge, DISP-5):
+// read from its output line by line, and the time left from earlier runs of the same command.
+
+export interface CheckProgress {
+  /** the step that runs now: an npm script's command, or the test runner */
+  stage: string | null;
+  /** the test file or test that finished last */
+  current: string | null;
+  passed: number;
+  failed: number;
+  skipped: number;
+  /** results seen so far (test files of vitest, tests of playwright): the measure of how far it got */
+  units: number;
+  /** results to expect, when the runner says so (playwright: "Running 40 tests") */
+  total: number | null;
+  elapsed_ms: number;
+}
+
+/** A check command running now for one session's branch. */
+export interface CheckRun {
+  session_id: number;
+  pr_id: number;
+  repo: string;
+  command: string;
+  started_at: string;
+  progress: CheckProgress;
+  /** from earlier passing runs of the same command in the same repo; null: no history yet */
+  expected: { duration_ms: number; units: number } | null;
+}
+
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
+
+export function stripAnsi(s: string) {
+  return s.replace(ANSI, '');
+}
+
+/** vitest: " ✓ test/a.test.ts (12 tests | 1 skipped) 345ms", " ❯ test/b.test.ts (3 tests | 1 failed) 20ms" */
+const VITEST_FILE = /^\s*([✓❯×↓])\s+(\S+\.\w+)\s+\((\d+) tests?((?:\s*\|\s*\d+ \w+)*)\)/;
+/** playwright list reporter: "  ✓  12 [chromium] › e2e/a.spec.ts:10:5 › title (1.2s)" */
+const PW_LIST = /^\s*([✓✘×-])\s+\d+\s+(.*›.*?)(?:\s+\(\d[\d.]*m?s\))?$/;
+/** playwright line reporter: "[3/40] [chromium] › e2e/a.spec.ts:10:5 › title" */
+const PW_LINE = /^\[(\d+)\/(\d+)\]\s+(.*)$/;
+const PW_RUNNING = /^Running (\d+) tests? using/;
+/** npm/pnpm/yarn run header: "> pkg@1.0.0 test" then "> vitest run" */
+const NPM_HEADER = /^> (\S+@\S*\s+\S+|\S+ \S+@\S*)$/;
+
+/** Reads a check command's output, a line at a time, into progress. */
+export class CheckParser {
+  private p: Omit<CheckProgress, 'elapsed_ms'> = { stage: null, current: null, passed: 0, failed: 0, skipped: 0, units: 0, total: null };
+  /** playwright totals per stage add up when several runs follow each other */
+  private totalBase = 0;
+  private pwLineDone = 0;
+  private partial = '';
+
+  /** Feed raw output (any chunking); returns true when the progress changed. */
+  write(chunk: string): boolean {
+    const lines = (this.partial + chunk).split(/\r?\n|\r/);
+    this.partial = lines.pop() ?? '';
+    let changed = false;
+    for (const l of lines) changed = this.line(l) || changed;
+    return changed;
+  }
+
+  line(raw: string): boolean {
+    const l = stripAnsi(raw).trimEnd();
+    if (!l.trim()) return false;
+    let m: RegExpMatchArray | null;
+    if ((m = l.match(VITEST_FILE))) {
+      const tests = Number(m[3]);
+      const extra = Object.fromEntries([...(m[4] ?? '').matchAll(/(\d+) (\w+)/g)].map((x) => [x[2], Number(x[1])]));
+      const failed = extra.failed ?? 0;
+      const skipped = (extra.skipped ?? 0) + (extra.todo ?? 0);
+      this.p.passed += Math.max(0, tests - failed - skipped);
+      this.p.failed += failed;
+      this.p.skipped += skipped;
+      this.p.units++;
+      this.p.current = m[2];
+      return true;
+    }
+    if ((m = l.match(PW_RUNNING))) {
+      this.totalBase = this.p.units;
+      this.pwLineDone = 0;
+      this.p.total = this.totalBase + Number(m[1]);
+      if (!this.p.stage) this.p.stage = 'playwright';
+      return true;
+    }
+    if ((m = l.match(PW_LINE))) {
+      const done = Number(m[1]);
+      if (done <= this.pwLineDone) return false;
+      this.p.total = this.totalBase + Number(m[2]);
+      this.p.units += done - this.pwLineDone;
+      this.p.passed += done - this.pwLineDone; // the line reporter names failures separately
+      this.pwLineDone = done;
+      this.p.current = m[3].replace(/^\[[^\]]+\]\s*›\s*/, '');
+      return true;
+    }
+    if ((m = l.match(PW_LIST)) && this.p.total !== null) {
+      if (m[1] === '✓') this.p.passed++;
+      else if (m[1] === '-') this.p.skipped++;
+      else this.p.failed++;
+      this.p.units++;
+      this.p.current = m[2].replace(/^\[[^\]]+\]\s*›\s*/, '');
+      return true;
+    }
+    if (/^\s*\d+\) .*›/.test(l) && this.pwLineDone > 0) {
+      // the line reporter's failure header ("  1) [chromium] › a.spec.ts:3:1 › title")
+      this.p.failed++;
+      this.p.passed = Math.max(0, this.p.passed - 1);
+      return true;
+    }
+    if (NPM_HEADER.test(l)) return false; // the next "> command" line names the stage
+    if ((m = l.match(/^> (.+)$/))) {
+      this.p.stage = m[1].trim().slice(0, 120);
+      return true;
+    }
+    if ((m = l.match(/^\s*RUN\s+v[\d.]+/))) {
+      if (!this.p.stage) this.p.stage = 'vitest';
+      return true;
+    }
+    return false;
+  }
+
+  progress(elapsedMs: number): CheckProgress {
+    return { ...this.p, elapsed_ms: elapsedMs };
+  }
+}
+
+function median(xs: number[]) {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** What earlier passing runs say to expect (the newest few count). */
+export function expectedFrom(history: { duration_ms: number; units: number }[]): CheckRun['expected'] {
+  const recent = history.slice(0, 5);
+  if (!recent.length) return null;
+  return { duration_ms: Math.round(median(recent.map((h) => h.duration_ms))), units: Math.round(median(recent.map((h) => h.units))) };
+}
+
+/**
+ * Milliseconds left, or null when nothing says. Earlier runs give the usual duration; the results
+ * seen so far against the usual (or announced) number of results say how far this run is. The
+ * further it is, the more the second counts.
+ */
+export function timeLeft(p: Pick<CheckProgress, 'units' | 'total'>, elapsedMs: number, expected: CheckRun['expected']): number | null {
+  const of = p.total ?? (expected && expected.units > 0 ? expected.units : null);
+  const f = of && p.units > 0 ? Math.min(p.units / of, 0.99) : 0;
+  const byUnits = f > 0 ? elapsedMs / f - elapsedMs : null;
+  const byTime = expected ? expected.duration_ms - elapsedMs : null;
+  let left: number | null;
+  if (byUnits !== null && byTime !== null) left = (1 - f) * byTime + f * byUnits;
+  else left = byUnits ?? byTime;
+  return left === null ? null : Math.max(0, Math.round(left));
+}
+
+/** "about 3 min", "about 40 s", "under 10 s" */
+export function formatLeft(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 10) return 'under 10 s';
+  if (s < 90) return `about ${Math.round(s / 5) * 5} s`;
+  return `about ${Math.round(s / 60)} min`;
+}

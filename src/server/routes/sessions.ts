@@ -99,6 +99,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       repos: s.project_id ? store.repos(s.project_id) : [],
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,
+      checks: github.checks.of(s.id),
     };
   });
 

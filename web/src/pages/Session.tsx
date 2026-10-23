@@ -11,6 +11,7 @@ import { useItemPeek } from '../components/itemPeek.tsx';
 import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
+import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -270,9 +271,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
+      {data.checks?.map((c) => <CheckProgressCard key={c.pr_id} run={c} />)}
       {s.status === 'idle' && s.kind === 'work' && (
         <div className="px-4 pt-2 pb-1">
-          {attention.kind === 'checking' && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
+          {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
         </div>
       )}

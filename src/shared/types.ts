@@ -1,4 +1,5 @@
 import type { ClaudeAccountInfo } from './accounts.ts';
+import type { CheckRun } from './checkProgress.ts';
 import { PROJECT_COLOR_NAMES, PROJECT_ICONS, type ProjectColor } from './projectLook.ts';
 import { z } from 'zod';
 
@@ -560,7 +561,9 @@ export type LiveEvent =
   /** finished sessions' leftovers were cleaned up */
   | { t: 'cleanup' }
   /** a notification: open apps show it in the page (devices with the app in focus get no system notification) */
-  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } };
+  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } }
+  /** the check commands running now for a session's merges, with their progress (empty: none, DISP-5) */
+  | { t: 'check'; session_id: number; checks: CheckRun[] };
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;
