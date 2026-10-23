@@ -2,6 +2,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
 import type { AssistantChat, SessionDetail, SessionEvent } from './api.ts';
+import { patchItemList } from './itemsCache.ts';
 
 /** Recent live events per session, so a refetch that raced with them can't drop them. */
 const recent = new Map<number, SessionEvent[]>();
@@ -116,7 +117,7 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;
     case 'item':
-      qc.invalidateQueries({ queryKey: ['items', e.item.project_id] });
+      if (!patchItemList(qc, e.item)) qc.invalidateQueries({ queryKey: ['items', e.item.project_id] });
       qc.invalidateQueries({ queryKey: ['item', e.item.id] });
       if (e.item.source_id) qc.invalidateQueries({ queryKey: ['source', e.item.source_id] });
       qc.invalidateQueries({ queryKey: ['projects'] });

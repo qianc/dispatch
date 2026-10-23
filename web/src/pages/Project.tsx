@@ -14,6 +14,7 @@ import { Schedules } from '../components/schedules.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { noteProject } from '../nav.ts';
+import { toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
@@ -64,10 +65,7 @@ export function Project() {
     staleTime: 15_000,
   });
   const qc = useQueryClient();
-  const toggle = useMutation({
-    mutationFn: (it: Item) => api.patch<Item>(`/items/${it.id}`, { marked: !it.marked }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['items', project?.id] }),
-  });
+  const toggle = useMutation(toggleMarked(qc));
   if (!project) return <Page title={key} back="/projects"><Empty>Loading…</Empty></Page>;
 
   const marked = items.filter((i) => i.marked);
