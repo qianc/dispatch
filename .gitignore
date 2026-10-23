@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 data/
 .env
@@ -9,6 +9,6 @@ playwright-report/
 # Docker setup: secrets and local files
 server.env
 worker.env
-worker.json
+/worker.json
 backups/
 .superpowers/

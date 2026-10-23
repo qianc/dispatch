@@ -1,0 +1,3 @@
+#!/bin/sh
+# no secrets or private data in commits (scripts/check-private.mjs)
+exec node scripts/check-private.mjs --staged

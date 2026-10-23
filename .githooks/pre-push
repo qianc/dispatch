@@ -1,0 +1,8 @@
+#!/bin/sh
+# no secrets or private data in what is pushed (scripts/check-private.mjs)
+zero=0000000000000000000000000000000000000000
+while read -r lref lsha rref rsha; do
+  [ "$lsha" = "$zero" ] && continue
+  if [ "$rsha" = "$zero" ]; then base=$(git merge-base "$lsha" origin/main 2>/dev/null || git hash-object -t tree /dev/null); else base=$rsha; fi
+  node scripts/check-private.mjs --range "$base..$lsha" || exit 1
+done
