@@ -1,7 +1,7 @@
 // Tidies what finished sessions leave on disk: worktrees, and their branches once merged.
 // When a session finishes it is tidied at once; an hourly check (and the inbox) finds what is
 // left later (a branch merged afterwards, chats unused for a week) and offers to clean it up.
-import { CHAT_KINDS, type Session } from '../shared/types.ts';
+import { CHAT_KINDS, FINAL_STATUSES, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Store } from './store.ts';
@@ -22,7 +22,7 @@ export class Janitor {
   private hub: WorkerHub;
   private github: GitHub;
   private bus: Bus;
-  offer: CleanupOffer | null = null;
+  private checked: CleanupOffer | null = null;
   private checking: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
   /** for tests: how long to wait after a session closes before its folders go */
@@ -41,6 +41,19 @@ export class Janitor {
   }
   stop() {
     if (this.timer) clearInterval(this.timer);
+  }
+
+  /** The last check's offer, without sessions resumed since (DISP-35). */
+  get offer(): CleanupOffer | null {
+    if (!this.checked) return null;
+    const sessions = this.checked.sessions.filter((o) => this.finished(o.id));
+    if (!sessions.length) return null;
+    const sum = (k: 'worktrees' | 'branches') => sessions.reduce((n, o) => n + o[k], 0);
+    return { ...this.checked, sessions, worktrees: sum('worktrees'), branches: sum('branches') };
+  }
+  private finished(id: number) {
+    const s = this.store.session(id);
+    return !!s && FINAL_STATUSES.includes(s.status);
   }
 
   private reposOf(s: Session) {
@@ -113,7 +126,7 @@ export class Janitor {
     // chats keep a read-only checkout while open; after a week unused it goes (a new message brings it back)
     const stale = this.store.sessions({ statuses: ['idle'] }).filter((s) => s.kind !== 'work' && Date.parse(s.updated_at) < Date.now() - 7 * DAY);
     for (const s of stale) await this.tidy(s, { deleteMerged: false, force: true }).catch(() => undefined);
-    this.offer = offer.sessions.length ? offer : null;
+    this.checked = offer.sessions.length ? offer : null;
   }
 
   /** The inbox's "Clean up": tidy every session in the offer (merged branches go, unmerged work stays). */
@@ -122,9 +135,9 @@ export class Janitor {
     const results: { session_id: number; results: TidyResult[] }[] = [];
     for (const o of this.offer?.sessions ?? []) {
       const s = this.store.session(o.id);
-      if (s) results.push({ session_id: s.id, results: await this.tidy(s, { deleteMerged: true, force: s.kind !== 'work' }) });
+      if (s && FINAL_STATUSES.includes(s.status)) results.push({ session_id: s.id, results: await this.tidy(s, { deleteMerged: true, force: s.kind !== 'work' }) });
     }
-    this.offer = null;
+    this.checked = null;
     await this.check();
     return results;
   }
