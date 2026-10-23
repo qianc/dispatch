@@ -63,6 +63,7 @@ function toRepo(r: Row): Repo {
     local_path: (r.local_path as string | null) ?? null,
     worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
     setup_command: (r.setup_command as string | null) ?? null,
+    deploy_command: (r.deploy_command as string | null) ?? null,
     read_dirs: json<string[]>(r.read_dirs, []),
     kind: (r.kind as Repo['kind']) ?? (r.local_path ? 'local' : 'github'),
     worker_id: numOrNull(r.worker_id),
@@ -206,17 +207,17 @@ export class Store {
     const kind = r.local_path ? 'local' : r.kind === 'hosted' ? 'hosted' : 'github';
     const workerId = kind === 'local' ? r.worker_id ?? this.defaultWorkerId() : null;
     const { lastId } = this.db.run(
-      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command, kind, worker_id, upstream_owner, upstream_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO repos (project_id, github_owner, github_name, default_branch, check_command, local_path, worktree_from, setup_command, kind, worker_id, upstream_owner, upstream_name, deploy_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null, kind, workerId,
-      r.upstream_owner ?? null, r.upstream_name ?? null,
+      r.upstream_owner ?? null, r.upstream_name ?? null, r.deploy_command ?? null,
     );
     return this.repo(lastId)!;
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };
-    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ?, upstream_owner = ?, upstream_name = ? WHERE id = ?',
+    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ?, upstream_owner = ?, upstream_name = ?, deploy_command = ? WHERE id = ?',
       n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, n.read_dirs?.length ? JSON.stringify(n.read_dirs) : null,
-      n.upstream_owner ?? null, n.upstream_name ?? null, id);
+      n.upstream_owner ?? null, n.upstream_name ?? null, n.deploy_command ?? null, id);
     return this.repo(id)!;
   }
   deleteRepo(id: number) {

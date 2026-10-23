@@ -562,6 +562,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                   {r.setup_command ? ` · setup: ${r.setup_command}` : ''}
                   {r.read_dirs?.length ? ` · Discuss also reads: ${r.read_dirs.join(', ')}` : ''}
                   {r.check_command ? ` · check: ${r.check_command}` : ''}
+                  {r.deploy_command ? ` · deploy: ${r.deploy_command}` : ''}
                 </div>
               </div>
               <Button small variant="ghost" onClick={() => setEditing(r)}>Edit</Button>
@@ -696,6 +697,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
   const [f, setF] = useState({
     default_branch: repo.default_branch,
     check_command: repo.check_command ?? '',
+    deploy_command: repo.deploy_command ?? '',
     setup_command: repo.setup_command ?? '',
     worktree_from: repo.worktree_from ?? 'repo',
     read_dirs: (repo.read_dirs ?? []).join('\n'),
@@ -705,6 +707,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     mutationFn: () => api.patch(`/repos/${repo.id}`, {
       default_branch: f.default_branch,
       check_command: f.check_command.trim() || null,
+      deploy_command: f.deploy_command.trim() || null,
       setup_command: f.setup_command.trim() || null,
       ...(repo.local_path ? { worktree_from: f.worktree_from, read_dirs: f.read_dirs.split('\n').map((d) => d.trim()).filter(Boolean) } : {}),
       ...(repo.kind === 'hosted' ? { upstream: f.upstream.trim() || null } : {}),
@@ -744,6 +747,12 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       )}
       <Field label="Check command (optional)" hint="Must pass before a local merge.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.check_command} onChange={(e) => setF({ ...f, check_command: e.target.value })} placeholder="npm test" />
+      </Field>
+      <Field
+        label="Deploy command (optional)"
+        hint={`Runs on the session's worker after Dispatch merges into ${f.default_branch || 'the base branch'} (auto-merge or your merge), ${repo.local_path ? 'in the repo folder' : 'in a fresh checkout of it'}. DISPATCH_DEPLOY_SHA holds the merged commit. A failure is shown in the session and pushed to you.`}
+      >
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.deploy_command} onChange={(e) => setF({ ...f, deploy_command: e.target.value })} placeholder="./deploy.sh" aria-label="Deploy command" />
       </Field>
       <ErrorText error={save.error} />
       <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>

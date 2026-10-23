@@ -64,6 +64,8 @@ export interface Repo {
   worktree_from: 'repo' | 'clone' | null;
   /** run in each new session worktree before the agent starts (venv, npm ci, ...) */
   setup_command: string | null;
+  /** runs on the worker after Dispatch merges into the default branch, e.g. a deploy script (DISP-37) */
+  deploy_command?: string | null;
   /** local repos: folders of the real checkout (relative, often not in git) that Discuss may read */
   read_dirs?: string[];
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
@@ -456,6 +458,7 @@ export const repoInput = z.object({
   setup_command: z.string().nullable().default(null),
   default_branch: z.string().min(1).default('main'),
   check_command: z.string().nullable().default(null),
+  deploy_command: z.string().nullable().default(null),
 });
 
 export const itemInput = z.object({
@@ -490,6 +493,7 @@ export const repoPatch = z.object({
   check_command: z.string().nullable().optional(),
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
   setup_command: z.string().nullable().optional(),
+  deploy_command: z.string().nullable().optional(),
   read_dirs: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
 });
 

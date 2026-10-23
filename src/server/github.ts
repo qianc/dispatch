@@ -545,11 +545,31 @@ export class GitHub {
     this.mergingNow.add(prId);
     this.bus.emit({ t: 'pr', pr });
     try {
-      return await this.mergeOpen(pr, how, method);
+      const res = await this.mergeOpen(pr, how, method);
+      if (res.ok) this.deploy(pr);
+      return res;
     } finally {
       this.mergingNow.delete(prId);
       this.bus.emit({ t: 'pr', pr: this.store.pr(prId)! });
     }
+  }
+
+  /**
+   * After a merge: run the repo's deploy command on the session's worker (DISP-37). It reports
+   * back on its own (sessions.ts, `deploy_result`): the deploy may restart this server.
+   */
+  private deploy(pr: PullRequest) {
+    const repo = this.store.repo(pr.repo_id);
+    const s = this.store.session(pr.session_id);
+    if (!repo?.deploy_command || !s) return;
+    const name = pr.repo_full_name.split('/').pop();
+    if (this.hub.send(s.worker_id, { t: 'deploy', session_id: s.id, repo })) {
+      this.store.addEvent(s.id, { kind: 'system', text: `Deploying ${name}: ${repo.deploy_command}` });
+      return;
+    }
+    const why = `the session's worker is not connected, so \`${repo.deploy_command}\` did not run. Deploy by hand.`;
+    this.store.addEvent(s.id, { kind: 'error', text: `Deploy failed for ${name}: ${why}` });
+    void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined });
   }
 
   private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
