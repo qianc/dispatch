@@ -8,6 +8,9 @@ export const E2E_SRC = '/tmp/dispatch-e2e-src';
 
 export const PORT = 3199;
 
+/** Local repos the e2e worker may use (LOCAL_REPO_DIRS). */
+export const E2E_REPOS = '/tmp/dispatch-e2e-repos';
+
 /**
  * Only the basics from this shell: inside a Dispatch session it holds the live worker's settings
  * (GitHub tokens, repo dirs, server URL, releases), which would point the e2e server and worker at
@@ -23,6 +26,8 @@ function baseEnv(): Record<string, string> {
 export default async function setup() {
   rmSync('/tmp/dispatch-e2e', { recursive: true, force: true });
   rmSync(E2E_SRC, { recursive: true, force: true });
+  rmSync(E2E_REPOS, { recursive: true, force: true });
+  mkdirSync(E2E_REPOS, { recursive: true });
   mkdirSync(`${E2E_SRC}/docs`, { recursive: true });
   writeFileSync(`${E2E_SRC}/docs/triage.md`, '# Triage notes\n\nSee [the pic](pic.png).\n\n![diagram](pic.png)\n');
   // a 1x1 png
@@ -43,7 +48,7 @@ export default async function setup() {
     await new Promise((r) => setTimeout(r, 100));
   }
   procs.push(spawn(process.execPath, ['src/worker/main.ts'], {
-    env: { ...common, SERVER_WS_URL: `ws://127.0.0.1:${PORT}/worker`, RUNNER: 'fake', FAKE_DELAY_MS: '150', WINDOWS_PATH: 'off', ASSISTANT_READ_DIRS: E2E_SRC,
+    env: { ...common, SERVER_WS_URL: `ws://127.0.0.1:${PORT}/worker`, RUNNER: 'fake', FAKE_DELAY_MS: '150', WINDOWS_PATH: 'off', ASSISTANT_READ_DIRS: E2E_SRC, LOCAL_REPO_DIRS: E2E_REPOS,
       CLAUDE_ACCOUNTS: 'private,work', CLAUDE_ACCOUNT_PRIVATE_OAUTH_TOKEN: 'e2e', CLAUDE_ACCOUNT_WORK_CONFIG_DIR: '/tmp/dispatch-e2e-work', CLAUDE_ACCOUNT_WORK_LABEL: 'Work',
       RELEASES: JSON.stringify([{ repo: 'me/e2e-rel', label_prefix: 'rel:', command: './release.sh {version} --yes' }]) },
     stdio: 'inherit',

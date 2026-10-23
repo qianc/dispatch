@@ -87,7 +87,9 @@ export type WorkerToServer =
   | { t: 'cmd_progress'; req_id: string; data: unknown };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
-export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items' | AssistantMethod;
+export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items'
+  /** images pasted into the chat (DISP-34): read one, or attach one to an item */
+  | 'get_chat_image' | 'attach_image' | AssistantMethod;
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'add_repo' | 'remove_repo'

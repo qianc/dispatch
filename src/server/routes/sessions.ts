@@ -105,8 +105,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/sessions/:id/messages', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
-    sessions.send(s.id, text);
+    const { text, images } = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
+      .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.').parse(req.body);
+    sessions.send(s.id, text, images);
     return { ok: true };
   });
 

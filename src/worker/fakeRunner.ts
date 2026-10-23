@@ -4,6 +4,7 @@ import type { StartSpec } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload } from '../shared/types.ts';
 import { releaseCommand } from './prompts.ts';
 import type { AgentRunner, RunnerDeps } from './runner.ts';
+import { imageMarkers } from '../shared/chatImages.ts';
 
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
@@ -72,6 +73,7 @@ export class FakeRunner implements AgentRunner {
     this.turn++;
     await sleep(this.delay);
     if (this.closed) return;
+    if (imageMarkers(text).length) return this.pastedImagesTurn(text);
     if (this.spec.kind === 'planner') return this.plannerTurn();
     if (this.spec.kind === 'release' && this.turn === 1) return this.releaseTurn();
     if (this.spec.kind === 'assistant') return this.assistantTurn(text);
@@ -119,6 +121,16 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 't1', is_error: false, text: 'All tests passed' } });
     this.say(`(fake) Done with "${choice}". In a real session I would now push and open a PR.`);
+    this.finishTurn();
+  }
+
+  /** Images pasted into the chat (DISP-34): fetch them as the real runner does; "attach to HC-3" attaches the first. */
+  private async pastedImagesTurn(text: string) {
+    const files = imageMarkers(text);
+    const got = await Promise.all(files.map((file) => this.deps.rpc('get_chat_image', { file }) as Promise<{ mime: string; data: string }>));
+    const key = text.match(/attach (?:it )?to ([A-Z][A-Z0-9]*-\d+)/)?.[1];
+    if (key) await this.deps.rpc('attach_image', { key, image: files[0], name: 'screenshot.png' });
+    this.say(`(fake) I see ${got.length} pasted image(s): ${got.map((g) => `${g.mime} ${Buffer.from(g.data, 'base64').length} bytes`).join(', ')}${key ? `. Attached the first to ${key}.` : '.'}`);
     this.finishTurn();
   }
 

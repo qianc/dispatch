@@ -256,7 +256,8 @@ export interface WorkerRecord {
 
 /** Compact, UI-ready transcript event. */
 export type SessionEventBody =
-  | { kind: 'user'; text: string }
+  /** images: pasted into the chat with the message (DISP-34) */
+  | { kind: 'user'; text: string; images?: { url: string; media_type: string }[] }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; summary: string; input: unknown }
   | { kind: 'tool_result'; tool_use_id: string; is_error: boolean; text: string; images?: { url: string; media_type: string }[] }
