@@ -48,16 +48,28 @@ export class WorkerLink {
     return true;
   }
 
-  /** Run a git/workspace command on the worker and wait for its result. */
+  /**
+   * Run a git/workspace command on the worker and wait for its result. With `onProgress`, the
+   * timeout is a silence limit: each progress report starts it again (a long test suite reports
+   * at least every 30 s), so only a command that stopped reporting times out.
+   */
   cmd<T = unknown>(cmd: WorkerCommand, timeoutMs = 10 * 60_000, onProgress?: (data: unknown) => void): Promise<T> {
     const req_id = randomUUID();
     return new Promise<T>((resolve, reject) => {
       if (!this.send({ t: 'cmd', req_id, cmd })) return reject(new Error(`Worker ${this.name} is not connected`));
-      const timer = setTimeout(() => {
+      const expire = () => setTimeout(() => {
         this.pending.delete(req_id);
-        reject(new Error(`worker command ${cmd.c} timed out`));
+        reject(new Error(`worker command ${cmd.c} timed out${onProgress ? ` (nothing heard for ${Math.round(timeoutMs / 60_000)} minutes)` : ''}`));
       }, timeoutMs);
-      this.pending.set(req_id, { resolve: resolve as (v: unknown) => void, reject, timer, onProgress });
+      const entry = {
+        resolve: resolve as (v: unknown) => void, reject, timer: expire(),
+        onProgress: onProgress && ((data: unknown) => {
+          clearTimeout(entry.timer);
+          entry.timer = expire();
+          onProgress(data);
+        }),
+      };
+      this.pending.set(req_id, entry);
     });
   }
 

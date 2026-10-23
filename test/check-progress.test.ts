@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CheckParser, expectedFrom, formatLeft, timeLeft } from '../src/shared/checkProgress.ts';
+import { WorkerLink } from '../src/server/workerHub.ts';
 
 describe('check progress (DISP-5)', () => {
   it('reads vitest file lines, with colours and in any chunks', () => {
@@ -41,6 +42,40 @@ describe('check progress (DISP-5)', () => {
     expect(p.progress(0)).toMatchObject({ units: 2, total: 3, passed: 3 });
   });
 
+  it('reads pytest: collected total, progress dots, -v and xdist lines', () => {
+    const p = new CheckParser();
+    p.write([
+      '============================= test session starts ==============================',
+      'collected 10 items / 2 deselected / 8 selected',
+      '',
+      'tests/test_a.py ..F.  [ 50%]',
+      'tests/test_b.py sx',
+      '',
+      '=========================== short test summary info ============================',
+      'FAILED tests/test_a.py::test_three - AssertionError',
+      '',
+    ].join('\n'));
+    expect(p.progress(0)).toMatchObject({ stage: 'pytest', total: 8, units: 6, passed: 3, failed: 1, skipped: 2, current: 'tests/test_b.py' });
+
+    const v = new CheckParser();
+    v.write('created: 4/4 workers\n4 workers [3 items]\n\n[gw0] [ 33%] PASSED tests/test_a.py::test_one \n[gw1] [ 66%] FAILED tests/test_b.py::test_two \n');
+    v.write('tests/test_c.py::test_three SKIPPED (no db)  [100%]\n');
+    expect(v.progress(0)).toMatchObject({ total: 3, units: 3, passed: 1, failed: 1, skipped: 1, current: 'tests/test_c.py' });
+
+    // pytest -q: no "collected" line, the percentage gives the size
+    const q = new CheckParser();
+    q.write('..........                                [ 25%]\n');
+    expect(q.progress(0)).toMatchObject({ units: 10, total: 40, passed: 10 });
+  });
+
+  it('leaves cached or partial runs out of the estimate', () => {
+    // "already green - not re-running" took a second and ran nothing
+    expect(expectedFrom([{ duration_ms: 1_000, units: 0 }, { duration_ms: 2_400_000, units: 900 }, { duration_ms: 2_600_000, units: 910 }]))
+      .toEqual({ duration_ms: 2_500_000, units: 905 });
+    // a runner whose output is not read: short runs are the cached ones
+    expect(expectedFrom([{ duration_ms: 2_000, units: 0 }, { duration_ms: 600_000, units: 0 }])).toEqual({ duration_ms: 600_000, units: 0 });
+  });
+
   it('estimates time left from earlier runs and from how far this one got', () => {
     const expected = expectedFrom([{ duration_ms: 60_000, units: 10 }, { duration_ms: 80_000, units: 10 }, { duration_ms: 70_000, units: 10 }]);
     expect(expected).toEqual({ duration_ms: 70_000, units: 10 });
@@ -56,5 +91,22 @@ describe('check progress (DISP-5)', () => {
     expect(formatLeft(3_000)).toBe('under 10 s');
     expect(formatLeft(42_000)).toBe('about 40 s');
     expect(formatLeft(185_000)).toBe('about 3 min');
+  });
+
+  it('a merge on the worker times out only after a silence, however long the check runs', async () => {
+    const sent: { req_id: string }[] = [];
+    const link = new WorkerLink(1, 'w', { readyState: 1, send: (m: string) => sent.push(JSON.parse(m)) } as never);
+    const seen: unknown[] = [];
+    const done = link.cmd({ c: 'merge_local' } as never, 100, (d) => seen.push(d));
+    const p = link.pending.get(sent[0].req_id)!;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 60));
+      p.onProgress!(i);
+    }
+    p.resolve({ ok: true }); // 300 ms in: well past the 100 ms, but it kept reporting
+    expect(await done).toEqual({ ok: true });
+    expect(seen).toEqual([0, 1, 2, 3, 4]);
+    const silent = link.cmd({ c: 'merge_local' } as never, 50, () => undefined);
+    await expect(silent).rejects.toThrow(/nothing heard/);
   });
 });
