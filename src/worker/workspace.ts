@@ -132,7 +132,8 @@ export class Workspaces {
   private hosted: { base: string; token: string } | null;
 
   constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({}), hosted: { base: string; token: string } | null = null) {
-    this.root = root;
+    // absolute: git commands run in other folders (a local repo) and must find these paths too
+    this.root = resolve(root);
     this.remoteBase = remoteBase;
     this.gitEnv = gitEnv;
     this.hosted = hosted;
