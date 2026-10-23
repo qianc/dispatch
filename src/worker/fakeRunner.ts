@@ -128,7 +128,13 @@ export class FakeRunner implements AgentRunner {
   private async pastedImagesTurn(text: string) {
     const files = imageMarkers(text);
     const got = await Promise.all(files.map((file) => this.deps.rpc('get_chat_image', { file }) as Promise<{ mime: string; data: string }>));
-    const key = text.match(/attach (?:it )?to ([A-Z][A-Z0-9]*-\d+)/)?.[1];
+    let key = text.match(/attach (?:it )?to ([A-Z][A-Z0-9]*-\d+)/)?.[1];
+    // the assistant: "log a bug in HC" files a bug for the screenshot
+    const project = this.spec.kind === 'assistant' ? text.match(/log a bug in ([A-Z][A-Z0-9]*)/)?.[1] : undefined;
+    if (project) {
+      const [created] = (await this.deps.rpc('create_items', { project_key: project, items: [{ type: 'bug', title: '(fake) Error from the screenshot', body_md: 'Seen in the pasted screenshot.' }] })) as { key: string }[];
+      key = created.key;
+    }
     if (key) await this.deps.rpc('attach_image', { key, image: files[0], name: 'screenshot.png' });
     this.say(`(fake) I see ${got.length} pasted image(s): ${got.map((g) => `${g.mime} ${Buffer.from(g.data, 'base64').length} bytes`).join(', ')}${key ? `. Attached the first to ${key}.` : '.'}`);
     this.finishTurn();

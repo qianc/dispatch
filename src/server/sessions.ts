@@ -297,27 +297,49 @@ export class Sessions {
     return this.store.session(session.id)!;
   }
 
+  private checkImages(sessionId: number | null, images: string[]) {
+    if (!images.length) return;
+    const missing = this.attachments ? this.attachments.canClaim(sessionId, images) : images[0];
+    if (missing) throw new SessionError(`Image ${missing} was not found; paste it again.`);
+  }
+
+  /**
+   * The owner's message in the transcript, with the images pasted into it, and the text for the
+   * agent: the same, with a marker per image (its worker fetches them, get_chat_image).
+   */
+  private userMessage(sessionId: number, text: string, images: string[]): string {
+    this.checkImages(sessionId, images);
+    if (!images.length) {
+      this.addEvent(sessionId, { kind: 'user', text });
+      return text;
+    }
+    this.attachments!.claim(sessionId, images);
+    this.addEvent(sessionId, { kind: 'user', text, images: images.map((f) => ({ url: `/api/sessions/${sessionId}/attachments/${f}`, media_type: chatImageType(f) })) });
+    return withImageMarkers(text, images);
+  }
+
   /** A chat (assistant or discuss): continue the open thread, or start one on the first message. */
-  private chatSend(open: Session | undefined, create: () => Session, text: string): Session {
+  private chatSend(open: Session | undefined, create: (prompt: string) => Session, text: string, images: string[]): Session {
     if (open) {
-      this.send(open.id, text);
+      this.send(open.id, text, images);
       return this.store.session(open.id)!;
     }
+    this.checkImages(null, images);
     // a new chat starts at once, or waits in the queue for its worker
-    const s = create();
-    this.addEvent(s.id, { kind: 'user', text });
+    const s = create(withImageMarkers(text, images));
+    this.userMessage(s.id, text, images);
     this.emitSession(s);
     this.dispatch();
     return this.store.session(s.id)!;
   }
 
   /** The assistant chat: one open thread at a time. */
-  assistantSend(text: string): Session {
-    return this.chatSend(this.currentAssistant(), () => this.store.createSession({
+  assistantSend(text: string, images: string[] = []): Session {
+    return this.chatSend(this.currentAssistant(), (prompt) => this.store.createSession({
       project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', this.workerFor(null, null)),
+      initial_prompt: prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', this.workerFor(null, null)),
       worker_id: this.workerFor(null, null),
-    }), text);
+    }), text, images);
   }
 
   currentAssistant(): Session | undefined {
@@ -325,15 +347,15 @@ export class Sessions {
   }
 
   /** "Discuss this" on an item: a read-only chat about it, one open thread per item. */
-  discussSend(itemId: number, text: string): Session {
+  discussSend(itemId: number, text: string, images: string[] = []): Session {
     const item = this.store.item(itemId);
     if (!item) throw new SessionError('Unknown item', 404);
-    return this.chatSend(this.currentDiscuss(itemId), () => this.store.createSession({
+    return this.chatSend(this.currentDiscuss(itemId), (prompt) => this.store.createSession({
       project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: text, source_id: item.source_id, item_ids: [item.id],
+      initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
       claude_account: this.claudeAccountFor(this.store.project(item.project_id)!, null, undefined, this.workerFor(this.store.project(item.project_id)!, null)),
       worker_id: this.workerFor(this.store.project(item.project_id)!, null),
-    }), text);
+    }), text, images);
   }
 
   currentDiscuss(itemId: number): Session | undefined {
@@ -439,18 +461,12 @@ export class Sessions {
 
   // ---------- user actions ----------
 
-  /** `images`: files pasted into the chat (from POST /api/sessions/:id/images), sent along (DISP-34) */
+  /** `images`: files pasted into the chat (from POST /api/chat-images), sent along (DISP-34) */
   send(sessionId: number, ownText: string, images: string[] = []) {
     const s = this.mustGet(sessionId);
     if (s.status === 'queued') throw new SessionError('Session has not started yet.');
     if (s.status === 'waiting_input') throw new SessionError('Answer the open question first.');
-    const missing = images.find((f) => !CHAT_IMAGE_FILE.test(f) || !this.attachments?.hasSessionImage(sessionId, f));
-    if (missing) throw new SessionError(`Image ${missing} is not in this session; paste it again.`);
-    this.addEvent(sessionId, images.length
-      ? { kind: 'user', text: ownText, images: images.map((f) => ({ url: `/api/sessions/${sessionId}/attachments/${f}`, media_type: chatImageType(f) })) }
-      : { kind: 'user', text: ownText });
-    // the agent gets markers for the images; its worker fetches them (get_chat_image)
-    const text = withImageMarkers(ownText, images);
+    const text = this.userMessage(sessionId, ownText, images);
     const reopen = FINAL_STATUSES.includes(s.status);
     if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
       // its worker is away: the reply waits, and the session resumes with it when the worker is back
@@ -683,6 +699,8 @@ export class Sessions {
       return { mime: img.type, data: img.data.toString('base64') };
     }
     if (method === 'attach_image') return this.attachChatImage(s, p);
+    // the assistant reads and comments on items of any project (by key)
+    if (s.kind === 'assistant' && (method === 'get_item' || method === 'add_comment' || method === 'get_image')) return this.itemRpc(s, method, p, null);
     if (s.kind === 'assistant') {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
@@ -708,22 +726,10 @@ export class Sessions {
           comments: this.store.comments(i.id).length,
         }));
       }
-      case 'get_item': {
-        const it = byKey(p.key);
-        const images = this.store.itemImages(it.id).map((i) => ({ id: i.id, name: i.name, author: i.author, comment_id: i.comment_id }));
-        return { ...it, comments: this.store.comments(it.id), source: it.source_id ? this.store.source(it.source_id) : null, images };
-      }
-      case 'get_image': {
-        const img = this.store.itemImage(Number(p.id));
-        if (!img || this.store.item(img.item_id)?.project_id !== project.id) throw new Error(`No image ${String(p.id)} in project ${project.key}`);
-        const data = await this.attachments?.readItemImage(img.item_id, img.file);
-        if (!data) throw new Error('The image file is missing');
-        return { name: img.name, mime: img.mime, data: data.toString('base64') };
-      }
-      case 'add_comment': {
-        const it = byKey(p.key);
-        return this.store.addComment(it.id, 'claude', String(p.body ?? ''), s.id);
-      }
+      case 'get_item':
+      case 'get_image':
+      case 'add_comment':
+        return this.itemRpc(s, method, p, project);
       case 'add_to_batch': {
         if (s.kind !== 'work') throw new Error('Only a work session has a batch.');
         const keys = Array.isArray(p.keys) ? [...new Set((p.keys as unknown[]).map((k) => String(k).toUpperCase()))] : [];
@@ -766,6 +772,42 @@ export class Sessions {
     }
   }
 
+  /** An item by key: in `project`, or (null: the assistant) in any project. */
+  private itemByKey(key: unknown, project: Project | null) {
+    const k = String(key ?? '').toUpperCase();
+    const m = k.match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
+    // in its own project an agent may give the number alone ("42") or the key
+    const it = project
+      ? this.store.itemByNumber(project.id, Number(k.split('-').pop()))
+      : m ? (() => { const p = this.store.projectByKey(m[1]); return p && this.store.itemByNumber(p.id, Number(m[2])); })() : undefined;
+    if (!it) throw new Error(`No item ${k}${project ? ` in project ${project.key}` : ''}`);
+    return it;
+  }
+
+  /** Reading items, their images, and commenting: for agents in their project, the assistant in any. */
+  private async itemRpc(s: Session, method: 'get_item' | 'get_image' | 'add_comment', p: Record<string, unknown>, project: Project | null) {
+    switch (method) {
+      case 'get_item': {
+        const it = this.itemByKey(p.key, project);
+        const images = this.store.itemImages(it.id).map((i) => ({ id: i.id, name: i.name, author: i.author, comment_id: i.comment_id }));
+        return { ...it, comments: this.store.comments(it.id), source: it.source_id ? this.store.source(it.source_id) : null, images };
+      }
+      case 'get_image': {
+        const img = this.store.itemImage(Number(p.id));
+        if (!img || (project && this.store.item(img.item_id)?.project_id !== project.id)) throw new Error(`No image ${String(p.id)}${project ? ` in project ${project.key}` : ''}`);
+        const data = await this.attachments?.readItemImage(img.item_id, img.file);
+        if (!data) throw new Error('The image file is missing');
+        return { name: img.name, mime: img.mime, data: data.toString('base64') };
+      }
+      case 'add_comment': {
+        const it = this.itemByKey(p.key, project);
+        const c = this.store.addComment(it.id, 'claude', String(p.body ?? ''), s.id);
+        this.bus.emit({ t: 'item', item: this.store.item(it.id)! });
+        return c;
+      }
+    }
+  }
+
   /**
    * Put an image the owner pasted into this chat on an item (DISP-34). A work or planning session
    * reaches the items of its project; the assistant those of any project.
@@ -775,15 +817,12 @@ export class Sessions {
     const file = String(p.image ?? '').replace(/^\[pasted image (.*)\]$/, '$1').trim();
     const img = CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
     if (!img) throw new Error(`No pasted image ${file} in this chat. Use the name from its "[pasted image …]" marker.`);
-    const key = String(p.key ?? '').toUpperCase();
-    const m = key.match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
-    const project = m ? this.store.projectByKey(m[1]) : undefined;
-    if (!m || !project || (s.kind !== 'assistant' && project.id !== s.project_id)) throw new Error(`No item ${key}${s.project_key ? ` in project ${s.project_key}` : ''}`);
-    const item = this.store.itemByNumber(project.id, Number(m[2]));
-    if (!item) throw new Error(`No item ${key}`);
+    const item = this.itemByKey(p.key, s.kind === 'assistant' ? null : this.store.project(s.project_id!)!);
+    const commentId = p.comment_id ? Number(p.comment_id) : null;
+    if (commentId !== null && !this.store.comments(item.id).some((c) => c.id === commentId)) throw new Error(`Comment ${commentId} is not on ${item.key}`);
     const saved = this.attachments!.saveItemImage(item.id, img.data)!;
     const name = String(p.name ?? '').replace(/[/\\\0]/g, '').trim().slice(0, 120) || `pasted.${file.split('.').pop()}`;
-    const { file: _f, ...added } = this.store.addItemImage({ item_id: item.id, comment_id: null, name, file: saved.file, mime: saved.mime, size: img.data.length, author: 'claude' });
+    const { file: _f, ...added } = this.store.addItemImage({ item_id: item.id, comment_id: commentId, name, file: saved.file, mime: saved.mime, size: img.data.length, author: 'claude' });
     this.bus.emit({ t: 'item', item: this.store.item(item.id)! });
     this.addEvent(s.id, { kind: 'system', text: `Attached a pasted image to ${item.key}.` });
     return { attached: added.id, item: item.key, name };

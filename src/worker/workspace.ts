@@ -46,15 +46,19 @@ export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 
  * Run a shell command and read its output as it comes: `onProgress` gets the test progress read
  * from it (DISP-5), at most about once a second while it changes, and once at the end.
  */
-export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void): Promise<RunResult & { progress: CheckProgress; duration_ms: number }> {
+export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void): Promise<RunResult & { progress: CheckProgress; duration_ms: number; timed_out: boolean }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new CheckParser();
     let out = '';
     let last = 0;
     let dirty = false;
+    let timedOut = false;
     const report = (force = false) => {
-      if (!onProgress || (!dirty && !force)) return;
+      if (!onProgress) return;
+      // unchanged, it still goes every 30 s: the server knows the check is alive (a silent stretch
+      // of a long suite is not a hung worker)
+      if (!dirty && !force && Date.now() - last < 30_000) return;
       if (!force && Date.now() - last < 1000) return;
       last = Date.now();
       dirty = false;
@@ -72,6 +76,7 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
     child.stderr.on('data', onData);
     // the whole process group: a test runner's own children must not outlive the timeout
     const kill = setTimeout(() => {
+      timedOut = true;
       try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
     }, timeoutMs);
     const done = (code: number) => {
@@ -80,11 +85,20 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
       parser.write('\n');
       const progress = parser.progress(Date.now() - started);
       if (onProgress) onProgress(progress);
-      resolve({ code, out: out.trim(), progress, duration_ms: progress.elapsed_ms });
+      resolve({ code, out: out.trim(), progress, duration_ms: progress.elapsed_ms, timed_out: timedOut });
     };
     child.on('error', (e) => { out += String(e); done(127); });
     child.on('close', (code, signal) => done(code ?? (signal ? 137 : 1)));
   });
+}
+
+/** How long a check command may run: CHECK_TIMEOUT_MIN on the worker, 2 hours by default. */
+export function checkTimeoutMs() {
+  return (Number(process.env.CHECK_TIMEOUT_MIN) || 120) * 60_000;
+}
+
+function movedOn(repo: Repo) {
+  return `${repo.default_branch} moved on while the check ran (another merge landed), so nothing was pushed: the check did not test what would land. Merge again to check against the new ${repo.default_branch}.`;
 }
 
 const MAX_FILE = 10 * 1024 * 1024;
@@ -330,40 +344,55 @@ export class Workspaces {
     await this.withRepo(repo, () => git(['push', '-u', 'origin', branch], wt));
   }
 
-  /** Merge `branch` into the default branch locally, run the check command, push. */
-  mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
-    return this.withRepo(repo, () => this.mergeLocalUnlocked(repo, branch, message, onProgress));
-  }
-
-  private async mergeLocalUnlocked(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
-    const { dir, base, head } = await this.refs(repo, branch);
+  /**
+   * Merge `branch` into the default branch locally, run the check command, push. The repo is
+   * locked only for the merge and the push: a check can run for an hour, and the repo's diffs,
+   * branch status and pushes must not wait for it. If the default branch moved on meanwhile,
+   * nothing is pushed: the check did not test what would land.
+   */
+  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
     const tmp = join(this.root, 'merge', randomUUID());
-    await mkdir(join(this.root, 'merge'), { recursive: true });
-    await git(['worktree', 'add', '--detach', tmp, base], dir);
-    let check: MergeResult['check'];
-    try {
+    const prep = await this.withRepo(repo, async () => {
+      const { dir, base, head } = await this.refs(repo, branch);
+      await mkdir(join(this.root, 'merge'), { recursive: true });
+      const baseSha = await git(['rev-parse', base], dir);
+      await git(['worktree', 'add', '--detach', tmp, baseSha], dir);
       const m = await run('git', ['merge', '--no-ff', '-m', message, head], tmp);
       if (m.code !== 0) {
         await run('git', ['merge', '--abort'], tmp);
-        return { ok: false, conflict: true, output: m.out };
+        return { dir, base, baseSha, failed: { ok: false, conflict: true, output: m.out } as MergeResult };
       }
+      return { dir, base, baseSha, failed: null };
+    });
+    const { dir, base, baseSha } = prep;
+    let check: MergeResult['check'];
+    try {
+      if (prep.failed) return prep.failed;
       if (repo.check_command) {
-        const c = await runCheck(repo.check_command, tmp, 30 * 60_000, onProgress);
+        // the repo's account and hosted-git access, as the locked commands have them
+        const c = await repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
         check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
-        if (c.code !== 0) return { ok: false, output: `Check failed (${repo.check_command}):\n${c.out.slice(-4000)}`, check };
+        if (c.code !== 0) {
+          const why = c.timed_out ? `Check stopped after ${Math.round(checkTimeoutMs() / 60_000)} minutes (CHECK_TIMEOUT_MIN on the worker)` : 'Check failed';
+          return { ok: false, output: `${why} (${repo.check_command}):\n${c.out.slice(-4000)}`, check };
+        }
       }
-      // local repo: push into the repo itself, so a checked-out default branch is updated the
-      // git way (receive.denyCurrentBranch=updateInstead refuses when its working tree is dirty)
-      const push = await run('git', ['push', repo.local_path ?? 'origin', `HEAD:${repo.default_branch}`], tmp);
-      if (push.code !== 0) {
-        const why = repo.local_path && /denyCurrentBranch|checked out|working tree|would be overwritten|unstaged/i.test(push.out)
-          ? `Could not update ${repo.default_branch} in ${repo.local_path}: it is checked out there with uncommitted changes, or the repo refuses pushes to it. Commit or stash your changes (or run \`git config receive.denyCurrentBranch updateInstead\` in that repo) and merge again.\n\n`
-          : '';
-        return { ok: false, output: why + push.out, check };
-      }
-      return check ? { ok: true, check } : { ok: true };
+      return await this.withRepo(repo, async () => {
+        if (repo.local_path && (await git(['rev-parse', base], dir)) !== baseSha) return { ok: false, output: movedOn(repo), check };
+        // local repo: push into the repo itself, so a checked-out default branch is updated the
+        // git way (receive.denyCurrentBranch=updateInstead refuses when its working tree is dirty)
+        const push = await run('git', ['push', repo.local_path ?? 'origin', `HEAD:${repo.default_branch}`], tmp);
+        if (push.code !== 0) {
+          if (/non-fast-forward|fetch first|\(stale info\)/i.test(push.out)) return { ok: false, output: `${movedOn(repo)}\n\n${push.out}`, check };
+          const why = repo.local_path && /denyCurrentBranch|checked out|working tree|would be overwritten|unstaged/i.test(push.out)
+            ? `Could not update ${repo.default_branch} in ${repo.local_path}: it is checked out there with uncommitted changes, or the repo refuses pushes to it. Commit or stash your changes (or run \`git config receive.denyCurrentBranch updateInstead\` in that repo) and merge again.\n\n`
+            : '';
+          return { ok: false, output: why + push.out, check };
+        }
+        return check ? { ok: true, check } : { ok: true };
+      });
     } finally {
-      await run('git', ['worktree', 'remove', '--force', tmp], dir);
+      await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
     }
   }
 

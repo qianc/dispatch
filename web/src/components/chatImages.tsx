@@ -26,8 +26,8 @@ async function shrink(file: File): Promise<Blob> {
   return blob ?? file;
 }
 
-async function upload(sessionId: number, blob: Blob): Promise<string> {
-  const res = await fetch(`/api/sessions/${sessionId}/images`, {
+async function upload(blob: Blob): Promise<string> {
+  const res = await fetch('/api/chat-images', {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': blob.type.startsWith('image/') ? blob.type : 'application/octet-stream' },
     body: blob,
@@ -39,10 +39,11 @@ async function upload(sessionId: number, blob: Blob): Promise<string> {
 }
 
 /**
- * Images pasted into a chat (DISP-34), uploaded at once so sending stays quick. `files`: the
- * uploaded ones, to name in the message; `clear` after it is sent.
+ * Images pasted into a chat (DISP-34), uploaded at once so sending stays quick; also before the
+ * chat exists (its first message). `files`: the uploaded ones, to name in the message; `clear`
+ * after it is sent; `input`: the ChatInput props that take and show them.
  */
-export function useChatImages(sessionId: number) {
+export function useChatImages() {
   const [list, setList] = useState<Pasted[]>([]);
   const next = useRef(1);
   const live = useRef(list);
@@ -55,7 +56,7 @@ export function useChatImages(sessionId: number) {
       const preview = URL.createObjectURL(f);
       setList((l) => [...l, { id, preview, file: null, error: null }]);
       shrink(f)
-        .then((b) => upload(sessionId, b))
+        .then((b) => upload(b))
         .then((file) => setList((l) => l.map((p) => (p.id === id ? { ...p, file } : p))))
         .catch((e) => setList((l) => l.map((p) => (p.id === id ? { ...p, error: (e as Error).message } : p))));
     }
@@ -84,5 +85,6 @@ export function useChatImages(sessionId: number) {
     </div>
   ) : null;
 
-  return { add, clear, files, uploading, view, error: list.find((p) => p.error)?.error ?? null };
+  const error = list.find((p) => p.error)?.error ?? null;
+  return { add, clear, files, uploading, error, input: { onImages: add, attachments: view, hasImages: files.length > 0 } };
 }

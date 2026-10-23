@@ -132,6 +132,32 @@ test('assistant creates a project from a chat message', async ({ page }) => {
   await expect(page.getByText('create project Slides me/slides')).toBeVisible();
 });
 
+test('a screenshot of an error as the first Assistant message becomes a bug with the image (DISP-34)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'SHOT', name: 'Shots' } });
+  await page.request.post('/api/assistant/new', { data: {} }); // a new, empty chat
+  await page.getByRole('link', { name: 'Assistant' }).click();
+  const box = page.getByLabel('Message');
+  await box.evaluate((el, b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], 'error.png', { type: 'image/png' }));
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+  await expect(page.getByRole('img', { name: 'Pasted image' })).toBeVisible();
+  await box.fill('log a bug in SHOT');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('Attached the first to SHOT-1.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show image' }).locator('img')).toHaveJSProperty('naturalWidth', 1);
+  const items = await (await page.request.get('/api/projects/SHOT/items')).json();
+  const bug = await (await page.request.get(`/api/items/${(items.items ?? items)[0].id}`)).json();
+  expect(bug).toMatchObject({ type: 'bug' });
+  expect(bug.images).toHaveLength(1);
+});
+
 test('a reply in the assistant chat shows an unread badge on the Assistant menu until it is opened', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Password').fill('e2e-pass');

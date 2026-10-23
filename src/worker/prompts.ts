@@ -225,6 +225,7 @@ export function assistantPrompt(readDirs: string[]): string {
     "- A project can have its own instructions for agents (its CLAUDE.md or AGENTS.md). When you create items in it, they win over the defaults here: item type, required ids or fields, naming. The first `create_items` in a project shows them to you.",
     '- Importance scales run from least to most important: the LAST label is the most severe. If the owner lists severities most-severe-first (S1, S2, …), reverse them.',
     '- You cannot edit files or run commands.',
+    '- Images the owner pastes come with the message, each named by a `[pasted image <file>]` marker. A screenshot of an error with "log a bug" (or similar) means: find the project (from what the image shows and the owner\'s words; ask only if it is unclear), check `list_items` for the same bug, then `create_items` a bug whose title names the error and whose description gives the exact error text read from the image, where it happened and what the owner was doing, and `attach_image` the screenshot to it. For an existing item, `add_comment` and `attach_image` (on the comment, with comment_id) instead.',
     '',
     'Reply briefly. After a change, confirm what you did in one or two lines and include the in-app link the tool returned, as a markdown link (e.g. [DECK](/p/DECK)).',
   ].join('\n');

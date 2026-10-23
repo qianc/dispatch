@@ -41,6 +41,14 @@ const PW_LIST = /^\s*([✓✘×-])\s+\d+\s+(.*›.*?)(?:\s+\(\d[\d.]*m?s\))?$/;
 /** playwright line reporter: "[3/40] [chromium] › e2e/a.spec.ts:10:5 › title" */
 const PW_LINE = /^\[(\d+)\/(\d+)\]\s+(.*)$/;
 const PW_RUNNING = /^Running (\d+) tests? using/;
+/** pytest: "collected 523 items", "collected 523 items / 2 deselected / 521 selected", xdist "8 workers [523 items]" */
+const PYTEST_COLLECTED = /^collected (\d+) items?(?: \/ \d+ deselected \/ (\d+) selected)?/;
+const PYTEST_XDIST = /^\d+ workers? \[(\d+) items?\]/;
+/** pytest progress: "tests/test_a.py ..F.s  [ 12%]", a wrapped "......  [ 30%]", or xdist's dots */
+const PYTEST_DOTS = /^(?:(\S+\.py)\s+)?([.FEsxX]+)\s*(\[\s*\d+%\])?$/;
+/** pytest -v: "tests/a.py::test_x PASSED  [ 12%]"; with xdist: "[gw0] [ 12%] PASSED tests/a.py::test_x" */
+const PYTEST_VERBOSE = /^(\S+::\S.*?)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\b/;
+const PYTEST_XDIST_VERBOSE = /^\[gw\d+\]\s+\[\s*\d+%\]\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s+(\S+::.*)$/;
 /** npm/pnpm/yarn run header: "> pkg@1.0.0 test" then "> vitest run" */
 const NPM_HEADER = /^> (\S+@\S*\s+\S+|\S+ \S+@\S*)$/;
 
@@ -51,6 +59,7 @@ export class CheckParser {
   private totalBase = 0;
   private pwLineDone = 0;
   private partial = '';
+  private pyTotalGuess: number | null = null;
 
   /** Feed raw output (any chunking); returns true when the progress changed. */
   write(chunk: string): boolean {
@@ -75,6 +84,28 @@ export class CheckParser {
       this.p.skipped += skipped;
       this.p.units++;
       this.p.current = m[2];
+      return true;
+    }
+    if ((m = l.match(PYTEST_COLLECTED)) || (m = l.match(PYTEST_XDIST))) {
+      // a new pytest run: its total comes on top of what earlier runs reported
+      this.totalBase = this.p.units;
+      this.p.total = this.totalBase + Number(m[2] ?? m[1]);
+      if (!this.p.stage) this.p.stage = 'pytest';
+      return true;
+    }
+    if ((m = l.match(PYTEST_VERBOSE)) || (m = l.match(PYTEST_XDIST_VERBOSE))) {
+      const [what, name] = m[1].includes('::') ? [m[2], m[1]] : [m[1], m[2]];
+      this.pyResult(what === 'PASSED' || what === 'XPASS' ? '.' : what === 'SKIPPED' || what === 'XFAIL' ? 's' : 'F');
+      this.p.current = name.split('::')[0];
+      return true;
+    }
+    // the "[ 12%]" marks it as pytest; a file name alone only after pytest started (-q hides "collected")
+    if ((m = l.match(PYTEST_DOTS)) && (m[3] || (m[1] && this.p.stage === 'pytest'))) {
+      for (const c of m[2]) this.pyResult(c);
+      if (m[1]) this.p.current = m[1];
+      const pct = Number(m[3]?.match(/\d+/)?.[0] ?? 0);
+      // no "collected" line (pytest -q): the percentage says how many there are
+      if (this.p.total === null && pct > 0 && pct < 100) this.pyTotalGuess = Math.round((this.p.units * 100) / pct);
       return true;
     }
     if ((m = l.match(PW_RUNNING))) {
@@ -120,8 +151,15 @@ export class CheckParser {
     return false;
   }
 
+  private pyResult(c: string) {
+    if (c === '.' || c === 'X') this.p.passed++;
+    else if (c === 's' || c === 'x') this.p.skipped++;
+    else this.p.failed++;
+    this.p.units++;
+  }
+
   progress(elapsedMs: number): CheckProgress {
-    return { ...this.p, elapsed_ms: elapsedMs };
+    return { ...this.p, total: this.p.total ?? this.pyTotalGuess, elapsed_ms: elapsedMs };
   }
 }
 
@@ -131,9 +169,16 @@ function median(xs: number[]) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-/** What earlier passing runs say to expect (the newest few count). */
+/**
+ * What earlier passing runs say to expect (the newest few count). Runs that did far less than the
+ * others are left out: a runner that answers from a cache ("already green - not re-running") or
+ * ran only part of the suite says nothing about a full run.
+ */
 export function expectedFrom(history: { duration_ms: number; units: number }[]): CheckRun['expected'] {
-  const recent = history.slice(0, 5);
+  const maxUnits = Math.max(0, ...history.map((h) => h.units));
+  const maxTime = Math.max(0, ...history.map((h) => h.duration_ms));
+  const full = history.filter((h) => (maxUnits > 0 ? h.units >= maxUnits / 2 : h.duration_ms >= maxTime / 4));
+  const recent = full.slice(0, 5);
   if (!recent.length) return null;
   return { duration_ms: Math.round(median(recent.map((h) => h.duration_ms))), units: Math.round(median(recent.map((h) => h.units))) };
 }

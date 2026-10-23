@@ -72,6 +72,31 @@ describe('Workspaces (git)', () => {
     expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('Merge #1');
   });
 
+  it('does not lock the repo while the check runs, and pushes nothing if main moved on meanwhile', async () => {
+    const cwd = await ws.prepare(spec('feat'));
+    writeFileSync(join(cwd, 'b.txt'), 'two\n');
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-m', 'add b');
+    await ws.pushBranch(repo, 1, 'feat');
+    const merging = ws.mergeLocal({ ...repo, check_command: 'sleep 2' }, 'feat', 'Merge #1');
+    await new Promise((r) => setTimeout(r, 500));
+    // the repo answers while the check runs
+    const t = Date.now();
+    expect(await ws.branchStatus(repo, 'feat')).toMatchObject({ exists: true });
+    expect(Date.now() - t).toBeLessThan(1500);
+    // another merge lands on main meanwhile
+    const other = mkdtempSync(join(tmpdir(), 'dsp-other-'));
+    git(other, 'clone', '-q', join(remoteRoot, 'me', 'hc.git'), '.');
+    writeFileSync(join(other, 'c.txt'), 'three\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'other');
+    git(other, 'push', '-q', 'origin', 'main');
+    const res = await merging;
+    expect(res).toMatchObject({ ok: false, check: { ok: true } });
+    expect(res.output).toMatch(/main moved on while the check ran/);
+    expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('other');
+  });
+
   it('reports a failing check without pushing', async () => {
     const cwd = await ws.prepare(spec('feat'));
     writeFileSync(join(cwd, 'b.txt'), 'two\n');

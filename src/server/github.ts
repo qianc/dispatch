@@ -578,13 +578,13 @@ export class GitHub {
   /**
    * Merge a branch on the session's worker, which runs the repo's check command first. Its test
    * progress shows in the session while it runs; how long it took is kept for the next estimate.
-   * The check may run for up to 30 minutes on the worker.
+   * The worker limits the check's run time (CHECK_TIMEOUT_MIN); here it only has to keep reporting.
    */
   private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
     type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } };
     let res: Res | undefined;
     try {
-      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message }, 35 * 60_000,
+      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message }, 15 * 60_000,
         (p) => this.checks.progress(pr, repo, p as CheckProgress));
       return res;
     } finally {

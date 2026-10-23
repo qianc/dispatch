@@ -55,7 +55,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     },
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
-  const images = useChatImages(id);
+  const images = useChatImages();
   const send = useMutation({
     mutationFn: () => api.post(`/sessions/${id}/messages`, { text, images: images.files }),
     onSuccess: () => { setText(''); images.clear(); },
@@ -212,9 +212,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           canSubmit={canSend && !send.isPending && !images.uploading}
           disabled={!canSend}
           placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
-          onImages={images.add}
-          attachments={images.view}
-          hasImages={images.files.length > 0}
+          {...images.input}
           action={s.status === 'running' && !text && !images.files.length ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
         />
       }

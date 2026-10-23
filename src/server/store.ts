@@ -602,7 +602,7 @@ export class Store {
   }
 
   /** Earlier passing runs of a repo's check command, newest first. */
-  checkHistory(repoId: number, command: string, limit = 5): { duration_ms: number; units: number }[] {
+  checkHistory(repoId: number, command: string, limit = 20): { duration_ms: number; units: number }[] {
     return this.db.all('SELECT duration_ms, units FROM check_runs WHERE repo_id = ? AND command = ? AND ok = 1 ORDER BY id DESC LIMIT ?', repoId, command, limit)
       .map((r) => ({ duration_ms: Number(r.duration_ms), units: Number(r.units) }));
   }
