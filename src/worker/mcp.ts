@@ -37,6 +37,7 @@ const attachImage = (rpc: Rpc) =>
     key: z.string().describe('Item key, e.g. HC-42'),
     image: z.string().describe('The file from the marker, e.g. 3f2c…-….png'),
     name: z.string().optional().describe('File name to show on the item, e.g. "login-error.png"'),
+    comment_id: z.number().int().optional().describe('Put it on this comment of the item (id from add_comment or get_item)'),
   }, call(rpc, 'attach_image'));
 
 const itemShape = {
@@ -122,6 +123,9 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       check_command: z.string().optional().describe('Command that must pass before a local merge, e.g. "npm test"'),
     }, call(rpc, 'add_repo')),
     tool('remove_repo', 'Remove a repo from a project.', { project_key: z.string(), repo: z.string() }, call(rpc, 'remove_repo')),
+    tool('get_item', 'Read one item (any project) with its description, comments and image list.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
+    viewImage(rpc),
+    tool('add_comment', 'Add a comment (markdown) to an item in any project.', { key: z.string().describe('e.g. HC-42'), body: z.string() }, call(rpc, 'add_comment')),
     attachImage(rpc),
     tool('list_items', 'List open items in a project.', {
       project_key: z.string(),

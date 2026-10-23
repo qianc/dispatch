@@ -27,8 +27,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   set `receive.denyCurrentBranch updateInstead` there if the branch is checked out).
 - **Live test progress**: while a repo's check command runs before a merge, the session shows the
   step, the last finished test file, passed and failed counts, and the time left, estimated from
-  earlier passing runs of the same command (vitest and playwright output is read; any other command
-  still gets the time estimate).
+  earlier passing runs of the same command (vitest, playwright and pytest output is read; any other
+  command still gets the time estimate). Runs answered from a cache are left out of the estimate.
+  The check runs without locking the repo, for up to `CHECK_TIMEOUT_MIN` on the worker; if the
+  default branch moved on meanwhile, nothing is pushed and you merge again.
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
@@ -202,6 +204,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `CLAUDE_ACCOUNTS` + `CLAUDE_ACCOUNT_<NAME>_…` | | Several Claude accounts (see `.env.example`). |
 | `GITHUB_TOKEN` or `GITHUB_ACCOUNTS` + … | | Clone, push and open PRs. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_…` | | Commit identity. |
+| `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run before a merge. |
 | `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
 | `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |
@@ -428,9 +431,10 @@ Items can carry images (screenshots, rendered output): add them in the app (came
 library, file, or paste on desktop) or with the script. `images:` in `.dispatch.md`
 (`always`, `when_possible`, `off`) says how hard Claude tries to attach an example image that
 shows the issue, and the text below it can say how to make one. Agents working on an item can
-look at its images. In any chat, paste an image into the message box (or pick one with the image
-button): Claude sees it with your message, and a work session, planning chat or the Assistant can
-attach it to an item it creates or changes.
+look at its images. In any chat, also in its first message, paste an image into the message box
+(or pick one with the image button): Claude sees it with your message, and a work session, planning
+chat or the Assistant can attach it to an item it creates or changes. Paste a screenshot of an error
+into the Assistant and ask it to log a bug: it files the bug with the error text and the image.
 
 The changelog stays a file in the repo. Claude writes it from done items without a `rel:<version>`
 label, then labels them, so the next entry starts where this one ended.

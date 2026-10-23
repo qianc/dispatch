@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ItemDetail } from '../api.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
+import { useChatImages } from '../components/chatImages.tsx';
 import { Page } from '../components/Layout.tsx';
 import { CloseButton, ErrorText, ITEM_STATUS_LABEL, ItemStatusIcon, cx } from '../components/ui.tsx';
 import { RichMd } from '../components/RichMd.tsx';
@@ -62,10 +63,11 @@ export function Discuss({ itemId, onClose }: { itemId?: number; onClose?: () => 
 
 function EmptyDiscuss({ id, title, subtitle, onClose, intro }: { id: number; title: string; subtitle: string; onClose?: () => void; intro?: ReactNode }) {
   const qc = useQueryClient();
+  const images = useChatImages();
   const [text, setText] = useState('');
   const send = useMutation({
-    mutationFn: (t: string) => api.post(`/items/${id}/discuss`, { text: t }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['discuss', id] }),
+    mutationFn: (t: string) => api.post(`/items/${id}/discuss`, { text: t, images: images.files }),
+    onSuccess: () => { images.clear(); qc.invalidateQueries({ queryKey: ['discuss', id] }); },
   });
   return (
     <Page
@@ -75,7 +77,7 @@ function EmptyDiscuss({ id, title, subtitle, onClose, intro }: { id: number; tit
       keepScroll={!onClose}
       actions={onClose && <CloseButton onClick={onClose} label="Close chat" />}
       footer={
-        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending} placeholder="Ask about this item" />
+        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending && !images.uploading} placeholder="Ask about this item" {...images.input} />
       }
     >
       {intro}
@@ -86,7 +88,7 @@ function EmptyDiscuss({ id, title, subtitle, onClose, intro }: { id: number; tit
             {s}
           </button>
         ))}
-        <ErrorText error={send.error} />
+        <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
       </div>
     </Page>
   );

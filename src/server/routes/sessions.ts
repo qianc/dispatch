@@ -4,6 +4,10 @@ import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../..
 import { attentionOf } from '../../shared/attention.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
+
+/** A chat message: text, images pasted into it (POST /api/chat-images first, DISP-34), or both. */
+const message = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
+  .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.');
 export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
@@ -63,8 +67,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   });
 
   app.post('/api/assistant/messages', async (req) => {
-    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
-    return sessions.assistantSend(text);
+    const { text, images } = message.parse(req.body);
+    return sessions.assistantSend(text, images);
   });
 
   app.post('/api/assistant/new', async () => {
@@ -76,8 +80,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   app.get('/api/items/:id/discuss', async (req) => ({ session_id: sessions.currentDiscuss(intParam((req.params as { id: string }).id))?.id ?? null }));
 
   app.post('/api/items/:id/discuss', async (req) => {
-    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
-    return sessions.discussSend(intParam((req.params as { id: string }).id), text);
+    const { text, images } = message.parse(req.body);
+    return sessions.discussSend(intParam((req.params as { id: string }).id), text, images);
   });
 
   app.post('/api/items/:id/discuss/new', async (req) => {
@@ -105,8 +109,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/sessions/:id/messages', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { text, images } = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
-      .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.').parse(req.body);
+    const { text, images } = message.parse(req.body);
     sessions.send(s.id, text, images);
     return { ok: true };
   });

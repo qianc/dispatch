@@ -1,11 +1,12 @@
 // Images kept as files: from agent tool results under DATA_DIR/attachments/<session>/, and images
 // added to items under DATA_DIR/attachments/items/<item>/.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const FILE = /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/;
 const TYPE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 export class Attachments {
@@ -59,18 +60,39 @@ export class Attachments {
     if (/^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file)) rmSync(join(this.dir, 'items', String(itemId), file), { force: true });
   }
 
-  /** Store an image the owner pasted into a chat (DISP-34). The type comes from the content. */
-  saveSessionImage(sessionId: number, data: Buffer): { file: string; mime: string; url: string } | null {
+  /**
+   * Store an image the owner pasted into a chat (DISP-34), before the message goes: also the
+   * first message of a new chat, which has no session yet. Sending it claims it for the session.
+   * Images never sent are removed after a day.
+   */
+  savePendingImage(data: Buffer): { file: string; mime: string } | null {
     const mime = Attachments.sniff(data);
     if (!mime) return null;
+    const dir = join(this.dir, 'pending');
+    mkdirSync(dir, { recursive: true });
+    for (const f of readdirSync(dir)) {
+      try {
+        if (Date.now() - statSync(join(dir, f)).mtimeMs > 24 * 3600_000) rmSync(join(dir, f), { force: true });
+      } catch {
+        // gone already
+      }
+    }
     const file = `${randomUUID()}.${EXT[mime]}`;
-    mkdirSync(join(this.dir, String(sessionId)), { recursive: true });
-    writeFileSync(join(this.dir, String(sessionId), file), data);
-    return { file, mime, url: `/api/sessions/${sessionId}/attachments/${file}` };
+    writeFileSync(join(dir, file), data);
+    return { file, mime };
   }
 
-  hasSessionImage(sessionId: number, file: string) {
-    return /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file) && existsSync(join(this.dir, String(sessionId), file));
+  /** The pasted images a message names: all waiting to be sent, or already in this session. */
+  canClaim(sessionId: number | null, files: string[]): string | null {
+    return files.find((f) => !FILE.test(f) || !(existsSync(join(this.dir, 'pending', f)) || (sessionId !== null && existsSync(join(this.dir, String(sessionId), f))))) ?? null;
+  }
+
+  /** Move sent images from the waiting area into the session's folder. */
+  claim(sessionId: number, files: string[]) {
+    mkdirSync(join(this.dir, String(sessionId)), { recursive: true });
+    for (const f of files) {
+      if (FILE.test(f) && existsSync(join(this.dir, 'pending', f))) renameSync(join(this.dir, 'pending', f), join(this.dir, String(sessionId), f));
+    }
   }
 
   /** null for names that are not ours (no path tricks). */
