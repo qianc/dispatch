@@ -88,7 +88,7 @@ new bugs first"), a limit on the number of batches per run, and run options for 
 run asks nothing. It starts the batches it picks, or nothing if no work fits. It never starts items on
 hold, in progress or in review, and it cannot take an item off hold. It can triage items when the
 scope says so. The run shows in the session list, and its last message is the result. Times are in
-the server's local time zone (set `TZ` for the server). A run missed while the server was down
+the server's time zone: `TZ`, default `UTC` in Docker (see [Configuration](#configuration)). A run missed while the server was down
 starts when the server is back, if that is less than 6 hours after its time.
 
 The **phone app** and **push notifications** need HTTPS: put a reverse proxy in front and set
@@ -184,6 +184,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `AUTH_MODE` | `password` | `proxy` behind a sign-in proxy; `DISABLE_AUTH=1` turns sign-in off (testing only). |
 | `TRUSTED_PROXIES`, `AUTH_USERS`, `AUTH_HEADER`, `PROXY_SECRET`, `PROXY_SECRET_HEADER` | | Proxy mode, see [Sign-in](#sign-in-tokens-and-claude-connectors). |
 | `TOKEN_REMOTE_SCOPES` | `read,tracker` | What personal tokens may do from another machine. |
+| `TZ` | `UTC` (Docker) | Time zone of scheduled runs, e.g. `Europe/Berlin`. In Docker the compose files set it, so put it in the shell or the `.env` file next to them, not in `server.env`. |
 
 **Worker**
 
@@ -205,6 +206,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
 | `IDLE_CLOSE_MINUTES` | `10` | Close an idle Claude process after this long (it resumes on the next message). |
 | `RUNNER` | `claude` | `fake`: a scripted agent, to try the app without Claude. |
+| `RELEASES` | | JSON list of releases this worker may run: `[{"repo", "label_prefix"?, "command"?, "notes"?}]`. `label_prefix` defaults to `rel:`; `{version}` in `command` is replaced. Without `WORKER_CONFIG` only; with it, use a `releases` key per server. See [Releases](#releases). |
 
 ## Architecture
 
@@ -248,7 +250,8 @@ servers), and each server gets only the folders and accounts listed for it:
   "max_concurrent": 3,
   "servers": [
     { "name": "server-a", "url": "wss://dispatch-a.example.com/worker", "token_file": "~/.config/dispatch/worker-server-a.token",
-      "local_repo_dirs": ["~/repos/a"], "read_dirs": ["~/repos/a"] },
+      "local_repo_dirs": ["~/repos/a"], "read_dirs": ["~/repos/a"],
+      "releases": [{ "repo": "me/app", "label_prefix": "rel:", "command": "./release.sh {version} --yes" }] },
     { "name": "server-b", "url": "wss://dispatch-b.example.com/worker", "token_file": "~/.config/dispatch/worker-server-b.token",
       "local_repo_dirs": ["~/repos/b"], "claude_accounts": ["account-b"], "github_accounts": ["account-b"] }
   ]
@@ -350,7 +353,8 @@ be revoked on its own. Used from another machine, a token only gets `read` and `
 signed-in person; a token cannot make tokens.
 
 **Claude connector (MCP).** `PUBLIC_URL/mcp` is an MCP server with the tracker tools (list, read,
-add and edit items, comments, sources, images, release labels; nothing that starts agents). Add it
+add and edit items, comments, sources, images, release labels, the project's own instructions
+(its CLAUDE.md and AGENTS.md, read before adding items); nothing that starts agents). Add it
 as a connector in Claude (claude.ai, the apps, Claude Code: `claude mcp add --transport http dispatch
 https://dispatch.example.com/mcp`). Claude registers itself, you approve it once on a consent page
 (signed in as above), and it renews its access by itself (24 h access, 60-day rotating refresh
@@ -382,6 +386,10 @@ and kept in the database.
 You get a push when Claude asks a question, needs a plan approved, finishes a turn, proposes a
 batch, opens a PR, or fails. Mute per project in project settings.
 
+A device that has the app open and in focus gets no system notification: the app shows the notice
+itself (it tells the server every 20 s; after 45 s without that, pushes start again). Tapping a
+notification opens its chat, in the open app window if there is one.
+
 ## Posting retros from skills or scripts
 
 ```bash
@@ -404,10 +412,13 @@ next", "write the release notes", item keys like HC-42), and works through a sma
 1. Install it for your user: `ln -s "$PWD/skills/dispatch-backlog" ~/.claude/skills/dispatch-backlog`
 2. Token: copy the API token from Settings into `~/.config/dispatch/tokens/<host>`, with `:` as
    `_` (e.g. `tokens/localhost_3000`), `chmod 600`. One file per server.
-   Dispatch is assumed on `http://localhost:3000`; a repo names another server with `url:` in its
-   `.dispatch.md` (`DISPATCH_URL` overrides it for the whole machine).
-3. In each repo, add `.dispatch.md` (start from `skills/dispatch-backlog/dispatch.example.md`): the
-   project key in the frontmatter, then your rules for naming, tags, modules and the changelog.
+   The server is the first of: `--url`, `DISPATCH_URL` (one shell or run), `url:` in the repo's
+   `.dispatch.md`, `~/.config/dispatch/default-url` (this machine's default), `http://localhost:3000`.
+   `dispatch config` shows which one is used and whether the token is valid, rejected or missing.
+3. In each repo, run `dispatch init --project KEY` (add `--url URL` only if the repo must name its
+   server). It writes `.dispatch.md` from `skills/dispatch-backlog/dispatch.example.md` and never
+   overwrites one; without `--project` it only suggests a project. Then add your rules for naming,
+   tags, modules and the changelog below the frontmatter.
 
 Items can carry images (screenshots, rendered output): add them in the app (camera, photo
 library, file, or paste on desktop) or with the script. `images:` in `.dispatch.md`
@@ -435,3 +446,9 @@ npm run typecheck
 ```
 
 Set `CHROMIUM_PATH` if Playwright's own browser isn't installed.
+
+**No private data in commits.** `git config core.hooksPath .githooks` turns on hooks that run
+`scripts/check-private.mjs` on each commit and push. It refuses tokens, private keys, home-folder
+paths and real email addresses, plus your own words (hostnames, project names, IP ranges) from
+`~/.config/dispatch/private-patterns`, one regex per line. That file stays outside the repo. Use
+neutral examples (`example.com`, `/home/user`); a line ending in `private-ok` is skipped.

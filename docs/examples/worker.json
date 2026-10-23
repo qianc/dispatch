@@ -1,0 +1,39 @@
+{
+  "max_concurrent": 3,
+  "servers": [
+    {
+      "name": "server-a",
+      "url": "wss://dispatch-a.example.com/worker",
+      "token_file": "~/.config/dispatch/worker-server-a.token",
+      "local_repo_dirs": [
+        "~/repos/a"
+      ],
+      "read_dirs": [
+        "~/repos/a"
+      ],
+      "releases": [
+        {
+          "repo": "me/app",
+          "label_prefix": "rel:",
+          "command": "./release.sh {version} --yes",
+          "notes": "The upload credential is on this machine."
+        }
+      ]
+    },
+    {
+      "name": "server-b",
+      "url": "wss://dispatch-b.example.com/worker",
+      "token_file": "~/.config/dispatch/worker-server-b.token",
+      "local_repo_dirs": [
+        "~/repos/b"
+      ],
+      "read_dirs": [],
+      "claude_accounts": [
+        "account-b"
+      ],
+      "github_accounts": [
+        "account-b"
+      ]
+    }
+  ]
+}
