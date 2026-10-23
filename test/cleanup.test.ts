@@ -132,6 +132,22 @@ describe('the janitor on the server', () => {
       expect(existsSync(b.wt)).toBe(false);
       expect(branches()).toBe('');
       expect((await s.call('GET', '/inbox')).data.cleanup).toBeNull();
+
+      // DISP-35: offered while finished, then resumed: no longer offered, and "Clean up" leaves it alone
+      const c = await make('c');
+      s.ctx.store.updateSession(c.sess.id, { status: 'completed' });
+      expect((await s.call('POST', '/cleanup/check')).data).toMatchObject({ sessions: [expect.objectContaining({ id: c.sess.id })] });
+      s.ctx.store.updateSession(c.sess.id, { status: 'running' });
+      expect((await s.call('GET', '/inbox')).data.cleanup).toBeNull();
+      const checking = s.ctx.janitor.check; // a check that raced with the resume still offers it
+      s.ctx.janitor.check = async () => undefined;
+      s.ctx.store.updateSession(c.sess.id, { status: 'completed' });
+      await checking.call(s.ctx.janitor);
+      s.ctx.store.updateSession(c.sess.id, { status: 'waiting_input' });
+      expect((await s.call('POST', '/cleanup')).data.results).toEqual([]);
+      s.ctx.janitor.check = checking;
+      expect(existsSync(c.wt)).toBe(true);
+      expect(branches()).toContain('jan-c');
     } finally {
       await stopWorker(worker);
       await s.app.close();
