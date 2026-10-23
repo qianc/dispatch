@@ -36,6 +36,13 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   progress). A failure goes back to the agent with its output as the next turn, up to
   `CHECK_RETRIES` fix turns; then you get a push that it still fails. An unchanged worktree is not
   checked again. A batch can turn this off ("Run the repo's check before done").
+- **Deploy after merge**: a repo's deploy command (repo settings) runs on the session's worker
+  each time Dispatch merges into its default branch, by auto-merge or by you. A local repo deploys
+  from its folder, other repos from a fresh checkout of the merged branch; `DISPATCH_DEPLOY_SHA`
+  holds the merged commit. Deploys of one repo run one at a time. The result goes into the session,
+  and the push says "merged and deployed" or that the deploy failed, with the end of its output.
+  The deploy may restart the server itself: the worker keeps the result and reports it when the
+  server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
@@ -210,6 +217,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `GITHUB_TOKEN` or `GITHUB_ACCOUNTS` + … | | Clone, push and open PRs. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_…` | | Commit identity. |
 | `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run (before a merge, or before a turn is reported done). |
+| `DEPLOY_TIMEOUT_MIN` | `30` | How long a repo's deploy command may run after a merge. |
 | `CHECK_RETRIES` | `3` | Fix turns an agent gets when the check fails at the end of its turn, before you are told. |
 | `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |

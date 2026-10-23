@@ -561,6 +561,7 @@ export class Sessions {
   onWorkerMessage(workerId: number, msg: WorkerEvent) {
     const s = this.store.session(msg.session_id);
     if (!s || s.worker_id !== workerId) return; // not this worker's session
+    if (msg.t === 'deploy_result') return this.onDeployResult(s, msg); // often after the session ended
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
       if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
@@ -1195,6 +1196,20 @@ export class Sessions {
 
   private emitSession(s: Session) {
     this.bus.emit({ t: 'session', session: s });
+  }
+
+  /** A repo's deploy after a merge finished (DISP-37): told in the session and as a notice. */
+  private onDeployResult(s: Session, msg: Extract<WorkerEvent, { t: 'deploy_result' }>) {
+    const repo = this.store.repo(msg.repo_id);
+    if (!repo || repo.project_id !== s.project_id) return;
+    const at = msg.sha ? ` (${msg.sha.slice(0, 7)})` : '';
+    const took = msg.duration_ms ? ` in ${Math.max(1, Math.round(msg.duration_ms / 1000))} s` : '';
+    const tail = msg.output.trim().split('\n').slice(-15).join('\n');
+    this.addEvent(s.id, { kind: msg.ok ? 'system' : 'error', text: `${msg.ok ? 'Deployed' : 'Deploy failed for'} ${repo.github_name}${at}${took}.${tail ? `\n${tail}` : ''}` });
+    const key = s.project_key ?? 'Dispatch';
+    // success replaces the "done and merged" notice (same tag); a failure is a notice of its own
+    if (msg.ok) this.notify(s, `${key}: merged and deployed`, `${repo.github_name}${at}${s.last_text ? `\n${s.last_text}` : ''}`, `merged-${s.id}`);
+    else this.notify(s, `${key}: merged, but the deploy failed`, `${repo.github_name}${at}: ${msg.output.trim().split('\n').slice(-3).join(' ')}`, `deploy-${s.id}`);
   }
 
   private notify(s: Session, title: string, body: string, tag: string) {

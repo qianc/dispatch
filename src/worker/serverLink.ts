@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
-import { CHAT_KINDS, type WorkerFacts } from '../shared/types.ts';
+import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
 import type { ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
@@ -420,7 +420,29 @@ export class ServerLink {
           this.send({ t: 'cmd_result', req_id: msg.req_id, ok: false, error: (e as Error).message });
         }
         return;
+      case 'deploy':
+        return this.deploy(msg.session_id, msg.repo);
     }
+  }
+
+  /** Deploys per repo, one after the other: two merges in a row must not deploy at the same time. */
+  private deploys = new Map<number, Promise<void>>();
+
+  /** Run a repo's deploy command and report the result, also after a reconnect (DISP-37). */
+  private deploy(sessionId: number, repo: Repo) {
+    const result = (r: { ok: boolean; sha: string | null; output: string; duration_ms: number }) =>
+      this.send({ t: 'deploy_result', session_id: sessionId, repo_id: repo.id, ...r });
+    const go = async () => {
+      if (repo.local_path && !insideDirs(repo.local_path, this.entry.local_repo_dirs, '/')) {
+        return result({ ok: false, sha: null, output: `${repo.local_path} is outside the folders this worker allows for server ${this.entry.name}`, duration_ms: 0 });
+      }
+      // the fake runner pushes nothing to GitHub, so only a local repo has a merge to deploy
+      if (!repo.deploy_command || (this.shared.fake && !repo.local_path)) return;
+      result(await this.workspaces.deploy(repo).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
+    };
+    const next = (this.deploys.get(repo.id) ?? Promise.resolve()).then(go);
+    this.deploys.set(repo.id, next);
+    return next;
   }
 
   connect(delay = 1000) {

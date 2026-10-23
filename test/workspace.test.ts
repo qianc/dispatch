@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -30,6 +30,25 @@ describe('Workspaces (git)', () => {
     git(seed, 'push', bare, 'main');
     ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${remoteRoot}`);
     repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'hc', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null };
+  });
+
+  it('deploys a GitHub repo from a fresh checkout of the newest default branch, then removes it (DISP-37)', async () => {
+    await ws.refresh(repo); // a clone from before the merge
+    const bare = join(remoteRoot, 'me', 'hc.git');
+    const other = mkdtempSync(join(tmpdir(), 'dsp-other-'));
+    git(other, 'clone', bare, '.');
+    writeFileSync(join(other, 'b.txt'), 'merged\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'merged on GitHub');
+    git(other, 'push', 'origin', 'main');
+    const sha = git(bare, 'rev-parse', 'main');
+    const res = await ws.deploy({ ...repo, deploy_command: 'cat b.txt && echo "$DISPATCH_DEPLOY_SHA $DISPATCH_DEPLOY_BRANCH" && pwd' });
+    expect(res).toMatchObject({ ok: true, sha });
+    expect(res.output).toContain(`merged\n${sha} main`);
+    const dir = res.output.split('\n').pop()!;
+    expect(existsSync(dir)).toBe(false);
+    const failed = await ws.deploy({ ...repo, deploy_command: 'echo nope >&2; exit 2' });
+    expect(failed).toMatchObject({ ok: false, output: 'nope' });
   });
 
   it('creates a worktree on the session branch and pushes it', async () => {

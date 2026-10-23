@@ -103,6 +103,11 @@ export function checkTimeoutMs() {
   return (Number(process.env.CHECK_TIMEOUT_MIN) || 120) * 60_000;
 }
 
+/** How long a deploy command may run: DEPLOY_TIMEOUT_MIN on the worker, 30 minutes by default. */
+export function deployTimeoutMs() {
+  return (Number(process.env.DEPLOY_TIMEOUT_MIN) || 30) * 60_000;
+}
+
 function movedOn(repo: Repo) {
   return `${repo.default_branch} moved on while the check ran (another merge landed), so nothing was pushed: the check did not test what would land. Merge again to check against the new ${repo.default_branch}.`;
 }
@@ -422,6 +427,32 @@ export class Workspaces {
       });
     } finally {
       await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
+    }
+  }
+
+  /**
+   * Run a repo's deploy command on its merged default branch (DISP-37). A local repo deploys from
+   * the repo itself (the owner's deploy tooling lives there); others from a fresh checkout of the
+   * default branch, removed afterwards. The repo is locked only while that checkout is made.
+   */
+  async deploy(repo: Repo): Promise<{ ok: boolean; sha: string | null; output: string; duration_ms: number }> {
+    const tmp = repo.local_path ? null : join(this.root, 'deploy', randomUUID());
+    const { dir, sha } = await this.withRepo(repo, async () => {
+      const { dir, base } = await this.refs(repo, repo.default_branch);
+      const sha = await git(['rev-parse', base], dir);
+      if (tmp) {
+        await mkdir(join(this.root, 'deploy'), { recursive: true });
+        await git(['worktree', 'add', '--detach', tmp, sha], dir);
+      }
+      return { dir, sha };
+    });
+    try {
+      const env = { ...this.gitEnv(repo), ...this.hostedEnv(repo), DISPATCH_DEPLOY_SHA: sha, DISPATCH_DEPLOY_BRANCH: repo.default_branch };
+      const r = await repoEnv.run(env, () => runCheck(repo.deploy_command!, tmp ?? dir, deployTimeoutMs()));
+      const output = r.timed_out ? `Stopped after ${Math.round(deployTimeoutMs() / 60_000)} minutes (DEPLOY_TIMEOUT_MIN on the worker).\n${r.out}` : r.out;
+      return { ok: r.code === 0, sha, output: output.slice(-4000), duration_ms: r.duration_ms };
+    } finally {
+      if (tmp) await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
     }
   }
 

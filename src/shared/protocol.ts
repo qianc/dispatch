@@ -51,7 +51,12 @@ export type ServerToWorker =
   | { t: 'interrupt'; session_id: number }
   | { t: 'close'; session_id: number; cleanup: boolean; repos: Repo[] }
   | { t: 'rpc_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
-  | { t: 'cmd'; req_id: string; cmd: WorkerCommand };
+  | { t: 'cmd'; req_id: string; cmd: WorkerCommand }
+  /**
+   * run the repo's deploy command on its merged default branch (DISP-37). No reply: a deploy often
+   * restarts the server, so the result comes as `deploy_result`, kept until the server is back.
+   */
+  | { t: 'deploy'; session_id: number; repo: Repo };
 
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string }
@@ -90,7 +95,9 @@ export type WorkerToServer =
   | { t: 'rpc'; req_id: string; session_id: number; method: RpcMethod; params: unknown }
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
   /** a long command's progress so far (merge_local: its check command's test progress, DISP-5) */
-  | { t: 'cmd_progress'; req_id: string; data: unknown };
+  | { t: 'cmd_progress'; req_id: string; data: unknown }
+  /** a deploy command finished (DISP-37): `output` is the end of what it printed */
+  | { t: 'deploy_result'; session_id: number; repo_id: number; ok: boolean; sha: string | null; output: string; duration_ms: number };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
 export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items'
