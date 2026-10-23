@@ -6,7 +6,7 @@ import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import type { WorkerFacts } from '../shared/types.ts';
 
-export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'slots' } | { t: 'refused' }>;
+export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'cmd_progress' } | { t: 'slots' } | { t: 'refused' }>;
 
 export interface HubHandlers {
   onHello(workerId: number, live: number[], facts: WorkerFacts | null): void;
@@ -26,7 +26,7 @@ export class WorkerLink {
   /** the worker said hello on this connection: it has told us which sessions it runs */
   ready = false;
   facts: WorkerFacts | null = null;
-  pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+  pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; onProgress?: (data: unknown) => void }>();
 
   constructor(workerId: number, name: string, ws: WebSocket) {
     this.workerId = workerId;
@@ -49,7 +49,7 @@ export class WorkerLink {
   }
 
   /** Run a git/workspace command on the worker and wait for its result. */
-  cmd<T = unknown>(cmd: WorkerCommand, timeoutMs = 10 * 60_000): Promise<T> {
+  cmd<T = unknown>(cmd: WorkerCommand, timeoutMs = 10 * 60_000, onProgress?: (data: unknown) => void): Promise<T> {
     const req_id = randomUUID();
     return new Promise<T>((resolve, reject) => {
       if (!this.send({ t: 'cmd', req_id, cmd })) return reject(new Error(`Worker ${this.name} is not connected`));
@@ -57,7 +57,7 @@ export class WorkerLink {
         this.pending.delete(req_id);
         reject(new Error(`worker command ${cmd.c} timed out`));
       }, timeoutMs);
-      this.pending.set(req_id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      this.pending.set(req_id, { resolve: resolve as (v: unknown) => void, reject, timer, onProgress });
     });
   }
 
@@ -135,10 +135,10 @@ export class WorkerHub {
     return this.link(workerId)?.send(msg) ?? false;
   }
 
-  cmd<T = unknown>(workerId: number | null | undefined, cmd: WorkerCommand, timeoutMs?: number): Promise<T> {
+  cmd<T = unknown>(workerId: number | null | undefined, cmd: WorkerCommand, timeoutMs?: number, onProgress?: (data: unknown) => void): Promise<T> {
     const l = this.link(workerId);
     if (!l) return Promise.reject(new Error('Worker is not connected'));
-    return l.cmd<T>(cmd, timeoutMs);
+    return l.cmd<T>(cmd, timeoutMs, onProgress);
   }
 
   facts(workerId: number | null | undefined): WorkerFacts | null {
@@ -178,6 +178,13 @@ export class WorkerHub {
         link.pending.delete(msg.req_id);
         return msg.ok ? p.resolve(msg.data) : p.reject(new Error(msg.error ?? 'worker command failed'));
       }
+      case 'cmd_progress':
+        try {
+          link.pending.get(msg.req_id)?.onProgress?.(msg.data);
+        } catch (e) {
+          console.warn('command progress failed', e);
+        }
+        return;
       case 'rpc':
         try {
           const data = await this.handlers.onRpc(link.workerId, msg.session_id, msg.method, msg.params);

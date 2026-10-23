@@ -3,6 +3,8 @@ import { Octokit } from '@octokit/rest';
 import type { GithubAccount } from '../shared/accounts.ts';
 import type { BranchFile, BranchStatus, MergeEvent, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
+import { CheckRuns } from './checkRuns.ts';
+import type { CheckProgress } from '../shared/checkProgress.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -46,6 +48,9 @@ export class GitHub {
   readonly accounts: GithubAccount[];
   private clients = new Map<string, Octokit>();
 
+  /** check commands running now for local merges, with their progress (DISP-5) */
+  readonly checks: CheckRuns;
+
   constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub, apiUrl = 'https://api.github.com') {
     this.accounts = accounts;
     for (const a of accounts) this.clients.set(a.name, new Octokit({ auth: a.token, userAgent: 'dispatch', baseUrl: apiUrl }));
@@ -53,6 +58,7 @@ export class GitHub {
     this.bus = bus;
     this.notifier = notifier;
     this.hub = hub;
+    this.checks = new CheckRuns(store, bus);
     // the first account is the default (also what older code and tests use)
     this.octo = accounts.length ? this.clients.get(accounts[0].name)! : null;
   }
@@ -557,9 +563,7 @@ export class GitHub {
       const t = this.mustTarget(repo);
       await this.gh(repo).pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
-      const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>(this.workerOf(pr), {
-        c: 'merge_local', repo, branch: pr.head_ref, message: pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`,
-      });
+      const res = await this.mergeOnWorker(pr, repo, pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     }
     // GitHub needs a moment to register a pushed merge.
@@ -572,6 +576,23 @@ export class GitHub {
   }
 
   /**
+   * Merge a branch on the session's worker, which runs the repo's check command first. Its test
+   * progress shows in the session while it runs; how long it took is kept for the next estimate.
+   * The check may run for up to 30 minutes on the worker.
+   */
+  private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
+    type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } };
+    let res: Res | undefined;
+    try {
+      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message }, 35 * 60_000,
+        (p) => this.checks.progress(pr, repo, p as CheckProgress));
+      return res;
+    } finally {
+      this.checks.finish(pr, repo, res?.check);
+    }
+  }
+
+  /**
    * Merge a hosted repo's session branch in Dispatch: on the server, or, when the repo has a check
    * command, on the session's worker (which runs the check before it pushes the merge back here).
    * Then the merged default branch goes to the upstream, if there is one.
@@ -580,7 +601,7 @@ export class GitHub {
     const s = this.store.session(pr.session_id)!;
     const message = `Merge ${pr.head_ref}: ${pr.title}`;
     if (repo.check_command) {
-      const res = await this.hub.cmd<{ ok: boolean; conflict?: boolean; output?: string }>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message });
+      const res = await this.mergeOnWorker(pr, repo, message);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     } else {
       const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge');

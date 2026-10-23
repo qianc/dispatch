@@ -31,6 +31,14 @@ const viewImage = (rpc: Rpc) =>
     }
   });
 
+/** Images the owner pasted into this chat (DISP-34) go onto an item: one the agent created or changes. */
+const attachImage = (rpc: Rpc) =>
+  tool('attach_image', 'Attach an image the owner pasted into this chat to an item, e.g. a screenshot for a bug you filed or an item you changed. Name the image by the file in its "[pasted image <file>]" marker. Attach only when the owner asks, or when the image documents the item.', {
+    key: z.string().describe('Item key, e.g. HC-42'),
+    image: z.string().describe('The file from the marker, e.g. 3f2c…-….png'),
+    name: z.string().optional().describe('File name to show on the item, e.g. "login-error.png"'),
+  }, call(rpc, 'attach_image'));
+
 const itemShape = {
   type: z.enum(['backlog', 'bug']).describe('bug = defect, backlog = improvement or feature'),
   title: z.string().describe('Short title, max 200 chars'),
@@ -114,6 +122,7 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       check_command: z.string().optional().describe('Command that must pass before a local merge, e.g. "npm test"'),
     }, call(rpc, 'add_repo')),
     tool('remove_repo', 'Remove a repo from a project.', { project_key: z.string(), repo: z.string() }, call(rpc, 'remove_repo')),
+    attachImage(rpc),
     tool('list_items', 'List open items in a project.', {
       project_key: z.string(),
       status: z.array(z.string()).optional(),
@@ -232,6 +241,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       body: z.string(),
     }, call(rpc, 'add_comment')),
   ];
+  if (kind !== 'release') tools.push(attachImage(rpc));
   if (kind === 'release') {
     tools.push(
       tool('release_items', 'Label these items as released, with the version of this release. Call it only after the release succeeded (the release command exited 0, and the commit and tag are pushed); never after a failure.', {

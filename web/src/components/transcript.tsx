@@ -22,10 +22,10 @@ const AssistantText = memo(function AssistantText({ text, projectId, projectKey,
 type ToolUse = Extract<SessionEventBody, { kind: 'tool_use' }>;
 type ToolResult = Extract<SessionEventBody, { kind: 'tool_result' }>;
 
-function Thumbs({ images }: { images: { url: string }[] }) {
+function Thumbs({ images, className = 'ml-3.5 mb-1' }: { images: { url: string }[]; className?: string }) {
   const [full, setFull] = useState<string | null>(null);
   return (
-    <div className="ml-3.5 mb-1 flex flex-wrap gap-2">
+    <div className={cx('flex flex-wrap gap-2', className)}>
       {images.map((img) => (
         <button key={img.url} onClick={() => setFull(img.url)} className="rounded-lg overflow-hidden border border-line bg-raised" aria-label="Show image">
           <img src={img.url} alt="" loading="lazy" className="h-24 max-w-[60vw] object-cover" />
@@ -100,7 +100,8 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
       case 'user':
         return (
           <div key={e.seq} className="flex flex-col items-end">
-            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft border border-accent/25 px-3 py-2 whitespace-pre-wrap">{b.text}</div>
+            {b.images?.length ? <Thumbs images={b.images} className="justify-end mb-1 max-w-[85%]" /> : null}
+            {b.text && <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft border border-accent/25 px-3 py-2 whitespace-pre-wrap">{b.text}</div>}
             <MessageTime at={e.created_at} />
           </div>
         );

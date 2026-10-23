@@ -147,6 +147,37 @@ describe('review and merge of hosted repos in Dispatch', () => {
     }
   });
 
+  it('shows the running check\'s progress in the session, and estimates the next run from this one (DISP-5)', async () => {
+    const { s, session } = await setup({ check: 'npm test' });
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      const live: unknown[] = [];
+      s.ctx.bus.on((e) => e.t === 'check' && live.push(e.checks));
+      const progress = (units: number, elapsed_ms: number) => ({ stage: 'vitest run', current: `test/${units}.test.ts`, passed: units * 2, failed: 0, skipped: 0, units, total: null, elapsed_ms });
+      let during: any;
+      s.ctx.hub.cmd = (async (_w: unknown, _cmd: unknown, _t: unknown, onProgress?: (d: unknown) => void) => {
+        onProgress!(progress(1, 1000));
+        onProgress!(progress(2, 2000));
+        during = (await s.call('GET', `/sessions/${session.id}`)).data.checks;
+        return { ok: false, output: 'Check failed (npm test)', check: { ok: true, duration_ms: 4000, units: 4 } };
+      }) as typeof s.ctx.hub.cmd;
+      await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
+      expect(during).toEqual([expect.objectContaining({ session_id: session.id, pr_id: row.id, repo: 'app', command: 'npm test', expected: null, progress: progress(2, 2000) })]);
+      expect(live.at(-1)).toEqual([]); // the view goes away when the check is over
+      expect((await s.call('GET', `/sessions/${session.id}`)).data.checks).toEqual([]);
+      // the next run knows how long it takes
+      s.ctx.hub.cmd = (async (_w: unknown, _cmd: unknown, _t: unknown, onProgress?: (d: unknown) => void) => {
+        onProgress!(progress(1, 1000));
+        during = s.ctx.github.checks.of(session.id);
+        return { ok: false, output: 'Check failed (npm test)' };
+      }) as typeof s.ctx.hub.cmd;
+      await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
+      expect(during[0].expected).toEqual({ duration_ms: 4000, units: 4 });
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('pushes the merged default branch to the upstream; a failed push is told once', async () => {
     const { s, repo, session, upstream } = await setup({ upstream: true });
     try {

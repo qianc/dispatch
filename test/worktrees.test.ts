@@ -52,7 +52,7 @@ describe('worktrees of the owner\'s repo (local repos, default)', () => {
     git(dir, 'commit', '-m', 'owner work');
     expect(await ws.branchStatus(repo, 'dispatch/t-1')).toMatchObject({ ahead: 1, behind: 1 });
 
-    expect(await ws.mergeLocal({ ...repo, check_command: 'test -f b.txt && test -f c.txt' }, 'dispatch/t-1', 'Merge t-1')).toEqual({ ok: true });
+    expect(await ws.mergeLocal({ ...repo, check_command: 'test -f b.txt && test -f c.txt' }, 'dispatch/t-1', 'Merge t-1')).toMatchObject({ ok: true });
     expect(git(dir, 'log', '-1', '--format=%s', 'main')).toBe('Merge t-1');
     expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('two\n'); // checked-out main updated
     expect(await ws.branchStatus(repo, 'dispatch/t-1')).toMatchObject({ merged: true });

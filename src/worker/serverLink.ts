@@ -125,7 +125,7 @@ export class ServerLink {
       if (['idle', 'failed', 'completed', 'stopped'].includes(msg.status)) this.shared.slots.set(this.slotKey(msg.session_id), false);
     }
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
-    else if (msg.t !== 'rpc' && msg.t !== 'slots') this.outbox.push(msg); // rpc calls time out on their own and are retried by the agent
+    else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress') this.outbox.push(msg); // rpc calls time out on their own and are retried by the agent
   }
 
   sendSlots() {
@@ -302,7 +302,8 @@ export class ServerLink {
     }
   }
 
-  async command(cmd: WorkerCommand): Promise<unknown> {
+  /** `onProgress`: a long command's progress, sent to the server as it runs */
+  async command(cmd: WorkerCommand, onProgress?: (data: unknown) => void): Promise<unknown> {
     const ws = this.workspaces;
     // the fake runner still does real git for files and local repos; it only skips GitHub pushes/merges
     const local = 'repo' in cmd && !!cmd.repo?.local_path;
@@ -323,7 +324,7 @@ export class ServerLink {
         await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
         return { ok: true };
       case 'merge_local':
-        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message);
+        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress);
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch);
       case 'branch_diff':
@@ -383,7 +384,8 @@ export class ServerLink {
       }
       case 'cmd':
         try {
-          this.send({ t: 'cmd_result', req_id: msg.req_id, ok: true, data: await this.command(msg.cmd) });
+          const progress = (data: unknown) => this.send({ t: 'cmd_progress', req_id: msg.req_id, data });
+          this.send({ t: 'cmd_result', req_id: msg.req_id, ok: true, data: await this.command(msg.cmd, progress) });
         } catch (e) {
           this.send({ t: 'cmd_result', req_id: msg.req_id, ok: false, error: (e as Error).message });
         }

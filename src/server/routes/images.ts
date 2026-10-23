@@ -6,7 +6,8 @@ const MAX_BYTES = 15 * 1024 * 1024;
 /**
  * Images on items. Upload: POST the raw file (any image/* or application/octet-stream body) to
  * /api/items/:id/images?name=shot.png[&comment_id=7][&author=claude]. Only PNG, JPEG, GIF and WebP
- * are kept, told apart by their content.
+ * are kept, told apart by their content. Chat images (DISP-34): POST the raw file to
+ * /api/sessions/:id/images, then name its `file` in the message.
  */
 export function imageRoutes(app: FastifyInstance, { store, bus, attachments }: Ctx) {
   app.register(async (scoped) => {
@@ -30,6 +31,17 @@ export function imageRoutes(app: FastifyInstance, { store, bus, attachments }: C
       const { file: _file, ...img } = store.addItemImage({ item_id: it.id, comment_id: commentId, name, file: saved.file, mime: saved.mime, size: body.length, author });
       bus.emit({ t: 'item', item: store.item(it.id)! });
       return img;
+    });
+
+    // an image pasted into a chat (DISP-34): sent with the next message (POST .../messages, images)
+    scoped.post('/api/sessions/:id/images', { bodyLimit: MAX_BYTES }, async (req) => {
+      const s = store.session(intParam((req.params as { id: string }).id));
+      if (!s) throw notFound('Session');
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || !body.length) throw new HttpError(400, 'Send the image file as the request body.');
+      const saved = attachments.saveSessionImage(s.id, body);
+      if (!saved) throw new HttpError(415, 'Only PNG, JPEG, GIF and WebP images can be pasted.');
+      return saved;
     });
   });
 

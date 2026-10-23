@@ -42,7 +42,7 @@ describe('local repos in the worker', () => {
     expect(files).toEqual([expect.objectContaining({ filename: 'b.txt', status: 'added', additions: 1, deletions: 0 })]);
     expect(files[0].patch).toContain('+two');
 
-    expect(await ws.mergeLocal(repo, 'dispatch/l-5-x', 'Merge it')).toEqual({ ok: true });
+    expect(await ws.mergeLocal(repo, 'dispatch/l-5-x', 'Merge it')).toMatchObject({ ok: true });
     expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('two\n'); // working tree updated too
     expect(git(dir, 'log', '-1', '--format=%s')).toBe('Merge it');
     expect(await ws.branchStatus(repo, 'dispatch/l-5-x')).toMatchObject({ merged: true });

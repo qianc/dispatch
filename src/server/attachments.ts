@@ -1,7 +1,7 @@
 // Images kept as files: from agent tool results under DATA_DIR/attachments/<session>/, and images
 // added to items under DATA_DIR/attachments/items/<item>/.
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -57,6 +57,20 @@ export class Attachments {
 
   deleteItemImage(itemId: number, file: string) {
     if (/^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file)) rmSync(join(this.dir, 'items', String(itemId), file), { force: true });
+  }
+
+  /** Store an image the owner pasted into a chat (DISP-34). The type comes from the content. */
+  saveSessionImage(sessionId: number, data: Buffer): { file: string; mime: string; url: string } | null {
+    const mime = Attachments.sniff(data);
+    if (!mime) return null;
+    const file = `${randomUUID()}.${EXT[mime]}`;
+    mkdirSync(join(this.dir, String(sessionId)), { recursive: true });
+    writeFileSync(join(this.dir, String(sessionId), file), data);
+    return { file, mime, url: `/api/sessions/${sessionId}/attachments/${file}` };
+  }
+
+  hasSessionImage(sessionId: number, file: string) {
+    return /^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file) && existsSync(join(this.dir, String(sessionId), file));
   }
 
   /** null for names that are not ours (no path tricks). */

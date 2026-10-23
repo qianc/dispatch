@@ -4,6 +4,7 @@ import { query, type CanUseTool, type HookCallback, type Query, type SDKMessage,
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
+import { imageMarkers } from '../shared/chatImages.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
 import { existsSync, globSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -129,20 +130,54 @@ const ASSISTANT_TOOLS = ['Read', 'Glob', 'Grep'];
 const PLANNER_TOOLS_DENIED = ['Write', 'Edit', 'NotebookEdit', 'Bash', 'KillShell'];
 const MAX_TOOL_TEXT = 4000;
 
+type ImageFetch = (file: string) => Promise<{ mime: string; data: string }>;
+
+/**
+ * A user message for Claude. Images pasted into the chat (DISP-34) come as markers in the text:
+ * each is fetched from the server and sent as an image block after the text, which keeps the
+ * markers (the agent names an image by its marker to attach it to an item).
+ */
+export async function userContent(text: string, fetchImage: ImageFetch): Promise<SDKUserMessage['message']['content']> {
+  const files = imageMarkers(text);
+  if (!files.length) return text;
+  const blocks: Exclude<SDKUserMessage['message']['content'], string> = [{ type: 'text', text }];
+  for (const file of files) {
+    try {
+      const img = await fetchImage(file);
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mime as 'image/png', data: img.data } });
+    } catch (e) {
+      blocks.push({ type: 'text', text: `(The pasted image ${file} could not be loaded: ${(e as Error).message})` });
+    }
+  }
+  return blocks;
+}
+
 /** Async iterable of user messages that we can push into while the query runs. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
   private items: SDKUserMessage[] = [];
   private wake: (() => void) | null = null;
   private done = false;
+  /** messages are added in order, also while an earlier one's images are still being fetched */
+  private chain: Promise<void> = Promise.resolve();
+  private fetchImage: ImageFetch;
+
+  constructor(fetchImage: ImageFetch) {
+    this.fetchImage = fetchImage;
+  }
 
   push(text: string) {
-    this.items.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: '' } as SDKUserMessage);
-    this.wake?.();
+    this.chain = this.chain.then(async () => {
+      const content = await userContent(text, this.fetchImage);
+      this.items.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '' } as SDKUserMessage);
+      this.wake?.();
+    });
   }
 
   end() {
-    this.done = true;
-    this.wake?.();
+    this.chain = this.chain.then(() => {
+      this.done = true;
+      this.wake?.();
+    });
   }
 
   async *[Symbol.asyncIterator]() {
@@ -207,7 +242,7 @@ export class ClaudeRunner implements AgentRunner {
   private spec: StartSpec;
   private deps: RunnerDeps;
   private opts: RunnerOptions;
-  private input = new InputQueue();
+  private input = new InputQueue((file) => this.deps.rpc('get_chat_image', { file }) as Promise<{ mime: string; data: string }>);
   private q: Query | null = null;
   private waiting = new Map<string, (a: InputAnswer | null) => void>();
   private idleTimer: NodeJS.Timeout | null = null;

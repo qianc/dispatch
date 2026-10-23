@@ -99,13 +99,15 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       repos: s.project_id ? store.repos(s.project_id) : [],
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,
+      checks: github.checks.of(s.id),
     };
   });
 
   app.post('/api/sessions/:id/messages', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { text } = z.object({ text: z.string().min(1) }).parse(req.body);
-    sessions.send(s.id, text);
+    const { text, images } = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
+      .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.').parse(req.body);
+    sessions.send(s.id, text, images);
     return { ok: true };
   });
 

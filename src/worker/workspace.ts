@@ -1,10 +1,11 @@
 // Git clones and per-session worktrees under WORKSPACES_DIR.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
@@ -41,6 +42,51 @@ export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 
   });
 }
 
+/**
+ * Run a shell command and read its output as it comes: `onProgress` gets the test progress read
+ * from it (DISP-5), at most about once a second while it changes, and once at the end.
+ */
+export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void): Promise<RunResult & { progress: CheckProgress; duration_ms: number }> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const parser = new CheckParser();
+    let out = '';
+    let last = 0;
+    let dirty = false;
+    const report = (force = false) => {
+      if (!onProgress || (!dirty && !force)) return;
+      if (!force && Date.now() - last < 1000) return;
+      last = Date.now();
+      dirty = false;
+      onProgress(parser.progress(Date.now() - started));
+    };
+    const tick = setInterval(() => report(), 1000);
+    const child = spawn('sh', ['-c', command], { cwd, env: procEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const onData = (b: Buffer) => {
+      const s = b.toString('utf8');
+      out = (out + s).slice(-200_000);
+      if (parser.write(s)) dirty = true;
+      report();
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    // the whole process group: a test runner's own children must not outlive the timeout
+    const kill = setTimeout(() => {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+    }, timeoutMs);
+    const done = (code: number) => {
+      clearInterval(tick);
+      clearTimeout(kill);
+      parser.write('\n');
+      const progress = parser.progress(Date.now() - started);
+      if (onProgress) onProgress(progress);
+      resolve({ code, out: out.trim(), progress, duration_ms: progress.elapsed_ms });
+    };
+    child.on('error', (e) => { out += String(e); done(127); });
+    child.on('close', (code, signal) => done(code ?? (signal ? 137 : 1)));
+  });
+}
+
 const MAX_FILE = 10 * 1024 * 1024;
 
 /** Run git and get raw stdout bytes (for files that may be binary). */
@@ -58,6 +104,9 @@ async function git(args: string[], cwd?: string) {
   if (r.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.out}`);
   return r.out;
 }
+
+/** A local merge's outcome; `check`: how the repo's check command went, when it ran */
+export interface MergeResult { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } }
 
 export interface Leftover { repo_id: number; repo: string; worktree: boolean; dirty: boolean; untracked: boolean; branch: string | null; merged: boolean }
 export interface TidyResult { repo: string; worktree: 'none' | 'removed' | 'kept (uncommitted changes)'; branch: string }
@@ -83,7 +132,8 @@ export class Workspaces {
   private hosted: { base: string; token: string } | null;
 
   constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({}), hosted: { base: string; token: string } | null = null) {
-    this.root = root;
+    // absolute: git commands run in other folders (a local repo) and must find these paths too
+    this.root = resolve(root);
     this.remoteBase = remoteBase;
     this.gitEnv = gitEnv;
     this.hosted = hosted;
@@ -281,15 +331,16 @@ export class Workspaces {
   }
 
   /** Merge `branch` into the default branch locally, run the check command, push. */
-  mergeLocal(repo: Repo, branch: string, message: string): Promise<{ ok: boolean; conflict?: boolean; output?: string }> {
-    return this.withRepo(repo, () => this.mergeLocalUnlocked(repo, branch, message));
+  mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
+    return this.withRepo(repo, () => this.mergeLocalUnlocked(repo, branch, message, onProgress));
   }
 
-  private async mergeLocalUnlocked(repo: Repo, branch: string, message: string): Promise<{ ok: boolean; conflict?: boolean; output?: string }> {
+  private async mergeLocalUnlocked(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
     const { dir, base, head } = await this.refs(repo, branch);
     const tmp = join(this.root, 'merge', randomUUID());
     await mkdir(join(this.root, 'merge'), { recursive: true });
     await git(['worktree', 'add', '--detach', tmp, base], dir);
+    let check: MergeResult['check'];
     try {
       const m = await run('git', ['merge', '--no-ff', '-m', message, head], tmp);
       if (m.code !== 0) {
@@ -297,8 +348,9 @@ export class Workspaces {
         return { ok: false, conflict: true, output: m.out };
       }
       if (repo.check_command) {
-        const c = await run('sh', ['-c', repo.check_command], tmp, 30 * 60_000);
-        if (c.code !== 0) return { ok: false, output: `Check failed (${repo.check_command}):\n${c.out.slice(-4000)}` };
+        const c = await runCheck(repo.check_command, tmp, 30 * 60_000, onProgress);
+        check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
+        if (c.code !== 0) return { ok: false, output: `Check failed (${repo.check_command}):\n${c.out.slice(-4000)}`, check };
       }
       // local repo: push into the repo itself, so a checked-out default branch is updated the
       // git way (receive.denyCurrentBranch=updateInstead refuses when its working tree is dirty)
@@ -307,9 +359,9 @@ export class Workspaces {
         const why = repo.local_path && /denyCurrentBranch|checked out|working tree|would be overwritten|unstaged/i.test(push.out)
           ? `Could not update ${repo.default_branch} in ${repo.local_path}: it is checked out there with uncommitted changes, or the repo refuses pushes to it. Commit or stash your changes (or run \`git config receive.denyCurrentBranch updateInstead\` in that repo) and merge again.\n\n`
           : '';
-        return { ok: false, output: why + push.out };
+        return { ok: false, output: why + push.out, check };
       }
-      return { ok: true };
+      return check ? { ok: true, check } : { ok: true };
     } finally {
       await run('git', ['worktree', 'remove', '--force', tmp], dir);
     }

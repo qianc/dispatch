@@ -597,6 +597,16 @@ export class Store {
     }));
   }
 
+  addCheckRun(r: { repo_id: number; command: string; ok: boolean; duration_ms: number; units: number }) {
+    this.db.run('INSERT INTO check_runs (repo_id, command, ok, duration_ms, units) VALUES (?, ?, ?, ?, ?)', r.repo_id, r.command, r.ok ? 1 : 0, Math.round(r.duration_ms), r.units);
+  }
+
+  /** Earlier passing runs of a repo's check command, newest first. */
+  checkHistory(repoId: number, command: string, limit = 5): { duration_ms: number; units: number }[] {
+    return this.db.all('SELECT duration_ms, units FROM check_runs WHERE repo_id = ? AND command = ? AND ok = 1 ORDER BY id DESC LIMIT ?', repoId, command, limit)
+      .map((r) => ({ duration_ms: Number(r.duration_ms), units: Number(r.units) }));
+  }
+
   setPrBlocked(id: number, why: string | null) {
     this.db.run('UPDATE pull_requests SET blocked = ?, blocked_sha = head_sha WHERE id = ?', why, id);
   }

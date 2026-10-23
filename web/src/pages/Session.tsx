@@ -5,12 +5,14 @@ import { FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
+import { useChatImages } from '../components/chatImages.tsx';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
 import { useItemPeek } from '../components/itemPeek.tsx';
 import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
+import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -53,7 +55,11 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     },
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
-  const send = useMutation({ mutationFn: () => api.post(`/sessions/${id}/messages`, { text }), onSuccess: () => setText('') });
+  const images = useChatImages(id);
+  const send = useMutation({
+    mutationFn: () => api.post(`/sessions/${id}/messages`, { text, images: images.files }),
+    onSuccess: () => { setText(''); images.clear(); },
+  });
   const interrupt = useMutation({ mutationFn: () => api.post(`/sessions/${id}/interrupt`) });
   const finish = useMutation({
     mutationFn: (b: { status: 'completed' | 'stopped'; cleanup: boolean }) => api.post(`/sessions/${id}/finish`, b),
@@ -203,10 +209,13 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           value={text}
           onChange={setText}
           onSubmit={() => send.mutate()}
-          canSubmit={canSend && !send.isPending}
+          canSubmit={canSend && !send.isPending && !images.uploading}
           disabled={!canSend}
           placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
-          action={s.status === 'running' && !text ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
+          onImages={images.add}
+          attachments={images.view}
+          hasImages={images.files.length > 0}
+          action={s.status === 'running' && !text && !images.files.length ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
         />
       }
     >
@@ -270,13 +279,14 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
+      {data.checks?.map((c) => <CheckProgressCard key={c.pr_id} run={c} />)}
       {s.status === 'idle' && s.kind === 'work' && (
         <div className="px-4 pt-2 pb-1">
-          {attention.kind === 'checking' && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
+          {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
         </div>
       )}
-      <ErrorText error={send.error} />
+      <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
       <div ref={endRef} />
       {awayFromBottom && (
         // sticky at the bottom of the chat area: stays in view while you read further up

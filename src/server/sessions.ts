@@ -22,6 +22,7 @@ import {
   type SessionStatus,
 } from '../shared/types.ts';
 import { z } from 'zod';
+import { CHAT_IMAGE_FILE, chatImageType, withImageMarkers } from '../shared/chatImages.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
@@ -438,11 +439,18 @@ export class Sessions {
 
   // ---------- user actions ----------
 
-  send(sessionId: number, text: string) {
+  /** `images`: files pasted into the chat (from POST /api/sessions/:id/images), sent along (DISP-34) */
+  send(sessionId: number, ownText: string, images: string[] = []) {
     const s = this.mustGet(sessionId);
     if (s.status === 'queued') throw new SessionError('Session has not started yet.');
     if (s.status === 'waiting_input') throw new SessionError('Answer the open question first.');
-    this.addEvent(sessionId, { kind: 'user', text });
+    const missing = images.find((f) => !CHAT_IMAGE_FILE.test(f) || !this.attachments?.hasSessionImage(sessionId, f));
+    if (missing) throw new SessionError(`Image ${missing} is not in this session; paste it again.`);
+    this.addEvent(sessionId, images.length
+      ? { kind: 'user', text: ownText, images: images.map((f) => ({ url: `/api/sessions/${sessionId}/attachments/${f}`, media_type: chatImageType(f) })) }
+      : { kind: 'user', text: ownText });
+    // the agent gets markers for the images; its worker fetches them (get_chat_image)
+    const text = withImageMarkers(ownText, images);
     const reopen = FINAL_STATUSES.includes(s.status);
     if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
       // its worker is away: the reply waits, and the session resumes with it when the worker is back
@@ -667,6 +675,14 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     if (workerId !== undefined && s.worker_id !== workerId) throw new Error('This session runs on another worker.');
     const p = (params ?? {}) as Record<string, unknown>;
+    // images pasted into this chat (DISP-34): any kind of session reads its own
+    if (method === 'get_chat_image') {
+      const file = String(p.file ?? '');
+      const img = CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
+      if (!img) throw new Error(`No pasted image ${file} in this chat`);
+      return { mime: img.type, data: img.data.toString('base64') };
+    }
+    if (method === 'attach_image') return this.attachChatImage(s, p);
     if (s.kind === 'assistant') {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
@@ -748,6 +764,29 @@ export class Sessions {
       default:
         throw new Error(`Unknown method ${method}`);
     }
+  }
+
+  /**
+   * Put an image the owner pasted into this chat on an item (DISP-34). A work or planning session
+   * reaches the items of its project; the assistant those of any project.
+   */
+  private async attachChatImage(s: Session, p: Record<string, unknown>) {
+    if (s.kind === 'discuss' || s.kind === 'release') throw new Error(`A ${s.kind === 'discuss' ? 'discussion' : 'release session'} cannot attach images.`);
+    const file = String(p.image ?? '').replace(/^\[pasted image (.*)\]$/, '$1').trim();
+    const img = CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
+    if (!img) throw new Error(`No pasted image ${file} in this chat. Use the name from its "[pasted image …]" marker.`);
+    const key = String(p.key ?? '').toUpperCase();
+    const m = key.match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
+    const project = m ? this.store.projectByKey(m[1]) : undefined;
+    if (!m || !project || (s.kind !== 'assistant' && project.id !== s.project_id)) throw new Error(`No item ${key}${s.project_key ? ` in project ${s.project_key}` : ''}`);
+    const item = this.store.itemByNumber(project.id, Number(m[2]));
+    if (!item) throw new Error(`No item ${key}`);
+    const saved = this.attachments!.saveItemImage(item.id, img.data)!;
+    const name = String(p.name ?? '').replace(/[/\\\0]/g, '').trim().slice(0, 120) || `pasted.${file.split('.').pop()}`;
+    const { file: _f, ...added } = this.store.addItemImage({ item_id: item.id, comment_id: null, name, file: saved.file, mime: saved.mime, size: img.data.length, author: 'claude' });
+    this.bus.emit({ t: 'item', item: this.store.item(item.id)! });
+    this.addEvent(s.id, { kind: 'system', text: `Attached a pasted image to ${item.key}.` });
+    return { attached: added.id, item: item.key, name };
   }
 
   /** Show a proposal card in the session's transcript. */

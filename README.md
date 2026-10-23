@@ -25,6 +25,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   Agents push their branches into that folder; Dispatch shows the branch for review (diff on the
   phone) and merges it by pushing the default branch back (the folder's working tree must be clean;
   set `receive.denyCurrentBranch updateInstead` there if the branch is checked out).
+- **Live test progress**: while a repo's check command runs before a merge, the session shows the
+  step, the last finished test file, passed and failed counts, and the time left, estimated from
+  earlier passing runs of the same command (vitest and playwright output is read; any other command
+  still gets the time estimate).
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
@@ -424,7 +428,9 @@ Items can carry images (screenshots, rendered output): add them in the app (came
 library, file, or paste on desktop) or with the script. `images:` in `.dispatch.md`
 (`always`, `when_possible`, `off`) says how hard Claude tries to attach an example image that
 shows the issue, and the text below it can say how to make one. Agents working on an item can
-look at its images.
+look at its images. In any chat, paste an image into the message box (or pick one with the image
+button): Claude sees it with your message, and a work session, planning chat or the Assistant can
+attach it to an item it creates or changes.
 
 The changelog stays a file in the repo. Claude writes it from done items without a `rel:<version>`
 label, then labels them, so the next entry starts where this one ended.

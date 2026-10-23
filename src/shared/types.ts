@@ -1,4 +1,5 @@
 import type { ClaudeAccountInfo } from './accounts.ts';
+import type { CheckRun } from './checkProgress.ts';
 import { PROJECT_COLOR_NAMES, PROJECT_ICONS, type ProjectColor } from './projectLook.ts';
 import { z } from 'zod';
 
@@ -255,7 +256,8 @@ export interface WorkerRecord {
 
 /** Compact, UI-ready transcript event. */
 export type SessionEventBody =
-  | { kind: 'user'; text: string }
+  /** images: pasted into the chat with the message (DISP-34) */
+  | { kind: 'user'; text: string; images?: { url: string; media_type: string }[] }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; summary: string; input: unknown }
   | { kind: 'tool_result'; tool_use_id: string; is_error: boolean; text: string; images?: { url: string; media_type: string }[] }
@@ -560,7 +562,9 @@ export type LiveEvent =
   /** finished sessions' leftovers were cleaned up */
   | { t: 'cleanup' }
   /** a notification: open apps show it in the page (devices with the app in focus get no system notification) */
-  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } };
+  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } }
+  /** the check commands running now for a session's merges, with their progress (empty: none, DISP-5) */
+  | { t: 'check'; session_id: number; checks: CheckRun[] };
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;
