@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { ProposedItem, RunOptions } from '../../../src/shared/types.ts';
 import { api, type Item, type Session } from '../api.ts';
@@ -10,6 +11,26 @@ export interface BatchStart {
   prompt: string;
   force_plan: boolean;
   options: RunOptions;
+}
+
+/**
+ * The items picked on a batch card, kept in the browser so an untick survives a reload and the
+ * Inbox's Start button starts what the card shows (DISP-38).
+ */
+export function useCardPicks(sessionId: number, eventId: number, proposed: number[]) {
+  const key = `dispatch:card:${sessionId}:${eventId}`;
+  const [picked, setPicked] = useState<Set<number>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) ?? 'null') as unknown;
+      if (Array.isArray(saved)) return new Set(proposed.filter((id) => saved.includes(id)));
+    } catch { /* a bad entry: start from the card */ }
+    return new Set(proposed);
+  });
+  const update = (next: Set<number>) => {
+    setPicked(next);
+    localStorage.setItem(key, JSON.stringify([...next]));
+  };
+  return [picked, update] as const;
 }
 
 /**
