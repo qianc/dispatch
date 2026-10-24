@@ -92,7 +92,10 @@ const proposalSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-type BatchProposal = Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
+/** The system note a work session gets for the items the owner unticked on its card (DISP-38). */
+const LEFT_OUT = 'Left out by the owner on the proposal card: ';
+
+type BatchProposal =Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
 type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>;
 
 /** What a scheduled run may start: never items on hold, in review or closed (DISP-13). */
@@ -251,6 +254,14 @@ export class Sessions {
       || this.store.sessionsForItem(item.id, 'work').some((s) => !FINAL_STATUSES.includes(s.status));
   }
 
+  /** The items on a batch card that the owner did not pick when starting it. */
+  private leftOutOfCard(ref: { session_id: number; event_id: number } | undefined, picked: number[]): Item[] {
+    if (!ref) return [];
+    const card = this.store.events(ref.session_id).find((e) => e.id === ref.event_id);
+    if (card?.body.kind !== 'proposal' || card.body.proposal.type !== 'batch') return [];
+    return this.store.itemsByIds(card.body.proposal.item_ids.filter((id) => !picked.includes(id)));
+  }
+
   startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }): Session {
     this.assertProposalOpen(input.proposal);
     let requested = input.options?.worker_id ?? null;
@@ -269,6 +280,11 @@ export class Sessions {
       items = items.filter((i) => !gone.includes(i));
       if (!items.length && !input.new_items.length) throw new SessionError(`Nothing left to start: ${gone.map((i) => i.key).join(', ')} ${gone.length === 1 ? 'is' : 'are'} already closed or in progress elsewhere.`, 409);
     }
+    // what the owner unticked on the card: its instructions may still name them, so say they are out (DISP-38)
+    const leftOut = this.leftOutOfCard(input.proposal, input.item_ids).filter((i) => i.project_id === project.id && !this.movedOn(i));
+    const prompt = leftOut.length
+      ? `The owner left ${leftOut.map((i) => i.key).join(', ')} out of this batch. Do not work on ${leftOut.length === 1 ? 'it' : 'them'} and do not add ${leftOut.length === 1 ? 'it' : 'them'} to the batch, even where the instructions below mention ${leftOut.length === 1 ? 'it' : 'them'}.\n\n${input.prompt}`.trim()
+      : input.prompt;
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
     if (!all.length && !input.prompt.trim()) throw new SessionError('Pick at least one item or write a prompt.');
@@ -281,7 +297,7 @@ export class Sessions {
       status: 'queued',
       force_plan: input.force_plan ?? project.default_force_plan,
       branch: null,
-      initial_prompt: input.prompt,
+      initial_prompt: prompt,
       source_id: input.source_id ?? null,
       item_ids: all.map((i) => i.id),
       options: { ...(input.options ?? DEFAULT_RUN_OPTIONS), worker_id: workerId },
@@ -290,7 +306,9 @@ export class Sessions {
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
-    const left = gone.length ? ` (left out ${gone.map((i) => i.key).join(', ')}: closed or in progress elsewhere)` : '';
+    if (leftOut.length) this.addEvent(session.id, { kind: 'system', text: `${LEFT_OUT}${leftOut.map((i) => i.key).join(', ')}` });
+    const left = (gone.length ? ` (left out ${gone.map((i) => i.key).join(', ')}: closed or in progress elsewhere)` : '')
+      + (leftOut.length ? ` (left out ${leftOut.map((i) => i.key).join(', ')})` : '');
     this.markProposalDone(input.proposal, `Started session #${session.id}${left}`);
     this.emitSession(session);
     this.dispatch();
@@ -741,6 +759,14 @@ export class Sessions {
         const keys = Array.isArray(p.keys) ? [...new Set((p.keys as unknown[]).map((k) => String(k).toUpperCase()))] : [];
         if (!keys.length) throw new Error('Give the item keys, e.g. ["HC-3"]');
         const items = keys.map(byKey);
+        // an item the owner unticked on the card stays out until the owner asks for it in a message
+        const events = this.store.events(s.id);
+        const mark = events.findLast((e) => e.body.kind === 'system' && e.body.text.startsWith(LEFT_OUT));
+        if (mark?.body.kind === 'system' && !events.some((e) => e.body.kind === 'user' && e.seq > mark.seq)) {
+          const out = mark.body.text.slice(LEFT_OUT.length).split(', ');
+          const refused = items.filter((i) => out.includes(i.key)).map((i) => i.key).join(', ');
+          if (refused) throw new Error(`The owner left ${refused} out of this batch on the proposal card. Do not work on it; ask the owner if you think it is needed.`);
+        }
         this.store.addSessionItems(s.id, items.map((i) => i.id));
         for (const it of items) {
           // closed items stay closed; open ones are now being worked on here

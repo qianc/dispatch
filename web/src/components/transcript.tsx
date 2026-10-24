@@ -8,7 +8,7 @@ import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
-import { useProposalActions } from './proposals.ts';
+import { useCardPicks, useProposalActions } from './proposals.ts';
 import { ItemKeyLink } from './itemPeek.tsx';
 import { fullTime, messageTime } from '../time.ts';
 import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
@@ -382,7 +382,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
     queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),
     enabled: proposal.type === 'batch',
   });
-  const [picked, setPicked] = useState<Set<number>>(() => new Set(proposal.type === 'batch' ? proposal.item_ids : []));
+  const [picked, setPicked] = useCardPicks(session.id, eventId, proposal.type === 'batch' ? proposal.item_ids : []);
   const newItems = proposal.type === 'batch' ? proposal.new_items : proposal.items;
   const [pickedNew, setPickedNew] = useState<Set<number>>(() => new Set(newItems.map((_, i) => i)));
   const [title, setTitle] = useState(proposal.type === 'batch' ? proposal.title : '');
