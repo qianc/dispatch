@@ -209,12 +209,15 @@ export class GitHub {
   }
 
   /** Auto-merge outcomes per session, sent as one notice (a session can change several repos). */
-  private mergeNotices = new Map<number, { s: Session; merged: string[]; stopped: { label: string; why: string; prId: number }[]; timer: NodeJS.Timeout }>();
+  private mergeNotices = new Map<number, { s: Session; merged: string[]; deploys: boolean; stopped: { label: string; why: string; prId: number }[]; timer: NodeJS.Timeout }>();
 
-  private queueMergeNotice(s: Session, outcome: { merged: string } | { stopped: string; why: string; prId: number }) {
-    const cur = this.mergeNotices.get(s.id) ?? { s, merged: [], stopped: [], timer: undefined as unknown as NodeJS.Timeout };
+  private queueMergeNotice(s: Session, outcome: { merged: string; deploys: boolean } | { stopped: string; why: string; prId: number }) {
+    const cur = this.mergeNotices.get(s.id) ?? { s, merged: [], deploys: false, stopped: [], timer: undefined as unknown as NodeJS.Timeout };
     clearTimeout(cur.timer);
-    if ('merged' in outcome) cur.merged.push(outcome.merged);
+    if ('merged' in outcome) {
+      cur.merged.push(outcome.merged);
+      cur.deploys ||= outcome.deploys;
+    }
     else cur.stopped.push({ label: outcome.stopped, why: outcome.why, prId: outcome.prId });
     // outside a whole-session sync (a single PR synced), send once things are quiet
     cur.timer = setTimeout(() => this.flushMergeNotice(s.id), 1500);
@@ -226,13 +229,15 @@ export class GitHub {
     if (!n) return;
     clearTimeout(n.timer);
     this.mergeNotices.delete(sessionId);
-    const { s, merged, stopped } = n;
+    const { s, merged, deploys, stopped } = n;
     const project_id = s.project_id ?? undefined;
     if (stopped.length) {
       const body = stopped.map((x) => `${x.label}: ${x.why}`).join('\n') + (merged.length ? `\nMerged: ${merged.join(', ')}` : '');
       void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id });
       return;
     }
+    // a deploy follows: its result is the one notice for this turn (sessions.ts, DISP-40)
+    if (deploys) return;
     // the one notice for this turn: what Claude said it did, now merged
     const summary = this.store.session(s.id)?.last_text;
     void this.notifier.send({
@@ -444,7 +449,7 @@ export class GitHub {
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
     this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged into ${repoName}: ${ref} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
     this.tell(s.id);
-    this.queueMergeNotice(s, { merged: label });
+    this.queueMergeNotice(s, { merged: label, deploys: !!repo.deploy_command });
   }
 
   /** Store a GitHub PR and apply side effects of state changes. */

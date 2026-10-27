@@ -78,20 +78,23 @@ export function workPrompt(spec: StartSpec): string {
     lines.push('## Items in this batch', '', ...spec.items.map((it) => itemBlock(spec, it)), '');
   }
   if (spec.source) lines.push(`These items come from: ${sourceLine(spec.source)}.`, '');
+  const auto = spec.options.auto_merge !== 'off';
+  const merges = auto ? 'Dispatch merges it' : 'the owner merges from Dispatch';
+  const reviewed = auto ? 'Dispatch merges the branch when your work is done.' : 'Dispatch shows the branch to the owner for review and merges it from there.';
   lines.push(
     '## How to work',
     `- Work on branch \`${spec.branch}\`; it is already checked out in every repo. Commit as you go, with messages that mention the item keys.`,
     '- All items in this batch go into ONE branch and ONE pull request per changed repo.',
     `- When the work is done and verified: push the branch (\`git push -u origin ${spec.branch}\`) and open a pull request with \`gh pr create --head ${spec.branch}\` against the repo's base branch. The PR body lists the item keys it covers. Only open PRs for repos you changed. Dispatch links the PR to the items automatically.`,
-    '- Do not merge the PR yourself; the owner merges from Dispatch.',
+    `- Do not merge the PR yourself; ${merges}.`,
     ...(spec.repos.some((r) => r.local_path && r.attached)
-      ? [`- Local repos where this checkout is a worktree of the owner's repo: the branch \`${spec.branch}\` already lives in that repo. Commit and stop; do not push and do not run \`gh\`. Dispatch shows the branch to the owner for review and merges it from there.`]
+      ? [`- Local repos where this checkout is a worktree of the owner's repo: the branch \`${spec.branch}\` already lives in that repo. Commit and stop; do not push and do not run \`gh\`. ${reviewed}`]
       : []),
     ...(spec.repos.some((r) => r.kind === 'hosted')
       ? [`- Repos hosted by Dispatch: commit your work and stop; do not push and do not run \`gh\` for them (you have no access). Dispatch pushes the branch at the end of your turn and shows it to the owner for review. Before each turn Dispatch fetches them, so \`origin/<base branch>\` is current: to bring the base branch in, \`git merge origin/<base branch>\` without fetching.`]
       : []),
     ...(spec.repos.some((r) => r.local_path && !r.attached)
-      ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. Dispatch shows the branch to the owner for review and merges it from there.`]
+      ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. ${reviewed}`]
       : []),
     '- Your environment: change nothing outside this checkout (the owner\'s own checkout, its venv, shared caches) except through the repo\'s own tools and scripts. If a test fails because of your environment and not your change, fix the environment and re-run, so shared test records are true. Before you finish, remove any failure records you caused that way.',
     '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.',
@@ -109,6 +112,8 @@ export function workPrompt(spec: StartSpec): string {
   }
   if (spec.options.auto_merge !== 'off') {
     lines.push('- The owner chose auto-merge: when you open the PR and its checks pass, Dispatch merges it. Only open the PR when the work is complete and verified.');
+    // the last message is the notice body, sent after the merge and any deploy (DISP-40)
+    lines.push('- Your last message is sent to the owner as the notice after Dispatch merges (and deploys, if the repo has a deploy command). Say what you did. Do not say whether it is merged or deployed; Dispatch adds that.');
   }
   if (spec.force_plan) {
     lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval (ExitPlanMode or AskUserQuestion) before you change any code.');
