@@ -14,6 +14,13 @@ import { Discuss } from './Discuss.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, ImportanceIcon, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 /** An item. With `itemId` + `onClose` it renders as the desktop drawer next to the project list. */
+/** "26 Oct 2026 · 1d ago" for an item's created_at. */
+function createdLabel(iso: string) {
+  const date = new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const ago = timeAgo(iso);
+  return `${date} · ${ago === 'now' ? 'just now' : `${ago} ago`}`;
+}
+
 export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () => void } = {}) {
   const params = useParams();
   const id = itemId ?? Number(params.id);
@@ -84,6 +91,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
           {effortLabel(p, it.effort) && <Chip>Effort {effortLabel(p, it.effort)}</Chip>}
           {it.modules.map((m) => <Chip key={`m-${m}`} tone="accent">{m}</Chip>)}
           {it.labels.map((l) => <Chip key={`t-${l}`}>#{l}</Chip>)}
+          <Chip><span title={new Date(it.created_at).toLocaleString()}>Created {createdLabel(it.created_at)}</span></Chip>
         </div>
         <div className="mt-3"><StatusPicker value={it.status} onChange={(status) => patch.mutate({ status })} /></div>
         {it.source && (
