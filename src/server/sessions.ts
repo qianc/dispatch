@@ -1233,8 +1233,8 @@ export class Sessions {
     const tail = msg.output.trim().split('\n').slice(-15).join('\n');
     this.addEvent(s.id, { kind: msg.ok ? 'system' : 'error', text: `${msg.ok ? 'Deployed' : 'Deploy failed for'} ${repo.github_name}${at}${took}.${tail ? `\n${tail}` : ''}` });
     const key = s.project_key ?? 'Dispatch';
-    // success replaces the "done and merged" notice (same tag); a failure is a notice of its own
-    if (msg.ok) this.notify(s, `${key}: merged and deployed`, `${repo.github_name}${at}${s.last_text ? `\n${s.last_text}` : ''}`, `merged-${s.id}`);
+    // the one notice for an auto-merge with a deploy: none was sent at the merge (DISP-40)
+    if (msg.ok) this.notify(s, `${key}: done, merged and deployed`, s.last_text ? `${s.last_text}\n${repo.github_name}${at}` : `${repo.github_name}${at}`, `merged-${s.id}`);
     else this.notify(s, `${key}: merged, but the deploy failed`, `${repo.github_name}${at}: ${msg.output.trim().split('\n').slice(-3).join(' ')}`, `deploy-${s.id}`);
   }
 

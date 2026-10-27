@@ -18,6 +18,15 @@ describe('run options in the agent prompt', () => {
     expect(workPrompt(spec({}))).not.toMatch(/auto-merge/);
     expect(workPrompt(spec({ auto_merge: 'github' }))).toMatch(/auto-merge/);
   });
+
+  it('with auto-merge, does not tell Claude the owner merges, and asks it not to report merge or deploy state (DISP-40)', () => {
+    const local = { id: 1, github_name: 'r', local_path: '/r', attached: true } as unknown as StartSpec['repos'][number];
+    expect(workPrompt({ ...spec({}), repos: [local] })).toMatch(/the owner merges/);
+    const auto = workPrompt({ ...spec({ auto_merge: 'local' }), repos: [local] });
+    expect(auto).not.toMatch(/owner merges/);
+    expect(auto).not.toMatch(/merges it from there/);
+    expect(auto).toMatch(/Do not say whether it is merged or deployed/);
+  });
 });
 
 describe('start modes', () => {

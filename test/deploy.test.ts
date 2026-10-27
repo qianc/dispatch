@@ -56,6 +56,7 @@ describe('deploy after a merge (DISP-37)', () => {
     git(repo.local_path, 'checkout', 'main');
     return { repo, session };
   }
+  const notices = (id: number) => s.ctx.notifier.sent.filter((n) => n.url === `/s/${id}`).map((n) => n.title);
   const events = async (id: number) => ((await s.call('GET', `/sessions/${id}`)).data.events as { body: { kind: string; text: string } }[]).map((e) => e.body);
 
   it('auto-merge deploys the merged default branch and says so in the session and a notice', async () => {
@@ -68,7 +69,15 @@ describe('deploy after a merge (DISP-37)', () => {
     expect(done).toMatchObject({ kind: 'system' });
     expect(done.text).toContain('two'); // the end of its output
     expect((await events(session.id)).some((e) => /^Deploying depa/.test(e.text))).toBe(true);
-    expect(s.ctx.notifier.sent.some((n) => n.title === 'DEPA: merged and deployed')).toBe(true);
+    // one notice for the session, sent after the deploy (DISP-40): no "done and merged" before it
+    expect(notices(session.id)).toEqual(['DEPA: done, merged and deployed']);
+  }, 30_000);
+
+  it('a failed deploy after an auto-merge is the only notice of the session (DISP-40)', async () => {
+    const { session } = await mergeable('DEPD', 'echo broken registry; exit 3', true);
+    await s.ctx.github.syncSession(session);
+    await waitFor(async () => (await events(session.id)).find((e) => /^Deploy failed/.test(e.text)), 'deploy failure', 20_000);
+    expect(notices(session.id)).toEqual(['DEPD: merged, but the deploy failed']);
   }, 30_000);
 
   it('a failed deploy is an error in the session and a notice', async () => {
