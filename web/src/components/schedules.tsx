@@ -88,7 +88,8 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
       <p className="text-[13px] text-muted mb-3">At this time a planner looks at the backlog within the scope and starts the batches it picks, with the options below. It asks nothing; starting nothing is fine. It never starts items on hold.</p>
       <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Schedule name" /></Field>
       <Field label="Time" hint="The server's local time.">
-        <input type="time" className={inputCls} value={f.at_time} onChange={(e) => setF({ ...f, at_time: e.target.value })} aria-label="Time" required />
+        {/* DISP-41: mobile browsers give native time inputs a min intrinsic width that w-full alone does not cap */}
+        <input type="time" className={cx(inputCls, 'block min-w-0 max-w-full appearance-none')} value={f.at_time} onChange={(e) => setF({ ...f, at_time: e.target.value })} aria-label="Time" required />
       </Field>
       <Field label="Days" group>
         <div className="flex flex-wrap gap-1.5">

@@ -580,6 +580,14 @@ test('a schedule on the project page: add it, run it now, see what it started (D
   const d = page.getByRole('dialog');
   await d.getByLabel('Schedule name').fill('Night run');
   await d.getByLabel('Time').fill('03:30');
+  // DISP-41: the time field sits inside the sheet and the sheet does not scroll sideways
+  const fit = await d.getByLabel('Time').evaluate((el) => {
+    const box = el.closest('.overflow-y-auto')!;
+    return { right: el.getBoundingClientRect().right, boxRight: box.getBoundingClientRect().right, scroll: box.scrollWidth, client: box.clientWidth, x: getComputedStyle(box).overflowX };
+  });
+  expect(fit.right).toBeLessThanOrEqual(fit.boxRight);
+  expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
+  expect(fit.x).toBe('hidden');
   await d.getByRole('button', { name: 'Sat' }).click();
   await d.getByRole('button', { name: 'Sun' }).click();
   await d.getByLabel('Scope').fill('Small fixes only.');
