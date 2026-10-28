@@ -177,7 +177,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
           <h2 className="font-semibold">{title}</h2>
           <button onClick={onClose} className="text-muted px-2 h-8" aria-label="Close">✕</button>
         </div>
-        <div ref={body} className="overflow-y-auto overscroll-contain p-4">{children}</div>
+        <div ref={body} className="min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain p-4">{children}</div>
       </div>
     </div>,
     document.body,
