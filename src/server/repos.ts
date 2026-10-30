@@ -8,30 +8,93 @@ import type { HostedGit } from './hosted.ts';
 
 export const looksLikePath = (s: string) => /^(\/|~\/|~$|\.\.?\/)/.test(s.trim());
 
-export interface LocalRepoInfo { path: string; name: string; default_branch: string; receive_deny_current_branch: string }
+export interface LocalRepoInfo { path: string; name: string; default_branch: string; receive_deny_current_branch: string; root_sha?: string | null }
 
-/** Add a local repo after the worker has checked it (inside LOCAL_REPO_DIRS, is a git repo). */
-export async function addLocalRepo(store: Store, hub: WorkerHub, project: Project, path: string, opts: { default_branch?: string; check_command?: string | null; worker_id?: number | null } = {}) {
-  const workerId = opts.worker_id ?? project.worker_id ?? store.defaultWorkerId();
-  // all of a project's local repos are on one worker (its sessions run there)
-  const other = store.repos(project.id).find((r) => r.kind === 'local' && r.worker_id && r.worker_id !== workerId);
-  if (other) {
-    const name = store.db.get<{ name: string }>('SELECT name FROM workers WHERE id = ?', other.worker_id!)?.name ?? other.worker_id;
-    throw new HttpError(400, `This project's local repos are on worker ${name}; add this one there too, or use another project.`);
-  }
-  let info: LocalRepoInfo;
+const workerName = (store: Store, id: number) => store.db.get<{ name: string }>('SELECT name FROM workers WHERE id = ?', id)?.name ?? `#${id}`;
+
+async function inspect(hub: WorkerHub, workerId: number, path: string): Promise<LocalRepoInfo> {
   try {
-    info = await hub.cmd<LocalRepoInfo>(workerId, { c: 'inspect_local_repo', path }, 30_000);
+    return await hub.cmd<LocalRepoInfo>(workerId, { c: 'inspect_local_repo', path }, 30_000);
   } catch (e) {
     throw new HttpError(400, (e as Error).message);
   }
-  const existing = store.repos(project.id).find((r) => r.local_path === info.path);
+}
+
+/** Is this folder the same repo as `repo`? The same first commit; a repo not checked yet has none to compare. */
+const sameRepo = (repo: Repo, info: LocalRepoInfo) => {
+  const known = (repo.placements ?? []).map((p) => p.root_sha).filter(Boolean);
+  return !known.length || !info.root_sha || known.includes(info.root_sha);
+};
+
+/**
+ * Add a local repo after the worker has checked it (inside LOCAL_REPO_DIRS, is a git repo). The
+ * same repo already in the project on another worker (same first commit, or same name) gets this
+ * folder as its copy on this worker (DISP-45).
+ */
+export async function addLocalRepo(store: Store, hub: WorkerHub, project: Project, path: string, opts: { default_branch?: string; check_command?: string | null; worker_id?: number | null } = {}) {
+  const workerId = opts.worker_id ?? project.worker_id ?? store.defaultWorkerId();
+  const info = await inspect(hub, workerId, path);
+  const local = store.repos(project.id).filter((r) => r.kind === 'local');
+  const existing = local.find((r) => r.placements?.some((p) => p.worker_id === workerId && p.local_path === info.path));
   if (existing) return { repo: existing, info, already: true };
+  const bySha = info.root_sha ? local.find((r) => r.placements?.some((p) => p.root_sha === info.root_sha)) : undefined;
+  const same = bySha ?? local.find((r) => r.github_name === info.name);
+  if (same) {
+    if (!sameRepo(same, info)) throw new HttpError(409, `This project already has a local repo named ${info.name}, and ${info.path} is a different repo (another first commit).`);
+    const there = same.placements?.find((p) => p.worker_id === workerId);
+    if (there) throw new HttpError(409, `${same.github_name} already has its copy on worker ${workerName(store, workerId)} at ${there.local_path}. Change that path in the repo's settings.`);
+    return { repo: store.setPlacement(same.id, workerId, info.path, info.root_sha ?? null), info, already: false, copy: true };
+  }
   const repo: Repo = store.addRepo(project.id, {
     github_owner: 'local', github_name: info.name, default_branch: opts.default_branch ?? info.default_branch,
-    check_command: opts.check_command ?? null, local_path: info.path, worker_id: workerId,
+    check_command: opts.check_command ?? null, local_path: info.path, worker_id: workerId, root_sha: info.root_sha ?? null,
   });
   return { repo, info, already: false };
+}
+
+/** Set a local repo's copy on a worker (new, or another path), after that worker checked the folder (DISP-45). */
+export async function setPlacement(store: Store, hub: WorkerHub, repo: Repo, workerId: number, path: string) {
+  if (repo.kind !== 'local') throw new HttpError(400, 'Only a local repo has copies on workers.');
+  const info = await inspect(hub, workerId, path);
+  const others = { ...repo, placements: (repo.placements ?? []).filter((p) => p.worker_id !== workerId) };
+  if (!sameRepo(others, info)) throw new HttpError(409, `${info.path} is a different repo than ${repo.github_name} (another first commit).`);
+  return { repo: store.setPlacement(repo.id, workerId, info.path, info.root_sha ?? null), info };
+}
+
+/**
+ * Check every local repo copy on a worker (after its hello): the folder is still there and allowed,
+ * is a git repo, and is still the same repo. Sessions only go to workers whose copies are ok.
+ */
+export async function checkPlacements(store: Store, hub: WorkerHub, workerId: number) {
+  for (const { repo, placement } of store.placementsOn(workerId)) {
+    try {
+      const info = await hub.cmd<LocalRepoInfo>(workerId, { c: 'inspect_local_repo', path: placement.local_path }, 30_000);
+      if (placement.root_sha && info.root_sha && info.root_sha !== placement.root_sha) {
+        store.checkedPlacement(repo.id, workerId, 'mismatch', `${placement.local_path} now holds another repo (first commit ${info.root_sha.slice(0, 8)}, expected ${placement.root_sha.slice(0, 8)})`);
+      } else store.checkedPlacement(repo.id, workerId, 'ok', null, info.root_sha ?? null);
+    } catch (e) {
+      if (!hub.isConnected(workerId)) return; // gone again: nothing was checked
+      store.checkedPlacement(repo.id, workerId, 'missing', (e as Error).message);
+    }
+  }
+}
+
+/** Why this worker cannot run sessions on these local repos, or null when its copies of all are ok. */
+export function placementProblem(store: Store, repos: Repo[], workerId: number): string | null {
+  const bad = repos.filter((r) => r.kind === 'local').flatMap((r) => {
+    const p = r.placements?.find((x) => x.worker_id === workerId);
+    if (!p) return [`no copy of ${r.github_name}`];
+    if (p.status !== 'ok') return [`${r.github_name} at ${p.local_path} is ${p.status}${p.detail ? ` (${p.detail})` : ''}`];
+    return [];
+  });
+  return bad.length ? `Worker ${workerName(store, workerId)} has ${bad.join('; ')}.` : null;
+}
+
+/** A worker that can read a local repo now: a connected one with an ok copy, home first. */
+export function readerFor(hub: WorkerHub, repo: Repo): number | null {
+  const ok = (repo.placements ?? []).filter((p) => p.status === 'ok').map((p) => p.worker_id);
+  const order = [repo.worker_id, ...ok].filter((id): id is number => id != null);
+  return order.find((id) => ok.includes(id) && hub.isConnected(id)) ?? repo.worker_id ?? null;
 }
 
 /** What to tell the owner about pushing merges into a checked-out branch. */

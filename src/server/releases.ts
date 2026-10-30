@@ -25,8 +25,10 @@ export function matchesRepo(cap: ReleaseCapability, repo: Repo, workerId: number
   if (repo.kind === 'hosted') return false;
   const want = cap.repo.trim();
   if (repo.kind === 'local') {
-    if (repo.worker_id !== workerId) return false;
-    if (want.startsWith('/')) return !!repo.local_path && trimSlash(repo.local_path) === trimSlash(want);
+    // that worker's own copy (DISP-45)
+    const copy = repo.placements ? repo.placements.find((p) => p.worker_id === workerId)?.local_path : repo.worker_id === workerId ? repo.local_path : null;
+    if (!copy) return false;
+    if (want.startsWith('/')) return trimSlash(copy) === trimSlash(want);
   } else if (want.toLowerCase() === `${repo.github_owner}/${repo.github_name}`.toLowerCase()) return true;
   if (want.includes('/')) return false;
   const same = projectRepos.filter((r) => r.kind !== 'hosted' && r.github_name.toLowerCase() === want.toLowerCase());

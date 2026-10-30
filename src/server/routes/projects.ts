@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
-import { addHostedRepo, addLocalRepo, mergeNote, ownerName } from '../repos.ts';
+import { addHostedRepo, addLocalRepo, mergeNote, ownerName, setPlacement } from '../repos.ts';
 
 export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus, hosted }: Ctx) {
   const project = (key: unknown) => {
@@ -117,5 +117,32 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     if (repo.kind === 'hosted') await hosted.retire(repo); // the data stays on disk, renamed
     bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
     return { ok: true };
+  });
+
+  // a local repo's copy on a worker (DISP-45): add one, or change its path there
+  app.put('/api/repos/:id/placements/:workerId', async (req) => {
+    const params = req.params as { id: string; workerId: string };
+    const repo = store.repo(intParam(params.id));
+    if (!repo) throw notFound('Repo');
+    const workerId = intParam(params.workerId);
+    if (!workers.get(workerId) || workers.get(workerId)!.revoked_at) throw new HttpError(400, `Unknown worker ${workerId}`);
+    const { local_path } = z.object({ local_path: z.string().min(1) }).parse(req.body);
+    const { repo: updated, info } = await setPlacement(store, hub, repo, workerId, local_path);
+    bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
+    return { ...updated, note: mergeNote(info) };
+  });
+
+  app.delete('/api/repos/:id/placements/:workerId', async (req) => {
+    const params = req.params as { id: string; workerId: string };
+    const repo = store.repo(intParam(params.id));
+    if (!repo) throw notFound('Repo');
+    let updated;
+    try {
+      updated = store.removePlacement(repo.id, intParam(params.workerId));
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
+    bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
+    return updated;
   });
 }

@@ -23,6 +23,7 @@ import { Notifier } from './notify.ts';
 import { SessionError, Sessions } from './sessions.ts';
 import { Store } from './store.ts';
 import { WorkerHub } from './workerHub.ts';
+import { checkPlacements } from './repos.ts';
 import { HttpError, type Ctx } from './routes/ctx.ts';
 import { authRoutes } from './routes/auth.ts';
 import { projectRoutes } from './routes/projects.ts';
@@ -56,6 +57,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const hosted = new HostedGit(cfg.dataDir);
   const bus = new Bus();
   const hub = new WorkerHub();
+  // a local repo goes to each worker with that worker's own path for it (DISP-45)
+  hub.localize = (workerId, repo) => {
+    const p = (repo.placements ?? store.repo(repo.id)?.placements)?.find((x) => x.worker_id === workerId);
+    return p ? { ...repo, local_path: p.local_path, worker_id: workerId } : repo;
+  };
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus);
   const sessions = new Sessions(store, bus, hub, notifier, workers);
@@ -90,6 +96,10 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onHello: (workerId, live, facts) => {
       workers.seen(workerId, facts);
       sessions.onWorkerHello(workerId, live);
+      // are its local repo copies still there? (sessions only go to workers whose copies are ok)
+      void checkPlacements(store, hub, workerId)
+        .then(() => !closing && store.placementsOn(workerId).forEach(({ repo }) => bus.emit({ t: 'project', key: store.project(repo.project_id)!.key })))
+        .catch((e) => console.warn('checking local repo copies failed:', (e as Error).message));
       // look for leftovers soon after the worker is (back) online
       setTimeout(() => void janitor.check().catch((e) => console.warn('cleanup check failed:', (e as Error).message)), 30_000).unref();
     },

@@ -100,6 +100,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/projects/:key/repos': 'admin',
   'PATCH /api/repos/:id': 'admin',
   'DELETE /api/repos/:id': 'admin',
+  'PUT /api/repos/:id/placements/:workerId': 'admin',
+  'DELETE /api/repos/:id/placements/:workerId': 'admin',
   'GET /api/settings': 'admin',
   'PATCH /api/settings': 'admin',
   'GET /api/push/devices': 'admin',

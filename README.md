@@ -25,6 +25,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   Agents push their branches into that folder; Dispatch shows the branch for review (diff on the
   phone) and merges it by pushing the default branch back (the folder's working tree must be clean;
   set `receive.denyCurrentBranch updateInstead` there if the branch is checked out).
+  The same repo can have a copy on several workers, each at its own path (add the folder on the
+  other worker, or set the path in the repo's settings). Sessions run only on a worker whose copy
+  checks out (same repo, still there), and merges land in the copy on the worker the session ran on.
 - **Live test progress**: while a repo's check command runs before a merge, the session shows the
   step, the last finished test file, passed and failed counts, and the time left, estimated from
   earlier passing runs of the same command (vitest, playwright and pytest output is read; any other

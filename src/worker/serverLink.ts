@@ -374,7 +374,9 @@ export class ServerLink {
         const branch = (await ok(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(/^origin\//, '')
           || (await ok(['branch', '--show-current'])) || 'main';
         const deny = (await ok(['config', '--get', 'receive.denyCurrentBranch'])) || 'refuse';
-        return { path: top.out.trim(), name: top.out.trim().split('/').pop(), default_branch: branch.trim(), receive_deny_current_branch: deny };
+        // the first commit names the repo: the same repo on another machine has the same one (DISP-45)
+        const root_sha = (await ok(['rev-list', '--max-parents=0', 'HEAD'])).split('\n').filter(Boolean).sort()[0] ?? null;
+        return { path: top.out.trim(), name: top.out.trim().split('/').pop(), default_branch: branch.trim(), receive_deny_current_branch: deny, root_sha };
       }
       case 'read_file': {
         if (cmd.repo) return { base64: (await ws.readRepoFile(cmd.repo, cmd.path)).toString('base64') };
