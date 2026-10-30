@@ -6,14 +6,16 @@ import { startServer, waitFor } from './helpers.ts';
 
 type Msg = { t: string; spec?: Record<string, any>; cmd?: { c: string; path?: string }; req_id?: string };
 
-async function rawWorker(port: number, token: string, facts?: Record<string, unknown>) {
+async function rawWorker(port: number, token: string, facts?: Record<string, unknown>, missing: string[] = []) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/worker`, { headers: { 'x-worker-token': token } });
   const got: Msg[] = [];
   ws.on('message', (d) => {
     const m = JSON.parse(String(d)) as Msg;
     got.push(m);
     // answer local repo checks like a worker whose LOCAL_REPO_DIRS holds everything
-    if (m.t === 'cmd' && m.cmd?.c === 'inspect_local_repo') {
+    if (m.t === 'cmd' && m.cmd?.c === 'inspect_local_repo' && missing.includes(m.cmd.path!)) {
+      ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: false, error: `${m.cmd.path} is not a git repository` }));
+    } else if (m.t === 'cmd' && m.cmd?.c === 'inspect_local_repo') {
       ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: { path: m.cmd.path, name: m.cmd.path!.split('/').pop(), default_branch: 'main', receive_deny_current_branch: 'updateInstead' } }));
     } else if (m.t === 'cmd') {
       ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: { ok: true } }));
@@ -49,22 +51,69 @@ describe('placement', () => {
     expect(s.ctx.sessions.workerFor(null, null)).toBe(legacy());
   });
 
-  it("a project's local repos fix its worker; another worker is refused, and so is a local repo on a second worker", async () => {
+  it("a project's local repos pick its worker: one with a copy of each; another worker is refused", async () => {
     const wa = await rawWorker(s.port, 'test-token');
     const wb = await rawWorker(s.port, b.secret);
     await waitFor(() => s.ctx.hub.connectedIds().length === 2, 'both');
     await s.call('POST', '/projects', { key: 'LO', name: 'Local' });
     const repo = await s.call('POST', '/projects/LO/repos', { local_path: '/r/one', worker_id: b.id });
     expect(repo.status).toBe(200);
-    expect(repo.data).toMatchObject({ kind: 'local', worker_id: b.id });
+    expect(repo.data).toMatchObject({ kind: 'local', worker_id: b.id, placements: [{ worker_id: b.id, local_path: '/r/one', status: 'ok' }] });
     expect(wb.got.some((m) => m.cmd?.c === 'inspect_local_repo')).toBe(true);
     expect(wa.got.some((m) => m.cmd?.c === 'inspect_local_repo')).toBe(false);
-    const second = await s.call('POST', '/projects/LO/repos', { local_path: '/r/two', worker_id: legacy() });
-    expect(second.status).toBe(400);
-    expect(second.data.error).toMatch(/local repos are on worker b/);
     const lo = s.ctx.store.projectByKey('LO')!;
     expect(s.ctx.sessions.workerFor(lo, null)).toBe(b.id);
-    expect(() => s.ctx.sessions.workerFor(lo, legacy())).toThrow(/local repos are on worker b/);
+    expect(() => s.ctx.sessions.workerFor(lo, legacy())).toThrow(/Worker default has no copy of one/);
+    // another local repo, only on the other worker: now no worker has both
+    const second = await s.call('POST', '/projects/LO/repos', { local_path: '/r/two', worker_id: legacy() });
+    expect(second.status).toBe(200);
+    expect(() => s.ctx.sessions.workerFor(lo, null)).toThrow(/No worker has an ok copy/);
+    wa.close();
+    wb.close();
+  });
+
+  it('a local repo can have a copy on each worker, at its own path (DISP-45)', async () => {
+    const wa = await rawWorker(s.port, 'test-token');
+    const wb = await rawWorker(s.port, b.secret);
+    await waitFor(() => s.ctx.hub.connectedIds().length === 2, 'both');
+    await s.call('POST', '/projects', { key: 'CP', name: 'Copies' });
+    const one = (await s.call('POST', '/projects/CP/repos', { local_path: '/home/a/app', worker_id: legacy() })).data;
+    // the same name on another worker: the folder becomes the repo's copy there, not a second repo
+    const copy = await s.call('POST', '/projects/CP/repos', { local_path: '/srv/b/app', worker_id: b.id });
+    expect(copy.data.id).toBe(one.id);
+    const cp = s.ctx.store.projectByKey('CP')!;
+    expect(s.ctx.store.repos(cp.id)).toHaveLength(1);
+    expect(s.ctx.store.repo(one.id)!.placements!.map((p) => [p.worker_id, p.local_path])).toEqual([[legacy(), '/home/a/app'], [b.id, '/srv/b/app']].sort((x, y) => (x[0] as number) - (y[0] as number)));
+    // either worker can run it; a session on b gets b's path
+    expect(s.ctx.sessions.workerFor(cp, b.id)).toBe(b.id);
+    await s.call('POST', '/projects/CP/batches', { prompt: 'x', options: { worker_id: b.id } });
+    await waitFor(() => wb.starts().length === 1, 'start on b');
+    expect(wb.starts()[0].repos[0]).toMatchObject({ local_path: '/srv/b/app', worker_id: b.id });
+    // change b's path; then forget the home copy: b's copy becomes home
+    const moved = await s.call('PUT', `/repos/${one.id}/placements/${b.id}`, { local_path: '/srv/b/app2' });
+    expect(moved.status).toBe(200);
+    expect(moved.data.placements.find((p: { worker_id: number }) => p.worker_id === b.id).local_path).toBe('/srv/b/app2');
+    const home = await s.call('DELETE', `/repos/${one.id}/placements/${legacy()}`);
+    expect(home.data).toMatchObject({ worker_id: b.id, local_path: '/srv/b/app2' });
+    expect((await s.call('DELETE', `/repos/${one.id}/placements/${b.id}`)).status).toBe(400); // the last copy stays
+    wa.close();
+    wb.close();
+  });
+
+  it('a copy the worker cannot find is marked missing on hello, and sessions go elsewhere (DISP-45)', async () => {
+    const wa = await rawWorker(s.port, 'test-token');
+    let wb = await rawWorker(s.port, b.secret);
+    await waitFor(() => s.ctx.hub.connectedIds().length === 2, 'both');
+    await s.call('POST', '/projects', { key: 'MI', name: 'Missing' });
+    const repo = (await s.call('POST', '/projects/MI/repos', { local_path: '/r/app', worker_id: legacy() })).data;
+    await s.call('PUT', `/repos/${repo.id}/placements/${b.id}`, { local_path: '/gone/app' });
+    wb.close();
+    await waitFor(() => !s.ctx.hub.isConnected(b.id), 'b gone');
+    wb = await rawWorker(s.port, b.secret, undefined, ['/gone/app']);
+    await waitFor(() => s.ctx.store.repo(repo.id)!.placements!.find((p) => p.worker_id === b.id)!.status === 'missing', 'missing');
+    const mi = s.ctx.store.projectByKey('MI')!;
+    expect(() => s.ctx.sessions.workerFor(mi, b.id)).toThrow(/app at \/gone\/app is missing \(\/gone\/app is not a git repository\)/);
+    expect(s.ctx.sessions.workerFor(mi, null)).toBe(legacy());
     wa.close();
     wb.close();
   });

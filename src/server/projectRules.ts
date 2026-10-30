@@ -4,6 +4,7 @@ import type { Project, Repo } from '../shared/types.ts';
 import type { HostedGit } from './hosted.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
+import { readerFor } from './repos.ts';
 
 export const RULE_FILES = ['CLAUDE.md', 'AGENTS.md'];
 const MAX_CHARS = 30_000;
@@ -13,7 +14,8 @@ type Deps = { store: Store; hub: WorkerHub; hosted: HostedGit };
 /** A file from a repo's default branch: a hosted repo is read here, others on their worker. */
 export async function readRepoFile({ store, hub, hosted }: Deps, project: Project, repo: Repo, path: string): Promise<Buffer> {
   if (repo.kind === 'hosted') return hosted.readFile(repo, path);
-  const worker = repo.worker_id ?? project.worker_id ?? store.defaultWorkerId();
+  // a local repo: a connected worker with a copy of it (DISP-45)
+  const worker = (repo.kind === 'local' ? readerFor(hub, repo) : null) ?? repo.worker_id ?? project.worker_id ?? store.defaultWorkerId();
   const res = await hub.cmd<{ base64: string }>(worker, { c: 'read_file', repo, path }, 60_000);
   return Buffer.from(res.base64, 'base64');
 }

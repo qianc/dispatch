@@ -530,12 +530,11 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
   const isPath = /^(\/|~\/|\.\.?\/)/.test(repo.full.trim());
   const { data: workerList } = useWorkers();
   const workers = workerList?.workers ?? [];
-  const localWorker = project.repos.find((r) => r.kind === 'local' && r.worker_id)?.worker_id ?? null;
   const [repoNote, setRepoNote] = useState<string | null>(null);
   const addRepo = useMutation({
     mutationFn: () => {
       if (isPath) {
-        return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { local_path: repo.full.trim(), default_branch: repo.default_branch || undefined, check_command: repo.check_command || null, worker_id: localWorker ?? (repo.worker_id ? Number(repo.worker_id) : null) });
+        return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { local_path: repo.full.trim(), default_branch: repo.default_branch || undefined, check_command: repo.check_command || null, worker_id: repo.worker_id ? Number(repo.worker_id) : null });
       }
       const [github_owner, github_name] = repo.full.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '').split('/');
       return api.post<{ note?: string | null }>(`/projects/${project.key}/repos`, { github_owner, github_name, default_branch: repo.default_branch || 'main', check_command: repo.check_command || null });
@@ -557,7 +556,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                 </div>
                 <div className="text-[12px] text-muted truncate">
                   base {r.default_branch}
-                  {r.local_path && workers.length > 1 && ` · on ${workerName(workers, r.worker_id)}`}
+                  {r.kind === 'local' && workers.length > 1 && ` · on ${(r.placements ?? []).map((pl) => workerName(workers, pl.worker_id) + (pl.status === 'ok' ? '' : ` (${pl.status})`)).join(', ') || workerName(workers, r.worker_id)}`}
                   {r.local_path && (r.worktree_from === 'clone' ? ' · separate clone' : ' · worktrees in the repo')}
                   {r.setup_command ? ` · setup: ${r.setup_command}` : ''}
                   {r.read_dirs?.length ? ` · Discuss also reads: ${r.read_dirs.join(', ')}` : ''}
@@ -586,13 +585,14 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
             <input className={inputCls} placeholder="owner/repo, or a local folder like ~/projects/x" value={repo.full} onChange={(e) => setRepo({ ...repo, full: e.target.value })} aria-label="Repository" />
             {isPath && <p className="text-[12px] text-muted">Local repo: agents push their branches into this folder, and you review and merge them here. No GitHub needed.</p>}
-            {isPath && workers.length > 1 && (localWorker ? (
-              <p className="text-[12px] text-muted">On worker {workerName(workers, localWorker)}, with this project's other local repos.</p>
-            ) : (
-              <select className={inputCls} value={repo.worker_id || String(project.worker_id ?? workerList?.default_worker_id ?? '')} onChange={(e) => setRepo({ ...repo, worker_id: e.target.value })} aria-label="Worker that has this folder">
-                {workers.map((w) => <option key={w.id} value={w.id}>On worker {w.name}</option>)}
-              </select>
-            ))}
+            {isPath && workers.length > 1 && (
+              <>
+                <select className={inputCls} value={repo.worker_id || String(project.worker_id ?? workerList?.default_worker_id ?? '')} onChange={(e) => setRepo({ ...repo, worker_id: e.target.value })} aria-label="Worker that has this folder">
+                  {workers.map((w) => <option key={w.id} value={w.id}>On worker {w.name}</option>)}
+                </select>
+                {project.repos.some((r) => r.kind === 'local') && <p className="text-[12px] text-muted">If this project already has this repo on another worker, the folder becomes its copy on this worker.</p>}
+              </>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <input className={inputCls} placeholder={isPath ? 'base (auto)' : 'base branch (main)'} value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
               <input className={inputCls} placeholder="check cmd (optional)" value={repo.check_command} onChange={(e) => setRepo({ ...repo, check_command: e.target.value })} aria-label="Check command" />
@@ -737,6 +737,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       <Field label="Setup command (optional)" hint="Runs in each new session worktree before the agent starts, e.g. a venv setup or npm ci.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.setup_command} onChange={(e) => setF({ ...f, setup_command: e.target.value })} placeholder="bash tools/setup.sh" />
       </Field>
+      {repo.kind === 'local' && <RepoCopies repo={repo} />}
       {repo.local_path && (
         <Field
           label="Extra folders Discuss may read (optional)"
@@ -758,6 +759,60 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>
       <Button type="button" variant="danger" className="w-full mt-2" onClick={onRemove}>Remove repo</Button>
     </form>
+  );
+}
+
+/**
+ * A local repo's copy on each worker (DISP-45): its path there and what the worker last found.
+ * Sessions run only on a worker whose copy is ok, and merges land in the copy where the session ran.
+ */
+function RepoCopies({ repo: initial }: { repo: Repo }) {
+  const qc = useQueryClient();
+  const { data: workerList } = useWorkers();
+  const workers = workerList?.workers ?? [];
+  const [repo, setRepo] = useState(initial);
+  const [add, setAdd] = useState({ worker_id: '', local_path: '' });
+  const done = (r: Repo) => { setRepo(r); qc.invalidateQueries({ queryKey: ['project'] }); };
+  const put = useMutation({
+    mutationFn: () => api.put<Repo>(`/repos/${repo.id}/placements/${add.worker_id}`, { local_path: add.local_path.trim() }),
+    onSuccess: (r) => { setAdd({ worker_id: '', local_path: '' }); done(r); },
+  });
+  const del = useMutation({ mutationFn: (workerId: number) => api.del<Repo>(`/repos/${repo.id}/placements/${workerId}`), onSuccess: done });
+  const copies = repo.placements ?? [];
+  return (
+    <Field label="Copies on workers" group hint="The same repo can sit at a different path on each worker. Sessions run only on a worker whose copy is ok, and Dispatch merges into the copy on the worker where the session ran: keep the copies in step through a shared remote.">
+      <div className="space-y-1.5 mb-2">
+        {copies.map((c) => (
+          <div key={c.worker_id} className="flex items-start gap-2 text-[13px]">
+            <div className="flex-1 min-w-0">
+              <div className="break-all">
+                <span className="font-medium">{workerName(workers, c.worker_id)}</span>
+                {c.worker_id === repo.worker_id && <Chip className="ml-1.5">home</Chip>}
+                {c.status !== 'ok' && <Chip className="ml-1.5 text-wait">{c.status}</Chip>}
+                <span className="text-muted"> · {c.local_path}</span>
+              </div>
+              {c.detail && <div className="text-[12px] text-wait break-all">{c.detail}</div>}
+            </div>
+            {copies.length > 1 && <Button small type="button" variant="ghost" disabled={del.isPending} onClick={() => confirm(`Forget the copy on ${workerName(workers, c.worker_id)}? The folder stays.`) && del.mutate(c.worker_id)}>Remove</Button>}
+          </div>
+        ))}
+      </div>
+      {workers.length > 1 && (
+        <div className="space-y-1.5">
+          <select className={inputCls} value={add.worker_id} onChange={(e) => setAdd({ ...add, worker_id: e.target.value, local_path: copies.find((c) => String(c.worker_id) === e.target.value)?.local_path ?? '' })} aria-label="Worker for a copy">
+            <option value="">Add a copy, or change a path, on worker…</option>
+            {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{copies.some((c) => c.worker_id === w.id) ? ' (change path)' : ''}</option>)}
+          </select>
+          {add.worker_id && (
+            <div className="flex gap-2">
+              <input className={cx(inputCls, 'font-mono text-[14px]')} value={add.local_path} onChange={(e) => setAdd({ ...add, local_path: e.target.value })} placeholder="~/projects/x" aria-label="Path on that worker" />
+              <Button small type="button" variant="primary" disabled={!add.local_path.trim() || put.isPending} onClick={() => put.mutate()}>Save</Button>
+            </div>
+          )}
+          <ErrorText error={put.error ?? del.error} />
+        </div>
+      )}
+    </Field>
   );
 }
 

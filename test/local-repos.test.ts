@@ -107,6 +107,8 @@ describe('local repos end to end on the server', () => {
     const dir = localRepo(root);
     const r = (await s.call('POST', '/projects/LOC/repos', { local_path: dir })).data;
     expect(r).toMatchObject({ github_owner: 'local', github_name: 'tpl', default_branch: 'main', local_path: dir, note: null });
+    // its home copy knows the repo by its first commit (DISP-45)
+    expect(r.placements).toEqual([expect.objectContaining({ local_path: dir, status: 'ok', root_sha: execFileSync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim() })]);
   });
 
   it('lets the assistant find a project folder by name in the projects folder and add it (DISP-7)', async () => {

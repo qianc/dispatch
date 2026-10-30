@@ -3,8 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { copyFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
@@ -156,12 +156,80 @@ export class Workspaces {
   /** the server this worker serves: where its hosted repos are, and the worker's token for them */
   private hosted: { base: string; token: string } | null;
 
-  constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({}), hosted: { base: string; token: string } | null = null) {
+  /** this machine's env files per repo (DISP-44): <envDir>/<owner>/<name>/, copied into new worktrees */
+  readonly envDir: string | null;
+
+  constructor(root: string, remoteBase = 'https://github.com', gitEnv: (repo: Repo) => Record<string, string | undefined> = () => ({}), hosted: { base: string; token: string } | null = null, envDir: string | null = null) {
     // absolute: git commands run in other folders (a local repo) and must find these paths too
     this.root = resolve(root);
     this.remoteBase = remoteBase;
     this.gitEnv = gitEnv;
     this.hosted = hosted;
+    this.envDir = envDir ? resolve(envDir) : null;
+  }
+
+  /** A repo's env overlay folder on this machine (local repos: local/<name>, hosted: hosted/<name>), or null when it has none. */
+  overlayDir(repo: Repo): string | null {
+    if (!this.envDir) return null;
+    const dir = join(this.envDir, repo.github_owner, repo.github_name);
+    return existsSync(dir) ? dir : null;
+  }
+
+  /** The repos that have an env overlay here, as <owner>/<name> (worker facts). */
+  async overlays(): Promise<string[]> {
+    if (!this.envDir || !existsSync(this.envDir)) return [];
+    const out: string[] = [];
+    for (const owner of await readdir(this.envDir, { withFileTypes: true })) {
+      if (!owner.isDirectory()) continue;
+      for (const name of await readdir(join(this.envDir, owner.name), { withFileTypes: true })) {
+        if (name.isDirectory()) out.push(`${owner.name}/${name.name}`);
+      }
+    }
+    return out.sort();
+  }
+
+  /** Environment for a repo's setup, check and deploy commands: its account, hosted-git access, its env overlay. */
+  private commandEnv(repo: Repo): Record<string, string | undefined> {
+    const overlay = this.overlayDir(repo);
+    return { ...this.gitEnv(repo), ...this.hostedEnv(repo), ...(overlay ? { DISPATCH_REPO_ENV_DIR: overlay } : {}) };
+  }
+
+  /**
+   * Copy the repo's env overlay into a new worktree, at the same relative paths. A file git would
+   * track there is not copied (secrets must never be committed): it is in `refused`.
+   */
+  async applyOverlay(repo: Repo, wt: string): Promise<{ copied: string[]; refused: string[] }> {
+    const dir = this.overlayDir(repo);
+    const copied: string[] = [];
+    const refused: string[] = [];
+    if (!dir) return { copied, refused };
+    for (const entry of await readdir(dir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const from = join(entry.parentPath, entry.name);
+      const rel = relative(dir, from);
+      if ((await run('git', ['check-ignore', '-q', '--', rel], wt)).code !== 0) {
+        refused.push(rel);
+        continue;
+      }
+      await mkdir(dirname(join(wt, rel)), { recursive: true });
+      await copyFile(from, join(wt, rel));
+      copied.push(rel);
+    }
+    return { copied: copied.sort(), refused: refused.sort() };
+  }
+
+  /**
+   * Make a new worktree ready to work, check or deploy in (DISP-44): the env overlay, then the
+   * repo's setup command. Not ok when a file was refused or the setup failed.
+   */
+  async prepareTree(repo: Repo, wt: string): Promise<{ ok: boolean; output: string; copied: string[] }> {
+    const { copied, refused } = await this.applyOverlay(repo, wt);
+    const notes: string[] = [];
+    if (refused.length) notes.push(`Env files not copied, because git would track them in ${repo.github_name} (add them to .gitignore): ${refused.join(', ')}`);
+    if (!repo.setup_command) return { ok: !refused.length, output: notes.join('\n'), copied };
+    const r = await this.setup(repo, wt);
+    if (!r.ok) notes.push(`Setup command \`${repo.setup_command}\` failed:\n${r.output}`);
+    return { ok: r.ok && !refused.length, output: notes.join('\n\n'), copied };
   }
 
   /**
@@ -344,7 +412,7 @@ export class Workspaces {
 
   /** Run a repo's setup command in a new worktree. */
   async setup(repo: Repo, wt: string): Promise<{ ok: boolean; output: string }> {
-    const r = await repoEnv.run(this.gitEnv(repo), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
+    const r = await repoEnv.run(this.commandEnv(repo), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
   }
 
@@ -368,7 +436,7 @@ export class Workspaces {
   /** Run a repo's check command in a session's worktree, as its account (DISP-15). */
   sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal) {
     const wt = this.repoDir(sessionId, repo);
-    return repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, () => runCheck(repo.check_command!, wt, checkTimeoutMs(), onProgress, signal));
+    return repoEnv.run(this.commandEnv(repo), () => runCheck(repo.check_command!, wt, checkTimeoutMs(), onProgress, signal));
   }
 
   async pushBranch(repo: Repo, sessionId: number, branch: string) {
@@ -403,8 +471,11 @@ export class Workspaces {
     try {
       if (prep.failed) return prep.failed;
       if (repo.check_command) {
+        // the check runs in a worktree set up like a session's: env files and setup first (DISP-44)
+        const ready = await this.prepareTree(repo, tmp);
+        if (!ready.ok) return { ok: false, output: `Could not set up the merge checkout, so the check did not run.\n${ready.output}` };
         // the repo's account and hosted-git access, as the locked commands have them
-        const c = await repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
+        const c = await repoEnv.run(this.commandEnv(repo), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
         check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
         if (c.code !== 0) {
           const why = c.timed_out ? `Check stopped after ${Math.round(checkTimeoutMs() / 60_000)} minutes (CHECK_TIMEOUT_MIN on the worker)` : 'Check failed';
@@ -447,7 +518,12 @@ export class Workspaces {
       return { dir, sha };
     });
     try {
-      const env = { ...this.gitEnv(repo), ...this.hostedEnv(repo), DISPATCH_DEPLOY_SHA: sha, DISPATCH_DEPLOY_BRANCH: repo.default_branch };
+      // a fresh checkout is set up like a session's first (DISP-44); a local repo is already set up
+      if (tmp) {
+        const ready = await this.prepareTree(repo, tmp);
+        if (!ready.ok) return { ok: false, sha, output: `Could not set up the deploy checkout, so the deploy did not run.\n${ready.output}`.slice(-4000), duration_ms: 0 };
+      }
+      const env = { ...this.commandEnv(repo), DISPATCH_DEPLOY_SHA: sha, DISPATCH_DEPLOY_BRANCH: repo.default_branch };
       const r = await repoEnv.run(env, () => runCheck(repo.deploy_command!, tmp ?? dir, deployTimeoutMs()));
       const output = r.timed_out ? `Stopped after ${Math.round(deployTimeoutMs() / 60_000)} minutes (DEPLOY_TIMEOUT_MIN on the worker).\n${r.out}` : r.out;
       return { ok: r.code === 0, sha, output: output.slice(-4000), duration_ms: r.duration_ms };

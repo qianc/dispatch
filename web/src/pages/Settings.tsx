@@ -202,6 +202,7 @@ function WorkersSection() {
                   {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}
                   {w.facts?.slots ? ` · ${w.facts.free_slots}/${w.facts.slots} slots free` : ''}
+                  {w.facts?.repo_envs?.length ? ` · env files for ${w.facts.repo_envs.join(', ')}` : ''}
                   {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
                 </div>
               </div>

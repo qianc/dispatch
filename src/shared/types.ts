@@ -72,13 +72,26 @@ export interface Repo {
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */
   github_account?: string | null;
-  /** github: any worker clones it; local: a folder on one worker (`worker_id`); hosted: kept by the server */
+  /** github: any worker clones it; local: a folder on each worker that has a copy (`placements`, home: `worker_id`); hosted: kept by the server */
   kind?: 'github' | 'local' | 'hosted';
   /** hosted repos: a GitHub repo the merged default branch is pushed to (or PRs are opened on) */
   upstream_owner?: string | null;
   upstream_name?: string | null;
-  /** local repos: the worker whose machine holds the folder */
+  /** local repos: the home copy's worker (used when no session says which worker) */
   worker_id?: number | null;
+  /** local repos: its copy on each worker that has one, home included (DISP-45) */
+  placements?: RepoPlacement[];
+}
+
+/** A local repo's copy on one worker (DISP-45). */
+export interface RepoPlacement {
+  worker_id: number;
+  local_path: string;
+  root_sha: string | null;
+  /** as the worker last saw it: ok, missing (no git repo there, or not allowed) or mismatch (another repo) */
+  status: 'ok' | 'missing' | 'mismatch';
+  detail: string | null;
+  checked_at: string | null;
 }
 
 export interface Source {
@@ -242,6 +255,8 @@ export interface WorkerFacts {
   local_repo_dirs: string[];
   /** releases it can run (missing from workers older than releases) */
   releases?: ReleaseCapability[];
+  /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
+  repo_envs?: string[];
 }
 
 export interface WorkerRecord {

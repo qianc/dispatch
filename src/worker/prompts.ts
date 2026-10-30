@@ -202,6 +202,7 @@ function whereWorkRuns(spec: StartSpec): string[] {
       const facts = [
         w.claude_accounts.length ? `Claude accounts: ${w.claude_accounts.join(', ')}` : '',
         w.github_accounts.length ? `GitHub accounts: ${w.github_accounts.join(', ')}` : '',
+        w.repo_envs?.length ? `env files for: ${w.repo_envs.join(', ')}` : '',
       ].filter(Boolean).join('; ');
       return `- ${w.name} (${w.connected ? 'online' : 'offline'}): ${w.description || 'no description'}${facts ? ` (${facts})` : ''}`;
     }),

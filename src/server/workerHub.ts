@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
-import type { WorkerFacts } from '../shared/types.ts';
+import type { Repo, WorkerFacts } from '../shared/types.ts';
 
 export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'cmd_progress' } | { t: 'slots' } | { t: 'refused' }>;
 
@@ -94,6 +94,19 @@ export class WorkerLink {
 export class WorkerHub {
   private links = new Map<number, WorkerLink>();
   handlers!: HubHandlers;
+  /** a local repo as it is on one worker: that worker's copy (DISP-45); set by the app */
+  localize: (workerId: number, repo: Repo) => Repo = (_, repo) => repo;
+
+  /** Every repo in a message to a worker, as that worker has it (local repos: its own path). */
+  private forWorker<T extends object>(workerId: number, msg: T): T {
+    const fix = (r: Repo) => (r.kind === 'local' ? this.localize(workerId, r) : r);
+    const m = { ...msg } as Record<string, unknown>;
+    if (m.repo && typeof m.repo === 'object') m.repo = fix(m.repo as Repo);
+    if (Array.isArray(m.repos)) m.repos = (m.repos as Repo[]).map(fix);
+    if (m.spec && typeof m.spec === 'object') m.spec = this.forWorker(workerId, m.spec as object);
+    if (m.cmd && typeof m.cmd === 'object') m.cmd = this.forWorker(workerId, m.cmd as object);
+    return m as T;
+  }
 
   attach(ws: WebSocket, worker: { id: number; name: string }) {
     this.links.get(worker.id)?.close(4000, 'replaced by a new worker connection');
@@ -144,13 +157,14 @@ export class WorkerHub {
   }
 
   send(workerId: number | null | undefined, msg: ServerToWorker): boolean {
-    return this.link(workerId)?.send(msg) ?? false;
+    const l = this.link(workerId);
+    return l?.send(this.forWorker(l.workerId, msg)) ?? false;
   }
 
   cmd<T = unknown>(workerId: number | null | undefined, cmd: WorkerCommand, timeoutMs?: number, onProgress?: (data: unknown) => void): Promise<T> {
     const l = this.link(workerId);
     if (!l) return Promise.reject(new Error('Worker is not connected'));
-    return l.cmd<T>(cmd, timeoutMs, onProgress);
+    return l.cmd<T>(this.forWorker(l.workerId, cmd), timeoutMs, onProgress);
   }
 
   facts(workerId: number | null | undefined): WorkerFacts | null {

@@ -74,8 +74,19 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
 }
 
 /**
+ * The workers that can run a project with local repos: those with an ok copy of each (DISP-45);
+ * null when the project has no local repo (any worker can).
+ */
+export function localWorkers(repos: Repo[] | undefined): number[] | null {
+  const local = (repos ?? []).filter((r) => r.kind === 'local');
+  if (!local.length) return null;
+  const okOn = (r: Repo) => (r.placements ?? (r.worker_id ? [{ worker_id: r.worker_id, status: 'ok' }] : [])).filter((p) => p.status === 'ok').map((p) => p.worker_id);
+  return okOn(local[0]).filter((id) => local.every((r) => okOn(r).includes(id)));
+}
+
+/**
  * Which worker runs the batch. `proposed`: the planner's pick (a name) and why. Shown only when
- * there is more than one worker; a project with local repos runs where they are.
+ * there is more than one worker; a project with local repos runs on a worker that has them.
  */
 export function WorkerField({ value, onChange, project, proposed }: {
   value: number | null;
@@ -86,13 +97,18 @@ export function WorkerField({ value, onChange, project, proposed }: {
   const { data } = useWorkers();
   const workers = data?.workers ?? [];
   if (workers.length < 2) return null;
-  const local = project.repos?.find((r) => r.kind === 'local' && r.worker_id);
-  const fallback = local?.worker_id ?? workers.find((w) => w.name === proposed?.name)?.id ?? project.worker_id ?? data?.default_worker_id ?? null;
-  const chosen = workers.find((w) => w.id === (value ?? fallback));
+  const able = localWorkers(project.repos);
+  const choices = able ? workers.filter((w) => able.includes(w.id)) : workers;
+  const fallback = pickWorker(able, [workers.find((w) => w.name === proposed?.name)?.id, project.worker_id, data?.default_worker_id], workers);
+  const chosen = choices.find((w) => w.id === (value ?? fallback));
+  const hint = able
+    ? able.length ? (able.length === 1 ? 'Only this worker has a working copy of this project’s local repos, so its sessions run there.' : 'Workers with a working copy of this project’s local repos.')
+      : 'No worker has a working copy of this project’s local repos. Check their copies in the project settings.'
+    : proposed?.reason ? `Planner: ${proposed.reason}` : undefined;
   return (
-    <Field label="Worker" group hint={local ? 'This project’s local repos are on this worker, so its sessions run there.' : proposed?.reason ? `Planner: ${proposed.reason}` : undefined}>
-      <select className={inputCls} value={chosen?.id ?? ''} disabled={!!local} onChange={(e) => onChange(Number(e.target.value))} aria-label="Worker">
-        {workers.map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
+    <Field label="Worker" group hint={hint}>
+      <select className={inputCls} value={chosen?.id ?? ''} disabled={!!able && able.length <= 1} onChange={(e) => onChange(Number(e.target.value))} aria-label="Worker">
+        {choices.map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
       </select>
       {chosen && !chosen.connected && <p className="text-[12px] text-wait mt-1">{chosen.name} is offline: the session waits until it connects.</p>}
     </Field>
@@ -104,9 +120,16 @@ export function useChosenWorker(project: Pick<Project, 'worker_id'> & { repos?: 
   const { data } = useWorkers();
   const [picked, setPicked] = useState<number | null>(null);
   const workers = data?.workers ?? [];
-  const local = project.repos?.find((r) => r.kind === 'local' && r.worker_id);
-  const id = local?.worker_id ?? picked ?? workers.find((w) => w.name === proposedName)?.id ?? project.worker_id ?? null;
+  const able = localWorkers(project.repos);
+  const id = able ? pickWorker(able, [picked, workers.find((w) => w.name === proposedName)?.id, project.worker_id, data?.default_worker_id], workers)
+    : picked ?? workers.find((w) => w.name === proposedName)?.id ?? project.worker_id ?? null;
   return [id, setPicked] as const;
+}
+
+/** The first preferred worker that can run the project, else a connected one that can, else any that can. */
+function pickWorker(able: number[] | null, preferred: (number | null | undefined)[], workers: { id: number; connected: boolean }[]): number | null {
+  const ok = (id: number | null | undefined): id is number => id != null && (!able || able.includes(id));
+  return preferred.find(ok) ?? (able ? workers.find((w) => w.connected && able.includes(w.id))?.id ?? able[0] ?? null : null);
 }
 
 /** Short summary of non-default options, for session headers and proposal cards. */

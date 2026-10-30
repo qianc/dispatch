@@ -27,6 +27,7 @@ import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import { labelReleased } from './releases.ts';
+import { placementProblem } from './repos.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
@@ -153,17 +154,28 @@ export class Sessions {
   }
 
   /**
-   * The worker a new session runs on. A project's local repos live on one worker, so its sessions
-   * run there (asking for another is an error); otherwise the requested worker, the project's
-   * default, or the global default.
+   * The worker a new session runs on: the requested worker, the project's default, or the global
+   * default. A project with local repos runs only on a worker with an ok copy of each (DISP-45):
+   * asking for another is an error, and without a request the first such worker is used (the
+   * project's, the global default, then a connected one).
    */
   workerFor(project: Project | null, requested: number | null | undefined): number {
-    const local = project ? this.store.repos(project.id).find((r) => r.kind === 'local' && r.worker_id) : undefined;
-    if (local) {
-      if (requested && requested !== local.worker_id) {
-        throw new SessionError(`This project's local repos are on worker ${this.workers.get(local.worker_id!)?.name ?? local.worker_id}.`);
+    const local = project ? this.store.repos(project.id).filter((r) => r.kind === 'local') : [];
+    if (local.length) {
+      const live = (id: number | null | undefined): id is number => id != null && !!this.workers.get(id) && !this.workers.get(id)!.revoked_at;
+      if (requested) {
+        const why = placementProblem(this.store, local, requested);
+        if (why) throw new SessionError(why);
+        return requested;
       }
-      return local.worker_id!;
+      const holders = [...new Set(local.flatMap((r) => (r.placements ?? []).map((p) => p.worker_id)))];
+      const order = [project!.worker_id, this.workers.defaultId(), ...holders.filter((id) => this.hub.isConnected(id)), ...holders];
+      const pick = order.find((id) => live(id) && !placementProblem(this.store, local, id));
+      if (pick == null) {
+        const reasons = holders.filter(live).map((id) => placementProblem(this.store, local, id)).filter(Boolean);
+        throw new SessionError(`No worker has an ok copy of this project's local repos. ${reasons.join(' ')}`.trim());
+      }
+      return pick;
     }
     const id = requested ?? project?.worker_id ?? this.workers.defaultId();
     const w = this.workers.get(id);
@@ -1139,6 +1151,7 @@ export class Sessions {
         local_repo_dirs: facts?.local_repo_dirs ?? [],
         claude_accounts: (facts?.claude_accounts ?? []).map((a) => a.name),
         github_accounts: facts?.github_accounts ?? [],
+        repo_envs: facts?.repo_envs ?? [],
       };
     });
   }
@@ -1146,7 +1159,8 @@ export class Sessions {
   /**
    * Run a session on another worker. One that has not started just changes worker. A started one
    * stays where its worktree and conversation are: it stops, and a new session on the other worker
-   * picks the work up from the pushed branch. Local repos exist on one worker only.
+   * picks the work up from the pushed branch. A started session on local repos stays: its branch
+   * lives in that worker's copy.
    */
   async move(sessionId: number, workerId: number): Promise<Session> {
     const s = this.mustGet(sessionId);
@@ -1155,8 +1169,11 @@ export class Sessions {
     if (FINAL_STATUSES.includes(s.status)) throw new SessionError('This session has ended; start a new batch instead.');
     if (s.worker_id === workerId) return s;
     const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
-    if (project && this.store.repos(project.id).some((r) => r.kind === 'local')) {
-      throw new SessionError('This session works on local repos, which exist on one worker only: it cannot move.');
+    const local = project ? this.store.repos(project.id).filter((r) => r.kind === 'local') : [];
+    if (local.length) {
+      if (s.status !== 'queued' || s.sdk_session_id) throw new SessionError("This session works on local repos and has started: its branch is in this worker's copy, so it cannot move.");
+      const why = placementProblem(this.store, local, workerId);
+      if (why) throw new SessionError(why);
     }
     this.checkAccounts(workerId, s.claude_account, project);
     if (s.status === 'queued' && !s.sdk_session_id) {

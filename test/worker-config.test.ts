@@ -13,6 +13,7 @@ describe('worker config', () => {
         name: 'default', url: 'ws://192.0.2.1:3000/worker', token: 't0k',
         local_repo_dirs: [join(homedir(), 'projects'), '/srv/repos'], read_dirs: [join(homedir(), 'notes')],
         claude_accounts: null, github_accounts: null, releases: [],
+        repo_env_dir: join(homedir(), '.config', 'dispatch', 'repo-env'),
       }],
     });
     expect(loadWorkerConfig({ WORKER_TOKEN: 'x' }).max_concurrent).toBe(3);

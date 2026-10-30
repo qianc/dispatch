@@ -10,6 +10,7 @@ import {
   type ItemStatus,
   type MergeEvent,
   type PendingInput,
+  type RepoPlacement,
   type PendingInputPayload,
   type Project,
   type ProposedItem,
@@ -70,6 +71,7 @@ function toRepo(r: Row): Repo {
     upstream_owner: (r.upstream_owner as string | null) ?? null,
     upstream_name: (r.upstream_name as string | null) ?? null,
     github_account: (r.project_github_account as string | null) ?? null,
+    ...(r.kind === 'local' ? { placements: json<RepoPlacement[]>(r.placements_json, []).sort((a, b) => a.worker_id - b.worker_id) } : {}),
   };
 }
 
@@ -134,7 +136,10 @@ function toPr(r: Row): PullRequest {
 }
 
 // repos carry their project's GitHub account, so every git/GitHub call knows which token to use
-const REPO_SELECT = 'SELECT r.*, p.github_account AS project_github_account FROM repos r JOIN projects p ON p.id = r.project_id';
+const REPO_SELECT = `SELECT r.*, p.github_account AS project_github_account,
+  (SELECT json_group_array(json_object('worker_id', rp.worker_id, 'local_path', rp.local_path, 'root_sha', rp.root_sha, 'status', rp.status, 'detail', rp.detail, 'checked_at', rp.checked_at))
+     FROM repo_placements rp WHERE rp.repo_id = r.id) AS placements_json
+  FROM repos r JOIN projects p ON p.id = r.project_id`;
 const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects p ON p.id = i.project_id';
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
@@ -203,7 +208,7 @@ export class Store {
     return r && toRepo(r);
   }
   /** A local repo belongs to a worker: `worker_id`, or the default worker when not given. */
-  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command' | 'kind' | 'worker_id' | 'upstream_owner' | 'upstream_name'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command' | 'worker_id' | 'kind' | 'upstream_owner' | 'upstream_name'>>): Repo {
+  addRepo(projectId: number, r: Omit<Repo, 'id' | 'project_id' | 'local_path' | 'worktree_from' | 'setup_command' | 'kind' | 'worker_id' | 'upstream_owner' | 'upstream_name'> & Partial<Pick<Repo, 'local_path' | 'worktree_from' | 'setup_command' | 'worker_id' | 'kind' | 'upstream_owner' | 'upstream_name'>> & { root_sha?: string | null }): Repo {
     const kind = r.local_path ? 'local' : r.kind === 'hosted' ? 'hosted' : 'github';
     const workerId = kind === 'local' ? r.worker_id ?? this.defaultWorkerId() : null;
     const { lastId } = this.db.run(
@@ -211,7 +216,42 @@ export class Store {
       projectId, r.github_owner, r.github_name, r.default_branch, r.check_command, r.local_path ?? null, r.worktree_from ?? null, r.setup_command ?? null, kind, workerId,
       r.upstream_owner ?? null, r.upstream_name ?? null, r.deploy_command ?? null,
     );
+    if (kind === 'local') this.db.run('INSERT INTO repo_placements (repo_id, worker_id, local_path, root_sha) VALUES (?, ?, ?, ?)', lastId, workerId, r.local_path!, r.root_sha ?? null);
     return this.repo(lastId)!;
+  }
+
+  /** A local repo's copy on a worker, added or moved to another path there (DISP-45). */
+  setPlacement(repoId: number, workerId: number, localPath: string, rootSha: string | null): Repo {
+    this.db.run(`INSERT INTO repo_placements (repo_id, worker_id, local_path, root_sha, status, detail, checked_at) VALUES (?, ?, ?, ?, 'ok', NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      ON CONFLICT (repo_id, worker_id) DO UPDATE SET local_path = excluded.local_path, root_sha = excluded.root_sha, status = 'ok', detail = NULL, checked_at = excluded.checked_at`, repoId, workerId, localPath, rootSha);
+    // the home copy is mirrored on the repo row
+    this.db.run('UPDATE repos SET local_path = ? WHERE id = ? AND worker_id = ?', localPath, repoId, workerId);
+    return this.repo(repoId)!;
+  }
+
+  /** What a worker found at a placement's path. A first check records the repo's root commit. */
+  checkedPlacement(repoId: number, workerId: number, status: RepoPlacement['status'], detail: string | null, rootSha?: string | null) {
+    this.db.run(`UPDATE repo_placements SET status = ?, detail = ?, root_sha = COALESCE(root_sha, ?), checked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE repo_id = ? AND worker_id = ?`,
+      status, detail, rootSha ?? null, repoId, workerId);
+  }
+
+  /** Remove a worker's copy. Removing the home copy makes another copy home; the last one stays. */
+  removePlacement(repoId: number, workerId: number): Repo {
+    const repo = this.repo(repoId)!;
+    const rest = (repo.placements ?? []).filter((p) => p.worker_id !== workerId);
+    if (!rest.length) throw new Error('A local repo needs a copy on at least one worker: remove the repo instead.');
+    this.db.tx(() => {
+      this.db.run('DELETE FROM repo_placements WHERE repo_id = ? AND worker_id = ?', repoId, workerId);
+      if (repo.worker_id === workerId) this.db.run('UPDATE repos SET worker_id = ?, local_path = ? WHERE id = ?', rest[0].worker_id, rest[0].local_path, repoId);
+    });
+    return this.repo(repoId)!;
+  }
+
+  /** Local repos with a copy on this worker, with that copy. */
+  placementsOn(workerId: number): { repo: Repo; placement: RepoPlacement }[] {
+    return this.db.all<{ repo_id: number }>('SELECT repo_id FROM repo_placements WHERE worker_id = ? ORDER BY repo_id', workerId)
+      .map((r) => this.repo(Number(r.repo_id))!)
+      .map((repo) => ({ repo, placement: repo.placements!.find((p) => p.worker_id === workerId)! }));
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };

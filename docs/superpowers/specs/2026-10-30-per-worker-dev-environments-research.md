@@ -102,43 +102,52 @@ CREATE TABLE repo_placements (
   repo_id    INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
   worker_id  INTEGER NOT NULL REFERENCES workers(id),
   local_path TEXT NOT NULL,
-  role       TEXT NOT NULL DEFAULT 'copy',   -- 'home' | 'copy'
   root_sha   TEXT,                           -- first commit, identifies the repo
   status     TEXT NOT NULL DEFAULT 'ok',     -- 'ok' | 'missing' | 'mismatch'
+  detail     TEXT,                           -- why it is not ok
   checked_at TEXT,
   PRIMARY KEY (repo_id, worker_id)
 );
--- migration: one 'home' row per local repo from repos.local_path + repos.worker_id
+-- migration: one row per local repo from repos.local_path + repos.worker_id
 ```
 
-`repos.local_path` and `repos.worker_id` stay for one release as a read-only copy of the
-home placement, and are then dropped.
+`repos.local_path` and `repos.worker_id` stay, and they name the **home** copy. The home copy is
+used when no session names a worker: rule files, file links, releases. If the home copy is
+removed, another copy becomes home.
 
-**One home copy.** Copies on different machines are separate git repos. Merges and deploys go
-only to the `home` placement. A `copy` placement can host sessions in one of two cases:
+**Built (DISP-45): merges land in the copy where the session ran.** This is different from the
+first draft, where merges and deploys went only to the home copy. That would need a way to move
+a session branch from one machine to another, and Dispatch has none. Today the session's
+worker already runs the merge, the branch status and the deploy, so each copy acts as an
+in-place repo on its own worker:
 
-- the repo has a shared remote (for example gitea), and the copy's worktrees branch from
-  `origin/<default>` (`worktree_from='clone'`). The merge happens on the home worker, so a
-  session branch must reach the home copy through that remote.
-- otherwise, copies drift apart and merges cannot reach the home copy. A repo that has no shared
-  remote and must run on several workers should be a **hosted** repo, which already works on
-  any worker.
+- A session on worker B makes its worktrees in B's copy. Its branch lives there, and Dispatch
+  merges it into B's copy and deploys from there.
+- The copies are separate git repos. The owner keeps them in step through a shared remote (for
+  example gitea). A repo that has no shared remote and must run on several workers should be a
+  **hosted** repo, which already works on any worker.
+- A started session on a local repo cannot move to another worker, because its branch is in that
+  worker's copy. A queued session that has not started can move to any worker that has an ok copy.
 
-This change also removes the rule that all of a project's local repos must be on one worker.
-`workerFor` picks a worker that has an `ok` placement for every local repo in the session.
+The rule that all of a project's local repos must be on one worker is gone. `workerFor` picks a
+worker that has an `ok` copy of every local repo in the project. It tries the requested worker
+first, then the project's worker, then the global default, then a connected worker.
+
+Adding a local folder whose repo the project already has makes the folder that repo's copy on that
+worker. The repos match by the same first commit, or else by the same name. A repo with the
+same name but another first commit is refused.
 
 ### When a worker has no copy, or the path is wrong
 
-- When a worker sends `hello`, and before each session, it re-checks its placements: the path
-  exists, it is inside `local_repo_dirs`, it is a git repo, and its root commit equals `root_sha`.
-  The root-commit check catches a path that now points at a different repo. The result goes back
-  as `status`.
-- `workerFor` skips workers whose placement is `missing` or `mismatch`. If no worker is left, the
-  session is not started. The item stays queued with a clear reason ("ops-scripts has no
-  working copy on any online worker: worker-b reports the path is missing"), and the repo shows a
-  warning in the project settings.
-- A merge or deploy when the home placement is not `ok` fails with the same message. Dispatch
-  does not fall back to a copy.
+- When a worker sends `hello`, the server re-checks each of that worker's copies with
+  `inspect_local_repo`: the path exists, it is inside `local_repo_dirs`, it is a git repo, and its
+  first commit equals `root_sha`. The first-commit check catches a path that now holds a different
+  repo. The result is stored as `status` and `detail`.
+- `workerFor` skips workers whose copy is `missing` or `mismatch`, or that have no copy. If no
+  worker is left, the session is not made, and the error names each worker and what is wrong
+  ("Worker b has app at /gone/app is missing (/gone/app is not a git repository)."). The project
+  settings show the status and detail of each copy, and the batch sheet offers only workers that
+  have an ok copy.
 
 ## Follow-up work
 
