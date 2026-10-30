@@ -27,6 +27,13 @@ export const icons = {
   ),
   plus: <path d="M5 12h14M12 5v14" />,
   /** two speech bubbles: a conversation about something (Discuss, planning chats) */
+  /** clock: a run a schedule started */
+  schedule: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </>
+  ),
   discuss: <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2zm4-1a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1" />,
 };
 
