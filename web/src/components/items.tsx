@@ -120,7 +120,7 @@ export function SessionRow({ s, showProject, attention }: { s: Session; showProj
     <Link to={`/s/${s.id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
       <div className="flex items-center gap-2">
         {showProject && <ProjectKey k={s.project_key} badge />}
-        <span className="flex-1 min-w-0 truncate font-medium">{s.kind === 'planner' && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
+        <span className="flex-1 min-w-0 truncate font-medium">{s.schedule_id ? <Icon name="schedule" size={15} className="inline -mt-0.5 mr-1 text-muted" /> : s.kind === 'planner' && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
         <SessionStatusChip status={s.status} busy={busy?.label} />
       </div>
       <div className="flex items-center gap-2 mt-0.5 text-[13px] text-muted">
