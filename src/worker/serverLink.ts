@@ -89,7 +89,7 @@ export class ServerLink {
     this.shared = shared;
     const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
     // this server's hosted repos are at its own address, with this worker's token for it
-    this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv, { base: hostedGitBase(entry.url), token: entry.token });
+    this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
     // agents get no worker token: they commit, and the worker pushes hosted branches (pushHostedBranches)
     this.opts = { ...shared.opts, assistantReadDirs: entry.read_dirs };
   }
@@ -99,7 +99,7 @@ export class ServerLink {
   }
 
   /** What this server is told about the worker: only the accounts and folders it may use. */
-  facts(): WorkerFacts {
+  async facts(): Promise<WorkerFacts> {
     const claude = this.shared.claudeAccounts().filter((a) => this.allowedClaude(a.name));
     return {
       os: `${process.platform}${process.env.WSL_DISTRO_NAME ? ' (WSL)' : ''}`,
@@ -110,6 +110,7 @@ export class ServerLink {
       github_accounts: this.shared.githubAccounts.filter((a) => this.allowedGithub(a)),
       local_repo_dirs: this.entry.local_repo_dirs,
       releases: this.entry.releases,
+      repo_envs: await this.workspaces.overlays().catch(() => []),
     };
   }
 
@@ -270,12 +271,14 @@ export class ServerLink {
         if (spec.kind === 'planner') extra = { context: await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r))) };
         // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
         spec = { ...spec, repos: spec.repos.map((r) => ({ ...r, attached: Workspaces.isAttached(this.workspaces.repoDir(spec.session_id, r), r) })) };
-        // per-repo setup for new worktrees (venv, npm ci, ...), before the agent starts
-        for (const { repo, wt } of created.filter((c) => c.repo.setup_command)) {
-          this.send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
-          const res = await this.workspaces.setup(repo, wt);
-          this.send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
-          if (!res.ok) text = `Note from Dispatch: the worktree setup command \`${repo.setup_command}\` failed in ${repo.github_name}. Its output:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
+        // per-repo setup for new worktrees, before the agent starts: this machine's env files
+        // (DISP-44), then the setup command (venv, npm ci, ...)
+        for (const { repo, wt } of created.filter((c) => c.repo.setup_command || this.workspaces.overlayDir(c.repo))) {
+          if (repo.setup_command) this.send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
+          const res = await this.workspaces.prepareTree(repo, wt);
+          const files = res.copied.length ? ` Env files from this worker: ${res.copied.join(', ')}.` : '';
+          this.send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.${files}` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
+          if (!res.ok) text = `Note from Dispatch: setting up the worktree of ${repo.github_name} failed:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
         }
       }
       const hostedWork = spec.kind === 'work' && !!spec.branch && spec.repos.some((r) => r.kind === 'hosted') && !this.shared.fake;
@@ -449,11 +452,12 @@ export class ServerLink {
     if (this.stopped) return;
     const { url, token, name } = this.entry;
     const sock = new WebSocket(url, { headers: { 'x-worker-token': token } });
-    sock.on('open', () => {
+    sock.on('open', async () => {
       this.ws = sock;
       delay = 1000;
       console.log(`worker connected to ${url}${name === 'default' ? '' : ` (${name})`}${this.shared.fake ? ' (fake runner)' : ''}`);
-      const facts = this.facts();
+      const facts = await this.facts();
+      if (this.ws !== sock) return;
       sock.send(JSON.stringify({ t: 'hello', live: [...this.runners.keys(), ...this.starting.keys()], claude_accounts: facts.claude_accounts, facts } satisfies WorkerToServer));
       for (const m of this.outbox.splice(0)) sock.send(JSON.stringify(m));
     });

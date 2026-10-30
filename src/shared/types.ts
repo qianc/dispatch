@@ -242,6 +242,8 @@ export interface WorkerFacts {
   local_repo_dirs: string[];
   /** releases it can run (missing from workers older than releases) */
   releases?: ReleaseCapability[];
+  /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
+  repo_envs?: string[];
 }
 
 export interface WorkerRecord {

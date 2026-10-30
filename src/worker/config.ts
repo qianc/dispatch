@@ -8,12 +8,14 @@
 //     { "name": "home", "url": "wss://dispatch.example.com/worker", "token_file": "~/.config/dispatch/worker-home.token",
 //       "local_repo_dirs": ["~/projects"], "read_dirs": ["~/projects"],
 //       "claude_accounts": null, "github_accounts": null,       // null = every account this worker has
+//       "repo_env_dir": "~/.config/dispatch/repo-env",          // env files per repo, <owner>/<name>/ (default; also top level)
 //       "releases": [                                           // releases this server may start here
 //         { "repo": "me/app", "label_prefix": "rel:", "command": "./release.sh {version} --yes",
 //           "notes": "The upload credential is on this machine." } ] }
 //   ]
 // }
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { ReleaseCapability } from '../shared/types.ts';
@@ -32,6 +34,8 @@ export interface ServerEntry {
   github_accounts: string[] | null;
   /** releases this server may start on this worker */
   releases: ReleaseCapability[];
+  /** this machine's env files per repo, <dir>/<owner>/<name>/ (DISP-44) */
+  repo_env_dir: string;
 }
 
 export interface WorkerConfig {
@@ -71,10 +75,16 @@ const fileSchema = z.object({
     claude_accounts: z.array(z.string()).nullable().default(null),
     github_accounts: z.array(z.string()).nullable().default(null),
     releases: releasesSchema,
+    repo_env_dir: z.string().min(1).optional(),
   })),
+  repo_env_dir: z.string().min(1).optional(),
 });
 
 const dirs = (list: string[]) => expandDirs(list.join(':'));
+
+/** Where this machine keeps env files for repos: REPO_ENV_DIR, or ~/.config/dispatch/repo-env. */
+const envDir = (dir: string | undefined, home: string | undefined) =>
+  resolve((dir ?? '~/.config/dispatch/repo-env').replace(/^~(?=\/|$)/, home ?? homedir()));
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   const max = Number(env.MAX_CONCURRENT_SESSIONS ?? 3) || 3;
@@ -91,6 +101,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
         claude_accounts: null,
         github_accounts: null,
         releases: releases(releasesSchema.parse(env.RELEASES ? JSON.parse(env.RELEASES) : []), env.HOME),
+        repo_env_dir: envDir(env.REPO_ENV_DIR, env.HOME),
       }],
     };
   }
@@ -108,6 +119,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
       local_repo_dirs: dirs(s.local_repo_dirs), read_dirs: dirs(s.read_dirs),
       claude_accounts: s.claude_accounts, github_accounts: s.github_accounts,
       releases: releases(s.releases, env.HOME),
+      repo_env_dir: envDir(s.repo_env_dir ?? raw.repo_env_dir ?? env.REPO_ENV_DIR, env.HOME),
     };
   });
   return { max_concurrent: raw.max_concurrent ?? max, servers };

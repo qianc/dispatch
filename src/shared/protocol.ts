@@ -42,6 +42,8 @@ export interface PlannerWorker {
   local_repo_dirs: string[];
   claude_accounts: string[];
   github_accounts: string[];
+  /** repos with env files on it, <owner>/<name> (DISP-44) */
+  repo_envs?: string[];
 }
 
 export type ServerToWorker =

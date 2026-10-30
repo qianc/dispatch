@@ -222,6 +222,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
 | `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |
+| `REPO_ENV_DIR` | `~/.config/dispatch/repo-env` | This machine's env files per repo, in `<owner>/<name>/` (local repos: `local/<name>/`, hosted: `hosted/<name>/`). They are copied into every new worktree (session, merge check, deploy) before the setup command runs. Only files git ignores are copied. Commands get the folder as `DISPATCH_REPO_ENV_DIR`. With `WORKER_CONFIG`: a `repo_env_dir` key, at the top level or per server. |
 | `AGENT_MODEL`, `ASSISTANT_MODEL`, `DISCUSS_MODEL` | Claude Code default, `haiku`, `haiku` | Models. |
 | `AGENT_PLUGIN_DIRS`, `AGENT_SETTING_SOURCES` | (the image adds superpowers) | Plugins and which Claude settings agents load. |
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |

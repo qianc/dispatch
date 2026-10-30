@@ -1139,6 +1139,7 @@ export class Sessions {
         local_repo_dirs: facts?.local_repo_dirs ?? [],
         claude_accounts: (facts?.claude_accounts ?? []).map((a) => a.name),
         github_accounts: facts?.github_accounts ?? [],
+        repo_envs: facts?.repo_envs ?? [],
       };
     });
   }
