@@ -6,7 +6,7 @@ import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } fro
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
-import { existsSync, globSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -36,6 +36,7 @@ export interface AgentRunner {
 }
 
 export interface RunnerOptions {
+  /** AGENT_PLUGIN_DIRS as configured; see resolvePluginDirs. */
   pluginDirs: string[];
   settingSources: ('user' | 'project' | 'local')[];
   model: string | undefined;
@@ -73,6 +74,40 @@ export function linkAgentSkills(skillDirs: string[], dir: string): string | unde
   for (const name of readdirSync(links)) rmSync(join(links, name));
   for (const d of skills) symlinkSync(d, join(links, basename(d)));
   return skills.length ? dir : undefined;
+}
+
+/** Where Claude's plugin list (under `configDir`) says a plugin (`name@marketplace`) is installed. */
+function installedPluginPath(id: string, configDir: string): string | undefined {
+  try {
+    const list = JSON.parse(readFileSync(join(configDir, 'plugins', 'installed_plugins.json'), 'utf8'));
+    const installs: { scope?: string; installPath?: string }[] = list.plugins?.[id] ?? [];
+    return (installs.find((i) => i.scope === 'user') ?? installs[0])?.installPath;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The folders to load for the entries in AGENT_PLUGIN_DIRS. Claude updates plugins in the background and
+ * removes old versions, so call this when a session starts, not once at worker start. An entry is a plugin
+ * by its Claude name (superpowers@claude-plugins-official), or a folder. A folder in Claude's plugin cache
+ * (<config>/plugins/cache/<marketplace>/<plugin>/<version>) means that plugin at its installed version,
+ * whichever version the entry names. An entry that leads to no folder is left out, with a warning.
+ */
+export function resolvePluginDirs(entries: string[], configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')): string[] {
+  return entries.flatMap((entry) => {
+    let path: string | undefined;
+    if (!entry.includes('/') && entry.includes('@')) {
+      path = installedPluginPath(entry, configDir);
+    } else {
+      path = resolve(entry.replace(/^~(?=$|\/)/, homedir()));
+      const cached = path.match(/^(.*)\/plugins\/cache\/([^/]+)\/([^/]+)\/[^/]+$/);
+      if (cached) path = installedPluginPath(`${cached[3]}@${cached[2]}`, cached[1]) ?? path;
+    }
+    if (path && existsSync(path)) return [path];
+    console.warn(`AGENT_PLUGIN_DIRS: skipping ${entry}: ${path ? `${path} does not exist` : 'it is not installed'}`);
+    return [];
+  });
 }
 
 /** True if `path` (after resolving symlinks) is inside one of `dirs`. */
@@ -310,7 +345,7 @@ export class ClaudeRunner implements AgentRunner {
         ...(this.spec.options.effort !== 'default' && !chat ? { effort: this.spec.options.effort } : {}),
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
         settingSources: chat ? [] : this.opts.settingSources,
-        plugins: chat ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
+        plugins: chat ? [] : resolvePluginDirs(this.opts.pluginDirs).map((path) => ({ type: 'local' as const, path })),
         ...(this.opts.agentSkillsDir && !chat ? { additionalDirectories: [this.opts.agentSkillsDir] } : {}),
         ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
