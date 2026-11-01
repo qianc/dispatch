@@ -14,6 +14,7 @@ import { Schedules } from '../components/schedules.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { noteProject } from '../nav.ts';
+import { DEFAULT_ITEM_SORT, ITEM_SORT_GROUPS, itemSortOption, sortItems, type ItemSort } from '../itemSort.ts';
 import { toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { ItemDetail } from './ItemDetail.tsx';
@@ -122,6 +123,7 @@ export function Project() {
 
       {(tab === 'backlog' || tab === 'bugs') && (
         <ItemList
+          key={project.key}
           items={items.filter((i) => i.type === type)}
           project={project}
           onToggle={(it) => toggle.mutate(it)}
@@ -171,17 +173,19 @@ export function Project() {
   );
 }
 
-interface ListFilter { q: string; tags: string[]; modules: string[]; importance: number[]; wrap: boolean }
-const NO_FILTER: ListFilter = { q: '', tags: [], modules: [], importance: [], wrap: false };
+interface ListFilter { q: string; tags: string[]; modules: string[]; importance: number[]; wrap: boolean; sort: ItemSort }
+const NO_FILTER = { q: '', tags: [], modules: [], importance: [] };
+const LIST_DEFAULTS: ListFilter = { ...NO_FILTER, wrap: false, sort: DEFAULT_ITEM_SORT };
 
-/** Filter + display settings, remembered per project on this device. */
+/** Filter, sort + display settings, remembered per project on this device. */
 function useListFilter(projectKey: string) {
   const storageKey = `dispatch:list:${projectKey}`;
   const [f, setF] = useState<ListFilter>(() => {
     try {
-      return { ...NO_FILTER, ...JSON.parse(localStorage.getItem(storageKey) ?? '{}') };
+      const saved = { ...LIST_DEFAULTS, ...JSON.parse(localStorage.getItem(storageKey) ?? '{}') };
+      return { ...saved, sort: itemSortOption(saved.sort).value };
     } catch {
-      return NO_FILTER;
+      return LIST_DEFAULTS;
     }
   });
   const update = (patch: Partial<ListFilter>) => {
@@ -205,6 +209,8 @@ function matches(it: Item, f: ListFilter) {
   return true;
 }
 
+const chipCls = (on: boolean) => cx('rounded-md border text-[13px] min-h-8 px-2.5 py-1 text-left', on ? 'border-accent bg-accent/15 text-fg' : 'border-line text-muted');
+
 function ToggleChips({ label, options, value, onChange }: { label: string; options: { value: string | number; label: string }[]; value: (string | number)[]; onChange: (v: (string | number)[]) => void }) {
   if (!options.length) return null;
   return (
@@ -219,7 +225,7 @@ function ToggleChips({ label, options, value, onChange }: { label: string; optio
               type="button"
               aria-pressed={on}
               onClick={() => onChange(on ? value.filter((v) => v !== o.value) : [...value, o.value])}
-              className={cx('rounded-md border text-[13px] min-h-8 px-2.5 py-1 text-left', on ? 'border-accent bg-accent/15 text-fg' : 'border-line text-muted')}
+              className={chipCls(on)}
             >
               {o.label}
             </button>
@@ -242,19 +248,21 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
 }) {
   const [showClosed, setShowClosed] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   const [f, setF] = useListFilter(project.key);
   const { data: facets } = useFacets(project.key);
   const active = f.tags.length + f.modules.length + f.importance.length;
-  const shown = items.filter((i) => matches(i, f));
+  const sort = itemSortOption(f.sort);
+  const shown = sortItems(items.filter((i) => matches(i, f)), sort.value);
   const open = shown.filter((i) => OPEN.includes(i.status));
-  const held = shown.filter((i) => i.status === 'hold').sort((a, b) => b.importance - a.importance || b.number - a.number);
+  const held = shown.filter((i) => i.status === 'hold');
   const closed = shown.filter((i) => !OPEN.includes(i.status) && i.status !== 'hold');
   const groups = [
     { title: 'In review', items: open.filter((i) => i.status === 'in_review') },
     { title: 'In progress', items: open.filter((i) => i.status === 'in_progress') },
     { title: 'Todo', items: open.filter((i) => i.status === 'todo') },
     { title: 'Triage', items: open.filter((i) => i.status === 'triage') },
-    { title: 'Backlog', items: open.filter((i) => i.status === 'backlog').sort((a, b) => b.importance - a.importance || b.number - a.number) },
+    { title: 'Backlog', items: open.filter((i) => i.status === 'backlog') },
   ].filter((g) => g.items.length);
   const row = (it: Item, markable = true) => (
     <ItemRow
@@ -287,12 +295,15 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
         <Button small onClick={() => setFilterOpen(true)} aria-label="Filter and view">
           Filter{active > 0 && <span className="ml-0.5 min-w-4 h-4 px-1 rounded-full bg-accent-strong text-on-accent text-[10px] leading-4">{active}</span>}
         </Button>
+        <Button small className="whitespace-nowrap" onClick={() => setSortOpen(true)} aria-label={`Sort: ${sort.label}`}>
+          <Icon name="sort" size={14} /> {sort.short}
+        </Button>
         {!wide && <Button small variant={selectMode ? 'primary' : 'secondary'} onClick={() => setSelectMode(!selectMode)}>{selectMode ? 'Done' : 'Select'}</Button>}
       </div>
       {(active > 0 || f.q) && (
         <div className="px-4 pt-2 text-[12px] text-muted flex items-center gap-2">
           {shown.length} of {items.length} shown
-          <button className="text-accent" onClick={() => setF({ ...NO_FILTER, wrap: f.wrap })}>Clear</button>
+          <button className="text-accent" onClick={() => setF(NO_FILTER)}>Clear</button>
         </div>
       )}
       {!open.length && !held.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
@@ -326,9 +337,29 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
           <input type="checkbox" checked={f.wrap} onChange={(e) => setF({ wrap: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
         </label>
         <div className="flex gap-2 mt-3">
-          <Button className="flex-1" onClick={() => setF({ ...NO_FILTER, wrap: f.wrap })}>Clear filters</Button>
+          <Button className="flex-1" onClick={() => setF(NO_FILTER)}>Clear filters</Button>
           <Button variant="primary" className="flex-1" onClick={() => setFilterOpen(false)}>Show {shown.length}</Button>
         </div>
+      </Sheet>
+      <Sheet open={sortOpen} onClose={() => setSortOpen(false)} title="Sort">
+        {ITEM_SORT_GROUPS.map((g) => (
+          <div key={g.label} className="mb-4 last:mb-0" role="group" aria-label={g.label}>
+            <div className="text-[13px] text-muted mb-1.5">{g.label}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {g.options.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  aria-pressed={o.value === sort.value}
+                  onClick={() => { setF({ sort: o.value }); setSortOpen(false); }}
+                  className={chipCls(o.value === sort.value)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </Sheet>
     </>
   );
