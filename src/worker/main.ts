@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
-import { expandDirs, type RunnerOptions } from './runner.ts';
+import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, type ClaudeAccountInfo } from '../shared/accounts.ts';
@@ -34,6 +34,7 @@ const opts: RunnerOptions = {
   assistantModel: env.ASSISTANT_MODEL || 'haiku',
   discussModel: env.DISCUSS_MODEL || env.ASSISTANT_MODEL || 'haiku',
   assistantReadDirs: expandDirs(env.ASSISTANT_READ_DIRS ?? ''),
+  agentSkillsDir: linkAgentSkills(expandDirs(env.AGENT_SKILLS ?? ''), resolve(env.WORKSPACES_DIR ?? './data/workspaces', 'agent-skills')),
 };
 
 // Accounts (names and credentials from env; see src/shared/accounts.ts)

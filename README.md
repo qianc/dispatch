@@ -228,6 +228,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `REPO_ENV_DIR` | `~/.config/dispatch/repo-env` | This machine's env files per repo, in `<owner>/<name>/` (local repos: `local/<name>/`, hosted: `hosted/<name>/`). They are copied into every new worktree (session, merge check, deploy) before the setup command runs. Only files git ignores are copied. Commands get the folder as `DISPATCH_REPO_ENV_DIR`. With `WORKER_CONFIG`: a `repo_env_dir` key, at the top level or per server. |
 | `AGENT_MODEL`, `ASSISTANT_MODEL`, `DISCUSS_MODEL` | Claude Code default, `haiku`, `haiku` | Models. |
 | `AGENT_PLUGIN_DIRS`, `AGENT_SETTING_SOURCES` | (the image adds superpowers) | Plugins and which Claude settings agents load. |
+| `AGENT_SKILLS` | | Skill folders work sessions may load, separated by `:`. For skills in `~/.claude/skills` when `AGENT_SETTING_SOURCES` leaves out `user`. |
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
 | `IDLE_CLOSE_MINUTES` | `10` | Close an idle Claude process after this long (it resumes on the next message). |
 | `RUNNER` | `claude` | `fake`: a scripted agent, to try the app without Claude. |
@@ -347,7 +348,8 @@ WORKER_TOKEN=dev RUNNER=fake npm run dev:worker
 Without `RUNNER=fake` the worker uses your local Claude Code login. Set
 `AGENT_PLUGIN_DIRS=~/.claude/plugins/cache/claude-plugins-official/superpowers/<version>` to load
 superpowers, and `AGENT_SETTING_SOURCES=project` if you don't want your personal `~/.claude`
-settings in agent sessions.
+settings in agent sessions. That also hides the skills in `~/.claude/skills`; list the ones agents
+need in `AGENT_SKILLS`, e.g. `AGENT_SKILLS=~/.claude/skills/asd-ste100`.
 
 ## Sign-in, tokens and Claude connectors
 

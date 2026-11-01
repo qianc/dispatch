@@ -6,9 +6,9 @@ import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } fro
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
-import { existsSync, globSync, realpathSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface RunnerDeps {
@@ -49,10 +49,30 @@ export interface RunnerOptions {
   loginHint?: (name: string | null) => string;
   /** Folders the assistant may read (absolute, ~ expanded). */
   assistantReadDirs: string[];
+  /** Folder whose .claude/skills holds the skills work sessions may load (see linkAgentSkills). */
+  agentSkillsDir?: string;
 }
 
 export function expandDirs(list: string): string[] {
   return list.split(':').filter(Boolean).map((d) => resolve(d.replace(/^~(?=$|\/)/, homedir())));
+}
+
+/**
+ * Links each skill folder into <dir>/.claude/skills, and removes links no longer listed. Sessions get
+ * <dir> as an additional directory, so they load these skills even when AGENT_SETTING_SOURCES leaves out
+ * 'user', and nothing else from ~/.claude comes with them. Returns <dir>, or undefined if no skill is linked.
+ */
+export function linkAgentSkills(skillDirs: string[], dir: string): string | undefined {
+  const links = join(dir, '.claude', 'skills');
+  const skills = skillDirs.filter((d) => {
+    if (existsSync(join(d, 'SKILL.md'))) return true;
+    console.warn(`AGENT_SKILLS: skipping ${d}: it has no SKILL.md`);
+    return false;
+  });
+  mkdirSync(links, { recursive: true });
+  for (const name of readdirSync(links)) rmSync(join(links, name));
+  for (const d of skills) symlinkSync(d, join(links, basename(d)));
+  return skills.length ? dir : undefined;
 }
 
 /** True if `path` (after resolving symlinks) is inside one of `dirs`. */
@@ -291,6 +311,7 @@ export class ClaudeRunner implements AgentRunner {
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
         settingSources: chat ? [] : this.opts.settingSources,
         plugins: chat ? [] : this.opts.pluginDirs.map((path) => ({ type: 'local' as const, path })),
+        ...(this.opts.agentSkillsDir && !chat ? { additionalDirectories: [this.opts.agentSkillsDir] } : {}),
         ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
