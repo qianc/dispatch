@@ -46,6 +46,74 @@ test('desktop: left menu, checkboxes always on, items open in a drawer', async (
   await expect(page.getByRole('main').getByRole('link', { name: /Made in the panel/ })).toBeVisible();
 });
 
+test('sort button: orders the filtered list and keeps the choice per project (DISP-49)', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'SRT', name: 'Sorted' } });
+  await page.request.post('/api/projects', { data: { key: 'SRU', name: 'Sorted too' } });
+  await page.request.post('/api/projects/SRT/items', { data: { title: 'Alpha low large', importance: 1, effort: 4 } });
+  await page.request.post('/api/projects/SRT/items', { data: { title: 'Bravo high small', importance: 3, effort: 0 } });
+  await page.request.post('/api/projects/SRT/items', { data: { title: 'Charlie medium unsized', importance: 2 } });
+  await page.request.post('/api/projects/SRT/items', { data: { title: 'Delta critical other', importance: 4, effort: 2, labels: ['other'] } });
+  await page.goto('/p/SRT');
+
+  const titles = () => page.getByRole('main').getByRole('link').filter({ hasText: /Alpha|Bravo|Charlie|Delta/ });
+  const expectOrder = (...names: string[]) => expect(titles()).toHaveText(names.map((n) => new RegExp(n)));
+  const sortBy = async (choice: string) => {
+    await page.getByRole('button', { name: /^Sort:/ }).click();
+    await page.getByRole('dialog', { name: 'Sort' }).getByRole('button', { name: choice }).click();
+    await expect(page.getByRole('dialog', { name: 'Sort' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: `Sort: ${choice}` })).toBeVisible();
+  };
+
+  // the default, shown on the button next to Filter
+  const sortButton = page.getByRole('button', { name: 'Sort: Most severe first' });
+  await expect(sortButton).toHaveText('Most severe');
+  await expectOrder('Delta', 'Bravo', 'Charlie', 'Alpha');
+  const filterBox = (await page.getByRole('button', { name: 'Filter and view' }).boundingBox())!;
+  expect((await sortButton.boundingBox())!.x).toBeGreaterThan(filterBox.x);
+
+  await sortBy('Least severe first');
+  await expectOrder('Alpha', 'Charlie', 'Bravo', 'Delta');
+  await sortBy('Smallest first');
+  await expectOrder('Bravo', 'Delta', 'Alpha', 'Charlie'); // no size: last
+  await sortBy('Largest first');
+  await expectOrder('Alpha', 'Delta', 'Bravo', 'Charlie'); // no size: still last
+  await sortBy('Oldest first');
+  await expectOrder('Alpha', 'Bravo', 'Charlie', 'Delta');
+  await sortBy('Newest first');
+  await expectOrder('Delta', 'Charlie', 'Bravo', 'Alpha');
+
+  // a filtered list is sorted too, and clearing the filter keeps the sort
+  await page.getByLabel('Search items').fill('c');
+  await expectOrder('Delta', 'Charlie');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expectOrder('Delta', 'Charlie', 'Bravo', 'Alpha');
+  await expect(page.getByRole('button', { name: 'Sort: Newest first' })).toBeVisible();
+
+  // kept after leaving and returning
+  await page.goto('/projects');
+  await page.getByRole('link', { name: /^Sorted\b(?! too)/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Sort: Newest first' })).toBeVisible();
+  await expectOrder('Delta', 'Charlie', 'Bravo', 'Alpha');
+
+  // the toolbar still fits on a phone, with the longest label and the Select button
+  await sortBy('Most severe first');
+  await expect(page.getByLabel('Search items')).toBeVisible();
+  expect((await page.getByLabel('Search items').boundingBox())!.width).toBeGreaterThan(100);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await sortBy('Oldest first');
+
+  // each project keeps its own: moving between projects in the same page does not carry it over
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/p/SRU');
+  const menu = page.getByRole('complementary', { name: 'Menu' });
+  await expect(page.getByRole('button', { name: 'Sort: Most severe first' })).toBeVisible();
+  await menu.getByRole('link', { name: 'Sorted', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sort: Oldest first' })).toBeVisible();
+  await menu.getByRole('link', { name: 'Sorted too', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sort: Most severe first' })).toBeVisible();
+});
+
 test('phone: in select mode a tap on the text opens the item, the checkbox marks it', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'SEL', name: 'Selecting' } });

@@ -26,6 +26,7 @@ export const icons = {
     </>
   ),
   plus: <path d="M5 12h14M12 5v14" />,
+  sort: <path d="m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" />,
   /** two speech bubbles: a conversation about something (Discuss, planning chats) */
   /** clock: a run a schedule started */
   schedule: (
