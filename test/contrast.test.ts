@@ -60,6 +60,10 @@ describe.each([['dark', dark], ['light', light]] as const)('%s theme', (_name, t
     expect(contrast(t.panel, t.bg)).toBeGreaterThanOrEqual(1.1);
     expect(contrast(t.line, t.panel)).toBeGreaterThanOrEqual(1.4);
   });
+
+  it('input borders can be seen on the page and on panels (WCAG AA for controls: 3:1)', () => {
+    for (const surface of ['bg', 'panel']) expect(contrast(t['line-strong'], t[surface])).toBeGreaterThanOrEqual(3);
+  });
 });
 
 it('the light theme is the same whether chosen or automatic', () => {

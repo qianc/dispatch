@@ -6,6 +6,8 @@
   --color-panel: #1a1a1e;
   --color-raised: #26262b;
   --color-line: #3a3a42;
+  /* border of a field that takes input: 3:1 on the page and on panels */
+  --color-line-strong: #6e6e78;
   --color-fg: #ededef;
   --color-muted: #a8a8b1;
   --color-faint: #8d8d97;
@@ -31,6 +33,7 @@
   --color-panel: #ffffff;
   --color-raised: #e8e8ed;
   --color-line: #d0d0d8;
+  --color-line-strong: #85858f;
   --color-fg: #1b1b1f;
   --color-muted: #53535c;
   --color-faint: #656570;
@@ -51,6 +54,7 @@
     --color-panel: #ffffff;
     --color-raised: #e8e8ed;
     --color-line: #d0d0d8;
+    --color-line-strong: #85858f;
     --color-fg: #1b1b1f;
     --color-muted: #53535c;
     --color-faint: #656570;
