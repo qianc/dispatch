@@ -398,15 +398,35 @@ export class Workspaces {
     return wt;
   }
 
-  /** The newest version tag on a repo's default branch, and its VERSION file (null when there is none). */
-  releaseVersion(repo: Repo): Promise<{ tag: string | null; file: string | null }> {
+  /**
+   * The newest version tag on a repo's default branch and its VERSION file (null when there is
+   * none), each with its date, after fetching the tags: a copy that nobody fetched has old ones.
+   */
+  releaseVersion(repo: Repo): Promise<{ tag: string | null; tag_date: string | null; file: string | null; file_date: string | null; file_tagged: boolean; fetch_error: string | null }> {
     return this.withRepo(repo, async () => {
       const dir = repo.local_path ?? (await this.ensureCache(repo));
       const base = repo.local_path ? `refs/heads/${repo.default_branch}` : `origin/${repo.default_branch}`;
+      // a local repo can have no remote: then its own tags are all there is
+      const hasRemote = (await run('git', ['remote', 'get-url', 'origin'], dir)).code === 0;
+      const fetched = hasRemote ? await run('git', ['fetch', '--tags', 'origin'], dir, 30_000) : null;
       const tags = await run('git', ['tag', '--merged', base, '--list', 'v[0-9]*', '[0-9]*'], dir);
       const file = await run('git', ['show', `${base}:VERSION`], dir);
       const v = file.out.trim();
-      return { tag: tags.code === 0 ? maxVersion(tags.out.split('\n')) : null, file: file.code === 0 && VERSION_RE.test(v) ? v : null };
+      const tag = tags.code === 0 ? maxVersion(tags.out.split('\n')) : null;
+      const version = file.code === 0 && VERSION_RE.test(v) ? v : null;
+      const output = async (args: string[]) => {
+        const r = await run('git', args, dir);
+        return r.code === 0 && r.out ? r.out : null;
+      };
+      const bare = version?.replace(/^v/, '');
+      return {
+        tag,
+        tag_date: tag && (await output(['for-each-ref', '--format=%(creatordate:iso-strict)', `refs/tags/${tag}`])),
+        file: version,
+        file_date: version && (await output(['log', '-1', '--format=%cI', base, '--', 'VERSION'])),
+        file_tagged: !!bare && !!(await output(['tag', '--list', `v${bare}`, bare])),
+        fetch_error: fetched?.code ? fetched.out.slice(-300) : null,
+      };
     });
   }
 

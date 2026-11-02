@@ -44,13 +44,27 @@ export function normalizeVersion(input: string, last: string | null): string {
   return last?.startsWith('v') && /^\d/.test(s) ? `v${s}` : s;
 }
 
-/** Done items with no label of this release line yet (the rule release_items uses). */
-export function unreleased(items: Item[], prefix: string): Item[] {
-  return items.filter((i) => i.status === 'done' && !i.labels.some((l) => l.startsWith(prefix)));
+/** A release that would label more items than this asks the owner first. */
+export const MANY_RELEASE_ITEMS = 36;
+
+/** rel:v1.2.3, convert:0.3.0: a label that says a release of some line holds the item. */
+const RELEASE_LABEL_RE = /^\S*[^\sA-Za-z0-9.]v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+/** Done items not in a release of this line or of another; with `since`, only those done from that moment on. */
+export function unreleased(items: Item[], prefix: string, since?: string | null): Item[] {
+  const from = since ? Date.parse(since) : NaN;
+  return items.filter((i) => i.status === 'done' && !i.labels.some((l) => l.startsWith(prefix) || RELEASE_LABEL_RE.test(l))
+    && (Number.isNaN(from) || !i.done_at || Date.parse(i.done_at) >= from));
 }
 
 export function highestLabelVersion(items: Item[], prefix: string): string | null {
   return maxVersion(items.flatMap((i) => i.labels.filter((l) => l.startsWith(prefix)).map((l) => l.slice(prefix.length))));
+}
+
+/** When a labelled release was made: labelling is its last step, and a later edit moves only some of its items. */
+export function labelDate(items: Item[], prefix: string, version: string): string | null {
+  const dates = items.filter((i) => i.labels.some((l) => l.startsWith(prefix) && compareVersions(l.slice(prefix.length), version) === 0)).map((i) => i.updated_at);
+  return dates.length ? dates.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a)) : null;
 }
 
 /** Minor when the release holds backlog work, patch for fixes only; after a pre-release, its release. */

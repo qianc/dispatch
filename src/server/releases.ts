@@ -1,6 +1,6 @@
 // Releases: which connected worker can release which of a project's repos (from the releases
 // in each worker's own config), and labelling the items a release holds.
-import { compareVersions, highestLabelVersion, maxVersion, proposeVersion, unreleased } from '../shared/release.ts';
+import { compareVersions, highestLabelVersion, labelDate, maxVersion, proposeVersion, unreleased } from '../shared/release.ts';
 import type { Item, Project, ReleaseCapability, Repo } from '../shared/types.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -69,41 +69,68 @@ export function labelReleased(store: Store, projectId: number, prefix: string, v
 }
 
 export interface ReleaseProposal {
-  last: { version: string; from: 'tag' | 'file' | 'label' } | null;
+  /** date: when that release was made; null when it cannot be found */
+  last: { version: string; from: 'tag' | 'file' | 'label'; date: string | null } | null;
   proposed: string;
   bump: 'minor' | 'patch' | 'first' | 'release';
   items: Pick<Item, 'id' | 'key' | 'type' | 'title'>[];
+  /** done items with no label that are older than the last release: not in this one */
+  older: number;
   label_prefix: string;
   command: string | null;
   notes: string | null;
   warning?: string;
 }
 
+/** Items a release of this repo can hold: not released yet, and not merged only into other repos of the project. */
+export function releasable(store: Store, projectId: number, all: Item[], opt: Pick<ReleaseOption, 'repo_id' | 'label_prefix'>, since?: string | null): Item[] {
+  const merged = store.mergedRepos(projectId);
+  return unreleased(all, opt.label_prefix, since).filter((i) => merged.get(i.id)?.includes(opt.repo_id) ?? true);
+}
+
+/** What a worker says about a repo's last version. Older workers send only tag and file. */
+interface FoundVersion {
+  tag: string | null;
+  tag_date?: string | null;
+  file: string | null;
+  file_date?: string | null;
+  /** the version in the VERSION file has a tag on the worker */
+  file_tagged?: boolean;
+  fetch_error?: string | null;
+}
+
 /**
  * The last release (newest of the repo's version tag, its VERSION file and the project's release
- * labels, so a version already used is never proposed again) and the next version.
+ * labels, so a version already used is never proposed again), the next version, and the items
+ * done since that release.
  */
 export async function releaseProposal(deps: { store: Store; hub: WorkerHub }, project: Project, opt: ReleaseOption): Promise<ReleaseProposal> {
   const repo = deps.store.repo(opt.repo_id)!;
   const all = deps.store.items(project.id);
-  let found: { tag: string | null; file: string | null } = { tag: null, file: null };
-  let warning: string | undefined;
+  let found: FoundVersion = { tag: null, file: null };
+  const warnings: string[] = [];
   try {
-    const res = await deps.hub.cmd<{ tag?: string | null; file?: string | null }>(opt.worker_id, { c: 'release_version', repo }, 60_000);
-    found = { tag: res?.tag ?? null, file: res?.file ?? null };
+    const res = await deps.hub.cmd<Partial<FoundVersion>>(opt.worker_id, { c: 'release_version', repo }, 60_000);
+    found = { ...res, tag: res?.tag ?? null, file: res?.file ?? null };
   } catch (e) {
-    warning = `Could not read the version tags of ${opt.repo} on ${opt.worker}: ${(e as Error).message}`;
+    warnings.push(`Could not read the version tags of ${opt.repo} on ${opt.worker}: ${(e as Error).message}`);
   }
+  if (found.fetch_error) warnings.push(`Could not fetch the tags of ${opt.repo} on ${opt.worker}, so they can be behind the repo: ${found.fetch_error}`);
   const label = highestLabelVersion(all, opt.label_prefix);
   const candidates = [['tag', found.tag], ['file', found.file], ['label', label]] as const;
   const best = maxVersion(candidates.map(([, v]) => v));
-  const last = best ? { version: best, from: candidates.find(([, v]) => v && compareVersions(v, best) === 0)![0] } : null;
-  const items = unreleased(all, opt.label_prefix);
+  const isBest = (v: string | null) => !!v && !!best && compareVersions(v, best) === 0;
+  const date = [isBest(found.tag) && found.tag_date, isBest(found.file) && found.file_date, isBest(label) && labelDate(all, opt.label_prefix, best!)].find(Boolean) || null;
+  const last = best ? { version: best, from: candidates.find(([, v]) => isBest(v))![0], date } : null;
+  if (isBest(found.file) && found.file_tagged === false) warnings.push(`The VERSION file says ${found.file}, but ${opt.worker} has no tag for it.`);
+  if (last && !date) warnings.push(`Could not find the date of ${last.version}, so this list holds every done item with no release label.`);
+  const items = releasable(deps.store, project.id, all, opt, date);
   const next = proposeVersion(last?.version ?? null, items);
   return {
     last, proposed: next.version, bump: next.bump,
     items: items.map((i) => ({ id: i.id, key: i.key, type: i.type, title: i.title })),
+    older: releasable(deps.store, project.id, all, opt).length - items.length,
     label_prefix: opt.label_prefix, command: opt.command, notes: opt.notes,
-    ...(warning ? { warning } : {}),
+    ...(warnings.length ? { warning: warnings.join(' ') } : {}),
   };
 }

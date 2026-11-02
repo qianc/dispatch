@@ -5,15 +5,17 @@ import { join } from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { matchesRepo } from '../src/server/releases.ts';
+import { MANY_RELEASE_ITEMS } from '../src/shared/release.ts';
 import type { ReleaseCapability, Repo } from '../src/shared/types.ts';
 import { releasePrompt } from '../src/worker/prompts.ts';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
+type Version = { tag?: string | null; tag_date?: string | null; file?: string | null; file_date?: string | null; file_tagged?: boolean; fetch_error?: string | null };
 type Msg = { t: string; req_id?: string; cmd?: { c: string }; spec?: { session_id: number; kind: string; branch: string | null; repos: Repo[]; release?: { version: string } } };
 
 /** A hand-driven worker that answers release_version with `version`. */
-async function rawWorker(port: number, token: string, releases: ReleaseCapability[] | undefined, version: { tag?: string | null; file?: string | null } | Error = {}) {
+async function rawWorker(port: number, token: string, releases: ReleaseCapability[] | undefined, version: Version | Error = {}) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/worker`, { headers: { 'x-worker-token': token } });
   const got: Msg[] = [];
   ws.on('message', (d) => {
@@ -113,11 +115,107 @@ describe('releases from the interface', () => {
     const wc = await rawWorker(s.port, b.secret, [cap('me/app')], new Error('no network'));
     await waitFor(() => s.ctx.hub.isConnected(b.id), 'b again');
     done('Later', 'backlog', ['rel:v2.0.0']);
+    done('After it');
     const res = (await s.call('GET', q)).data;
     expect(res).toMatchObject({ last: { version: 'v2.0.0', from: 'label' }, proposed: 'v2.1.0' });
     expect(res.warning).toMatch(/no network/);
     expect((await s.call('GET', `/projects/REL/releases/proposal?worker_id=${b.id}&repo_id=999`)).status).toBe(400);
     wc.ws.close();
+  });
+
+  describe('the items of a release', () => {
+    const past = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const age = (id: number, days: number) => s.ctx.store.db.run('UPDATE items SET done_at = ? WHERE id = ?', past(days), id);
+    const worker = async (version: Version) => {
+      const w = await rawWorker(s.port, b.secret, [cap('me/app')], version);
+      await waitFor(() => s.ctx.hub.isConnected(b.id), 'b');
+      const repo_id = s.ctx.store.repos(s.ctx.store.projectByKey('REL')!.id)[0].id;
+      return { w, repo_id, q: `/projects/REL/releases/proposal?worker_id=${b.id}&repo_id=${repo_id}` };
+    };
+
+    it('holds only the items done since the last release, and says how many older ones have no label', async () => {
+      const date = past(5);
+      const { w, repo_id, q } = await worker({ tag: 'v0.20.0', tag_date: past(9), file: '0.21.0', file_date: date, file_tagged: true });
+      age(done('Long ago').id, 30);
+      const fresh = done('Fresh', 'bug');
+      const res = (await s.call('GET', q)).data;
+      expect(res).toMatchObject({ last: { version: '0.21.0', from: 'file', date }, proposed: '0.21.1', items: [{ title: 'Fresh' }], older: 1 });
+      expect(res.warning).toBeUndefined();
+
+      const started = await s.call('POST', '/projects/REL/releases', { worker_id: b.id, repo_id, version: '0.21.1' });
+      expect(started.data.item_ids).toEqual([fresh.id]);
+      w.ws.close();
+    });
+
+    it('dates a release known only from labels by those labels', async () => {
+      const { w, q } = await worker({ tag: null, file: null });
+      const shipped = done('Shipped', 'backlog', ['rel:v1.0.0']);
+      s.ctx.store.db.run('UPDATE items SET updated_at = ? WHERE id = ?', past(5), shipped.id);
+      age(done('Before').id, 9);
+      done('After');
+      expect((await s.call('GET', q)).data).toMatchObject({ last: { version: 'v1.0.0', from: 'label', date: s.ctx.store.item(shipped.id)!.updated_at }, items: [{ title: 'After' }], older: 1 });
+      w.ws.close();
+    });
+
+    it('warns when the list cannot be bounded, the tags cannot be fetched, or VERSION has no tag', async () => {
+      const { w, q } = await worker({ tag: null, file: '0.21.0', file_date: null, file_tagged: false, fetch_error: 'no route to host' });
+      age(done('Long ago').id, 30);
+      const res = (await s.call('GET', q)).data;
+      expect(res).toMatchObject({ last: { version: '0.21.0', date: null }, items: [{ title: 'Long ago' }], older: 0 });
+      expect(res.warning).toMatch(/no route to host/);
+      expect(res.warning).toMatch(/VERSION file says 0\.21\.0, but b has no tag/);
+      expect(res.warning).toMatch(/every done item/);
+      w.ws.close();
+    });
+
+    it('leaves out items of another release line, and items merged only into another repo', async () => {
+      const { w, repo_id, q } = await worker({ tag: 'v1.0.0', tag_date: past(5) });
+      const store = s.ctx.store;
+      const project = store.projectByKey('REL')!;
+      const other = (await s.call('POST', '/projects/REL/repos', { github_owner: 'me', github_name: 'convert' })).data;
+      const merge = (repo: number, number: number, state: 'merged' | 'open', ...items: { id: number }[]) => {
+        const session = store.createSession({ project_id: project.id, kind: 'work', title: 't', status: 'completed', force_plan: false, branch: `b${number}`, initial_prompt: 'x', source_id: null, item_ids: items.map((i) => i.id), options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: b.id });
+        store.db.run("INSERT INTO pull_requests (session_id, repo_id, number, url, state, head_ref) VALUES (?, ?, ?, '', ?, 'b')", session.id, repo, number, state);
+      };
+      done('Shipped in convert', 'backlog', ['convert:v0.3.0']);
+      merge(other.id, 1, 'merged', done('Only in convert'));
+      merge(other.id, 2, 'open', done('Convert, not merged yet'));
+      const here = done('In app');
+      merge(repo_id, 3, 'merged', here);
+      const both = done('In both');
+      merge(repo_id, 4, 'merged', both);
+      merge(other.id, 5, 'merged', both);
+      done('No pull request');
+      const titles = (await s.call('GET', q)).data.items.map((i: { title: string }) => i.title);
+      expect(titles.sort()).toEqual(['Convert, not merged yet', 'In app', 'In both', 'No pull request']);
+      const started = await s.call('POST', '/projects/REL/releases', { worker_id: b.id, repo_id, version: 'v1.1.0' });
+      expect(started.data.item_ids).toHaveLength(4);
+      w.ws.close();
+    });
+
+    it('asks for confirmation before it labels many items', async () => {
+      const { w, repo_id } = await worker({ tag: 'v1.0.0', tag_date: past(5) });
+      for (let i = 0; i <= MANY_RELEASE_ITEMS; i++) done(`Item ${i}`, 'bug');
+      const refused = await s.call('POST', '/projects/REL/releases', { worker_id: b.id, repo_id, version: 'v1.0.1' });
+      expect(refused.status).toBe(409);
+      expect(refused.data.error).toMatch(new RegExp(`label ${MANY_RELEASE_ITEMS + 1} items`));
+      expect((await s.call('POST', '/projects/REL/releases', { worker_id: b.id, repo_id, version: 'v1.0.1', confirm_many: true })).status).toBe(200);
+      w.ws.close();
+    });
+
+    it('keeps the date an item became done through edits, and a new date when it is done again', async () => {
+      const store = s.ctx.store;
+      const it = done('Item');
+      expect(it.done_at).toBeTruthy();
+      age(it.id, 3);
+      const before = store.item(it.id)!.done_at;
+      expect(store.updateItem(it.id, { labels: ['x'] }).done_at).toBe(before);
+      expect(store.updateItem(it.id, { status: 'todo' }).done_at).toBeNull();
+      const again = store.updateItem(it.id, { status: 'done' }).done_at!;
+      expect(Date.parse(again)).toBeGreaterThan(Date.parse(before!));
+      const open = store.createItem(store.projectByKey('REL')!.id, { title: 'Open', type: 'bug', body_md: '', status: 'todo', importance: 2, effort: null, source_id: null, labels: [] });
+      expect(open.done_at).toBeNull();
+    });
   });
 
   it('starts a release session on the worker that offers it, after checking the version', async () => {
@@ -237,7 +335,7 @@ describe('the release checkout of a GitHub repo', () => {
     execFileSync('git', ['clone', '--bare', src, join(base, 'me', 'app.git')]);
     const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${base}`);
     const repo: Repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'app', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null, kind: 'github' };
-    expect(await ws.releaseVersion(repo)).toEqual({ tag: 'v1.10.0-rc.1', file: '1.9.0' });
+    expect(await ws.releaseVersion(repo)).toEqual({ tag: 'v1.10.0-rc.1', tag_date: expect.any(String), file: '1.9.0', file_date: expect.any(String), file_tagged: false, fetch_error: null });
     const spec = { session_id: 3, kind: 'release' as const, repos: [repo] } as never;
     const wt = await ws.prepareRelease(spec);
     expect(git(wt, 'branch', '--show-current')).toBe('main');
@@ -248,5 +346,26 @@ describe('the release checkout of a GitHub repo', () => {
     const head = git(wt, 'rev-parse', 'HEAD');
     await ws.prepareRelease(spec);
     expect(git(wt, 'rev-parse', 'HEAD')).toBe(head); // a reopened release keeps its commit
+  });
+
+  it('fetches the tags of a local repo first, and says when it cannot', async () => {
+    const { Workspaces } = await import('../src/worker/workspace.ts');
+    const base = mkdtempSync(join(tmpdir(), 'dsp-tags-'));
+    const src = join(base, 'src'), copy = join(base, 'copy');
+    execFileSync('git', ['init', '-b', 'main', src]);
+    writeFileSync(join(src, 'VERSION'), 'v1.2.0\n');
+    git(src, 'add', '.');
+    git(src, 'commit', '-m', 'init');
+    execFileSync('git', ['clone', src, copy]);
+    git(src, 'tag', 'v1.2.0'); // tagged after the copy was made: the copy does not have it
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')), `file://${base}`);
+    const repo: Repo = { id: 1, project_id: 1, github_owner: 'local', github_name: 'copy', default_branch: 'main', check_command: null, local_path: copy, worktree_from: null, setup_command: null, kind: 'local' };
+    expect(git(copy, 'tag', '--list')).toBe('');
+    expect(await ws.releaseVersion(repo)).toMatchObject({ tag: 'v1.2.0', tag_date: expect.any(String), file: 'v1.2.0', file_tagged: true, fetch_error: null });
+
+    git(copy, 'remote', 'set-url', 'origin', join(base, 'gone'));
+    expect((await ws.releaseVersion(repo)).fetch_error).toBeTruthy();
+    git(copy, 'remote', 'remove', 'origin');
+    expect(await ws.releaseVersion(repo)).toMatchObject({ tag: 'v1.2.0', fetch_error: null });
   });
 });

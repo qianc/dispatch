@@ -293,7 +293,7 @@ export function releasePrompt(spec: StartSpec, context: { label: string; text: s
     '',
     `## Done items not yet released with prefix \`${r.label_prefix}\``,
     ...shown.map((it) => `- ${it.key} · ${it.type} · ${it.title}${it.modules.length ? ` (modules: ${it.modules.join(', ')})` : ''}`),
-    ...(spec.items.length > shown.length ? [`- …and ${spec.items.length - shown.length} more: list_items with status ["done"] shows them all.`] : []),
+    ...(spec.items.length > shown.length ? [`- …and ${spec.items.length - shown.length} more: list_items with status ["done"] shows them, with older items that are not in this release.`] : []),
     'Read an item with `get_item` when its title is not enough to write its changelog line.',
     '',
     '## How to release',

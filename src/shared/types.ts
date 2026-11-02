@@ -126,6 +126,8 @@ export interface Item {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** when it became done; null while it is not done */
+  done_at: string | null;
   /** set where an item is handed to an agent: how many images it has */
   image_count?: number;
   /** set where an item is handed to an agent: its comments, oldest first */
