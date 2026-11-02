@@ -135,10 +135,11 @@ export interface ReleaseOption {
 }
 
 export interface ReleaseProposal {
-  last: { version: string; from: 'tag' | 'file' | 'label' } | null;
+  last: { version: string; from: 'tag' | 'file' | 'label'; date: string | null } | null;
   proposed: string;
   bump: 'minor' | 'patch' | 'first' | 'release';
   items: Pick<Item, 'id' | 'key' | 'type' | 'title'>[];
+  older: number;
   label_prefix: string;
   command: string | null;
   notes: string | null;

@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { compareVersions, normalizeVersion, unreleased, VERSION_RE } from '../../shared/release.ts';
-import { releaseOptions, releaseProposal } from '../releases.ts';
+import { compareVersions, MANY_RELEASE_ITEMS, normalizeVersion, VERSION_RE } from '../../shared/release.ts';
+import { releasable, releaseOptions, releaseProposal } from '../releases.ts';
 import { HttpError, notFound, type Ctx } from './ctx.ts';
 
 const pick = z.object({ worker_id: z.coerce.number().int(), repo_id: z.coerce.number().int() });
-const create = pick.extend({ version: z.string().trim().min(1).max(60) });
+const create = pick.extend({ version: z.string().trim().min(1).max(60), confirm_many: z.boolean().optional() });
 
 export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
   const { store, sessions } = ctx;
@@ -44,8 +44,9 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
     const all = store.items(p.id);
     if (all.some((i) => i.labels.includes(label))) throw new HttpError(409, `${label} is already used`);
     if (proposal.last && compareVersions(version, proposal.last.version) <= 0) throw new HttpError(409, `${version} is not above the last release ${proposal.last.version}`);
-    const items = unreleased(all, opt.label_prefix);
+    const items = releasable(store, p.id, all, opt, proposal.last?.date);
     if (!items.length) throw new HttpError(400, 'No done items since the last release');
+    if (items.length > MANY_RELEASE_ITEMS && !input.confirm_many) throw new HttpError(409, `This release would label ${items.length} items. Confirm that they all belong in it.`);
     return sessions.startRelease(p, {
       workerId: opt.worker_id, repo: store.repo(opt.repo_id)!, items,
       release: { repo_id: opt.repo_id, cap_repo: opt.cap_repo, version, label_prefix: opt.label_prefix, command: opt.command, notes: opt.notes, last_version: proposal.last?.version ?? null },

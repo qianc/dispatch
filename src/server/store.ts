@@ -109,6 +109,7 @@ function toItem(r: Row): Item {
     sort_order: Number(r.sort_order),
     created_at: String(r.created_at),
     updated_at: String(r.updated_at),
+    done_at: r.done_at == null ? null : String(r.done_at),
   };
 }
 
@@ -317,8 +318,8 @@ export class Store {
       this.db.run('UPDATE projects SET next_item_number = next_item_number + 1 WHERE id = ?', projectId);
       const min = this.db.get<{ m: number | null }>('SELECT min(sort_order) AS m FROM items WHERE project_id = ?', projectId)?.m ?? 0;
       const { lastId } = this.db.run(
-        'INSERT INTO items (project_id, number, type, title, body_md, status, importance, effort, source_id, labels, modules, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        projectId, Number(n), it.type, it.title, it.body_md, it.status, it.importance, it.effort, it.source_id, JSON.stringify(it.labels), JSON.stringify(it.modules ?? []), Number(min) - 1,
+        'INSERT INTO items (project_id, number, type, title, body_md, status, importance, effort, source_id, labels, modules, sort_order, done_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        projectId, Number(n), it.type, it.title, it.body_md, it.status, it.importance, it.effort, it.source_id, JSON.stringify(it.labels), JSON.stringify(it.modules ?? []), Number(min) - 1, it.status === 'done' ? now() : null,
       );
       return this.item(lastId)!;
     });
@@ -328,11 +329,14 @@ export class Store {
       this.createItem(projectId, { ...p, status: p.type === 'bug' ? 'triage' : 'backlog', source_id: sourceId, labels: p.labels ?? [], modules: p.modules ?? [] }),
     );
   }
-  updateItem(id: number, patch: Partial<Omit<Item, 'id' | 'project_id' | 'number' | 'key' | 'created_at' | 'updated_at'>>): Item {
-    const n = { ...this.item(id)!, ...patch };
+  updateItem(id: number, patch: Partial<Omit<Item, 'id' | 'project_id' | 'number' | 'key' | 'created_at' | 'updated_at' | 'done_at'>>): Item {
+    const old = this.item(id)!;
+    const n = { ...old, ...patch };
+    // stays when an item that is done is edited; a reopened item is done again on its new date
+    const doneAt = n.status !== 'done' ? null : old.status === 'done' ? old.done_at : now();
     this.db.run(
-      'UPDATE items SET type = ?, title = ?, body_md = ?, status = ?, importance = ?, effort = ?, source_id = ?, labels = ?, modules = ?, marked = ?, sort_order = ?, updated_at = ? WHERE id = ?',
-      n.type, n.title, n.body_md, n.status, n.importance, n.effort, n.source_id, JSON.stringify(n.labels), JSON.stringify(n.modules), n.marked ? 1 : 0, n.sort_order, now(), id,
+      'UPDATE items SET type = ?, title = ?, body_md = ?, status = ?, importance = ?, effort = ?, source_id = ?, labels = ?, modules = ?, marked = ?, sort_order = ?, updated_at = ?, done_at = ? WHERE id = ?',
+      n.type, n.title, n.body_md, n.status, n.importance, n.effort, n.source_id, JSON.stringify(n.labels), JSON.stringify(n.modules), n.marked ? 1 : 0, n.sort_order, now(), doneAt, id,
     );
     return this.item(id)!;
   }
@@ -346,6 +350,19 @@ export class Store {
         )
         .map((r) => ({ name: String(r.name), count: Number(r.count) }));
     return { tags: count('labels'), modules: count('modules') };
+  }
+
+  /** The repos each of a project's items reached through a merged pull request; other items have no entry. */
+  mergedRepos(projectId: number): Map<number, number[]> {
+    const rows = this.db.all<{ item_id: number; repo_id: number }>(
+      `SELECT DISTINCT si.item_id, pr.repo_id FROM session_items si
+       JOIN items i ON i.id = si.item_id JOIN pull_requests pr ON pr.session_id = si.session_id
+       WHERE i.project_id = ? AND pr.state = 'merged'`,
+      projectId,
+    );
+    const out = new Map<number, number[]>();
+    for (const r of rows) out.set(Number(r.item_id), [...(out.get(Number(r.item_id)) ?? []), Number(r.repo_id)]);
+    return out;
   }
 
   deleteItem(id: number) {

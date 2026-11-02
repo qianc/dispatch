@@ -6,7 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
 import { api, type Item, type ProjectSummary, type ReleaseOption, type ReleaseProposal, type Repo, type Session, type SourceSummary } from '../api.ts';
-import { normalizeVersion, VERSION_RE } from '../../../src/shared/release.ts';
+import { MANY_RELEASE_ITEMS, normalizeVersion, VERSION_RE } from '../../../src/shared/release.ts';
 import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
@@ -17,6 +17,7 @@ import { noteProject } from '../nav.ts';
 import { DEFAULT_ITEM_SORT, ITEM_SORT_GROUPS, itemSortOption, sortItems, type ItemSort } from '../itemSort.ts';
 import { toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
+import { messageTime } from '../time.ts';
 import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
@@ -393,14 +394,17 @@ function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary;
   });
   const [version, setVersion] = useState('');
   useEffect(() => setVersion(proposal?.proposed ?? ''), [proposal?.proposed, opt?.worker_id, opt?.repo_id]);
+  const [confirmMany, setConfirmMany] = useState(false);
+  useEffect(() => setConfirmMany(false), [opt?.worker_id, opt?.repo_id]);
   const start = useMutation({
-    mutationFn: () => api.post<Session>(`/projects/${project.key}/releases`, { worker_id: opt.worker_id, repo_id: opt.repo_id, version }),
+    mutationFn: () => api.post<Session>(`/projects/${project.key}/releases`, { worker_id: opt.worker_id, repo_id: opt.repo_id, version, confirm_many: confirmMany }),
     onSuccess: onStarted,
   });
   if (!opt) return <Empty>No worker offers a release of this project now.</Empty>;
   const final = normalizeVersion(version, proposal?.last?.version ?? proposal?.proposed ?? null);
   const valid = VERSION_RE.test(final);
   const items = proposal?.items ?? [];
+  const many = items.length > MANY_RELEASE_ITEMS;
   return (
     <form onSubmit={(e) => { e.preventDefault(); start.mutate(); }}>
       <p className="text-[13px] text-muted mb-3">Claude writes the changelog from the done items, runs the release on the worker, and labels the items once the release succeeded.</p>
@@ -415,7 +419,7 @@ function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary;
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px] mb-3">
         <dt className="text-muted">Last release</dt>
-        <dd>{proposal ? (proposal.last ? `${proposal.last.version} (${FROM[proposal.last.from]})` : 'none found') : isFetching ? 'reading…' : '—'}</dd>
+        <dd>{proposal ? (proposal.last ? `${proposal.last.version} (${FROM[proposal.last.from]})${proposal.last.date ? `, ${messageTime(proposal.last.date)}` : ''}` : 'none found') : isFetching ? 'reading…' : '—'}</dd>
         <dt className="text-muted">Runs</dt>
         <dd className="font-mono break-all">{opt.command ?? "the repo's own release steps"}</dd>
         {opt.notes && <><dt className="text-muted">Notes</dt><dd>{opt.notes}</dd></>}
@@ -441,8 +445,15 @@ function ReleaseForm({ project, options, onStarted }: { project: ProjectSummary;
           </Card>
         ) : <Empty>{proposal ? 'Nothing done since the last release.' : 'Loading…'}</Empty>}
       </Section>
+      {!!proposal?.older && <p className="text-[12px] text-muted mt-2">{proposal.older} older done {proposal.older === 1 ? 'item has' : 'items have'} no release label. {proposal.older === 1 ? 'It is' : 'They are'} not in this release.</p>}
+      {many && (
+        <label className="flex items-start gap-2 text-[13px] text-wait mt-3">
+          <input type="checkbox" checked={confirmMany} onChange={(e) => setConfirmMany(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+          <span>This release labels {items.length} items. Confirm that they all belong in it.</span>
+        </label>
+      )}
       <ErrorText error={start.error} />
-      <Button variant="primary" className="w-full mt-3" disabled={!proposal || !items.length || !valid || start.isPending}>Create release {valid ? final : ''}</Button>
+      <Button variant="primary" className="w-full mt-3" disabled={!proposal || !items.length || !valid || (many && !confirmMany) || start.isPending}>Create release {valid ? final : ''}</Button>
     </form>
   );
 }

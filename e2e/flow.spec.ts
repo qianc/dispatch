@@ -535,6 +535,29 @@ test('browser-drawn controls (checkboxes, scrollbars) follow the theme, also on 
   expect(await scheme()).toBe('dark');
 });
 
+test('a release of many items asks for confirmation first', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  const api = (method: 'post' | 'patch', path: string, data: unknown) => page.request[method](`/api${path}`, { data }).then((r) => r.json());
+  await api('post', '/projects', { key: 'RM', name: 'Many' });
+  await api('post', '/projects/RM/repos', { github_owner: 'me', github_name: 'e2e-rel' });
+  for (let i = 0; i < 37; i++) {
+    const it = await api('post', '/projects/RM/items', { title: `Item ${i}` });
+    await api('patch', `/items/${it.id}`, { status: 'done' });
+  }
+
+  await page.goto('/p/RM');
+  await page.getByRole('button', { name: 'Create release' }).click();
+  const d = page.getByRole('dialog');
+  await expect(d.getByText('Done since the last release · 37')).toBeVisible();
+  const create = d.getByRole('button', { name: /^Create release v/ });
+  await expect(create).toBeDisabled();
+  await d.getByLabel(/This release labels 37 items/).check();
+  await expect(create).toBeEnabled();
+});
+
 test('a release from the project page: review the version, edit it, create it', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Password').fill('e2e-pass');

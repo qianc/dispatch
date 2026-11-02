@@ -293,10 +293,21 @@ uses `SERVER_WS_URL`, `WORKER_TOKEN`, `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS
 
 A project page shows **Release** when a connected worker can release one of the project's repos.
 The sheet shows:
-- the last release
-- the done items since then
+- the last release and its date
+- the done items since then, and how many older done items have no release label (they are not in
+  this release)
 - a proposed version, which you can edit
 - the release step the worker will run
+- a warning when the tags cannot be fetched, or when the worker has no tag for the version in the
+  `VERSION` file
+
+An item is in the list once: an item with a release label of any line is not listed, and an item
+merged only into another repo of the project is not listed for this one. An item with no merged pull
+request and no release label shows for each repo of the project, so the release session leaves out
+what belongs to another repo.
+
+The worker fetches the repo's tags first. A release that would label more than 36 items asks you to
+confirm them.
 
 **Create release** starts a release session on that worker. Claude reads the repo's release rules
 (CLAUDE.md, AGENTS.md, `.dispatch.md`), writes and commits the changelog entry, and runs the release

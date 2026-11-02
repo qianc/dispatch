@@ -5,7 +5,7 @@ import { DEFAULT_RUN_OPTIONS, type Item } from '../src/shared/types.ts';
 const item = (comments: Item['comments']): Item => ({
   id: 1, project_id: 1, number: 55, key: 'SLD-55', type: 'backlog', title: 'DP25 — writing standard', body_md: 'The description.',
   status: 'backlog', importance: 2, effort: null, source_id: null, labels: [], modules: [], marked: false, sort_order: 0,
-  created_at: '', updated_at: '', comments,
+  created_at: '', updated_at: '', done_at: null, comments,
 });
 const spec = (items: Item[]) => ({
   session_id: 1, kind: 'work' as const, project_key: 'SLD', project_name: 'slides', importance_scale: ['L', 'M', 'H', 'C'], effort_scale: ['S'],
