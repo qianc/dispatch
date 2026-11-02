@@ -610,7 +610,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
               <input className={inputCls} placeholder="push merges to GitHub (optional): owner/name" value={hostedForm.upstream} onChange={(e) => setHostedForm({ ...hostedForm, upstream: e.target.value })} aria-label="Push merges to GitHub" />
               <input className={inputCls} placeholder="base branch (main)" value={repo.default_branch} onChange={(e) => setRepo({ ...repo, default_branch: e.target.value })} aria-label="Base branch" />
               <ErrorText error={addHosted.error} />
-              <Button className="w-full" disabled={!hostedForm.name.trim() || addHosted.isPending}>{addHosted.isPending ? 'Making the repo…' : 'Add hosted repo'}</Button>
+              <Button variant="primary" className="w-full" disabled={!hostedForm.name.trim() || addHosted.isPending}>{addHosted.isPending ? 'Making the repo…' : 'Add hosted repo'}</Button>
             </form>
           ) : (
           <form className="p-3 space-y-2" onSubmit={(e) => { e.preventDefault(); addRepo.mutate(); }}>
@@ -630,7 +630,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
             </div>
             <ErrorText error={addRepo.error} />
             {repoNote && <p className="text-[12px] text-wait">{repoNote}</p>}
-            <Button className="w-full" disabled={!repo.full.includes('/') || addRepo.isPending}>Add repo</Button>
+            <Button variant="primary" className="w-full" disabled={!repo.full.includes('/') || addRepo.isPending}>Add repo</Button>
           </form>
           )}
         </Card>
@@ -673,7 +673,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           <Field label="Importance scale" hint="Exactly 4 labels, lowest first"><input className={inputCls} value={f.importance} onChange={(e) => setF({ ...f, importance: e.target.value })} /></Field>
           <Field label="Effort scale" hint="Smallest first. Existing items keep their index."><input className={inputCls} value={f.effort} onChange={(e) => setF({ ...f, effort: e.target.value })} /></Field>
           <ErrorText error={save.error} />
-          <Button className="w-full" disabled={save.isPending}>Save</Button>
+          <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>
         </form>
       </Section>
     </>

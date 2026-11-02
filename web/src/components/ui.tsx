@@ -199,7 +199,7 @@ export function Field({ label, children, hint, group }: { label: string; childre
     : <label className="block mb-3">{body}</label>;
 }
 
-export const inputCls = 'w-full rounded-lg bg-bg border border-line px-3 py-2 text-fg placeholder:text-faint focus:outline-none focus:border-accent';
+export const inputCls = 'w-full rounded-lg bg-panel border border-line-strong px-3 py-2 text-fg placeholder:text-faint focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent disabled:border-line';
 
 /** Pick one. Short labels sit in a row; long ones (or many) stack as a list so nothing overflows. */
 export function Segmented<T extends string | number>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {

@@ -543,3 +543,32 @@ test('a notification while the app is open shows in the page (DISP-12)', async (
   await banner.getByRole('button', { name: 'Dismiss notification' }).click();
   await expect(banner).toHaveCount(0);
 });
+
+test('project settings: inputs stand out from the page and Save is the primary action (DISP-48)', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'LOK', name: 'Looks' } });
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.goto('/p/LOK');
+    await page.getByRole('radio', { name: 'Settings' }).click();
+    const css = (l: import('@playwright/test').Locator, prop: string) => l.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
+    const role = (name: string) => page.evaluate((n) => {
+      const probe = document.body.appendChild(document.createElement('div'));
+      probe.style.color = `var(--color-${n})`;
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    }, name);
+
+    const name = page.getByLabel('Name', { exact: true });
+    const pageBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    expect(await css(name, 'background-color')).not.toBe(pageBg);
+    expect(await css(name, 'border-top-color')).toBe(await role('line-strong'));
+    await name.focus();
+    expect(await css(name, 'border-top-color')).toBe(await role('accent'));
+    expect(await css(name, 'box-shadow')).not.toBe('none');
+
+    const form = page.locator('form').filter({ has: name });
+    expect(await css(form.getByRole('button', { name: 'Save' }), 'background-color')).toBe(await role('accent-strong'));
+  }
+});

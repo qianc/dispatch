@@ -140,7 +140,7 @@ export function StatusPicker({ value, onChange, disabled }: { value: ItemStatus;
         type="button"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        className="w-full flex items-center gap-2.5 h-10 px-3 rounded-lg bg-bg border border-line text-left active:bg-raised disabled:opacity-50"
+        className="w-full flex items-center gap-2.5 h-10 px-3 rounded-lg bg-panel border border-line-strong text-left active:bg-raised disabled:opacity-50 disabled:border-line"
         aria-label={`Status: ${ITEM_STATUS_LABEL[value]}. Change status`}
       >
         <ItemStatusIcon status={value} size={18} />
