@@ -1,6 +1,6 @@
 // Releases: which connected worker can release which of a project's repos (from the releases
 // in each worker's own config), and labelling the items a release holds.
-import { compareVersions, highestLabelVersion, labelDate, maxVersion, proposeVersion, unreleased } from '../shared/release.ts';
+import { compareVersions, highestLabelVersion, isReleaseDate, labelDate, lastLabelDate, MANY_RELEASE_ITEMS, maxVersion, proposeVersion, unreleased } from '../shared/release.ts';
 import type { Item, Project, ReleaseCapability, Repo } from '../shared/types.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -56,10 +56,21 @@ export function releaseOptions(deps: { store: Store; hub: WorkerHub; workers: Wo
   return out;
 }
 
-/** Add <prefix><version> to these items (default: every done item not yet in a release of this line). Returns the items released. */
-export function labelReleased(store: Store, projectId: number, prefix: string, version: string, items?: Item[], emit?: (it: Item) => void): Item[] {
+/** The items to label when no keys are given: unreleased since `since`, else since the last release in the labels. With no date, only a short list. */
+function unreleasedTargets(all: Item[], prefix: string, version: string, since?: string): Item[] {
+  if (since !== undefined && !isReleaseDate(since)) throw new Error(`since "${since}" is not a date. Use YYYY-MM-DD or an ISO date and time.`);
+  const date = since ?? lastLabelDate(all, prefix, version);
+  const targets = unreleased(all, prefix, date);
+  if (!date && targets.length > MANY_RELEASE_ITEMS) {
+    throw new Error(`${targets.length} done items have no release label and no ${prefix} label dates a last release, so all of them would be labelled. Pass since (the date of the last release) or the keys of the items.`);
+  }
+  return targets;
+}
+
+/** Add <prefix><version> to these items (default: the done items since the last release, see unreleasedTargets). Returns the items released. */
+export function labelReleased(store: Store, projectId: number, prefix: string, version: string, items?: Item[], emit?: (it: Item) => void, since?: string): Item[] {
   const tag = `${prefix}${version}`;
-  const targets = items?.length ? items : store.items(projectId, { status: ['done'] }).filter((i) => !i.labels.some((l) => l.startsWith(prefix)));
+  const targets = items?.length ? items : unreleasedTargets(store.items(projectId), prefix, version, since);
   for (const it of targets) {
     if (it.labels.includes(tag)) continue;
     const up = store.updateItem(it.id, { labels: [...it.labels, tag] });

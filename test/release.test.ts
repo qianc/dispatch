@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bump, compareVersions, highestLabelVersion, labelDate, maxVersion, normalizeVersion, parseVersion, proposeVersion, unreleased, VERSION_RE } from '../src/shared/release.ts';
+import { bump, compareVersions, highestLabelVersion, isReleaseDate, labelDate, lastLabelDate, maxVersion, normalizeVersion, parseVersion, proposeVersion, unreleased, VERSION_RE } from '../src/shared/release.ts';
 import type { Item } from '../src/shared/types.ts';
 
 const item = (key: string, over: Partial<Item> = {}): Item => ({
@@ -66,6 +66,22 @@ describe('release versions', () => {
     ];
     expect(labelDate(items, 'rel:', 'v1.0.0')).toBe('2026-11-01T10:00:00.000Z');
     expect(labelDate(items, 'rel:', 'v2.0.0')).toBeNull();
+  });
+
+  it('finds the date of the last labelled release; a version being labelled again does not count', () => {
+    const items = [
+      item('A-1', { labels: ['rel:v1.0.0'], updated_at: '2026-10-01T10:00:00.000Z' }), item('A-2', { labels: ['rel:1.1.0'], updated_at: '2026-11-01T10:00:00.000Z' }),
+      item('A-3', { labels: ['convert:v9.0.0'], updated_at: '2026-11-02T10:00:00.000Z' }),
+    ];
+    expect(lastLabelDate(items, 'rel:')).toBe('2026-11-01T10:00:00.000Z');
+    expect(lastLabelDate(items, 'rel:', 'v1.1.0')).toBe('2026-10-01T10:00:00.000Z');
+    expect(lastLabelDate(items, 'rel:', 'v2.0.0')).toBe('2026-11-01T10:00:00.000Z');
+    expect(lastLabelDate(items, 'x:')).toBeNull();
+  });
+
+  it('takes only an ISO date as a release date, because Date.parse reads almost anything', () => {
+    for (const ok of ['2026-11-01', '2026-11-01T11:00:00+01:00', '2026-11-01T10:00:00.000Z']) expect(isReleaseDate(ok)).toBe(true);
+    for (const bad of ['', '1', 'v1.4.0', 'yesterday', '11/01/2026', '2026-13-01']) expect(isReleaseDate(bad)).toBe(false);
   });
 
   it('proposes minor for backlog work, patch for bugs only, v0.1.0 for a first release', () => {

@@ -129,6 +129,123 @@ describe('dispatch-backlog skill script', () => {
       (e) => ({ out: String(e.stdout), err: String(e.stderr), ok: false }),
     );
 
+  describe('unreleased items', () => {
+    const past = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    let n = 0;
+    const setup = async () => {
+      const key = `UN${++n}`;
+      await s.call('POST', '/projects', { key, name: key });
+      const projectId = s.ctx.store.projectByKey(key)!.id;
+      const done = (title: string, days = 0, labels: string[] = []) => {
+        const it = s.ctx.store.createItem(projectId, { title, type: 'backlog', body_md: '', status: 'done', importance: 2, effort: null, source_id: null, labels });
+        s.ctx.store.db.run('UPDATE items SET done_at = ?, updated_at = ? WHERE id = ?', past(days), past(days), it.id);
+        return it;
+      };
+      const run = (...args: string[]) => runIn(repo, { DISPATCH_URL: s.base, HOME: repo }, ...args, '--project', key);
+      const labels = (id: number) => s.ctx.store.item(id)!.labels;
+      return { done, run, labels };
+    };
+
+    it('counts from the date of the last release, and leaves out other lines', async () => {
+      const { done, run, labels } = await setup();
+      done('Shipped', 5, ['rel:v1.0.0']);
+      const old = done('Old with no label', 9);
+      done('In another line', 2, ['convert:v0.3.0']);
+      const fresh = done('Fresh', 1);
+      const list = await run('unreleased');
+      expect(list.out).toContain('Fresh');
+      expect(list.out).not.toContain('Old with no label');
+      expect(list.out).not.toContain('In another line');
+      expect(list.out).toMatch(/\(1 done item not in a release yet, done since v1\.0\.0 \(\d{4}-.*\); left out 1 older done item with no label\)/);
+      expect(list.err).toBe('');
+      expect(JSON.parse((await run('unreleased', '--json')).out).map((i: { title: string }) => i.title)).toEqual(['Fresh']);
+
+      const res = await run('release', 'v1.1.0', '--unreleased');
+      expect(res.ok).toBe(true);
+      expect(labels(fresh.id)).toEqual(['rel:v1.1.0']);
+      expect(labels(old.id)).toEqual([]);
+      expect(res.out).toContain('left out 1 older done item with no label');
+    });
+
+    it('takes a release label with a pre-release or no v as the last release', async () => {
+      const { done, run } = await setup();
+      done('Older release', 20, ['rel:v1.9.0']);
+      done('Candidate', 5, ['rel:2.0.0-rc.1']);
+      done('Between', 9);
+      done('Fresh', 1);
+      const { out } = await run('unreleased');
+      expect(out).toContain('Fresh');
+      expect(out).not.toContain('Between');
+      expect(out).toContain('done since 2.0.0-rc.1');
+    });
+
+    it('lets --since win over the labels', async () => {
+      const { done, run, labels } = await setup();
+      done('Shipped', 5, ['rel:v1.0.0']);
+      const old = done('Old', 9);
+      const older = done('Older', 30);
+      const { out } = await run('unreleased', '--since', past(20));
+      expect(out).toContain('Old');
+      expect(out).not.toContain('Older');
+      expect(out).toContain(`done since ${past(20).slice(0, 10)}`);
+      expect((await run('release', 'v1.1.0', '--unreleased', '--since', past(20))).ok).toBe(true);
+      expect(labels(old.id)).toEqual(['rel:v1.1.0']);
+      expect(labels(older.id)).toEqual([]);
+    });
+
+    it('refuses a date it cannot read', async () => {
+      const { done, run, labels } = await setup();
+      const it = done('Item');
+      for (const bad of ['v1.4.0', '1']) {
+        for (const args of [['unreleased'], ['release', 'v1.0.0', '--unreleased']]) {
+          const res = await run(...args, '--since', bad);
+          expect(res.ok).toBe(false);
+          expect(res.err).toContain(`--since "${bad}" is not a date`);
+        }
+      }
+      expect((await run('unreleased', '--since')).err).toContain('--since needs a date');
+      expect(labels(it.id)).toEqual([]);
+    });
+
+    it('with no date: lists a long list with a warning, and refuses to label it', async () => {
+      const { done, run, labels } = await setup();
+      const items = Array.from({ length: 37 }, (_, i) => done(`Item ${i}`, 40));
+      const list = await run('unreleased');
+      expect(list.ok).toBe(true);
+      expect(list.out).toContain('(37 done items not in a release yet)');
+      expect(list.err).toMatch(/warning: .*no date.*--since/);
+      expect(JSON.parse((await run('unreleased', '--json')).out)).toHaveLength(37);
+
+      const refused = await run('release', 'v1.0.0', '--unreleased');
+      expect(refused.ok).toBe(false);
+      expect(refused.err).toMatch(/37 done items.*--since.*keys/);
+      expect(items.flatMap((i) => labels(i.id))).toEqual([]);
+
+      expect((await run('release', 'v1.0.0', items[0].key)).ok).toBe(true); // explicit keys still work
+      expect(labels(items[0].id)).toEqual(['rel:v1.0.0']);
+    });
+
+    it('with no date: warns on a short list and still labels it, for a first release', async () => {
+      const { done, run, labels } = await setup();
+      const it = done('Item', 400);
+      const list = await run('unreleased');
+      expect(list.out).toContain('(1 done item not in a release yet)');
+      expect(list.err).toContain('warning');
+      expect((await run('release', 'v0.1.0', '--unreleased')).ok).toBe(true);
+      expect(labels(it.id)).toEqual(['rel:v0.1.0']);
+    });
+
+    it('finishes a version that was labelled in part', async () => {
+      const { done, run, labels } = await setup();
+      done('Shipped', 30, ['rel:v1.0.0']);
+      const first = done('First', 9);
+      const second = done('Second', 9);
+      await run('release', 'v1.1.0', first.key);
+      await run('release', 'v1.1.0', '--unreleased');
+      expect(labels(second.id)).toEqual(['rel:v1.1.0']);
+    });
+  });
+
   it('reads a copied example as meant, with # comments stripped from values', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsp-example-'));
     copyFileSync(EXAMPLE, join(dir, '.dispatch.md'));

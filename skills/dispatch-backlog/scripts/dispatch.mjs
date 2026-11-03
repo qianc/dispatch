@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 const STATUSES = [...OPEN, 'hold', 'done', 'canceled'];
+const MANY_RELEASE_ITEMS = 36;
 
 const HELP = `dispatch.mjs <command> [args] [--project KEY]
 
@@ -34,7 +35,9 @@ Reading
                                  --type bug|backlog  --tag t  --module m  --q "words"  --json
   show KEY                       one item in full, with comments, images and sessions
   facets                         tags and modules in use, with counts
-  unreleased                     done items without a release label (for the changelog)
+  unreleased [--since DATE]      done items without a release label, done since the last release
+                                 (for the changelog). The date is DATE (YYYY-MM-DD or ISO), else
+                                 it comes from the release labels; with no date, it warns
 
 Writing
   add --title T [--type bug|backlog] [--body TEXT | --body-file F] [--importance N|label]
@@ -47,7 +50,9 @@ Writing
   attach KEY FILE [FILE...]      add images (PNG, JPEG, GIF, WebP) to an item
   images KEY [--save DIR]        download an item's images; prints the file paths to read
   release VERSION KEY [KEY...]   add the release label (prefix from .dispatch.md) to items
-  release VERSION --unreleased   ...to every unreleased done item
+  release VERSION --unreleased [--since DATE]
+                                 ...to the items unreleased lists. With no date and more than
+                                 ${MANY_RELEASE_ITEMS} items it refuses: pass --since or the keys
 
 Sources (retros, reports)
   source add --title T --kind retro|skill_run|user_report|manual [--body-file F]
@@ -283,6 +288,58 @@ function line(it, p) {
   return `${it.key.padEnd(8)} ${it.status.padEnd(11)} ${p.importance_scale[it.importance - 1]}${eff}${it.type === 'bug' ? ' bug' : ''}  ${it.title}${meta ? `  ${meta}` : ''}`;
 }
 
+// ---------- releases ----------
+// The rule of src/shared/release.ts. This script stands alone, so it has its own copy: keep the two in step.
+const RELEASE_LABEL_RE = /^\S*[^\sA-Za-z0-9.]v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+function parseVersion(s) {
+  const m = s.trim().match(/^(v?)(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  return m && { nums: [Number(m[2]), Number(m[3]), Number(m[4])], pre: m[5] ?? null };
+}
+
+function compareVersions(a, b) {
+  const pa = parseVersion(a), pb = parseVersion(b);
+  if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
+  for (let i = 0; i < 3; i++) if (pa.nums[i] !== pb.nums[i]) return pa.nums[i] - pb.nums[i];
+  if (pa.pre === pb.pre) return 0;
+  if (pa.pre === null) return 1;
+  if (pb.pre === null) return -1;
+  return pa.pre < pb.pre ? -1 : 1;
+}
+
+const releaseVersions = (i) => i.labels.filter((l) => l.startsWith(RELEASE_PREFIX)).map((l) => l.slice(RELEASE_PREFIX.length));
+
+/** The last release in the labels and its date (see lastLabelDate): the highest version, dated by its first item labelled. */
+function lastLabelled(items, labelling) {
+  const others = labelling ? items.filter((i) => !releaseVersions(i).some((v) => compareVersions(v, labelling) === 0)) : items;
+  const version = others.flatMap(releaseVersions).filter(parseVersion).reduce((best, v) => (best === null || compareVersions(v, best) > 0 ? v : best), null);
+  if (version === null) return null;
+  const dates = others.filter((i) => releaseVersions(i).some((v) => compareVersions(v, version) === 0)).map((i) => i.updated_at);
+  return { version, date: dates.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a)) };
+}
+
+/**
+ * Done items in no release of any line, done since --since, else since the last release in the labels.
+ * `from` names that bound and `older` counts the items it leaves out; with no bound, `date` is null.
+ */
+async function unreleasedItems(labelling) {
+  if (flags.since === true) die('--since needs a date: YYYY-MM-DD or an ISO date and time.');
+  // ISO only: Date.parse reads "1" as 2001, and that would bound nothing
+  if (flags.since !== undefined && !(/^\d{4}-\d{2}-\d{2}(T.+)?$/.test(flags.since) && !Number.isNaN(Date.parse(flags.since)))) {
+    die(`--since "${flags.since}" is not a date. Use YYYY-MM-DD or an ISO date and time.`);
+  }
+  const p = await project();
+  const all = await api('GET', `/projects/${p.key}/items`);
+  const last = flags.since ? null : lastLabelled(all, labelling);
+  const date = flags.since ?? last?.date ?? null;
+  const unlabelled = all.filter((i) => i.status === 'done' && !i.labels.some((l) => l.startsWith(RELEASE_PREFIX) || RELEASE_LABEL_RE.test(l)));
+  const from = date ? Date.parse(date) : NaN;
+  const items = unlabelled.filter((i) => Number.isNaN(from) || !i.done_at || Date.parse(i.done_at) >= from);
+  return { p, items, date, from: flags.since ?? last?.version ?? null, older: unlabelled.length - items.length };
+}
+
+const leftOut = (n) => `left out ${n} older done item${n === 1 ? '' : 's'} with no label`;
+
 // ---------- commands ----------
 const [cmd, ...rest] = pos;
 switch (cmd) {
@@ -411,12 +468,13 @@ switch (cmd) {
   }
 
   case 'unreleased': {
-    const p = await project();
-    const items = (await api('GET', `/projects/${p.key}/items?status=done`)).filter((i) => !i.labels.some((l) => l.startsWith(RELEASE_PREFIX)));
+    const { p, items, date, from, older } = await unreleasedItems();
+    if (!date && items.length) console.error(`dispatch: warning: no date bound applied, because no ${RELEASE_PREFIX} label dates a last release. These are all done items with no release label, and many can be in earlier releases. Pass --since DATE to bound them.`);
     if (flags.json) console.log(JSON.stringify(items, null, 2));
     else {
       for (const it of items) console.log(line(it, p));
-      console.log(`(${items.length} done item${items.length === 1 ? '' : 's'} not in a release yet)`);
+      const bound = date ? `, done since ${from === date ? date : `${from} (${date})`}${older ? `; ${leftOut(older)}` : ''}` : '';
+      console.log(`(${items.length} done item${items.length === 1 ? '' : 's'} not in a release yet${bound})`);
     }
     break;
   }
@@ -501,9 +559,14 @@ switch (cmd) {
     if (!version) die('release VERSION KEY... | --unreleased');
     const label = `${RELEASE_PREFIX}${version}`;
     let targets;
+    let older = 0;
     if (flags.unreleased) {
-      const p = await project();
-      targets = (await api('GET', `/projects/${p.key}/items?status=done`)).filter((i) => !i.labels.some((l) => l.startsWith(RELEASE_PREFIX)));
+      const found = await unreleasedItems(version);
+      if (!found.date && found.items.length > MANY_RELEASE_ITEMS) {
+        die(`${found.items.length} done items have no release label and no ${RELEASE_PREFIX} label dates a last release, so all of them would be labelled. Pass --since DATE (the date of the last release) or the keys of the items.`);
+      }
+      targets = found.items;
+      older = found.older;
     } else {
       if (!keys.length) die('release VERSION KEY... | --unreleased');
       targets = await Promise.all(keys.map(item));
@@ -513,6 +576,7 @@ switch (cmd) {
       console.log(`${it.key} → ${label}`);
     }
     if (!targets.length) console.log('nothing to release');
+    if (older) console.log(`(${leftOut(older)}: done before the last release)`);
     break;
   }
 

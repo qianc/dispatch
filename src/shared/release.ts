@@ -67,6 +67,21 @@ export function labelDate(items: Item[], prefix: string, version: string): strin
   return dates.length ? dates.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a)) : null;
 }
 
+/**
+ * The date of the last release of this line, from the labels; null when it has no label. With `labelling`, that
+ * version does not count: its own date would leave out the rest of its items when labelling it is retried.
+ */
+export function lastLabelDate(items: Item[], prefix: string, labelling?: string): string | null {
+  const others = labelling ? items.filter((i) => !i.labels.some((l) => l.startsWith(prefix) && compareVersions(l.slice(prefix.length), labelling) === 0)) : items;
+  const last = highestLabelVersion(others, prefix);
+  return last ? labelDate(others, prefix, last) : null;
+}
+
+/** A release date given by hand. ISO only: Date.parse reads "1" as 2001, and that would bound nothing. */
+export function isReleaseDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(T.+)?$/.test(s) && !Number.isNaN(Date.parse(s));
+}
+
 /** Minor when the release holds backlog work, patch for fixes only; after a pre-release, its release. */
 export function proposeVersion(last: string | null, items: Item[]): { version: string; bump: 'minor' | 'patch' | 'first' | 'release' } {
   if (!last) return { version: 'v0.1.0', bump: 'first' };
