@@ -68,6 +68,32 @@ describe('check progress (DISP-5)', () => {
     expect(q.progress(0)).toMatchObject({ units: 10, total: 40, passed: 10 });
   });
 
+  it('reads the run count line of a multi-suite run_tests.sh (DISP-52)', () => {
+    const p = new CheckParser();
+    p.write('[ 12 / 40 · 30% ] passed 12, failed 0, skipped 0 · 2 of 5 suites collected\n');
+    // the total can still grow: shown as "~", and earlier runs that saw more count
+    expect(p.progress(0)).toMatchObject({ stage: 'pytest', units: 12, total: 40, passed: 12, failed: 0, skipped: 0, total_open: true });
+    expect(timeLeft(p.progress(0), 10_000, { duration_ms: 100_000, units: 1_000 })).toBeGreaterThan(80_000);
+
+    // the counts are for the whole run: set, not added; thousands commas
+    p.write('\x1b[32m[ 412 / 1,038 · 40% ] passed 409, failed 0, skipped 3\x1b[0m\n');
+    let pr = p.progress(0);
+    expect(pr).toMatchObject({ units: 412, total: 1038, passed: 409, failed: 0, skipped: 3 });
+    expect(pr.total_open).toBeUndefined();
+    expect(timeLeft(pr, 10_000, null)).toBe(Math.round(10_000 / (412 / 1038) - 10_000));
+
+    // pytest -u wrote part of a line first; pytest's own lines no longer add to the counts
+    p.write('collected 300 items\ntests/test_a.py ..[ 1,100 / 1,038 · 100% ] passed 1,100, failed 2, skipped 3\n');
+    p.write('tests/test_b.py ....  [ 90%]\n');
+    pr = p.progress(0);
+    expect(pr).toMatchObject({ units: 1100, total: 1038, passed: 1100, failed: 2, skipped: 3, stage: 'pytest' });
+
+    // a stage already named stays
+    const s = new CheckParser();
+    s.write('> bash tools/run_tests.sh\n[ 1 / 2 · 50% ] passed 1, failed 0, skipped 0\n');
+    expect(s.progress(0)).toMatchObject({ stage: 'bash tools/run_tests.sh', units: 1, total: 2 });
+  });
+
   it('leaves cached or partial runs out of the estimate', () => {
     // "already green - not re-running" took a second and ran nothing
     expect(expectedFrom([{ duration_ms: 1_000, units: 0 }, { duration_ms: 2_400_000, units: 900 }, { duration_ms: 2_600_000, units: 910 }]))

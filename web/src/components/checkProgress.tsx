@@ -21,7 +21,7 @@ export function CheckProgressCard({ run }: { run: CheckRun }) {
   // between reports the run goes on: count from its start, not from the last report
   const elapsed = Math.max(p.elapsed_ms, now - Date.parse(run.started_at));
   const left = timeLeft(p, elapsed, run.expected);
-  const of = p.total ?? run.expected?.units ?? null;
+  const of = p.total !== null && p.total_open && run.expected ? Math.max(p.total, run.expected.units) : p.total ?? run.expected?.units ?? null;
   const share = left !== null && elapsed + left > 0 ? elapsed / (elapsed + left) : of ? Math.min(p.units / of, 1) : null;
   return (
     <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]" role="status" aria-label={`Tests running in ${run.repo}`}>
@@ -38,7 +38,7 @@ export function CheckProgressCard({ run }: { run: CheckRun }) {
         <span className="text-ok">{p.passed} passed</span>
         {p.failed > 0 && <span className="text-bad">{p.failed} failed</span>}
         {p.skipped > 0 && <span className="text-muted">{p.skipped} skipped</span>}
-        {of !== null && <span className="text-muted tabular-nums">{p.units} of {p.total !== null ? '' : '~'}{of}</span>}
+        {of !== null && <span className="text-muted tabular-nums">{p.units} of {p.total !== null && !p.total_open ? '' : '~'}{of}</span>}
         <span className="ml-auto text-muted">
           {left === null ? 'no earlier run to estimate from' : left > 0 ? `${formatLeft(left)} left` : 'longer than usual'}
         </span>
