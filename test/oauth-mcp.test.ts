@@ -84,6 +84,12 @@ describe('OAuth for MCP clients', () => {
       const detail = (await s.app.inject({ method: 'GET', url: `/api/items/${item.id}`, headers: { cookie } })).json();
       expect(detail.comments[0]).toMatchObject({ author: 'claude', body_md: 'Found it' });
 
+      const release = async (args: object) => (await mcp(s, t.access_token, 'tools/call', { name: 'release_items', arguments: { project: 'MC', version: 'v1.0.0', ...args } })).body.result;
+      await s.app.inject({ method: 'PATCH', url: `/api/items/${item.id}`, headers: { cookie }, payload: { status: 'done' } });
+      expect((await release({ since: 'v0.9.0' })).content[0].text).toContain('not a date');
+      expect(JSON.parse((await release({ since: '2999-01-01' })).content[0].text).released).toEqual([]);
+      expect(JSON.parse((await release({})).content[0].text)).toEqual({ released: ['MC-1'], label: 'rel:v1.0.0' });
+
       // refresh rotates: the new pair works, the old refresh token does not
       const r2 = (await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id }) })).json();
       expect(r2.access_token).toBeTruthy();

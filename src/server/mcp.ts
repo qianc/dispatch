@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { MANY_RELEASE_ITEMS } from '../shared/release.ts';
 import { ITEM_STATUSES, type Item, type Project } from '../shared/types.ts';
 import type { Principal } from './access.ts';
 import type { Attachments } from './attachments.ts';
@@ -229,11 +230,11 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
   }));
 
   server.registerTool('release_items', {
-    description: 'Label done items with a release (e.g. rel:v1.4.0) after the changelog is written. Without keys: every done item not yet in a release.',
-    inputSchema: { project: z.string(), version: z.string().min(1), keys: z.array(z.string()).optional(), prefix: z.string().default('rel:') },
-  }, guard(true, (a: { project: string; version: string; keys?: string[]; prefix: string }) => {
+    description: `Label done items with a release (e.g. rel:v1.4.0) after the changelog is written. Without keys: the done items with no release label that were done since the last release. That date is since if given (YYYY-MM-DD or ISO date and time), else it comes from the release labels. With no date and more than ${MANY_RELEASE_ITEMS} items it refuses: pass since or keys. since applies only without keys.`,
+    inputSchema: { project: z.string(), version: z.string().min(1), keys: z.array(z.string()).optional(), prefix: z.string().default('rel:'), since: z.string().optional() },
+  }, guard(true, (a: { project: string; version: string; keys?: string[]; prefix: string; since?: string }) => {
     const p = project(a.project);
-    const targets = labelReleased(store, p.id, a.prefix, a.version, a.keys?.map(item), emit);
+    const targets = labelReleased(store, p.id, a.prefix, a.version, a.keys?.map(item), emit, a.since);
     return text({ released: targets.map((i) => i.key), label: `${a.prefix}${a.version}` });
   }));
 

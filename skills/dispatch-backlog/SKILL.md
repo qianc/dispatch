@@ -181,12 +181,19 @@ Rules:
 The changelog stays a file in the repo (path and style in the conventions). Dispatch gives the
 content: done items that are not in a release yet.
 
-1. `dispatch unreleased`: done items without a release label.
+1. `dispatch unreleased`: done items in no release of any line, done since the last release. The
+   date is `--since DATE` if given (YYYY-MM-DD or ISO), else it comes from the release labels.
+   If it warns that no date bound applied (the project has no release labels), the list can hold
+   items from earlier releases: ask the user or read the date of the last release from its git tag,
+   and pass `--since`. For a true first release, use the list as it is.
 2. Write the entry in the changelog file, as the conventions say (default: a `## <version> — <date>`
    heading, then grouped lines: Added / Changed / Fixed, one per item, ending with its key).
    Write for the people who use the project, not about the code.
 3. After the user agrees to the entry: `dispatch release v1.4.0 --unreleased` (or list the keys).
-   This adds the release label (default `rel:v1.4.0`), so the next changelog starts after it.
+   This adds the release label (default `rel:v1.4.0`), so the next changelog starts after it. It
+   takes the same `--since DATE` and labels the same list. With no date and more than 36 items it
+   refuses: pass `--since DATE` or list the keys. The `release_items` tool follows the same rules,
+   with `since` and `keys`.
 
 **No `CHANGELOG.md`.** Some repos have no changelog file and publish releases with GitHub's
 generated release notes (this is in their conventions, or `changelog:` is missing). Then skip

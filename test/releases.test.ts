@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { matchesRepo } from '../src/server/releases.ts';
+import { labelReleased, matchesRepo } from '../src/server/releases.ts';
 import { MANY_RELEASE_ITEMS } from '../src/shared/release.ts';
 import type { ReleaseCapability, Repo } from '../src/shared/types.ts';
 import { releasePrompt } from '../src/worker/prompts.ts';
@@ -215,6 +215,88 @@ describe('releases from the interface', () => {
       expect(Date.parse(again)).toBeGreaterThan(Date.parse(before!));
       const open = store.createItem(store.projectByKey('REL')!.id, { title: 'Open', type: 'bug', body_md: '', status: 'todo', importance: 2, effort: null, source_id: null, labels: [] });
       expect(open.done_at).toBeNull();
+    });
+  });
+
+  describe('labelling without keys', () => {
+    const past = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const age = (it: { id: number }, days: number) => {
+      s.ctx.store.db.run('UPDATE items SET done_at = ? WHERE id = ?', past(days), it.id);
+      return it;
+    };
+    const shipped = (version: string, days: number) => {
+      const it = done(`In ${version}`, 'backlog', [`rel:${version}`]);
+      s.ctx.store.db.run('UPDATE items SET updated_at = ? WHERE id = ?', past(days), it.id);
+      return it;
+    };
+    const label = (version: string, since?: string, keys?: { id: number }[]) => {
+      const items = keys?.map((k) => s.ctx.store.item(k.id)!);
+      return labelReleased(s.ctx.store, s.ctx.store.projectByKey('REL')!.id, 'rel:', version, items, undefined, since).map((i) => i.title);
+    };
+    const many = () => { for (let i = 0; i <= MANY_RELEASE_ITEMS; i++) done(`Item ${i}`); };
+
+    it('takes only the items done since the last release, and none of another line', () => {
+      shipped('v1.0.0', 5);
+      age(done('Before'), 9);
+      done('Other line', 'backlog', ['convert:v0.3.0']);
+      const after = done('After');
+      expect(label('v1.1.0')).toEqual(['After']);
+      expect(s.ctx.store.item(after.id)!.labels).toEqual(['rel:v1.1.0']);
+    });
+
+    it('lets a given date win over the labels, earlier or later', () => {
+      shipped('v1.0.0', 5);
+      age(done('Nine days ago'), 9);
+      age(done('Two days ago'), 2);
+      age(done('Today'), 0);
+      expect(label('v1.1.0', past(1))).toEqual(['Today']);
+      expect(label('v1.1.0', past(20)).sort()).toEqual(['Nine days ago', 'Two days ago']);
+    });
+
+    it('refuses a long list with no date and labels nothing, until a date or keys are given', () => {
+      many();
+      expect(() => label('v1.0.0')).toThrow(new RegExp(`${MANY_RELEASE_ITEMS + 1} done items.*since.*keys`));
+      const items = s.ctx.store.items(s.ctx.store.projectByKey('REL')!.id);
+      expect(items.flatMap((i) => i.labels)).toEqual([]);
+      expect(label('v1.0.0', undefined, [items[0]])).toEqual([items[0].title]);
+      expect(label('v1.0.1', past(1))).toHaveLength(MANY_RELEASE_ITEMS);
+    });
+
+    it('treats empty keys as no keys, so they are refused too', () => {
+      many();
+      expect(() => label('v1.0.0', undefined, [])).toThrow(/since/);
+    });
+
+    it('labels a short list with no date: a first release', () => {
+      age(done('Old'), 400);
+      done('New');
+      expect(label('v0.1.0').sort()).toEqual(['New', 'Old']);
+    });
+
+    it('does not refuse a long list when the last release is dated', () => {
+      shipped('v1.0.0', 5);
+      many();
+      expect(label('v1.1.0')).toHaveLength(MANY_RELEASE_ITEMS + 1);
+    });
+
+    it('finishes a version that was labelled in part, instead of dating the rest out', () => {
+      shipped('v1.0.0', 30);
+      const first = age(done('First'), 9);
+      age(done('Second'), 9);
+      label('v1.1.0', undefined, [first]);
+      expect(label('v1.1.0')).toEqual(['Second']);
+    });
+
+    it('refuses a date it cannot read, because that would bound nothing', () => {
+      done('Item');
+      for (const bad of ['v1.4.0', '1', '']) expect(() => label('v1.0.0', bad)).toThrow(/not a date/);
+      expect(s.ctx.store.items(s.ctx.store.projectByKey('REL')!.id)[0].labels).toEqual([]);
+    });
+
+    it('keeps explicit keys as they were: older items and other lines can be labelled', () => {
+      shipped('v1.0.0', 5);
+      const old = age(done('Old'), 30);
+      expect(label('v1.1.0', undefined, [old])).toEqual(['Old']);
     });
   });
 
