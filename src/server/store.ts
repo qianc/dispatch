@@ -21,6 +21,7 @@ import {
   type Session,
   type SessionEvent,
   type SessionEventBody,
+  type SessionSearch,
   type ReleaseInfo,
   type Schedule,
   type SessionKind,
@@ -28,6 +29,7 @@ import {
   type Source,
   type SourceKind,
 } from '../shared/types.ts';
+import { searchTerms, snippetOf } from '../shared/search.ts';
 
 const json = <T>(v: unknown, fallback: T): T => (typeof v === 'string' ? (JSON.parse(v) as T) : fallback);
 const bool = (v: unknown) => v === 1 || v === 1n;
@@ -456,6 +458,46 @@ export class Store {
     if (filter.statuses?.length) { where.push(`s.status IN (${filter.statuses.map(() => '?').join(',')})`); params.push(...filter.statuses); }
     const sql = `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC LIMIT ?`;
     return this.db.all(sql, ...params, filter.limit ?? 200).map((r) => this.toSession(r));
+  }
+  /**
+   * Activity's search over the full history (DISP-54), newest first. Every word of `q` must be in
+   * the title, the first prompt, or a message (the owner's or Claude's) of the chat. All kinds,
+   * chats too, unless `kind` is given. `from` / `to` (ISO times, `to` not included) bound when it
+   * started. Each hit has a piece of the message that matches most words.
+   */
+  searchSessions(f: { q?: string; project_id?: number; kind?: SessionKind; from?: string; to?: string; limit?: number; offset?: number } = {}): SessionSearch {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    const terms = searchTerms(f.q ?? '');
+    const likes = terms.map((t) => `%${t.replace(/[\\%_]/g, '\\$&')}%`);
+    const text = "json_extract(e.body, '$.text')";
+    const message = "json_extract(e.body, '$.kind') IN ('user', 'assistant')";
+    for (const like of likes) {
+      where.push(`(s.title LIKE ? ESCAPE '\\' OR s.initial_prompt LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = s.id AND ${message} AND ${text} LIKE ? ESCAPE '\\'))`);
+      params.push(like, like, like);
+    }
+    if (f.project_id) { where.push('s.project_id = ?'); params.push(f.project_id); }
+    if (f.kind) { where.push('s.kind = ?'); params.push(f.kind); }
+    if (f.from) { where.push('s.created_at >= ?'); params.push(f.from); }
+    if (f.to) { where.push('s.created_at < ?'); params.push(f.to); }
+    const limit = Math.min(Math.max(f.limit ?? 30, 1), 100);
+    const rows = this.db.all(
+      `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC, s.id DESC LIMIT ? OFFSET ?`,
+      ...params, limit + 1, Math.max(f.offset ?? 0, 0),
+    );
+    const best = likes.length
+      ? `SELECT ${text} AS text FROM session_events e WHERE e.session_id = ? AND ${message} AND (${likes.map(() => `${text} LIKE ? ESCAPE '\\'`).join(' OR ')})
+          ORDER BY ${likes.map(() => `(${text} LIKE ? ESCAPE '\\')`).join(' + ')} DESC, e.seq DESC LIMIT 1`
+      : '';
+    return {
+      sessions: rows.slice(0, limit).map((r) => {
+        const s = this.toSession(r);
+        const hit = best ? this.db.get<{ text: string }>(best, s.id, ...likes, ...likes) : undefined;
+        const from = hit?.text ?? (terms.some((t) => s.initial_prompt.toLowerCase().includes(t)) ? s.initial_prompt : null);
+        return { ...s, snippet: from ? snippetOf(from, terms) : null };
+      }),
+      has_more: rows.length > limit,
+    };
   }
   session(id: number): Session | undefined {
     const r = this.db.get(`${SESSION_SELECT} WHERE s.id = ?`, id);

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
+import { SESSION_KINDS, answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
 import { attentionOf } from '../../shared/attention.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
@@ -42,6 +42,20 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       statuses: q.status?.split(',').filter(Boolean) as never,
       kind: q.kind as never,
     });
+  });
+
+  /** Activity's search over the full history (DISP-54): words in the chat, project, kind, start dates, paged. */
+  app.get('/api/sessions/search', async (req) => {
+    const f = z.object({
+      q: z.string().max(200).optional(),
+      project: z.string().optional(),
+      kind: z.enum(SESSION_KINDS).optional(),
+      from: z.iso.datetime().optional(),
+      to: z.iso.datetime().optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(30),
+      offset: z.coerce.number().int().min(0).default(0),
+    }).parse(Object.fromEntries(Object.entries(req.query as Record<string, string>).filter(([, v]) => v !== '')));
+    return store.searchSessions({ ...f, project_id: f.project ? project(f.project).id : undefined });
   });
 
   app.get('/api/worker', async () => ({
