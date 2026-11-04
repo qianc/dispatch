@@ -392,6 +392,15 @@ test('Activity searches all chats by a word, filters, and opens the one found (D
   await page.getByLabel('Session kind').selectOption('work');
   await page.getByLabel('Project').selectOption('FIND');
   await expect(page.getByRole('heading', { name: 'Found (1)' })).toBeVisible();
+  // a start day after it leaves it out; clearing the day brings it back
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  await page.getByLabel('From date').fill(`${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`);
+  await expect(page.getByText('No chats match.')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear from date' }).click();
+  await expect(page.getByRole('heading', { name: 'Found (1)' })).toBeVisible();
+  // the filters fit the phone's width
+  const width = page.viewportSize()!.width;
+  for (const f of ['Project', 'Session kind', 'From date', 'To date']) expect((await page.getByLabel(f).boundingBox())!.x + (await page.getByLabel(f).boundingBox())!.width).toBeLessThanOrEqual(width);
   await hit.click();
   await expect(page).toHaveURL(new RegExp(`/s/${s.id}$`));
 });
