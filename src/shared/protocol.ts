@@ -1,6 +1,7 @@
 // Messages on the internal WebSocket between server and worker.
 import type { ClaudeAccountInfo } from './accounts.ts';
 import type { CheckProgress } from './checkProgress.ts';
+import type { GeneratorItem } from './generatorItems.ts';
 import type { ReleaseInfo, WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
@@ -62,7 +63,8 @@ export type ServerToWorker =
 
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string }
-  | { c: 'merge_local'; repo: Repo; branch: string; message: string }
+  /** `items`: the export for the repo's generate command (DISP-56), when it has one */
+  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[] }
   | { c: 'branch_status'; repo: Repo; branch: string }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
   | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string }

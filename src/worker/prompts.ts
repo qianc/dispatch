@@ -110,6 +110,11 @@ export function workPrompt(spec: StartSpec): string {
   if (checked.length) {
     lines.push(`- When your turn ends, Dispatch runs the repo's check command (${checked.map((r) => `${r.github_name}: \`${r.check_command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
   }
+  // DISP-56: these files are written at merge, from the items; a branch that edits them is refused
+  const generated = spec.repos.filter((r) => r.generate_command && r.generated_paths?.length);
+  if (generated.length) {
+    lines.push(`- Do not edit ${generated.map((r) => `${r.generated_paths!.map((p) => `\`${p}\``).join(', ')} in ${r.github_name}`).join('; ')}: Dispatch generates them at merge from the items (the batch's items as done), and refuses a branch that edits them. To change what they show, change the items with the dispatch tools.`);
+  }
   if (spec.options.auto_merge !== 'off') {
     lines.push('- The owner chose auto-merge: when you open the PR and its checks pass, Dispatch merges it. Only open the PR when the work is complete and verified.');
     // the last message is the notice body, sent after the merge and any deploy (DISP-40)

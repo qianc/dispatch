@@ -39,6 +39,11 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   progress). A failure goes back to the agent with its output as the next turn, up to
   `CHECK_RETRIES` fix turns; then you get a push that it still fails. An unchanged worktree is not
   checked again. A batch can turn this off ("Run the repo's check before done").
+- **Generated files at merge**: a repo's generate command (repo settings) runs in the merge
+  checkout after the merge and before the check, with `DISPATCH_ITEMS` set to a JSON file of the
+  project's items (the merging batch's items done). Its changes to the repo's generated files
+  (e.g. `backlog.md`) go into the merge commit itself; a failure blocks the merge, and so does a
+  branch that edits a generated file by hand. Such repos always merge in Dispatch, never on GitHub.
 - **Deploy after merge**: a repo's deploy command (repo settings) runs on the session's worker
   each time Dispatch merges into its default branch, by auto-merge or by you. A local repo deploys
   from its folder, other repos from a fresh checkout of the merged branch; `DISPATCH_DEPLOY_SHA`

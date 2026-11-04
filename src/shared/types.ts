@@ -66,6 +66,14 @@ export interface Repo {
   setup_command: string | null;
   /** runs on the worker after Dispatch merges into the default branch, e.g. a deploy script (DISP-37) */
   deploy_command?: string | null;
+  /**
+   * runs in the merge checkout after the merge, before the check (DISP-56): DISPATCH_ITEMS is a
+   * JSON file of the project's items (the batch's items done). Its changes to `generated_paths`
+   * go into the merge commit; a failure blocks the merge.
+   */
+  generate_command?: string | null;
+  /** files only the generate command writes: a branch that edits them is refused at merge */
+  generated_paths?: string[];
   /** local repos: folders of the real checkout (relative, often not in git) that Discuss may read */
   read_dirs?: string[];
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
@@ -511,6 +519,8 @@ export const repoPatch = z.object({
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
   setup_command: z.string().nullable().optional(),
   deploy_command: z.string().nullable().optional(),
+  generate_command: z.string().nullable().optional(),
+  generated_paths: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   read_dirs: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
 });
 

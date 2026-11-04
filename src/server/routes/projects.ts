@@ -102,7 +102,12 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
       if (bad) throw new HttpError(400, `"${bad}" must be a folder inside the repo, e.g. reference-decks/library-work`);
       patch.read_dirs = [...new Set(patch.read_dirs.map((d) => d.replace(/\/+$/, '')))];
     }
-    if (repo.kind === 'hosted' && patch.default_branch && patch.default_branch !== repo.default_branch) {
+    if (patch.generated_paths?.length) {
+      const bad = patch.generated_paths.find((d) => !isRepoSubdir(d));
+      if (bad) throw new HttpError(400, `"${bad}" must be a file inside the repo, e.g. backlog.md`);
+      patch.generated_paths = [...new Set(patch.generated_paths)];
+    }
+    if (repo.kind === 'hosted' && patch.default_branch &&patch.default_branch !== repo.default_branch) {
       await hosted.setDefaultBranch(repo, patch.default_branch).catch((e: Error) => { throw new HttpError(400, `The repo has no branch ${patch.default_branch}: ${e.message}`); });
     }
     const updated = store.updateRepo(id, patch);

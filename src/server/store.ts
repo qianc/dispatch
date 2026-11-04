@@ -65,6 +65,8 @@ function toRepo(r: Row): Repo {
     worktree_from: (r.worktree_from as Repo['worktree_from']) ?? null,
     setup_command: (r.setup_command as string | null) ?? null,
     deploy_command: (r.deploy_command as string | null) ?? null,
+    generate_command: (r.generate_command as string | null) ?? null,
+    generated_paths: json<string[]>(r.generated_paths, []),
     read_dirs: json<string[]>(r.read_dirs, []),
     kind: (r.kind as Repo['kind']) ?? (r.local_path ? 'local' : 'github'),
     worker_id: numOrNull(r.worker_id),
@@ -256,9 +258,9 @@ export class Store {
   }
   updateRepo(id: number, patch: Partial<Omit<Repo, 'id' | 'project_id'>>): Repo {
     const n = { ...this.repo(id)!, ...patch };
-    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ?, upstream_owner = ?, upstream_name = ?, deploy_command = ? WHERE id = ?',
+    this.db.run('UPDATE repos SET github_owner = ?, github_name = ?, default_branch = ?, check_command = ?, worktree_from = ?, setup_command = ?, read_dirs = ?, upstream_owner = ?, upstream_name = ?, deploy_command = ?, generate_command = ?, generated_paths = ? WHERE id = ?',
       n.github_owner, n.github_name, n.default_branch, n.check_command, n.worktree_from, n.setup_command, n.read_dirs?.length ? JSON.stringify(n.read_dirs) : null,
-      n.upstream_owner ?? null, n.upstream_name ?? null, n.deploy_command ?? null, id);
+      n.upstream_owner ?? null, n.upstream_name ?? null, n.deploy_command ?? null, n.generate_command ?? null, n.generated_paths?.length ? JSON.stringify(n.generated_paths) : null, id);
     return this.repo(id)!;
   }
   deleteRepo(id: number) {

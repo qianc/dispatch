@@ -3,9 +3,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { copyFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
+import type { GeneratorItem } from '../shared/generatorItems.ts';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
@@ -110,6 +111,10 @@ export function deployTimeoutMs() {
 
 function movedOn(repo: Repo) {
   return `${repo.default_branch} moved on while the check ran (another merge landed), so nothing was pushed: the check did not test what would land. Merge again to check against the new ${repo.default_branch}.`;
+}
+
+function handEdited(repo: Repo, branch: string, files: string[]) {
+  return `${branch} edits ${files.join(', ')}, which only the generate command writes (Dispatch makes it at merge, from the items), so nothing was merged. Undo the edit on the branch (\`git checkout $(git merge-base ${repo.default_branch} HEAD) -- ${files.join(' ')}\` and commit), change the items in Dispatch instead, and merge again.`;
 }
 
 const MAX_FILE = 10 * 1024 * 1024;
@@ -472,12 +477,16 @@ export class Workspaces {
    * branch status and pushes must not wait for it. If the default branch moved on meanwhile,
    * nothing is pushed: the check did not test what would land.
    */
-  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void): Promise<MergeResult> {
+  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = []): Promise<MergeResult> {
     const tmp = join(this.root, 'merge', randomUUID());
     const prep = await this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
       await mkdir(join(this.root, 'merge'), { recursive: true });
       const baseSha = await git(['rev-parse', base], dir);
+      // only the generate command writes its files (DISP-56): a branch that edits them is refused
+      const paths = repo.generated_paths ?? [];
+      const edited = paths.length ? (await git(['diff', '--name-only', '--no-renames', `${baseSha}...${head}`, '--', ...paths], dir)).split('\n').filter(Boolean) : [];
+      if (edited.length) return { dir, base, baseSha, failed: { ok: false, output: handEdited(repo, branch, edited) } as MergeResult };
       await git(['worktree', 'add', '--detach', tmp, baseSha], dir);
       const m = await run('git', ['merge', '--no-ff', '-m', message, head], tmp);
       if (m.code !== 0) {
@@ -490,10 +499,16 @@ export class Workspaces {
     let check: MergeResult['check'];
     try {
       if (prep.failed) return prep.failed;
-      if (repo.check_command) {
+      if (repo.check_command || repo.generate_command) {
         // the check runs in a worktree set up like a session's: env files and setup first (DISP-44)
         const ready = await this.prepareTree(repo, tmp);
         if (!ready.ok) return { ok: false, output: `Could not set up the merge checkout, so the check did not run.\n${ready.output}` };
+      }
+      if (repo.generate_command) {
+        const g = await this.generate(repo, tmp, items);
+        if (!g.ok) return { ok: false, output: g.output };
+      }
+      if (repo.check_command) {
         // the repo's account and hosted-git access, as the locked commands have them
         const c = await repoEnv.run(this.commandEnv(repo), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
         check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
@@ -518,6 +533,28 @@ export class Workspaces {
       });
     } finally {
       await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
+    }
+  }
+
+  /**
+   * Run a repo's generate command in a merge checkout (DISP-56), with the items in a JSON file at
+   * DISPATCH_ITEMS, and put what it changed in `generated_paths` (all tracked files when there are
+   * none) into the merge commit: the merge stays one commit, with no extra one on the default branch.
+   */
+  private async generate(repo: Repo, tmp: string, items: GeneratorItem[]): Promise<{ ok: boolean; output: string }> {
+    const file = `${tmp}.items.json`;
+    await writeFile(file, JSON.stringify(items, null, 2));
+    try {
+      return await repoEnv.run({ ...this.commandEnv(repo), DISPATCH_ITEMS: file }, async () => {
+        const r = await run('sh', ['-c', repo.generate_command!], tmp, checkTimeoutMs());
+        if (r.code !== 0) return { ok: false, output: `Generate command failed (${repo.generate_command}), so nothing was merged:\n${r.out.slice(-4000)}` };
+        const paths = repo.generated_paths ?? [];
+        await git(paths.length ? ['add', '-A', '--', ...paths] : ['add', '-u'], tmp);
+        if ((await run('git', ['diff', '--cached', '--quiet'], tmp)).code !== 0) await git(['commit', '--amend', '--no-edit', '--no-verify'], tmp);
+        return { ok: true, output: r.out };
+      });
+    } finally {
+      await rm(file, { force: true });
     }
   }
 
