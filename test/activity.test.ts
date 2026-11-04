@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
 import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
-import { NO_FILTER, busyStatus, filtering, liveGroups, searchQuery, waitingCount } from '../web/src/activity.ts';
+import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, searchQuery, sessionLink, waitingCount } from '../web/src/activity.ts';
 import type { Inbox } from '../web/src/api.ts';
 import { startServer } from './helpers.ts';
 
@@ -158,5 +158,36 @@ describe('Activity search query (DISP-54)', () => {
     expect(p.get('to')).toBe(new Date(2026, 3, 1).toISOString());
     expect(p.get('offset')).toBe('30');
     expect(new URLSearchParams(searchQuery(NO_FILTER)).has('offset')).toBe(false);
+  });
+});
+
+describe('open item discussions in Activity (DISP-58)', () => {
+  let s: Awaited<ReturnType<typeof startServer>>;
+  beforeAll(async () => {
+    s = await startServer();
+    await s.call('POST', '/projects', { key: 'OD', name: 'Open discussions' });
+  });
+  afterAll(() => s.app.close());
+  const open = async () => (await s.call<Session[]>('GET', `/sessions?kind=discuss&status=${OPEN_STATUSES}`)).data.map((x) => x.item_ids[0]);
+
+  it('lists a discussion until it is closed, answered or not', async () => {
+    const a = (await s.call('POST', '/projects/OD/items', { title: 'Asked, not answered' })).data;
+    const b = (await s.call('POST', '/projects/OD/items', { title: 'Answered' })).data;
+    await s.call('POST', `/items/${a.id}/discuss`, { text: 'What is this?' });
+    const chat = (await s.call<Session>('POST', `/items/${b.id}/discuss`, { text: 'And this?' })).data;
+    s.ctx.store.updateSession(chat.id, { status: 'idle' });
+    expect((await open()).sort()).toEqual([a.id, b.id].sort());
+    // leaving the page changes nothing; closing ("New chat") takes it off the list
+    await s.call('POST', `/items/${b.id}/discuss/new`);
+    expect(await open()).toEqual([a.id]);
+  });
+
+  it('an open discussion opens on its item and thread; a finished one on its session page', () => {
+    const chat = { id: 9, kind: 'discuss' as const, status: 'idle' as const, item_ids: [4] };
+    expect(sessionLink(chat, false)).toBe('/items/4/discuss');
+    expect(sessionLink(chat, true)).toBe('/items/4?discuss=1');
+    expect(sessionLink({ ...chat, status: 'completed' }, true)).toBe('/s/9');
+    expect(sessionLink({ id: 3, kind: 'assistant', status: 'running', item_ids: [] }, false)).toBe('/assistant');
+    expect(sessionLink({ id: 5, kind: 'work', status: 'running', item_ids: [4] }, true)).toBe('/s/5');
   });
 });

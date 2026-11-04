@@ -668,3 +668,29 @@ test('a schedule on the project page: add it, run it now, see what it started (D
   const work = (await page.request.get('/api/sessions?project=NT').then((r) => r.json()) as { id: number; kind: string }[]).find((x) => x.kind === 'work')!;
   await page.request.post(`/api/sessions/${work.id}/finish`, { data: { status: 'stopped' } });
 });
+
+test('an open item discussion stays in Activity and opens its item and thread; closing it takes it off (DISP-58)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'TALK', name: 'Talkproj' } });
+  const it = await (await page.request.post('/api/projects/TALK/items', { data: { title: 'Wombat question' } })).json();
+  await page.goto(`/items/${it.id}/discuss`);
+  await page.getByRole('button', { name: 'Explain this item in plain words' }).click();
+  await expect(page.getByText('Explain this item in plain words').first()).toBeVisible();
+
+  // leave it unanswered and find it again from Activity
+  await page.getByRole('link', { name: 'Activity' }).click();
+  await expect(page.getByRole('heading', { name: /^Open discussions \(\d+\)$/ })).toBeVisible();
+  await page.locator(`main a[href="/items/${it.id}/discuss"]`).click();
+  await expect(page).toHaveURL(new RegExp(`/items/${it.id}/discuss$`));
+  await expect(page.getByText('Explain this item in plain words').first()).toBeVisible();
+
+  // closing it ("New chat") takes it off the list
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await expect(page.getByRole('button', { name: 'What would a good first step be?' })).toBeVisible();
+  await page.getByRole('link', { name: 'Activity' }).click();
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
+  await expect(page.locator(`main a[href="/items/${it.id}/discuss"]`)).toHaveCount(0);
+});

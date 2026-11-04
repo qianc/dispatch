@@ -6,7 +6,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TokenInput } from './TokenInput.tsx';
 import { ITEM_STATUSES, type ItemStatus, type ItemType, type ProposedItem } from '../../../src/shared/types.ts';
 import { api, type Attention, type Item, type Project, type Session } from '../api.ts';
-import { busyStatus } from '../activity.ts';
+import { busyStatus, sessionLink } from '../activity.ts';
+import { useWide } from '../wide.ts';
 import { markTerms } from '../../../src/shared/search.ts';
 import {
   Button, Chip, ErrorText, Field, ITEM_STATUS_LABEL, ImportanceIcon, ItemStatusIcon, Segmented, SessionStatusChip, Sheet, cx, inputCls, timeAgo,
@@ -118,11 +119,12 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
 /** `snippet`: a piece of the message a search found (DISP-54), with the `terms` marked. */
 export function SessionRow({ s, showProject, attention, snippet, terms = [] }: { s: Session; showProject?: boolean; attention?: Attention; snippet?: string | null; terms?: string[] }) {
   const busy = busyStatus(s, attention);
+  const wide = useWide();
   return (
-    <Link to={`/s/${s.id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
+    <Link to={sessionLink(s, wide)} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
       <div className="flex items-center gap-2">
         {showProject && <ProjectKey k={s.project_key} badge />}
-        <span className="flex-1 min-w-0 truncate font-medium">{s.schedule_id ? <Icon name="schedule" size={15} className="inline -mt-0.5 mr-1 text-muted" /> : s.kind === 'planner' && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
+        <span className="flex-1 min-w-0 truncate font-medium">{s.schedule_id ? <Icon name="schedule" size={15} className="inline -mt-0.5 mr-1 text-muted" /> : (s.kind === 'planner' || s.kind === 'discuss') && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
         <SessionStatusChip status={s.status} busy={busy?.label} />
       </div>
       <div className="flex items-start gap-2 mt-0.5 text-[13px] text-muted">
