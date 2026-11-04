@@ -5,6 +5,7 @@ import type { BranchFile, BranchStatus, MergeEvent, PullRequest, Repo, Session }
 import type { Bus } from './bus.ts';
 import { CheckRuns } from './checkRuns.ts';
 import type { CheckProgress } from '../shared/checkProgress.ts';
+import { generatorItems } from '../shared/generatorItems.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -580,7 +581,8 @@ export class GitHub {
   private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
     const prId = pr.id;
     const repo = this.store.repo(pr.repo_id)!;
-    if (repo.local_path) how = 'local';
+    // a generate command runs in Dispatch's merge (DISP-56): GitHub's merge button would skip it
+    if (repo.local_path || repo.generate_command) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
     this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).then((b) => b.behind, () => null));
     if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
@@ -609,7 +611,7 @@ export class GitHub {
     type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } };
     let res: Res | undefined;
     try {
-      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message }, 15 * 60_000,
+      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo) }, 15 * 60_000,
         (p) => this.checks.progress(pr, repo, p as CheckProgress));
       return res;
     } finally {
@@ -617,15 +619,22 @@ export class GitHub {
     }
   }
 
+  /** The items a repo's generate command gets at merge (DISP-56): the project's, with the PR's batch done. */
+  private generatorExport(pr: PullRequest, repo: Repo) {
+    if (!repo.generate_command) return undefined;
+    const project = this.store.project(repo.project_id)!;
+    return generatorItems(this.store.items(project.id), project.effort_scale, this.store.session(pr.session_id)?.item_ids ?? []);
+  }
+
   /**
    * Merge a hosted repo's session branch in Dispatch: on the server, or, when the repo has a check
-   * command, on the session's worker (which runs the check before it pushes the merge back here).
+   * or generate command, on the session's worker (which runs the check before it pushes the merge back here).
    * Then the merged default branch goes to the upstream, if there is one.
    */
   private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase') {
     const s = this.store.session(pr.session_id)!;
     const message = `Merge ${pr.head_ref}: ${pr.title}`;
-    if (repo.check_command) {
+    if (repo.check_command || repo.generate_command) {
       const res = await this.mergeOnWorker(pr, repo, message);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     } else {

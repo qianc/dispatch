@@ -354,7 +354,7 @@ export class ServerLink {
         await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
         return { ok: true };
       case 'merge_local':
-        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress);
+        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items);
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch);
       case 'branch_diff':

@@ -604,6 +604,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
                   {r.read_dirs?.length ? ` · Discuss also reads: ${r.read_dirs.join(', ')}` : ''}
                   {r.check_command ? ` · check: ${r.check_command}` : ''}
                   {r.deploy_command ? ` · deploy: ${r.deploy_command}` : ''}
+                  {r.generate_command ? ` · generates ${(r.generated_paths ?? []).join(', ') || 'files'} at merge` : ''}
                 </div>
               </div>
               <Button small variant="ghost" onClick={() => setEditing(r)}>Edit</Button>
@@ -740,6 +741,8 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     default_branch: repo.default_branch,
     check_command: repo.check_command ?? '',
     deploy_command: repo.deploy_command ?? '',
+    generate_command: repo.generate_command ?? '',
+    generated_paths: (repo.generated_paths ?? []).join('\n'),
     setup_command: repo.setup_command ?? '',
     worktree_from: repo.worktree_from ?? 'repo',
     read_dirs: (repo.read_dirs ?? []).join('\n'),
@@ -750,6 +753,8 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       default_branch: f.default_branch,
       check_command: f.check_command.trim() || null,
       deploy_command: f.deploy_command.trim() || null,
+      generate_command: f.generate_command.trim() || null,
+      generated_paths: f.generated_paths.split('\n').map((d) => d.trim()).filter(Boolean),
       setup_command: f.setup_command.trim() || null,
       ...(repo.local_path ? { worktree_from: f.worktree_from, read_dirs: f.read_dirs.split('\n').map((d) => d.trim()).filter(Boolean) } : {}),
       ...(repo.kind === 'hosted' ? { upstream: f.upstream.trim() || null } : {}),
@@ -790,6 +795,15 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       )}
       <Field label="Check command (optional)" hint="Must pass before a local merge.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.check_command} onChange={(e) => setF({ ...f, check_command: e.target.value })} placeholder="npm test" />
+      </Field>
+      <Field
+        label="Generate command (optional)"
+        hint="Runs in the merge checkout after the merge, before the check. DISPATCH_ITEMS is a JSON file of the project's items, with the merging batch's items done. What it changes in the files below goes into the merge commit; a failure blocks the merge."
+      >
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.generate_command} onChange={(e) => setF({ ...f, generate_command: e.target.value })} placeholder={'python3 tools/backlog_gen.py render --items "$DISPATCH_ITEMS"'} aria-label="Generate command" />
+      </Field>
+      <Field label="Generated files" hint="One per line. Only the generate command writes them: a branch that edits one by hand is refused at merge.">
+        <textarea className={cx(inputCls, 'min-h-16 font-mono text-[14px]')} value={f.generated_paths} onChange={(e) => setF({ ...f, generated_paths: e.target.value })} placeholder="backlog.md" aria-label="Generated files" />
       </Field>
       <Field
         label="Deploy command (optional)"
