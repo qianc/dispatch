@@ -370,6 +370,32 @@ test('a session opened from another tab does not trap the Projects tab', async (
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
 });
 
+test('Activity searches all chats by a word, filters, and opens the one found (DISP-54)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'FIND', name: 'Findproj' } });
+  await page.request.post('/api/projects/FIND/repos', { data: { github_owner: 'me', github_name: 'find' } });
+  const s = await (await page.request.post('/api/projects/FIND/batches', { data: { prompt: 'fix the quokkaparser please' } })).json();
+  await page.request.post(`/api/sessions/${s.id}/finish`, { data: { status: 'stopped' } });
+
+  await page.getByRole('link', { name: 'Activity' }).click();
+  await page.getByLabel('Search chats').fill('QuokkaParser');
+  const hit = page.locator(`main a[href="/s/${s.id}"]`);
+  await expect(page.getByRole('heading', { name: 'Found (1)' })).toBeVisible();
+  await expect(hit.locator('mark')).toHaveText('quokkaparser');
+  // a filter that leaves it out, then one that keeps it
+  await page.getByRole('button', { name: 'Filters' }).click();
+  await page.getByLabel('Session kind').selectOption('planner');
+  await expect(page.getByText('No chats match.')).toBeVisible();
+  await page.getByLabel('Session kind').selectOption('work');
+  await page.getByLabel('Project').selectOption('FIND');
+  await expect(page.getByRole('heading', { name: 'Found (1)' })).toBeVisible();
+  await hit.click();
+  await expect(page).toHaveURL(new RegExp(`/s/${s.id}$`));
+});
+
 for (const [where, width] of [['phone', 0], ['desktop', 1280]] as const) {
   test(`${where}: the menu highlights Activity when it reopens its last chat`, async ({ page }) => {
     if (width) await page.setViewportSize({ width, height: 800 });

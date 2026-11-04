@@ -47,6 +47,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/images/:id/:name': 'read',
   'GET /api/sources/:id': 'read',
   'GET /api/sessions': 'read',
+  'GET /api/sessions/search': 'read',
   'GET /api/sessions/:id': 'read',
   'GET /api/sessions/:id/attachments/:name': 'read',
   'GET /api/prs/:id': 'read',

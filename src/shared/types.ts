@@ -207,6 +207,10 @@ export interface Session {
   ended_at: string | null;
 }
 
+/** A chat found by Activity's search (DISP-54): the session, and a piece of the message that matched. */
+export type SessionHit = Session & { snippet: string | null };
+export interface SessionSearch { sessions: SessionHit[]; has_more: boolean }
+
 /** A planner run at set times on a project, which starts the work it picks (DISP-13). */
 export interface Schedule {
   id: number;

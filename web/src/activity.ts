@@ -36,3 +36,29 @@ export function busyStatus(s: Pick<Session, 'status'>, attention?: Attention): {
   if (s.status !== 'idle' || !attention || waitsOnOwner(attention)) return null;
   return { label: attention.kind === 'merging' ? 'Merging' : 'Checking', text: attention.text };
 }
+
+/** What Activity's search asks for (DISP-54). Dates are the owner's local days, `to` included. */
+export interface SessionFilter { q: string; project: string; kind: string; from: string; to: string }
+export const NO_FILTER: SessionFilter = { q: '', project: '', kind: '', from: '', to: '' };
+
+/** Whether a search or filter is set: then results replace "Recently finished". */
+export function filtering(f: SessionFilter): boolean {
+  return !!(f.q.trim() || f.project || f.kind || f.from || f.to);
+}
+
+/** The query string for GET /api/sessions/search: local days become times, `to` the start of the next day. */
+export function searchQuery(f: SessionFilter, offset = 0, limit = 30): string {
+  const day = (d: string, plus = 0) => {
+    const [y, m, dd] = d.split('-').map(Number);
+    return new Date(y, m - 1, dd + plus).toISOString();
+  };
+  const p = new URLSearchParams();
+  if (f.q.trim()) p.set('q', f.q.trim());
+  if (f.project) p.set('project', f.project);
+  if (f.kind) p.set('kind', f.kind);
+  if (f.from) p.set('from', day(f.from));
+  if (f.to) p.set('to', day(f.to, 1));
+  p.set('limit', String(limit));
+  if (offset) p.set('offset', String(offset));
+  return p.toString();
+}
