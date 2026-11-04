@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, type Inbox as InboxData } from '../api.ts';
 import { waitsOnOwner } from '../../../src/shared/attention.ts';
+import { crossProjectSummary } from '../../../src/shared/types.ts';
 import { Page } from '../components/Layout.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
@@ -64,13 +65,14 @@ export function Inbox() {
           <Card>
             {data.inputs.map((i) => {
               const s = sessionById.get(i.session_id);
-              const text = i.payload.kind === 'plan_approval' ? 'Plan ready for approval' : i.payload.questions.map((q) => q.question).join(' · ');
+              const p = i.payload;
+              const text = p.kind === 'plan_approval' ? 'Plan ready for approval' : p.kind === 'cross_project' ? crossProjectSummary(p) : p.questions.map((q) => q.question).join(' · ');
               return (
                 <Link key={i.id} to={`/s/${i.session_id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
                   <div className="flex items-center gap-2">
                     <ProjectKey k={s?.project_key} badge />
                     <span className="flex-1 min-w-0 truncate font-medium">{s?.title}</span>
-                    <Chip tone="wait">{i.payload.kind === 'plan_approval' ? 'Plan' : 'Question'}</Chip>
+                    <Chip tone="wait">{p.kind === 'plan_approval' ? 'Plan' : p.kind === 'cross_project' ? 'Access' : 'Question'}</Chip>
                   </div>
                   <div className="flex gap-2 text-[13px] text-muted mt-0.5">
                     <span className="flex-1 min-w-0 line-clamp-2">{text}</span>

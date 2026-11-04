@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Proposal, ProposedItem, Question, SessionEventBody } from '../../../src/shared/types.ts';
+import { crossProjectSummary, type Proposal, type ProposedItem, type Question, type SessionEventBody } from '../../../src/shared/types.ts';
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
 import { Button, Chip, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
@@ -227,6 +227,27 @@ export function InputCard({ input }: { input: PendingInput }) {
             >
               Send answer
             </Button>
+          )}
+        </>
+      ) : p.kind === 'cross_project' ? (
+        <>
+          <div className="text-[12px] font-semibold uppercase tracking-wide text-wait mb-1">Access to project {p.project_key}</div>
+          <div className="text-[14px] font-medium">{crossProjectSummary(p)}</div>
+          {p.reason && <p className="mt-1 text-[13px] text-muted">{p.reason}</p>}
+          {p.action === 'comment' && (
+            <>
+              <div className="mt-2 text-[12px] text-faint">The comment, exactly as it will be added:</div>
+              <pre className="mt-1 text-[13px] whitespace-pre-wrap bg-raised rounded p-2">{p.body}</pre>
+            </>
+          )}
+          {input.answer?.kind === 'cross_project' && (
+            <p className="mt-2 text-[13px] text-muted">{input.answer.approve ? 'Approved' : 'Denied'}</p>
+          )}
+          {open && (
+            <div className="mt-3 flex gap-2">
+              <Button className="flex-1" disabled={send.isPending} onClick={() => send.mutate({ kind: 'cross_project', approve: false })}>Deny</Button>
+              <Button variant="primary" className="flex-1" disabled={send.isPending} onClick={() => send.mutate({ kind: 'cross_project', approve: true })}>Approve</Button>
+            </div>
           )}
         </>
       ) : (

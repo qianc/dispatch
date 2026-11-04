@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
-import type { SessionKind } from '../shared/types.ts';
+import { crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
 
 export type Rpc = (method: RpcMethod, params: unknown) => Promise<unknown>;
 
@@ -195,12 +195,60 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
   ];
 };
 
+/** Ask the owner to approve one cross-project request: the input's local id when approved, null when not. */
+export type AskCrossProject = (req: CrossProjectRequest & { reason?: string }) => Promise<{ approved: boolean; local_id: string } | null>;
+
+/**
+ * Planner and discussion chats reach other projects (DISP-55). Every call waits for the owner's
+ * approval of exactly this request; the server checks that approval again before it runs.
+ * A denial comes back as the tool result, and nothing from the other project is read or written.
+ */
+export function crossProjectTools(rpc: Rpc, ownKey: string, ask: AskCrossProject): SdkMcpToolDefinition<any>[] {
+  const run = async (req: CrossProjectRequest, reason?: string) => {
+    try {
+      req.project_key = req.project_key.trim().toUpperCase();
+      if (!/^[A-Z][A-Z0-9]*$/.test(req.project_key)) throw new Error(`"${req.project_key}" is not a project key`);
+      if (req.project_key === ownKey.toUpperCase()) throw new Error(`${ownKey} is this chat's own project: use list_items and get_item, which need no approval.`);
+      const answer = await ask({ ...req, ...(reason?.trim() ? { reason: reason.trim() } : {}) });
+      if (!answer) return ok(`The request was cancelled: ${crossProjectSummary(req)}. Nothing was read or written.`);
+      if (!answer.approved) return ok(`The owner denied this request: ${crossProjectSummary(req)}. Nothing from project ${req.project_key} was read or written. Do not ask again for the same thing unless the owner asks you to.`);
+      return ok(await rpc('cross_project', { ...req, approval: answer.local_id }));
+    } catch (e) {
+      return fail(e);
+    }
+  };
+  const itemKey = z.string().describe('Item key in the other project, e.g. HC-42');
+  const reason = z.string().describe('One line for the owner: why you need this');
+  const projectOf = (key: string) => key.trim().toUpperCase().split('-')[0];
+  return [
+    tool('search_other_project', `Search the items of ANOTHER project (not ${ownKey}) for words in their key, title, description or tags. The owner must approve the query first; nothing runs until they do. Returns matching items with a short excerpt.`, {
+      project_key: z.string().describe('Key of the other project, e.g. HC'),
+      query: z.string().min(1).describe('Words to look for; "a quoted phrase" is one word'),
+      reason,
+    }, async (p) => run({ action: 'search', project_key: p.project_key, query: p.query.trim() }, p.reason)),
+    tool('read_other_item', `Read one item of ANOTHER project (not ${ownKey}) with its description and comments. The owner must approve it first.`, {
+      key: itemKey,
+      reason,
+    }, async (p) => run({ action: 'read', project_key: projectOf(p.key), key: p.key.trim().toUpperCase() }, p.reason)),
+    tool('comment_on_other_item', `Add a comment to an item of ANOTHER project (not ${ownKey}), e.g. to link it to an item here ("Related: ${ownKey}-12 …"). The owner sees the exact text and must approve it; it is written only then.`, {
+      key: itemKey,
+      body: z.string().min(1).describe('The comment (markdown), exactly as it will be added'),
+      reason,
+    }, async (p) => run({ action: 'comment', project_key: projectOf(p.key), key: p.key.trim().toUpperCase(), body: p.body }, p.reason)),
+  ];
+}
+
 const noFiles = async () => {
   throw new Error('File reading is not available here');
 };
 
-/** `scheduled`: a scheduled planner run (DISP-13), which starts batches and changes items itself. */
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false) {
+/**
+ * `scheduled`: a scheduled planner run (DISP-13), which starts batches and changes items itself.
+ * `cross`: planner (not scheduled: nobody is there to approve) and discussion chats get the
+ * cross-project tools (DISP-55).
+ */
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }) {
+  const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
@@ -228,6 +276,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
           },
           async (p) => call(rpc, 'propose')({ type: 'item_update', ...p }),
         ),
+        ...crossTools,
       ],
     });
   }
@@ -299,5 +348,6 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       }, async (p) => call(rpc, 'propose')({ type: 'items', ...p })),
     );
   }
+  tools.push(...crossTools);
   return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools });
 }
