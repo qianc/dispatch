@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
 import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
-import { busyStatus, liveGroups, waitingCount } from '../web/src/activity.ts';
+import { NO_FILTER, busyStatus, filtering, liveGroups, searchQuery, waitingCount } from '../web/src/activity.ts';
 import type { Inbox } from '../web/src/api.ts';
 import { startServer } from './helpers.ts';
 
@@ -140,5 +140,23 @@ describe('search words and snippets (DISP-54)', () => {
     expect(markTerms('A Zebra and a zebra.', ['zebra'])).toEqual([
       { text: 'A ', hit: false }, { text: 'Zebra', hit: true }, { text: ' and a ', hit: false }, { text: 'zebra', hit: true }, { text: '.', hit: false },
     ]);
+  });
+});
+
+describe('Activity search query (DISP-54)', () => {
+  it('is only active with a word or a filter', () => {
+    expect(filtering(NO_FILTER)).toBe(false);
+    expect(filtering({ ...NO_FILTER, q: '  ' })).toBe(false);
+    expect(filtering({ ...NO_FILTER, kind: 'work' })).toBe(true);
+  });
+  it('sends local days as times, with the "to" day included', () => {
+    const p = new URLSearchParams(searchQuery({ q: ' zebra ', project: 'DISP', kind: 'planner', from: '2026-03-01', to: '2026-03-31' }, 30));
+    expect(p.get('q')).toBe('zebra');
+    expect(p.get('project')).toBe('DISP');
+    expect(p.get('kind')).toBe('planner');
+    expect(p.get('from')).toBe(new Date(2026, 2, 1).toISOString());
+    expect(p.get('to')).toBe(new Date(2026, 3, 1).toISOString());
+    expect(p.get('offset')).toBe('30');
+    expect(new URLSearchParams(searchQuery(NO_FILTER)).has('offset')).toBe(false);
   });
 });

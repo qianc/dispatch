@@ -7,6 +7,7 @@ import { TokenInput } from './TokenInput.tsx';
 import { ITEM_STATUSES, type ItemStatus, type ItemType, type ProposedItem } from '../../../src/shared/types.ts';
 import { api, type Attention, type Item, type Project, type Session } from '../api.ts';
 import { busyStatus } from '../activity.ts';
+import { markTerms } from '../../../src/shared/search.ts';
 import {
   Button, Chip, ErrorText, Field, ITEM_STATUS_LABEL, ImportanceIcon, ItemStatusIcon, Segmented, SessionStatusChip, Sheet, cx, inputCls, timeAgo,
 } from './ui.tsx';
@@ -114,7 +115,8 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
   );
 }
 
-export function SessionRow({ s, showProject, attention }: { s: Session; showProject?: boolean; attention?: Attention }) {
+/** `snippet`: a piece of the message a search found (DISP-54), with the `terms` marked. */
+export function SessionRow({ s, showProject, attention, snippet, terms = [] }: { s: Session; showProject?: boolean; attention?: Attention; snippet?: string | null; terms?: string[] }) {
   const busy = busyStatus(s, attention);
   return (
     <Link to={`/s/${s.id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
@@ -123,8 +125,10 @@ export function SessionRow({ s, showProject, attention }: { s: Session; showProj
         <span className="flex-1 min-w-0 truncate font-medium">{s.schedule_id ? <Icon name="schedule" size={15} className="inline -mt-0.5 mr-1 text-muted" /> : s.kind === 'planner' && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
         <SessionStatusChip status={s.status} busy={busy?.label} />
       </div>
-      <div className="flex items-center gap-2 mt-0.5 text-[13px] text-muted">
-        <span className="flex-1 min-w-0 truncate">{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : s.last_text ?? s.initial_prompt}</span>
+      <div className="flex items-start gap-2 mt-0.5 text-[13px] text-muted">
+        {snippet
+          ? <span className="flex-1 min-w-0 line-clamp-2 break-words">{markTerms(snippet, terms).map((p, i) => (p.hit ? <mark key={i} className="bg-accent/25 text-fg rounded-sm">{p.text}</mark> : p.text))}</span>
+          : <span className="flex-1 min-w-0 truncate">{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : s.last_text ?? s.initial_prompt}</span>}
         <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
       </div>
     </Link>
