@@ -6,6 +6,7 @@ import type { Bus } from './bus.ts';
 import { CheckRuns } from './checkRuns.ts';
 import type { CheckProgress } from '../shared/checkProgress.ts';
 import { generatorItems } from '../shared/generatorItems.ts';
+import { mergeMessage } from '../shared/mergeMessage.ts';
 import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -590,7 +591,7 @@ export class GitHub {
       const t = this.mustTarget(repo);
       await this.gh(repo).pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
-      const res = await this.mergeOnWorker(pr, repo, pr.local ? `Merge ${pr.head_ref}: ${pr.title}` : `Merge #${pr.number}: ${pr.title}`);
+      const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     }
     // GitHub needs a moment to register a pushed merge.
@@ -619,6 +620,11 @@ export class GitHub {
     }
   }
 
+  /** A Dispatch merge's commit message: the batch's item keys and the title, not the branch name (DISP-57). */
+  private mergeMessage(pr: PullRequest) {
+    return mergeMessage(this.store.itemsByIds(this.store.session(pr.session_id)?.item_ids ?? []).map((i) => i.key), pr.title);
+  }
+
   /** The items a repo's generate command gets at merge (DISP-56): the project's, with the PR's batch done. */
   private generatorExport(pr: PullRequest, repo: Repo) {
     if (!repo.generate_command) return undefined;
@@ -633,7 +639,7 @@ export class GitHub {
    */
   private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase') {
     const s = this.store.session(pr.session_id)!;
-    const message = `Merge ${pr.head_ref}: ${pr.title}`;
+    const message = this.mergeMessage(pr);
     if (repo.check_command || repo.generate_command) {
       const res = await this.mergeOnWorker(pr, repo, message);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
