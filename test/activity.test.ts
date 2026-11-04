@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
 import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
-import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, recentDiscussions, searchQuery, sessionLink, waitingCount } from '../web/src/activity.ts';
+import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, recentDiscussions, searchQuery, sessionLink, swipeOffset, waitingCount } from '../web/src/activity.ts';
 import type { Inbox } from '../web/src/api.ts';
 import { startServer } from './helpers.ts';
 
@@ -187,6 +187,14 @@ describe('open item discussions in Activity (DISP-58)', () => {
     const at = (updated_at: string) => ({ updated_at });
     expect(recentDiscussions([at('2026-11-19T12:00:00.000Z'), at('2026-11-10T12:00:01.000Z'), at('2026-11-10T12:00:00.000Z'), at('2026-10-01T00:00:00.000Z')], now))
       .toEqual([at('2026-11-19T12:00:00.000Z'), at('2026-11-10T12:00:01.000Z')]);
+  });
+
+  it('a sideways drag to the left moves the row; a scroll or a drag to the right does not', () => {
+    expect(swipeOffset(-4, 0, false)).toEqual({ dragging: false, offset: 0 }); // too small yet
+    expect(swipeOffset(-20, 40, false)).toEqual({ dragging: false, offset: 0 }); // a scroll
+    expect(swipeOffset(-30, 5, false)).toEqual({ dragging: true, offset: -30 });
+    expect(swipeOffset(-30, 60, true)).toEqual({ dragging: true, offset: -30 }); // once dragging, it follows
+    expect(swipeOffset(25, 0, true)).toEqual({ dragging: true, offset: 0 }); // never right of its place
   });
 
   it('an open discussion opens on its item and thread; a finished one on its session page', () => {

@@ -86,3 +86,15 @@ export function sessionLink(s: Pick<Session, 'id' | 'kind' | 'status' | 'item_id
   if (open && s.kind === 'assistant') return '/assistant';
   return `/s/${s.id}`;
 }
+
+/** How far left a row must be dragged to close it, in px. Less springs back. */
+export const SWIPE_CLOSE_PX = 96;
+
+/**
+ * Where a drag leaves the row: a mostly sideways drag to the left follows the finger (never
+ * right of its place); a mostly up-and-down one is a scroll and leaves the row alone.
+ */
+export function swipeOffset(dx: number, dy: number, dragging: boolean): { dragging: boolean; offset: number } {
+  if (!dragging && (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy))) return { dragging: false, offset: 0 };
+  return { dragging: true, offset: Math.min(0, dx) };
+}

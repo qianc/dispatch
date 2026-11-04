@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { searchTerms } from '../../../src/shared/search.ts';
 import type { SessionSearch } from '../../../src/shared/types.ts';
 import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchQuery, type SessionFilter } from '../activity.ts';
 import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
+import { SwipeToClose } from '../components/swipe.tsx';
 import { Button, Card, Empty, ErrorText, Section, cx, inputCls } from '../components/ui.tsx';
 
 const KINDS = [
@@ -42,7 +43,7 @@ export function Activity() {
       )}
       {!searching && discussions.length > 0 && (
         <Section title={`Open discussions (${discussions.length})`}>
-          <Card>{discussions.map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card>
+          <Card className="overflow-hidden">{discussions.map((s) => <DiscussionRow key={s.id} s={s} />)}</Card>
         </Section>
       )}
       {!searching && recent.length > 0 && (
@@ -52,6 +53,20 @@ export function Activity() {
       )}
       </div>
     </Page>
+  );
+}
+
+/** An open discussion: drag it left to close it (phone), or the Close button (desktop). */
+function DiscussionRow({ s }: { s: Session }) {
+  const qc = useQueryClient();
+  const close = () => api.post(`/items/${s.item_ids[0]}/discuss/new`).then(() => qc.invalidateQueries({ queryKey: ['sessions'] }));
+  return (
+    <SwipeToClose label="Close" onClose={close}>
+      <div className="flex items-center">
+        <div className="flex-1 min-w-0"><SessionRow s={s} showProject /></div>
+        <span className="hidden lg:block mr-2 shrink-0"><Button type="button" small variant="ghost" aria-label={`Close ${s.title}`} onClick={close}>Close</Button></span>
+      </div>
+    </SwipeToClose>
   );
 }
 
