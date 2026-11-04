@@ -500,3 +500,5 @@ Set `CHROMIUM_PATH` if Playwright's own browser isn't installed.
 paths and real email addresses, plus your own words (hostnames, project names, IP ranges) from
 `~/.config/dispatch/private-patterns`, one regex per line. That file stays outside the repo. Use
 neutral examples (`example.com`, `/home/user`); a line ending in `private-ok` is skipped.
+Dispatch's own merge commits name the items (`Merge DISP-5: <title>`), not the branch, and the
+worker replaces words from that file in the message with `…`, so a title with one still merges.

@@ -4,9 +4,11 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { GeneratorItem } from '../shared/generatorItems.ts';
+import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
@@ -20,6 +22,16 @@ const procEnv = () => {
   const extra = repoEnv.getStore();
   return extra ? { ...process.env, ...extra } : process.env;
 };
+
+/**
+ * A merge message without the owner's private words (DISP-57): the repo's pre-push hook
+ * (scripts/check-private.mjs) refuses a pushed commit message that has one, and the agent cannot
+ * change the title the message repeats.
+ */
+function withoutPrivateWords(message: string) {
+  const file = privatePatternsFile(process.env, homedir());
+  return existsSync(file) ? redactPrivate(message, readFileSync(file, 'utf8')) : message;
+}
 
 /** ws(s)://host/worker → http(s)://host/git: where a server serves its hosted repos. */
 export function hostedGitBase(workerUrl: string) {
@@ -488,7 +500,7 @@ export class Workspaces {
       const edited = paths.length ? (await git(['diff', '--name-only', '--no-renames', `${baseSha}...${head}`, '--', ...paths], dir)).split('\n').filter(Boolean) : [];
       if (edited.length) return { dir, base, baseSha, failed: { ok: false, output: handEdited(repo, branch, edited) } as MergeResult };
       await git(['worktree', 'add', '--detach', tmp, baseSha], dir);
-      const m = await run('git', ['merge', '--no-ff', '-m', message, head], tmp);
+      const m = await run('git', ['merge', '--no-ff', '-m', withoutPrivateWords(message), head], tmp);
       if (m.code !== 0) {
         await run('git', ['merge', '--abort'], tmp);
         return { dir, base, baseSha, failed: { ok: false, conflict: true, output: m.out } as MergeResult };
