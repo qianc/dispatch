@@ -694,3 +694,33 @@ test('an open item discussion stays in Activity and opens its item and thread; c
   await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
   await expect(page.locator(`main a[href="/items/${it.id}/discuss"]`)).toHaveCount(0);
 });
+
+test('phone: dragging an open discussion to the left in Activity closes it; a short drag does not (DISP-58)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.request.post('/api/projects', { data: { key: 'SWIPE', name: 'Swipeproj' } });
+  const it = await (await page.request.post('/api/projects/SWIPE/items', { data: { title: 'Swipe me' } })).json();
+  await page.request.post(`/api/items/${it.id}/discuss`, { data: { text: 'A question' } });
+
+  await page.getByRole('link', { name: 'Activity' }).click();
+  const row = page.locator(`main a[href="/items/${it.id}/discuss"]`);
+  await expect(row).toBeVisible();
+  const box = (await row.boundingBox())!;
+  const y = box.y + box.height / 2;
+  const drag = async (to: number) => {
+    const ev = { pointerId: 7, pointerType: 'touch', isPrimary: true, clientY: y };
+    await row.dispatchEvent('pointerdown', { ...ev, clientX: box.x + box.width - 20 });
+    for (const x of [box.x + box.width - 40, box.x + box.width - 20 - to]) await row.dispatchEvent('pointermove', { ...ev, clientX: x });
+    await row.dispatchEvent('pointerup', { ...ev, clientX: box.x + box.width - 20 - to });
+  };
+  // a short drag springs back and does not open the chat
+  await drag(40);
+  await expect(page).toHaveURL(/\/activity$/);
+  await expect(row).toBeVisible();
+  // a long one closes it
+  await drag(200);
+  await expect(row).toHaveCount(0);
+  expect((await (await page.request.get(`/api/items/${it.id}/discuss`)).json()).session_id).toBeNull();
+});
