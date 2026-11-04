@@ -118,7 +118,9 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     scheduler.start();
   }
 
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
+  // forceCloseConnections: live streams (/api/stream) never end on their own, so close() would wait
+  // for them forever; a deploy then SIGKILLs the server with the database still open
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 5 * 1024 * 1024, forceCloseConnections: true });
   /** every route, as "METHOD /path" (a test checks each /api one has an access rule) */
   const routes: string[] = [];
   app.addHook('onRoute', (r) => {
