@@ -66,6 +66,14 @@ export function searchQuery(f: SessionFilter, offset = 0, limit = 30): string {
 /** The statuses of a session that is not finished: the Live list, and open discussions (DISP-58). */
 export const OPEN_STATUSES = 'queued,running,waiting_input,idle';
 
+/** An open discussion untouched this long leaves Activity's list; it stays open on its item. */
+export const DISCUSSION_DAYS = 10;
+
+/** The open discussions Activity shows: those with a message in the last DISCUSSION_DAYS days. */
+export function recentDiscussions<T extends Pick<Session, 'updated_at'>>(open: T[], now = Date.now()): T[] {
+  return open.filter((s) => now - Date.parse(s.updated_at) < DISCUSSION_DAYS * 86_400_000);
+}
+
 /**
  * Where a session's row opens. An open discussion opens on its item, beside it on desktop
  * (DISP-58), and the open assistant chat on its own screen: those screens show the open thread.

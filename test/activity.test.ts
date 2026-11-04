@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
 import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
-import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, searchQuery, sessionLink, waitingCount } from '../web/src/activity.ts';
+import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, recentDiscussions, searchQuery, sessionLink, waitingCount } from '../web/src/activity.ts';
 import type { Inbox } from '../web/src/api.ts';
 import { startServer } from './helpers.ts';
 
@@ -180,6 +180,13 @@ describe('open item discussions in Activity (DISP-58)', () => {
     // leaving the page changes nothing; closing ("New chat") takes it off the list
     await s.call('POST', `/items/${b.id}/discuss/new`);
     expect(await open()).toEqual([a.id]);
+  });
+
+  it('one left alone for 10 days is not shown as ongoing', () => {
+    const now = Date.parse('2026-11-20T12:00:00.000Z');
+    const at = (updated_at: string) => ({ updated_at });
+    expect(recentDiscussions([at('2026-11-19T12:00:00.000Z'), at('2026-11-10T12:00:01.000Z'), at('2026-11-10T12:00:00.000Z'), at('2026-10-01T00:00:00.000Z')], now))
+      .toEqual([at('2026-11-19T12:00:00.000Z'), at('2026-11-10T12:00:01.000Z')]);
   });
 
   it('an open discussion opens on its item and thread; a finished one on its session page', () => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { searchTerms } from '../../../src/shared/search.ts';
 import type { SessionSearch } from '../../../src/shared/types.ts';
-import { NO_FILTER, OPEN_STATUSES, filtering, searchQuery, type SessionFilter } from '../activity.ts';
+import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchQuery, type SessionFilter } from '../activity.ts';
 import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
@@ -19,8 +19,10 @@ const PAGE = 30;
 
 export function Activity() {
   const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>(`/sessions?status=${OPEN_STATUSES}`) });
-  // item discussions not yet closed, answered or not: found again here, not only on their item (DISP-58)
-  const { data: discussions = [] } = useQuery({ queryKey: ['sessions', 'discussions'], queryFn: () => api.get<Session[]>(`/sessions?kind=discuss&status=${OPEN_STATUSES}`) });
+  // item discussions not yet closed, answered or not: found again here, not only on their item (DISP-58).
+  // One left alone for 10 days steps aside; it stays open on its item and in search.
+  const { data: open = [] } = useQuery({ queryKey: ['sessions', 'discussions'], queryFn: () => api.get<Session[]>(`/sessions?kind=discuss&status=${OPEN_STATUSES}`) });
+  const discussions = recentDiscussions(open);
   // same query as the menu: an idle session's attention says whether Dispatch checks or merges it
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
   const attention = new Map((inbox?.idle ?? []).map((s) => [s.id, s.attention]));
