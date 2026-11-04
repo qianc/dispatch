@@ -62,3 +62,19 @@ export function searchQuery(f: SessionFilter, offset = 0, limit = 30): string {
   if (offset) p.set('offset', String(offset));
   return p.toString();
 }
+
+/** The statuses of a session that is not finished: the Live list, and open discussions (DISP-58). */
+export const OPEN_STATUSES = 'queued,running,waiting_input,idle';
+
+/**
+ * Where a session's row opens. An open discussion opens on its item, beside it on desktop
+ * (DISP-58), and the open assistant chat on its own screen: those screens show the open thread.
+ * A finished chat, and every other session, opens on the session page.
+ */
+export function sessionLink(s: Pick<Session, 'id' | 'kind' | 'status' | 'item_ids'>, wide: boolean): string {
+  const open = OPEN_STATUSES.split(',').includes(s.status);
+  const item = s.item_ids[0];
+  if (open && s.kind === 'discuss' && item) return wide ? `/items/${item}?discuss=1` : `/items/${item}/discuss`;
+  if (open && s.kind === 'assistant') return '/assistant';
+  return `/s/${s.id}`;
+}
