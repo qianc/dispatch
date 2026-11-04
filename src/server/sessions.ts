@@ -95,6 +95,8 @@ const proposalSchema = z.discriminatedUnion('type', [
 
 /** The system note a work session gets for the items the owner unticked on its card (DISP-38). */
 const LEFT_OUT = 'Left out by the owner on the proposal card: ';
+/** waiting_reason of a session whose chat the server could not save */
+const UNSAVED = 'Chat could not be saved';
 
 type BatchProposal =Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
 type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>;
@@ -624,7 +626,7 @@ export class Sessions {
           patch.ended_at = new Date().toISOString();
           if (msg.error) this.addEvent(s.id, { kind: 'error', text: msg.error });
         }
-        if (msg.status === 'idle') patch.waiting_reason = 'Turn finished';
+        if (msg.status === 'idle') patch.waiting_reason = this.unsaved.has(s.id) ? UNSAVED : 'Turn finished';
         if (msg.status === 'running') {
           patch.waiting_reason = null;
           if (s.pending_prompt) patch.pending_prompt = null; // delivered
@@ -1232,9 +1234,39 @@ export class Sessions {
   }
 
   private addEvent(sessionId: number, body: Parameters<Store['addEvent']>[1]) {
-    const event = this.store.addEvent(sessionId, body);
+    let event: ReturnType<Store['addEvent']>;
+    try {
+      event = this.store.addEvent(sessionId, body);
+    } catch (e) {
+      this.chatNotSaved(sessionId, e as Error);
+      throw e;
+    }
+    this.unsaved.delete(sessionId);
     this.bus.emit({ t: 'session_event', event });
     return event;
+  }
+
+  /** Sessions whose chat the server could not save, told to the owner already. */
+  private unsaved = new Set<number>();
+
+  /**
+   * The server could not save a chat event (once: a damaged database, and a whole session ran with an
+   * empty chat). Nobody can see what such a session does, so it must not go on as if all is well:
+   * stop the turn, turn auto-merge off (nothing merges or deploys unseen) and tell the owner, once.
+   */
+  private chatNotSaved(sessionId: number, err: Error) {
+    console.error(`session ${sessionId}: chat not saved:`, err.message);
+    if (this.unsaved.has(sessionId)) return;
+    this.unsaved.add(sessionId);
+    const s = this.store.session(sessionId);
+    if (!s) return;
+    this.hub.send(s.worker_id, { t: 'interrupt', session_id: s.id });
+    try {
+      this.emitSession(this.store.updateSession(s.id, { options: { ...s.options, auto_merge: 'off' }, waiting_reason: UNSAVED }));
+    } catch (e) {
+      console.error(`session ${s.id}: could not turn auto-merge off:`, (e as Error).message);
+    }
+    this.notify(s, `${s.project_key ?? 'Dispatch'}: chat not saved`, `Turn stopped, auto-merge off. The server could not save the chat: ${err.message}`, `unsaved-${s.id}`);
   }
 
   private emitSession(s: Session) {
