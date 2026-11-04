@@ -312,13 +312,38 @@ export interface SessionEvent {
 export interface QuestionOption { label: string; description: string; preview?: string }
 export interface Question { question: string; header: string; options: QuestionOption[]; multiSelect: boolean }
 
+/**
+ * A planner or discussion chat asks to reach into another project (DISP-55): search it, read one
+ * of its items, or comment on one (e.g. to link it). Each request is approved on its own.
+ */
+export type CrossProjectAction = 'search' | 'read' | 'comment';
+export interface CrossProjectRequest {
+  action: CrossProjectAction;
+  project_key: string;
+  /** search: the words to look for */
+  query?: string;
+  /** read, comment: the item */
+  key?: string;
+  /** comment: the exact text that will be added */
+  body?: string;
+}
+
 export type PendingInputPayload =
   | { kind: 'question'; questions: Question[] }
-  | { kind: 'plan_approval'; plan: string };
+  | { kind: 'plan_approval'; plan: string }
+  | ({ kind: 'cross_project'; reason?: string } & CrossProjectRequest);
 
 export type InputAnswer =
   | { kind: 'question'; answers: Record<string, string> }
-  | { kind: 'plan_approval'; approve: boolean; feedback?: string };
+  | { kind: 'plan_approval'; approve: boolean; feedback?: string }
+  | { kind: 'cross_project'; approve: boolean };
+
+/** One line for a cross-project request: what the chat wants to do, for the card and the push. */
+export function crossProjectSummary(r: CrossProjectRequest): string {
+  if (r.action === 'search') return `Search ${r.project_key} for "${r.query ?? ''}"`;
+  if (r.action === 'read') return `Read ${r.key} (project ${r.project_key})`;
+  return `Comment on ${r.key} (project ${r.project_key})`;
+}
 
 export interface PendingInput {
   id: number;
@@ -578,6 +603,7 @@ export const plannerInput = z.object({
 export const answerInput = z.union([
   z.object({ kind: z.literal('question'), answers: z.record(z.string(), z.string()) }),
   z.object({ kind: z.literal('plan_approval'), approve: z.boolean(), feedback: z.string().optional() }),
+  z.object({ kind: z.literal('cross_project'), approve: z.boolean() }),
 ]);
 
 export const mergeInput = z.object({

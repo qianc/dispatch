@@ -3,6 +3,7 @@ import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import {
   ACTIVE_STATUSES,
   CHAT_KINDS,
+  crossProjectSummary,
   FINAL_STATUSES,
   ITEM_STATUSES,
   itemPatch,
@@ -23,6 +24,7 @@ import {
 } from '../shared/types.ts';
 import { z } from 'zod';
 import { CHAT_IMAGE_FILE, chatImageType, withImageMarkers } from '../shared/chatImages.ts';
+import { searchTerms, snippetOf } from '../shared/search.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
@@ -105,6 +107,8 @@ type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_
 const SCHEDULED_START = ['triage', 'backlog', 'todo'];
 /** The statuses a scheduled run may give an item: never done, and it cannot take one off hold. */
 const SCHEDULED_SET = ['triage', 'backlog', 'todo', 'hold', 'canceled'];
+/** at most this many items from a cross-project search (DISP-55) */
+const CROSS_SEARCH_MAX = 20;
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -686,9 +690,11 @@ export class Sessions {
         const input = this.store.createInput(s.id, msg.local_id, msg.payload);
         this.addEvent(s.id, { kind: 'input_request', input_id: input.id });
         this.bus.emit({ t: 'input', input });
-        const reason = msg.payload.kind === 'plan_approval' ? 'Plan ready for approval' : msg.payload.questions[0]?.question ?? 'Question';
+        const p = msg.payload;
+        const reason = p.kind === 'plan_approval' ? 'Plan ready for approval' : p.kind === 'cross_project' ? crossProjectSummary(p) : p.questions[0]?.question ?? 'Question';
+        const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
         this.setStatus(s.id, 'waiting_input', { waiting_reason: reason });
-        this.notify(s, `${s.project_key ?? 'Assistant'}: ${msg.payload.kind === 'plan_approval' ? 'approve plan?' : 'question'}`, reason, `input-${input.id}`);
+        this.notify(s, `${s.project_key ?? 'Assistant'}: ${what}`, reason, `input-${input.id}`);
         return;
       }
     }
@@ -743,6 +749,7 @@ export class Sessions {
       if (!this.assistantRpc) throw new Error('Assistant tools are not available');
       return this.assistantRpc(s, method, p);
     }
+    if (method === 'cross_project') return this.crossProject(s, p);
     if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image', 'propose'].includes(method)) throw new Error('A discussion is read-only.');
     if (s.kind === 'discuss' && method === 'propose' && (p as { type?: string }).type !== 'item_update') throw new Error('A discussion can only suggest item changes.');
     if (s.kind === 'release' && !['get_item', 'list_items', 'get_image', 'add_comment', 'release_items'].includes(method)) throw new Error(`A release session cannot call ${method}.`);
@@ -818,11 +825,68 @@ export class Sessions {
     }
   }
 
+  /**
+   * A planner or discussion chat reaches another project (DISP-55). It runs only with the owner's
+   * approval of exactly this request (`approval`: the local id of the answered input), once.
+   */
+  private crossProject(s: Session, p: Record<string, unknown>) {
+    if (!((s.kind === 'planner' && !s.schedule_id) || s.kind === 'discuss')) throw new Error('Only planner and discussion chats reach other projects.');
+    const input = this.store.inputs(s.id).find((i) => i.local_id === String(p.approval ?? ''));
+    const asked = input?.payload.kind === 'cross_project' ? input.payload : null;
+    if (!input || !asked) throw new Error('No approval for this request: ask the owner first.');
+    if (input.answer?.kind !== 'cross_project' || !input.answer.approve) throw new Error('The owner did not approve this request.');
+    if (this.crossUsed.has(input.id)) throw new Error('This approval was already used: ask again.');
+    const fields = ['action', 'project_key', 'query', 'key', 'body'] as const;
+    if (fields.some((f) => (asked[f] ?? null) !== (p[f] ?? null))) throw new Error('The request is not the one the owner approved.');
+    const own = this.store.project(s.project_id!)!;
+    const project = this.store.projectByKey(asked.project_key);
+    if (!project) throw new Error(`No project ${asked.project_key}`);
+    if (project.id === own.id) throw new Error(`${own.key} is this chat's own project: use list_items and get_item.`);
+    this.crossUsed.add(input.id);
+    const scaled = (i: Item) => ({
+      key: i.key, type: i.type, title: i.title, status: i.status,
+      importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
+      tags: i.labels, modules: i.modules,
+    });
+    switch (asked.action) {
+      case 'search': {
+        const terms = searchTerms(asked.query ?? '');
+        if (!terms.length) throw new Error('Give words to search for.');
+        const hits = this.store.items(project.id).filter((i) => {
+          const text = [i.key, i.title, i.body_md, ...i.labels, ...i.modules].join(' ').toLowerCase();
+          return terms.every((t) => text.includes(t));
+        });
+        this.addEvent(s.id, { kind: 'system', text: `Searched ${project.key} for "${asked.query}" (approved): ${hits.length} item${hits.length === 1 ? '' : 's'}` });
+        return {
+          project: project.key, query: asked.query, total: hits.length,
+          items: hits.slice(0, CROSS_SEARCH_MAX).map((i) => ({ ...scaled(i), excerpt: snippetOf(i.body_md, terms) })),
+        };
+      }
+      case 'read': {
+        const it = this.itemByKey(asked.key, project);
+        this.addEvent(s.id, { kind: 'system', text: `Read ${it.key} (approved)` });
+        // images stay out: view_image reaches only the chat's own project
+        return { ...scaled(it), body_md: it.body_md, comments: this.store.comments(it.id).map((c) => ({ author: c.author, created_at: c.created_at, body_md: c.body_md })) };
+      }
+      case 'comment': {
+        const it = this.itemByKey(asked.key, project);
+        const c = this.store.addComment(it.id, 'claude', asked.body ?? '', s.id);
+        this.bus.emit({ t: 'item', item: this.store.item(it.id)! });
+        this.addEvent(s.id, { kind: 'system', text: `Commented on ${it.key} (approved)` });
+        return { commented: it.key, comment_id: c.id };
+      }
+    }
+  }
+
+  /** cross-project approvals already used: each one runs its request once */
+  private crossUsed = new Set<number>();
+
   /** An item by key: in `project`, or (null: the assistant) in any project. */
   private itemByKey(key: unknown, project: Project | null) {
     const k = String(key ?? '').toUpperCase();
     const m = k.match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
     // in its own project an agent may give the number alone ("42") or the key
+    if (project && m && m[1] !== project.key) throw new Error(`${k} is not in project ${project.key}. Planner and discussion chats read other projects with read_other_item, after the owner approves.`);
     const it = project
       ? this.store.itemByNumber(project.id, Number(k.split('-').pop()))
       : m ? (() => { const p = this.store.projectByKey(m[1]); return p && this.store.itemByNumber(p.id, Number(m[2])); })() : undefined;

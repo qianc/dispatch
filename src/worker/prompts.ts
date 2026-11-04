@@ -175,8 +175,18 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
     );
   }
   if (spec.workers?.length || spec.placement_md?.trim()) lines.push('', ...whereWorkRuns(spec));
+  if (!spec.schedule) lines.push('', ...otherProjects(spec));
   if (context.length) lines.push('', ...projectRuleLines(context));
   return lines.join('\n');
+}
+
+/** Planner and discussion chats reach other projects only with the owner's approval of each call (DISP-55). */
+function otherProjects(spec: StartSpec): string[] {
+  return [
+    '## Other projects',
+    `Your tracker tools read only ${spec.project_key}. Work sometimes spans projects; when it helps, you may reach another one with \`search_other_project\`, \`read_other_item\` and \`comment_on_other_item\` (e.g. a comment that links its item to one here).`,
+    'Each call asks the owner first and runs only when they approve it; give a one-line `reason`. Ask only for what you need. If the owner denies a request, nothing was read or written: go on without it and do not ask again for the same thing unless they ask you to.',
+  ];
 }
 
 /** A scheduled run (DISP-13): pick within the scope and start it, or start nothing. */
@@ -257,6 +267,8 @@ export function discussPrompt(spec: StartSpec, context: { label: string; text: s
     '- When the owner asks you to add something to an item or change it (a comment with what you found, a better description, tags, importance), call `propose_item_update`. It shows them a card to apply or dismiss; never say a change is made until they applied it.',
     '- If the owner wants the work done, tell them to use "Start agent on this" on the item page. You cannot start it.',
     '- Answer briefly and concretely. Quote file paths you looked at. Say when you are unsure.',
+    '',
+    ...otherProjects(spec),
     '',
   ];
   if (item) lines.push('## The item', itemBlock(spec, item), '');

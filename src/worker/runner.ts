@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { query, type CanUseTool, type HookCallback, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
-import type { InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
+import type { CrossProjectRequest, InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
@@ -352,7 +352,7 @@ export class ClaudeRunner implements AgentRunner {
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         // a scheduled run has nobody to answer a question
         disallowedTools: planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule) },
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
@@ -434,21 +434,35 @@ export class ClaudeRunner implements AgentRunner {
     const payload: PendingInputPayload = name === 'AskUserQuestion'
       ? { kind: 'question', questions: (input.questions as Question[]).map((q) => ({ ...q, multiSelect: !!q.multiSelect })) }
       : { kind: 'plan_approval', plan: String(input.plan ?? '') };
-    const localId = randomUUID();
-    const answer = await new Promise<InputAnswer | null>((resolve) => {
-      this.waiting.set(localId, resolve);
-      signal.addEventListener('abort', () => resolve(null), { once: true });
-      this.deps.emit({ t: 'input_request', session_id: this.sessionId, local_id: localId, payload });
-    });
-    this.waiting.delete(localId);
+    const { answer } = await this.ask(payload, signal);
     if (!answer) return { behavior: 'deny', message: 'The question was cancelled.', interrupt: true };
     if (answer.kind === 'question') return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers } };
+    if (answer.kind !== 'plan_approval') return { behavior: 'deny', message: 'The answer did not match the question.' };
     if (answer.approve) {
       void this.q?.setPermissionMode('default').catch(() => undefined);
       return { behavior: 'allow', updatedInput: input };
     }
     return { behavior: 'deny', message: `The owner did not approve the plan.${answer.feedback ? ` Feedback: ${answer.feedback}` : ''}` };
   };
+
+  /** Send the owner a question or approval and wait for the answer (null: cancelled). */
+  private async ask(payload: PendingInputPayload, signal?: AbortSignal) {
+    const localId = randomUUID();
+    const answer = await new Promise<InputAnswer | null>((resolve) => {
+      this.waiting.set(localId, resolve);
+      signal?.addEventListener('abort', () => resolve(null), { once: true });
+      this.deps.emit({ t: 'input_request', session_id: this.sessionId, local_id: localId, payload });
+    });
+    this.waiting.delete(localId);
+    return { localId, answer };
+  }
+
+  /** A chat's request to reach another project (DISP-55), approved or not by the owner. */
+  private async askCrossProject(req: CrossProjectRequest & { reason?: string }) {
+    const { localId, answer } = await this.ask({ kind: 'cross_project', ...req });
+    if (!answer || answer.kind !== 'cross_project') return null;
+    return { approved: answer.approve, local_id: localId };
+  }
 
   private noticed = new Set<string>();
 
