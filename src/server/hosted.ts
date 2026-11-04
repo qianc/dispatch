@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BranchFile, BranchStatus, Repo } from '../shared/types.ts';
+import { mergedRange } from '../shared/mergedRange.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -175,9 +176,10 @@ export class HostedGit {
     return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim() };
   }
 
-  async branchDiff(repo: Repo, branch: string): Promise<BranchFile[]> {
+  /** `mergedSha`: the branch is merged; show it from that last commit (the branch may be gone). */
+  async branchDiff(repo: Repo, branch: string, mergedSha?: string): Promise<BranchFile[]> {
     const dir = this.dir(repo);
-    const range = `${this.base(repo)}...refs/heads/${branch}`;
+    const range = mergedSha ? await mergedRange((a) => must(dir, a), this.base(repo), mergedSha) : `${this.base(repo)}...refs/heads/${branch}`;
     const stat = await must(dir, ['diff', '--numstat', '--no-renames', range]);
     const names = await must(dir, ['diff', '--name-status', '--no-renames', range]);
     const status = new Map(names.split('\n').filter(Boolean).map((l) => {

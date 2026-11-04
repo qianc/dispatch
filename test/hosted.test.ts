@@ -53,8 +53,11 @@ describe('hosted repos on the server', () => {
     expect(m.ok).toBe(true);
     expect((await h.readFile(r, 'b.txt')).toString()).toBe('two\n');
     expect(await h.branchStatus(r, 'dispatch/x-1')).toMatchObject({ merged: true });
+    const sha = git(h.dir(r), 'rev-parse', 'refs/heads/dispatch/x-1');
     expect(await h.deleteBranch(r, 'dispatch/x-1')).toBe(true);
     expect(await h.branchStatus(r, 'dispatch/x-1')).toMatchObject({ exists: false });
+    // merged and deleted: its page still shows what it changed
+    expect((await h.branchDiff(r, 'dispatch/x-1', sha)).map((f) => [f.filename, f.status, f.additions])).toEqual([['b.txt', 'added', 1]]);
   });
 
   it('a squash merge makes one commit; a conflict leaves the default branch where it was', async () => {
@@ -79,6 +82,9 @@ describe('hosted repos on the server', () => {
     const after = git(h.dir(r), 'rev-parse', 'refs/heads/main');
     expect(git(h.dir(r), 'rev-list', '--count', `${before}..${after}`)).toBe('1');
     expect(git(h.dir(r), 'log', '-1', '--format=%s', 'main')).toBe('Squash feat');
+    // a squash leaves the branch out of main's history: it still compares with main
+    const feat = git(h.dir(r), 'rev-parse', 'refs/heads/feat');
+    expect((await h.branchDiff(r, 'feat', feat)).map((f) => f.filename)).toEqual(['a.txt', 'c.txt']);
 
     const bad = await h.merge(r, 'other', 'Merge other', 'merge');
     expect(bad).toMatchObject({ ok: false, conflict: true });

@@ -46,6 +46,14 @@ describe('local repos in the worker', () => {
     expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('two\n'); // working tree updated too
     expect(git(dir, 'log', '-1', '--format=%s')).toBe('Merge it');
     expect(await ws.branchStatus(repo, 'dispatch/l-5-x')).toMatchObject({ merged: true });
+
+    // merged, main moved on and the branch is gone: its page still shows what it changed
+    const sha = git(dir, 'rev-parse', 'dispatch/l-5-x');
+    writeFileSync(join(dir, 'c.txt'), 'later\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'later');
+    git(dir, 'update-ref', '-d', 'refs/heads/dispatch/l-5-x'); // (still checked out in the worktree)
+    expect((await ws.branchDiff(repo, 'dispatch/l-5-x', sha)).map((f) => [f.filename, f.status, f.additions])).toEqual([['b.txt', 'added', 1]]);
   });
 
   it('a branch with the same tree as a rewritten main does not differ from it (DISP-33)', async () => {

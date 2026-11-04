@@ -71,7 +71,7 @@ export type WorkerCommand =
   /** check a folder is a git repo we may use (LOCAL_REPO_DIRS) and read its default branch */
   | { c: 'inspect_local_repo'; path: string }
   /** a local repo's session branch: diff against the default branch */
-  | { c: 'branch_diff'; repo: Repo; branch: string }
+  | { c: 'branch_diff'; repo: Repo; branch: string; merged_sha?: string }
   /** what a finished session left on disk (worktrees, its branch, merged or not) */
   | { c: 'leftovers'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[] }
   /** remove a finished session's worktrees, and its branch where merged */

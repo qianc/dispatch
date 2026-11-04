@@ -514,12 +514,14 @@ export class GitHub {
     const pr = await this.syncPr(prId);
     const repo = this.store.repo(pr.repo_id)!;
     const auto_merge = this.store.session(pr.session_id)?.options.auto_merge ?? 'off';
+    // merged: the branch is in the default branch (and may be deleted); show it from its last commit
+    const merged_sha = pr.state === 'merged' && pr.head_sha ? pr.head_sha : undefined;
     if (repo.local_path) {
-      const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref }, 120_000);
+      const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref, merged_sha }, 120_000);
       return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     if (repo.kind === 'hosted' && pr.local) {
-      const files = await this.hosted!.branchDiff(repo, pr.head_ref);
+      const files = await this.hosted!.branchDiff(repo, pr.head_ref, merged_sha);
       return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     const o = this.mustTarget(repo);

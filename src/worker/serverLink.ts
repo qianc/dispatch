@@ -358,7 +358,7 @@ export class ServerLink {
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch);
       case 'branch_diff':
-        return ws.branchDiff(cmd.repo, cmd.branch);
+        return ws.branchDiff(cmd.repo, cmd.branch, cmd.merged_sha);
       case 'inspect_local_repo': {
         const path = resolve(cmd.path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
         const allowed = this.entry.local_repo_dirs;

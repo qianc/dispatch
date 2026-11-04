@@ -12,6 +12,7 @@ import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
+import { mergedRange } from '../shared/mergedRange.ts';
 
 /**
  * Extra environment for commands run on behalf of a repo (its GitHub account's token and commit
@@ -616,11 +617,14 @@ export class Workspaces {
     });
   }
 
-  /** Files changed on the branch since it left the default branch, with patches (like a PR's files). */
-  branchDiff(repo: Repo, branch: string): Promise<import('../shared/types.ts').BranchFile[]> {
+  /**
+   * Files changed on the branch since it left the default branch, with patches (like a PR's files).
+   * `mergedSha`: the branch is merged; show it from that last commit (the branch may be gone).
+   */
+  branchDiff(repo: Repo, branch: string, mergedSha?: string): Promise<import('../shared/types.ts').BranchFile[]> {
     return this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
-      const range = `${base}...${head}`;
+      const range = mergedSha ? await mergedRange((a) => git(a, dir), base, mergedSha) : `${base}...${head}`;
       const stat = await git(['diff', '--numstat', '--no-renames', range], dir);
       const names = await git(['diff', '--name-status', '--no-renames', range], dir);
       const status = new Map(names.split('\n').filter(Boolean).map((l) => {
