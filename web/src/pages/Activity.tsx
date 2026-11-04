@@ -86,12 +86,8 @@ function SearchBar({ filter, onChange }: { filter: SessionFilter; onChange: (f: 
             <option value="">All kinds</option>
             {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
           </select>
-          <label className="block text-[12px] text-muted">From
-            <input type="date" className={cx(select, 'mt-0.5')} value={filter.from} max={filter.to || undefined} onChange={(e) => set({ from: e.target.value })} />
-          </label>
-          <label className="block text-[12px] text-muted">To
-            <input type="date" className={cx(select, 'mt-0.5')} value={filter.to} min={filter.from || undefined} onChange={(e) => set({ to: e.target.value })} />
-          </label>
+          <DateField label="From" value={filter.from} max={filter.to} onChange={(from) => set({ from })} />
+          <DateField label="To" value={filter.to} min={filter.from} onChange={(to) => set({ to })} />
           {(count > 0 || text) && (
             <Button type="button" small className="col-span-2" onClick={() => { setText(''); onChange(NO_FILTER); }}>
               Clear search and filters
@@ -99,6 +95,37 @@ function SearchBar({ filter, onChange }: { filter: SessionFilter; onChange: (f: 
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A day, drawn like the other fields. iOS Safari gives a bare date input its own width and height
+ * (it overflowed the grid, and was blank when empty), so the native input lies invisible on top:
+ * a tap still opens the system date picker.
+ */
+function DateField({ label, value, min, max, onChange }: { label: string; value: string; min?: string; max?: string; onChange: (day: string) => void }) {
+  const shown = value ? new Date(`${value}T00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Any day';
+  return (
+    <div className="min-w-0">
+      <span className="block text-[12px] text-muted mb-0.5">{label}</span>
+      <div className="relative overflow-hidden rounded-lg">
+        <div className={cx(inputCls, 'h-10 py-0 flex items-center truncate', value ? 'pr-9' : 'text-faint')} aria-hidden>{shown}</div>
+        <input
+          type="date"
+          aria-label={`${label} date`}
+          className="absolute inset-0 w-full h-full min-w-0 opacity-0 cursor-pointer"
+          value={value}
+          min={min || undefined}
+          max={max || undefined}
+          onChange={(e) => onChange(e.target.value)}
+          // desktop browsers open the picker only from their own icon, which is hidden here
+          onClick={(e) => { try { e.currentTarget.showPicker(); } catch { /* not offered: typing works */ } }}
+        />
+        {value && (
+          <button type="button" aria-label={`Clear ${label.toLowerCase()} date`} onClick={() => onChange('')} className="absolute right-0 inset-y-0 w-9 flex items-center justify-center text-muted text-lg">×</button>
+        )}
+      </div>
     </div>
   );
 }
