@@ -6,7 +6,7 @@ import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type
 import { useQuery } from '@tanstack/react-query';
 import { api, type AssistantChat, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { useVeryWide, useWide } from '../wide.ts';
-import { icons } from './icons.tsx';
+import { Icon, icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 import { Notices } from './Notices.tsx';
 import { liveGroups, waitingCount } from '../activity.ts';
@@ -143,6 +143,7 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
             {recentList.map((p) => row(`/p/${p.key}`, <>
               <ProjectBadge project={p} size={20} />
               <span className="truncate flex-1">{p.name}</span>
+              {p.disabled && <span title="Disabled (read-only)" aria-label="read-only" className="text-wait"><Icon name="lock" size={13} /></span>}
               {!!p.counts?.waiting && <span className="text-[11px] text-wait">{p.counts.waiting}</span>}
             </>, `p-${p.key}`))}
           </SideGroup>
