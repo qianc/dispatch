@@ -68,6 +68,7 @@ export function Settings() {
       <ServerGithubSection />
       <WorkersSection />
       <AccessSection />
+      <DevicesSection />
       <Section title="Status">
         <Card className="p-3 text-sm text-muted space-y-1">
           <div>Sign-in: {settings?.auth_mode === 'proxy' ? `through the proxy${me?.user ? `, as ${me.user}` : ''}` : settings?.auth_mode === 'off' ? 'off (testing)' : 'password'}</div>
@@ -124,6 +125,7 @@ function ServerGithubSection() {
 }
 
 interface ApiTokenRow { id: number; name: string; prefix: string; scopes: string[]; created_at: string; expires_at: string | null; last_used_at: string | null; revoked_at: string | null }
+interface DeviceRow { id: number; name: string; user: string; created_at: string; expires_at: string; last_used_at: string | null }
 interface GrantRow { id: number; client_name: string; scopes: string[]; created_at: string; last_used_at: string | null; refresh_expires_at: string }
 
 const SCOPE_INFO: Record<string, string> = {
@@ -345,5 +347,38 @@ function AccessSection() {
         </Card>
       </Section>
     </>
+  );
+}
+
+/** Phones paired with a code (for home-screen apps that cannot use the sign-in proxy's SSO). */
+function DevicesSection() {
+  const qc = useQueryClient();
+  const { data: devices = [] } = useQuery({ queryKey: ['devices'], queryFn: () => api.get<DeviceRow[]>('/devices') });
+  const [code, setCode] = useState('');
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['devices'] });
+  const approve = useMutation({ mutationFn: () => api.post<DeviceRow>('/devices/approve', { code }), onSuccess: () => { setCode(''); refresh(); } });
+  const revoke = useMutation({ mutationFn: (id: number) => api.del(`/devices/${id}`), onSuccess: refresh });
+  return (
+    <Section title="Paired devices">
+      <Card>
+        {devices.map((d) => (
+          <div key={d.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">{d.name}</div>
+              <div className="text-[12px] text-muted">as {d.user} · since {when(d.created_at)} · used {when(d.last_used_at)} · expires {when(d.expires_at)}</div>
+            </div>
+            <Button small variant="ghost" onClick={() => confirm(`Unpair ${d.name}? It has to be paired again to use Dispatch.`) && revoke.mutate(d.id)}>Unpair</Button>
+          </div>
+        ))}
+        {!devices.length && <p className="px-3 py-2.5 text-[13px] text-muted">None. On a phone, open <code>{location.origin}/pair</code>, add it to the home screen, open it from there and enter the code it shows here.</p>}
+      </Card>
+      <form className="mx-3 mt-3 rounded-xl border border-line bg-panel p-3" onSubmit={(e) => { e.preventDefault(); approve.mutate(); }}>
+        <Field label="Code shown on the device" hint="Only approve a code you see on your own device: it gets your access for 90 days.">
+          <input className={cx(inputCls, 'font-mono uppercase tracking-widest')} value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCD-EFGH" autoComplete="off" autoCapitalize="characters" />
+        </Field>
+        <ErrorText error={approve.error ?? revoke.error} />
+        <Button variant="primary" className="w-full" disabled={code.replace(/[^a-z0-9]/gi, '').length < 8 || approve.isPending}>Pair</Button>
+      </form>
+    </Section>
   );
 }

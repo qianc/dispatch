@@ -16,6 +16,7 @@ import { Attachments } from './attachments.ts';
 import { imageRoutes } from './routes/images.ts';
 import { Janitor } from './janitor.ts';
 import { Access, ROUTE_ACCESS, type Principal } from './access.ts';
+import { Devices } from './devices.ts';
 import { OAuth } from './oauth.ts';
 import { mcpRoutes } from './mcp.ts';
 import { GitHub } from './github.ts';
@@ -26,6 +27,7 @@ import { WorkerHub } from './workerHub.ts';
 import { checkPlacements } from './repos.ts';
 import { HttpError, type Ctx } from './routes/ctx.ts';
 import { authRoutes } from './routes/auth.ts';
+import { deviceRoutes } from './routes/devices.ts';
 import { projectRoutes } from './routes/projects.ts';
 import { itemRoutes } from './routes/items.ts';
 import { sourceRoutes } from './routes/sources.ts';
@@ -111,9 +113,10 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     // after app.close() the database is gone: links closing then have nothing to update
     onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
   };
-  const access = new Access(cfg, db, auth);
+  const devices = new Devices(db);
+  const access = new Access(cfg, db, auth, devices);
   const scheduler = new Scheduler(store, sessions, bus);
-  const ctx: Ctx = { cfg, store, auth, access, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  const ctx: Ctx = { cfg, store, auth, access, devices, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
@@ -192,6 +195,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   });
 
   authRoutes(app, ctx);
+  deviceRoutes(app, ctx);
   projectRoutes(app, ctx);
   itemRoutes(app, ctx);
   sourceRoutes(app, ctx);

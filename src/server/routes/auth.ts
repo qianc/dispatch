@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { COOKIE } from '../auth.ts';
+import { DEVICE_COOKIE } from '../devices.ts';
 import { SCOPES, isLoopback } from '../access.ts';
 import { HttpError, type Ctx } from './ctx.ts';
 
-export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store }: Ctx) {
+export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices }: Ctx) {
   const db = store.db;
   const passwordSet = !!(cfg.appPassword || cfg.appPasswordHash);
   /** Where the password login may be used: anywhere in password mode; only from this machine behind a proxy. */
@@ -20,12 +21,18 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
     auth.issueCookie(reply);
     return { ok: true };
   });
-  app.post('/api/logout', async (_req, reply) => {
+  app.post('/api/logout', async (req, reply) => {
     reply.clearCookie(COOKIE, { path: '/' });
+    // signing out on a paired device ends that device's session
+    const device = access.device(req);
+    if (device) devices.revoke(device.id);
+    if (req.cookies[DEVICE_COOKIE]) reply.clearCookie(DEVICE_COOKIE, { path: '/' });
     return { ok: true };
   });
-  app.get('/api/me', async (req) => {
+  app.get('/api/me', async (req, reply) => {
     const user = access.browserUser(req);
+    // a revoked or expired device cookie: clear it, so the app offers pairing again
+    if (req.cookies[DEVICE_COOKIE] && !access.device(req)) reply.clearCookie(DEVICE_COOKIE, { path: '/' });
     return {
       authed: !!user,
       user,

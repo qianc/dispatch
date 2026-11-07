@@ -10,6 +10,7 @@ import { trackPresence } from './presence.ts';
 import { initTheme } from './theme.ts';
 import { Layout } from './components/Layout.tsx';
 import { Login, SignedOut } from './pages/Login.tsx';
+import { Pair } from './pages/Pair.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Activity } from './pages/Activity.tsx';
 import { Projects } from './pages/Projects.tsx';
@@ -153,7 +154,7 @@ document.addEventListener('focusout', () => setTimeout(unshift, 50));
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
-      <App />
+      {location.pathname === '/pair' ? <Pair /> : <App />}
     </QueryClientProvider>
   </StrictMode>,
 );

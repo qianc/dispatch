@@ -34,7 +34,9 @@ export default defineConfig({
         theme_color: '#1a1a1e',
         background_color: '#0e0e10',
         display: 'standalone',
-        start_url: '/',
+        // the home-screen app starts on /pair: where the sign-in proxy's SSO cannot run (iOS web apps
+        // under a managed-browser policy) it pairs from there; signed in, it goes straight on to /
+        start_url: '/pair',
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },

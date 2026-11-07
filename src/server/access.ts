@@ -15,6 +15,7 @@ import type { FastifyRequest } from 'fastify';
 import type { Auth } from './auth.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
+import { DEVICE_COOKIE, type Devices } from './devices.ts';
 
 export const SCOPES = ['read', 'tracker', 'sessions', 'admin'] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -122,6 +123,12 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'PATCH /api/workers/:id': 'user',
   'DELETE /api/workers/:id': 'user',
   'PUT /api/settings/default-worker': 'user',
+  // pairing a phone: it asks and polls before it is signed in; a person approves (not a device: see the route)
+  'POST /api/devices/pair': 'public',
+  'GET /api/devices/pair/:pairId': 'public',
+  'POST /api/devices/approve': 'user',
+  'GET /api/devices': 'user',
+  'DELETE /api/devices/:id': 'user',
   'GET /api/oauth/grants': 'user',
   'DELETE /api/oauth/grants/:id': 'user',
 };
@@ -188,11 +195,18 @@ export class Access {
   private cfg: Config;
   private db: Db;
   private auth: Auth;
+  private devices: Devices;
 
-  constructor(cfg: Config, db: Db, auth: Auth) {
+  constructor(cfg: Config, db: Db, auth: Auth, devices: Devices) {
     this.cfg = cfg;
     this.db = db;
     this.auth = auth;
+    this.devices = devices;
+  }
+
+  /** The paired device this request comes from (its cookie), or null. */
+  device(req: FastifyRequest) {
+    return this.devices.find(req.cookies?.[DEVICE_COOKIE]);
   }
 
   private from(req: FastifyRequest) {
@@ -217,21 +231,27 @@ export class Access {
     return !f.local && !f.proxy;
   }
 
-  /** A person signed in through the browser, or null. Tokens and OAuth clients are not people. */
-  browserUser(req: FastifyRequest): string | null {
+  /**
+   * A person signed in through the browser, or null. Tokens and OAuth clients are not people. A paired
+   * device counts as the person who approved it, unless `devices` is false (pairing more devices).
+   */
+  browserUser(req: FastifyRequest, { devices = true } = {}): string | null {
     if (this.cfg.authMode === 'off') return 'local';
     const f = this.from(req);
+    const paired = () => (devices ? this.device(req)?.user ?? null : null);
     if (this.cfg.authMode === 'proxy') {
       if (f.proxy) {
         const user = String(req.headers[this.cfg.authHeader] ?? '').trim();
-        if (!user) return null;
+        // no user header: the proxy let a device through on its own cookie
+        if (!user) return paired();
         if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(user)) return null;
         return user;
       }
       // the password login is the way in from this machine when the proxy is down
-      if (!f.local || (!this.cfg.appPassword && !this.cfg.appPasswordHash)) return null;
+      if (!f.local) return null;
+      if (!this.cfg.appPassword && !this.cfg.appPasswordHash) return paired();
     }
-    return this.auth.hasSessionCookie(req) ? 'owner' : null;
+    return this.auth.hasSessionCookie(req) ? 'owner' : paired();
   }
 
   /** Who is making this request, or null (not signed in, or a bad token). */

@@ -18,6 +18,8 @@ export function SignedOut() {
         <h1 className="text-lg font-semibold mb-2">Signed out</h1>
         <p className="text-sm text-muted mb-5">Your sign-in has expired.</p>
         <Button variant="primary" className="w-full" onClick={() => location.assign(`/signin?to=${encodeURIComponent(location.pathname + location.search)}`)}>Sign in again</Button>
+        <Button variant="ghost" className="w-full mt-2" onClick={() => location.assign('/pair')}>Pair this device instead</Button>
+        <p className="text-[12px] text-muted mt-2">For a phone whose app cannot use the sign-in: approve it from a computer where you are signed in.</p>
       </div>
     </div>
   );
