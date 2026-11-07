@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
-import { serverGithubAccount, type ServerEntry } from './config.ts';
+import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
@@ -96,7 +96,14 @@ export class ServerLink {
     const gitEnv = (repo: Repo) => shared.gitEnv?.({ ...repo, github_account: serverGithubAccount(entry, repo.github_account) }) ?? {};
     this.workspaces = new Workspaces(root, shared.remoteBase, gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
     // agents get no worker token: they commit, and the worker pushes hosted branches (pushHostedBranches)
-    this.opts = { ...shared.opts, assistantReadDirs: entry.read_dirs };
+    // agents report to the server that started them (DISPATCH_URL beats a repo's or machine's default)
+    const appUrl = serverAppUrl(entry.url);
+    const sessionEnv = shared.opts.sessionEnv;
+    this.opts = {
+      ...shared.opts,
+      assistantReadDirs: entry.read_dirs,
+      sessionEnv: (spec) => ({ ...(sessionEnv ? sessionEnv(spec) : process.env), DISPATCH_URL: appUrl }),
+    };
   }
 
   private slotKey(id: number) {

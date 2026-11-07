@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkerConfig, serverGithubAccount } from '../src/worker/config.ts';
+import { loadWorkerConfig, serverAppUrl, serverGithubAccount } from '../src/worker/config.ts';
 
 describe('GitHub account per server', () => {
   it("uses the project's account, else the first one the server is allowed, else the worker's default", () => {
@@ -11,6 +11,14 @@ describe('GitHub account per server', () => {
     expect(serverGithubAccount({ github_accounts: ['ey'] }, undefined)).toBe('ey');
     expect(serverGithubAccount({ github_accounts: null }, null)).toBeNull();
     expect(serverGithubAccount({ github_accounts: [] }, null)).toBeNull();
+  });
+});
+
+describe('the address agents report to', () => {
+  it("is the web address of the server that started the session", () => {
+    expect(serverAppUrl('wss://dispatch.example.com/worker')).toBe('https://dispatch.example.com');
+    expect(serverAppUrl('ws://192.0.2.1:3000/worker')).toBe('http://192.0.2.1:3000');
+    expect(serverAppUrl('wss://example.com/dispatch/worker/')).toBe('https://example.com/dispatch');
   });
 });
 

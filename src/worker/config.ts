@@ -50,6 +50,18 @@ const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
  * worker.json allows for that server, else null (the worker's first account). So a worker serving a
  * personal and a work server can default each to its own account.
  */
+/**
+ * The web address of a server, from the worker socket address in worker.json
+ * (wss://host/worker → https://host). Agents get it as DISPATCH_URL, so the tools they run (the
+ * dispatch CLI of the dispatch-backlog skill) report to the server that started them.
+ */
+export function serverAppUrl(workerUrl: string): string {
+  const u = new URL(workerUrl);
+  u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  u.pathname = u.pathname.replace(/\/worker\/?$/, '');
+  return u.toString().replace(/\/$/, '');
+}
+
 export function serverGithubAccount(entry: Pick<ServerEntry, 'github_accounts'>, name: string | null | undefined): string | null {
   return name || entry.github_accounts?.[0] || null;
 }
