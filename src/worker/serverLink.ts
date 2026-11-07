@@ -83,6 +83,9 @@ export class ServerLink {
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private ws: WebSocket | null = null;
   private stopped = false;
+  /** The server pings every 20 s (workerHub). Hearing nothing for this long means the connection
+   * is dead but not closed (laptop slept, NAT entry gone): drop it and reconnect. */
+  silenceMs = 60_000;
 
   constructor(entry: ServerEntry, shared: LinkShared) {
     this.entry = entry;
@@ -453,8 +456,16 @@ export class ServerLink {
   connect(delay = 1000) {
     if (this.stopped) return;
     const { url, token, name } = this.entry;
-    const sock = new WebSocket(url, { headers: { 'x-worker-token': token } });
+    const sock = new WebSocket(url, { headers: { 'x-worker-token': token }, handshakeTimeout: 30_000 });
+    let watchdog: NodeJS.Timeout | undefined;
+    const heard = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => sock.terminate(), this.silenceMs);
+      watchdog.unref();
+    };
+    sock.on('ping', heard);
     sock.on('open', async () => {
+      heard();
       this.ws = sock;
       delay = 1000;
       console.log(`worker connected to ${url}${name === 'default' ? '' : ` (${name})`}${this.shared.fake ? ' (fake runner)' : ''}`);
@@ -464,6 +475,7 @@ export class ServerLink {
       for (const m of this.outbox.splice(0)) sock.send(JSON.stringify(m));
     });
     sock.on('message', (data) => {
+      heard();
       let msg: ServerToWorker;
       try {
         msg = JSON.parse(String(data));
@@ -473,6 +485,7 @@ export class ServerLink {
       this.onMessage(msg).catch((e) => console.error('worker handler failed', msg.t, e));
     });
     sock.on('close', (code, reason) => {
+      clearTimeout(watchdog);
       if (this.ws === sock) this.ws = null;
       if (code === 4001) console.error(`server ${name} rejected the worker token`);
       else if (code !== 1000) console.warn(`worker disconnected from ${name} (${code} ${reason}); retrying`);
