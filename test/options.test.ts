@@ -109,6 +109,40 @@ describe('auto-merge', () => {
     await s.app.close();
   });
 
+  describe('a token that cannot read checks (fine-grained PATs have no Checks permission)', () => {
+    type Run = { name: string; status: string; conclusion: string | null; html_url: string };
+    const withRuns = async (runs: Run[]) => {
+      const t = await setup([]);
+      const fake = (t.s.ctx.github as unknown as { octo: Record<string, unknown> }).octo;
+      fake.checks = { listForRef: async () => { throw Object.assign(new Error('Resource not accessible by personal access token'), { status: 403 }); } };
+      const asked: unknown[] = [];
+      fake.actions = { listWorkflowRunsForRepo: async (args: unknown) => { asked.push(args); return { data: { workflow_runs: runs } }; } };
+      return { ...t, asked };
+    };
+
+    it('reads the GitHub Actions runs of the head commit instead, and merges when they passed', async () => {
+      const { s, session, merges, asked } = await withRuns([{ name: 'validate', status: 'completed', conclusion: 'success', html_url: 'u' }]);
+      await s.ctx.github.syncSession(session);
+      expect(asked).toEqual([expect.objectContaining({ owner: 'me', repo: 'r', head_sha: 'abc' })]);
+      expect(merges).toHaveLength(1);
+      await s.app.close();
+    });
+
+    it('waits for runs still going, and does not merge on a failed run', async () => {
+      const running = await withRuns([{ name: 'validate', status: 'in_progress', conclusion: null, html_url: 'u' }]);
+      await running.s.ctx.github.syncSession(running.session);
+      expect(running.merges).toHaveLength(0);
+      await running.s.app.close();
+
+      const failed = await withRuns([{ name: 'validate', status: 'completed', conclusion: 'failure', html_url: 'u' }]);
+      await failed.s.ctx.github.syncSession(failed.session);
+      expect(failed.merges).toHaveLength(0);
+      const events = (await failed.s.call('GET', `/sessions/${failed.session.id}`)).data.events;
+      expect(JSON.stringify(events)).toContain('checks failed (validate)');
+      await failed.s.app.close();
+    });
+  });
+
   it('merges once when two syncs of the same branch run at the same time', async () => {
     const { s, session, merges } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
     await Promise.all([s.ctx.github.syncSession(session), s.ctx.github.syncSession(session)]);

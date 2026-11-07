@@ -342,6 +342,21 @@ export class GitHub {
     return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
   }
 
+  /**
+   * The CI results for a commit: GitHub's check runs, or, when the token may not read them (a
+   * fine-grained PAT has no Checks permission), the GitHub Actions runs for the commit (Actions: read).
+   */
+  private async checkRuns(repo: Repo, sha: string, perPage = 100): Promise<{ name: string; status: string; conclusion: string | null; html_url: string | null }[]> {
+    const t = this.mustTarget(repo);
+    try {
+      return (await this.gh(repo).checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage })).data.check_runs;
+    } catch (e) {
+      if ((e as { status?: number }).status !== 403) throw e;
+      const { data } = await this.gh(repo).actions.listWorkflowRunsForRepo({ owner: t.owner, repo: t.repo, head_sha: sha, per_page: perPage });
+      return data.workflow_runs.map((r) => ({ name: r.name ?? 'workflow', status: r.status ?? 'queued', conclusion: r.conclusion ?? null, html_url: r.html_url }));
+    }
+  }
+
   /** The worker that holds a PR's branch: its session's. */
   private workerOf(pr: PullRequest) {
     return this.store.session(pr.session_id)?.worker_id ?? null;
@@ -441,9 +456,7 @@ export class GitHub {
         return;
       }
     }
-    const checks = pr.head_sha && !pr.local
-      ? (await this.gh(repo).checks.listForRef({ owner: this.mustTarget(repo).owner, repo: this.mustTarget(repo).repo, ref: pr.head_sha, per_page: 100 })).data.check_runs
-      : [];
+    const checks = pr.head_sha && !pr.local ? await this.checkRuns(repo, pr.head_sha) : [];
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
@@ -529,7 +542,7 @@ export class GitHub {
       this.gh(repo).pulls.get({ ...o, pull_number: pr.number }),
       this.gh(repo).paginate(this.gh(repo).pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
       pr.head_sha
-        ? this.gh(repo).checks.listForRef({ ...o, ref: pr.head_sha, per_page: 50 }).then((r) => r.data.check_runs).catch(() => [])
+        ? this.checkRuns(repo, pr.head_sha, 50).catch(() => [])
         : Promise.resolve([]),
     ]);
     return {
