@@ -2,7 +2,17 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkerConfig } from '../src/worker/config.ts';
+import { loadWorkerConfig, serverGithubAccount } from '../src/worker/config.ts';
+
+describe('GitHub account per server', () => {
+  it("uses the project's account, else the first one the server is allowed, else the worker's default", () => {
+    expect(serverGithubAccount({ github_accounts: ['ey'] }, 'other')).toBe('other');
+    expect(serverGithubAccount({ github_accounts: ['ey', 'personal'] }, null)).toBe('ey');
+    expect(serverGithubAccount({ github_accounts: ['ey'] }, undefined)).toBe('ey');
+    expect(serverGithubAccount({ github_accounts: null }, null)).toBeNull();
+    expect(serverGithubAccount({ github_accounts: [] }, null)).toBeNull();
+  });
+});
 
 describe('worker config', () => {
   it("without a file, today's environment is a config with one server", () => {

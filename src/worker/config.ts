@@ -45,6 +45,15 @@ export interface WorkerConfig {
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+/**
+ * The GitHub account for work from one server: the one the project names, else the first account
+ * worker.json allows for that server, else null (the worker's first account). So a worker serving a
+ * personal and a work server can default each to its own account.
+ */
+export function serverGithubAccount(entry: Pick<ServerEntry, 'github_accounts'>, name: string | null | undefined): string | null {
+  return name || entry.github_accounts?.[0] || null;
+}
+
 const releasesSchema = z.array(z.object({
   /** owner/name, a repo name, or a local path */
   repo: z.string().min(1),

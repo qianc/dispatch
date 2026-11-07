@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
-import type { ServerEntry } from './config.ts';
+import { serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
@@ -92,7 +92,9 @@ export class ServerLink {
     this.shared = shared;
     const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
     // this server's hosted repos are at its own address, with this worker's token for it
-    this.workspaces = new Workspaces(root, shared.remoteBase, shared.gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
+    // git for a repo of this server: the project's GitHub account, else the first this server is allowed here
+    const gitEnv = (repo: Repo) => shared.gitEnv?.({ ...repo, github_account: serverGithubAccount(entry, repo.github_account) }) ?? {};
+    this.workspaces = new Workspaces(root, shared.remoteBase, gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
     // agents get no worker token: they commit, and the worker pushes hosted branches (pushHostedBranches)
     this.opts = { ...shared.opts, assistantReadDirs: entry.read_dirs };
   }
@@ -242,6 +244,8 @@ export class ServerLink {
     // a release runs the command and notes of this worker's own config, never what a server sends
     const cap = spec.kind === 'release' ? this.releaseCapability(spec) : undefined;
     if (cap && spec.release) spec = { ...spec, release: { ...spec.release, command: cap.command, notes: cap.notes } };
+    // the agent's gh and git: the project's GitHub account, else the first this server is allowed here
+    spec = { ...spec, github_account: serverGithubAccount(this.entry, spec.github_account) };
     // the worker owns its slots: a new agent session waits when they are all taken (by any server)
     if (isStart && !CHAT_KINDS.includes(spec.kind) && !this.shared.slots.has(this.slotKey(id)) && this.shared.slots.free <= 0) {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'refused', session_id: id, reason: 'busy' } satisfies WorkerToServer));
