@@ -98,6 +98,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
 
   'POST /api/projects': 'admin',
   'PATCH /api/projects/:key': 'admin',
+  'POST /api/projects/:key/disable': 'admin',
+  'POST /api/projects/:key/enable': 'admin',
   'POST /api/projects/:key/repos': 'admin',
   'PATCH /api/repos/:id': 'admin',
   'DELETE /api/repos/:id': 'admin',
@@ -132,6 +134,12 @@ export interface Principal {
   /** the request came from this machine (not through the proxy or the LAN) */
   local: boolean;
   token_id?: number;
+}
+
+/** Who did something, for the record: a user name, "token ci", "OAuth Claude Code". */
+export function principalName(who: Principal | undefined): string {
+  if (!who) return 'you';
+  return who.kind === 'user' ? who.name : `${who.kind === 'token' ? 'token' : 'OAuth'} ${who.name}`;
 }
 
 export interface ApiToken {

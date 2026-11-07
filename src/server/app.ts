@@ -41,6 +41,7 @@ import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
 import { Scheduler } from './scheduler.ts';
+import { disabledMessage, refusedWrite } from './projectLock.ts';
 
 
 declare module 'fastify' {
@@ -156,6 +157,14 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
       return reply.status(403).send({ error: need === 'user' ? 'Only a signed-in person can do this, not a token.' : `This needs the "${need}" scope${who.kind === 'token' && !who.local ? ' (tokens used from another machine are limited to read and tracker)' : ''}.` });
     }
     req.principal = who;
+  });
+
+  // A disabled project is read-only (DISP-59): its write routes are refused, whoever asks.
+  app.addHook('preHandler', async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith('/api/')) return;
+    const p = refusedWrite(store, req.method, route, req.params as Record<string, string>);
+    if (p) return reply.status(423).send({ error: disabledMessage(p) });
   });
 
   // "Sign in again": behind a sign-in proxy this path goes through its login, then back into the app

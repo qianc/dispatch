@@ -76,6 +76,8 @@ export class Scheduler {
   tick(now = new Date()) {
     for (const s of this.store.schedules()) {
       const slot = due(s, now);
+      // a disabled project's schedules are switched off; this is in case one was missed (DISP-59)
+      if (slot && this.store.project(s.project_id)?.disabled) continue;
       if (!slot) continue;
       // marked first: a slot never runs twice, even if starting it throws
       this.store.updateSchedule(s.id, { last_slot: slot.toISOString() });

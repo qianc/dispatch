@@ -51,6 +51,9 @@ function toProject(r: Row): Project {
     icon: (r.icon as string | null) ?? null,
     worker_id: numOrNull(r.worker_id),
     placement_md: String(r.placement_md ?? ''),
+    disabled: bool(r.disabled),
+    disabled_at: (r.disabled_at as string | null) ?? null,
+    disabled_by: (r.disabled_by as string | null) ?? null,
     created_at: String(r.created_at),
   };
 }
@@ -179,14 +182,14 @@ export class Store {
     const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
     );
     return this.project(lastId)!;
   }
-  updateProject(id: number, patch: Partial<Omit<Project, 'id' | 'key' | 'created_at'>>): Project {
+  updateProject(id: number, patch: Partial<Omit<Project, 'id' | 'key' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by'>>): Project {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(
@@ -194,6 +197,23 @@ export class Store {
       n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
       n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, id,
     );
+    return this.project(id)!;
+  }
+  /**
+   * Disable a project (read-only, DISP-59) or enable it again. Disabling switches off its enabled
+   * schedules and marks them; enabling switches the marked ones back on, with `resume` setting
+   * what else changes on them (the slot that passed meanwhile does not run).
+   */
+  setDisabled(id: number, by: string | null, resume: (s: Schedule) => Partial<Schedule> = () => ({})): Project {
+    this.db.tx(() => {
+      if (by !== null) {
+        this.db.run('UPDATE projects SET disabled = 1, disabled_at = ?, disabled_by = ? WHERE id = ?', now(), by, id);
+        this.db.run('UPDATE schedules SET enabled = 0, paused_by_disable = 1, updated_at = ? WHERE project_id = ? AND enabled = 1', now(), id);
+        return;
+      }
+      this.db.run('UPDATE projects SET disabled = 0, disabled_at = NULL, disabled_by = NULL WHERE id = ?', id);
+      for (const s of this.schedules(id).filter((x) => x.paused_by_disable)) this.updateSchedule(s.id, { ...resume(s), enabled: true, paused_by_disable: false });
+    });
     return this.project(id)!;
   }
   isMuted(projectId: number) {
@@ -554,6 +574,7 @@ export class Store {
       max_batches: Number(r.max_batches),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       enabled: bool(r.enabled),
+      paused_by_disable: bool(r.paused_by_disable),
       last_slot: (r.last_slot as string | null) ?? null,
       last_session_id: numOrNull(r.last_session_id),
       last_error: (r.last_error as string | null) ?? null,

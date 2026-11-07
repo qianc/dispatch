@@ -30,6 +30,7 @@ import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import { labelReleased } from './releases.ts';
 import { placementProblem } from './repos.ts';
+import { assertWritable, disabledMessage } from './projectLock.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
@@ -109,6 +110,8 @@ const SCHEDULED_START = ['triage', 'backlog', 'todo'];
 const SCHEDULED_SET = ['triage', 'backlog', 'todo', 'hold', 'canceled'];
 /** at most this many items from a cross-project search (DISP-55) */
 const CROSS_SEARCH_MAX = 20;
+/** The agents' `dispatch` tools that change their project: refused while it is disabled (DISP-59). */
+const RPC_WRITES = ['attach_image', 'add_comment', 'add_to_batch', 'create_item', 'release_items', 'update_item', 'propose'];
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -281,6 +284,7 @@ export class Sessions {
   }
 
   startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }): Session {
+    assertWritable(this.store, project.id);
     this.assertProposalOpen(input.proposal);
     let requested = input.options?.worker_id ?? null;
     if (!requested && input.worker) {
@@ -386,6 +390,7 @@ export class Sessions {
   discussSend(itemId: number, text: string, images: string[] = []): Session {
     const item = this.store.item(itemId);
     if (!item) throw new SessionError('Unknown item', 404);
+    assertWritable(this.store, item.project_id);
     return this.chatSend(this.currentDiscuss(itemId), (prompt) => this.store.createSession({
       project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
       initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
@@ -399,6 +404,7 @@ export class Sessions {
   }
 
   startPlanner(project: Project, input: { prompt: string; source_id: number | null; proposal?: { session_id: number; event_id: number } }): Session {
+    assertWritable(this.store, project.id);
     this.assertProposalOpen(input.proposal);
     const source = input.source_id ? this.store.source(input.source_id) : null;
     if (input.source_id && (!source || source.project_id !== project.id)) throw new SessionError('Unknown source', 404);
@@ -422,6 +428,7 @@ export class Sessions {
    * run of a schedule at a time.
    */
   startScheduled(project: Project, schedule: Schedule): Session {
+    assertWritable(this.store, project.id);
     const open = this.store.sessions({ project_id: project.id, kind: 'planner' }).find((s) => s.schedule_id === schedule.id && !FINAL_STATUSES.includes(s.status));
     if (open) throw new SessionError(`The last run of "${schedule.name}" (#${open.id}) has not finished yet.`, 409);
     if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
@@ -479,6 +486,7 @@ export class Sessions {
    * a session's merged branch as deletable, and a release works on the default branch itself.
    */
   startRelease(project: Project, input: { workerId: number; repo: Repo; release: ReleaseInfo; items: Item[] }): Session {
+    assertWritable(this.store, project.id);
     const live = this.store.sessions({ project_id: project.id, kind: 'release' })
       .find((s) => !FINAL_STATUSES.includes(s.status) && s.release?.repo_id === input.repo.id);
     if (live) throw new SessionError(`Release #${live.id} of ${input.repo.github_name} is not finished yet.`, 409);
@@ -742,6 +750,8 @@ export class Sessions {
       if (!img) throw new Error(`No pasted image ${file} in this chat`);
       return { mime: img.type, data: img.data.toString('base64') };
     }
+    // a disabled project (DISP-59): the agent reads, but writes nothing (the assistant: checked per project)
+    if (s.kind !== 'assistant' && RPC_WRITES.includes(method)) assertWritable(this.store, s.project_id);
     if (method === 'attach_image') return this.attachChatImage(s, p);
     // the assistant reads and comments on items of any project (by key)
     if (s.kind === 'assistant' && (method === 'get_item' || method === 'add_comment' || method === 'get_image')) return this.itemRpc(s, method, p, null);
@@ -870,6 +880,7 @@ export class Sessions {
       }
       case 'comment': {
         const it = this.itemByKey(asked.key, project);
+        assertWritable(this.store, project);
         const c = this.store.addComment(it.id, 'claude', asked.body ?? '', s.id);
         this.bus.emit({ t: 'item', item: this.store.item(it.id)! });
         this.addEvent(s.id, { kind: 'system', text: `Commented on ${it.key} (approved)` });
@@ -911,6 +922,7 @@ export class Sessions {
       }
       case 'add_comment': {
         const it = this.itemByKey(p.key, project);
+        assertWritable(this.store, it.project_id);
         const c = this.store.addComment(it.id, 'claude', String(p.body ?? ''), s.id);
         this.bus.emit({ t: 'item', item: this.store.item(it.id)! });
         return c;
@@ -928,6 +940,7 @@ export class Sessions {
     const img = CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
     if (!img) throw new Error(`No pasted image ${file} in this chat. Use the name from its "[pasted image …]" marker.`);
     const item = this.itemByKey(p.key, s.kind === 'assistant' ? null : this.store.project(s.project_id!)!);
+    assertWritable(this.store, item.project_id);
     const commentId = p.comment_id ? Number(p.comment_id) : null;
     if (commentId !== null && !this.store.comments(item.id).some((c) => c.id === commentId)) throw new Error(`Comment ${commentId} is not on ${item.key}`);
     const saved = this.attachments!.saveItemImage(item.id, img.data)!;
@@ -1099,6 +1112,12 @@ export class Sessions {
       };
       if (next.paused) {
         wait('Paused');
+        continue;
+      }
+      // a disabled project (DISP-59): its queued sessions wait until it is enabled
+      const owner = next.project_id ? this.store.project(next.project_id) : undefined;
+      if (owner?.disabled) {
+        wait(disabledMessage(owner));
         continue;
       }
       // an "after" batch first waits for the earlier batch, wherever that runs
