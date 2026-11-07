@@ -9,6 +9,7 @@ import type { Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import { addLocalRepo, looksLikePath, mergeNote } from './repos.ts';
+import { assertWritable } from './projectLock.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
 export function parseRepo(input: string): { owner: string; name: string } {
@@ -49,6 +50,13 @@ export class AssistantTools {
   private project(key: unknown): Project {
     const p = this.store.projectByKey(String(key ?? ''));
     if (!p) throw new Error(`No project with key ${String(key)}. Use list_projects to see keys.`);
+    return p;
+  }
+
+  /** A project the tool changes: refused while it is disabled (DISP-59). */
+  private writable(key: unknown): Project {
+    const p = this.project(key);
+    assertWritable(this.store, p);
     return p;
   }
 
@@ -148,7 +156,7 @@ export class AssistantTools {
       }
 
       case 'update_project': {
-        const project = this.project(p.key);
+        const project = this.writable(p.key);
         const patch = z.object({
           name: z.string().min(1).optional(),
           description: z.string().optional(),
@@ -162,10 +170,10 @@ export class AssistantTools {
       }
 
       case 'add_repo':
-        return this.addRepo(this.project(p.project_key), String(p.repo ?? ''), p.default_branch ? String(p.default_branch) : undefined, p.check_command ? String(p.check_command) : null);
+        return this.addRepo(this.writable(p.project_key), String(p.repo ?? ''), p.default_branch ? String(p.default_branch) : undefined, p.check_command ? String(p.check_command) : null);
 
       case 'remove_repo': {
-        const project = this.project(p.project_key);
+        const project = this.writable(p.project_key);
         const { owner, name } = parseRepo(String(p.repo ?? ''));
         const repo = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === owner.toLowerCase() && r.github_name.toLowerCase() === name.toLowerCase());
         if (!repo) throw new Error(`${owner}/${name} is not in ${project.key}`);
@@ -184,7 +192,7 @@ export class AssistantTools {
       }
 
       case 'create_items': {
-        const project = this.project(p.project_key);
+        const project = this.writable(p.project_key);
         const items = z.array(z.object({
           type: z.enum(['backlog', 'bug']).default('backlog'),
           title: z.string().min(1).max(200),
@@ -212,6 +220,7 @@ export class AssistantTools {
       case 'update_item': {
         const it = this.item(p.key);
         const project = this.store.project(it.project_id)!;
+        assertWritable(this.store, project);
         const patch: Parameters<Store['updateItem']>[1] = {};
         if (p.title) patch.title = String(p.title);
         if (p.body_md !== undefined) patch.body_md = String(p.body_md);
@@ -229,7 +238,7 @@ export class AssistantTools {
       }
 
       case 'create_source': {
-        const project = this.project(p.project_key);
+        const project = this.writable(p.project_key);
         const input = z.object({
           kind: z.enum(SOURCE_KINDS).default('retro'),
           title: z.string().min(1),
@@ -243,7 +252,7 @@ export class AssistantTools {
       }
 
       case 'import_sections': {
-        const project = this.project(p.project_key);
+        const project = this.writable(p.project_key);
         const sections = p.sections as MdSection[];
         if (!Array.isArray(sections) || !sections.length) throw new Error('No sections to import');
         const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null };
@@ -283,7 +292,7 @@ export class AssistantTools {
       }
 
       case 'propose_session': {
-        const project = this.project(p.project_key);
+        const project = this.writable(p.project_key);
         if (p.type === 'planner') return this.sessions.propose(s, { type: 'planner', project_key: project.key, prompt: String(p.prompt ?? '') });
         const keys = Array.isArray(p.item_keys) ? (p.item_keys as unknown[]) : [];
         const ids = keys.map((k) => this.item(k)).map((it) => {

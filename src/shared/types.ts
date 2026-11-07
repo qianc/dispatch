@@ -48,6 +48,11 @@ export interface Project {
   worker_id: number | null;
   /** prose for the planner: when to use which worker */
   placement_md: string;
+  /** read-only (DISP-59): writes are refused, schedules paused, queued sessions wait */
+  disabled: boolean;
+  disabled_at: string | null;
+  /** who disabled it: a user, token or OAuth client name */
+  disabled_by: string | null;
   created_at: string;
 }
 
@@ -227,6 +232,8 @@ export interface Schedule {
   /** run options for the batches it starts */
   options: RunOptions;
   enabled: boolean;
+  /** switched off because its project is disabled; enabling the project switches it back on */
+  paused_by_disable: boolean;
   /** the last slot (ISO time) that ran or was passed over: each slot runs once */
   last_slot: string | null;
   last_session_id: number | null;

@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
+import { assertWritable, setDisabled } from '../projectLock.ts';
+import { principalName } from '../access.ts';
 import { addHostedRepo, addLocalRepo, mergeNote, ownerName, setPlacement } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus, hosted }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus, hosted, sessions }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -48,6 +50,8 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const p = project((req.params as { key: string }).key);
     const patch = projectPatch.extend({ muted: z.boolean().optional() }).parse(req.body);
     const { muted, ...rest } = patch;
+    // a disabled project can still be muted; nothing else of it changes
+    if (Object.values(rest).some((v) => v !== undefined)) assertWritable(store, p);
     if (rest.github_account && !github.accounts.some((a) => a.name === rest.github_account)) {
       throw new HttpError(400, `Unknown GitHub account "${rest.github_account}" (configured: ${github.accounts.map((a) => a.name).join(', ') || 'none'})`);
     }
@@ -62,6 +66,19 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     if (muted !== undefined) store.setMuted(p.id, muted);
     const updated = store.updateProject(p.id, rest);
     bus.emit({ t: 'project', key: p.key });
+    return { ...updated, muted: store.isMuted(p.id), repos: store.repos(p.id) };
+  });
+
+  // read-only (DISP-59): one click each way; who and when are kept on the project
+  app.post('/api/projects/:key/disable', async (req) => {
+    const p = project((req.params as { key: string }).key);
+    const updated = p.disabled ? p : setDisabled({ store, bus, sessions }, p, principalName(req.principal));
+    return { ...updated, muted: store.isMuted(p.id), repos: store.repos(p.id) };
+  });
+
+  app.post('/api/projects/:key/enable', async (req) => {
+    const p = project((req.params as { key: string }).key);
+    const updated = p.disabled ? setDisabled({ store, bus, sessions }, p, null) : p;
     return { ...updated, muted: store.isMuted(p.id), repos: store.repos(p.id) };
   });
 

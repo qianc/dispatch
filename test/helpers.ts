@@ -32,8 +32,9 @@ export async function startServer(env: Record<string, string> = {}) {
 export function startWorker(port: number, env: Record<string, string> = {}): ChildProcess {
   const child = spawn(process.execPath, ['src/worker/main.ts'], {
     // WINDOWS_PATH off: test workers need no Windows tools, and asking Windows for its PATH is slow
-    // when many test workers start at once. REPO_ENV_DIR: none of this machine's own env files
-    env: { ...process.env, SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', WINDOWS_PATH: 'off', REPO_ENV_DIR: '/nonexistent/dispatch-repo-env', ...env },
+    // when many test workers start at once. REPO_ENV_DIR: none of this machine's own env files.
+    // WORKER_CONFIG: not this machine's worker config (it would connect to the real servers)
+    env: { ...process.env, WORKER_CONFIG: '', SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', WINDOWS_PATH: 'off', REPO_ENV_DIR: '/nonexistent/dispatch-repo-env', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr?.on('data', (d) => process.env.DEBUG_WORKER && process.stderr.write(d));

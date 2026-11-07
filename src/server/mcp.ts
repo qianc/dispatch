@@ -12,6 +12,7 @@ import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { OAuth } from './oauth.ts';
 import { labelReleased } from './releases.ts';
+import { assertWritable } from './projectLock.ts';
 import type { Store } from './store.ts';
 
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
@@ -35,6 +36,11 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     const p = store.projectByKey(key.toUpperCase());
     if (!p) throw new Error(`No project ${key}. list_projects shows the keys.`);
     return p;
+  };
+  /** A project, or an item's project, that a tool changes: refused while it is disabled (DISP-59). */
+  const writable = <T extends Project | Item>(x: T): T => {
+    assertWritable(store, 'project_id' in x ? x.project_id : x);
+    return x;
   };
   const item = (key: string): Item => {
     const [pk, n] = key.toUpperCase().split(/-(?=\d+$)/);
@@ -142,7 +148,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
       source_id: z.number().int().nullable().optional(),
     },
   }, guard(true, (a: { project: string; title: string; type: 'backlog' | 'bug'; description: string; importance?: number | string; effort?: number | string | null; tags: string[]; modules: string[]; status?: Item['status']; source_id?: number | null }) => {
-    const p = project(a.project);
+    const p = writable(project(a.project));
     const it = store.createItem(p.id, {
       type: a.type, title: a.title, body_md: a.description, status: a.status ?? (a.type === 'bug' ? 'triage' : 'backlog'),
       importance: scaled(p, 'importance', a.importance) ?? 2, effort: scaled(p, 'effort', a.effort) ?? null,
@@ -168,7 +174,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
       modules: z.array(z.string()).optional(),
     },
   }, guard(true, (a: { key: string; title?: string; description?: string; type?: 'backlog' | 'bug'; status?: Item['status']; importance?: number | string; effort?: number | string | null; tags?: string[]; add_tags?: string[]; remove_tags?: string[]; modules?: string[] }) => {
-    const it = item(a.key);
+    const it = writable(item(a.key));
     const p = store.project(it.project_id)!;
     let labels = a.tags ?? it.labels;
     if (a.add_tags || a.remove_tags) {
@@ -197,7 +203,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     description: 'Comment on an item: findings, decisions, what changed (with commit or branch).',
     inputSchema: { key: z.string(), text: z.string().min(1) },
   }, guard(true, (a: { key: string; text: string }) => {
-    const it = item(a.key);
+    const it = writable(item(a.key));
     store.addComment(it.id, AUTHOR, a.text);
     emit(store.item(it.id)!);
     return text(`Commented on ${it.key}`);
@@ -215,7 +221,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
       skill_name: z.string().nullable().optional(),
     },
   }, guard(true, (a: { project: string; title: string; kind: 'retro' | 'skill_run' | 'user_report' | 'manual'; text: string; reporter?: string | null; version_tag?: string | null; skill_name?: string | null }) => {
-    const s = store.createSource(project(a.project).id, { kind: a.kind, title: a.title, body_md: a.text, reporter: a.reporter ?? null, version_tag: a.version_tag ?? null, skill_name: a.skill_name ?? null });
+    const s = store.createSource(writable(project(a.project)).id, { kind: a.kind, title: a.title, body_md: a.text, reporter: a.reporter ?? null, version_tag: a.version_tag ?? null, skill_name: a.skill_name ?? null });
     return text({ source_id: s.id });
   }));
 
@@ -233,7 +239,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     description: `Label done items with a release (e.g. rel:v1.4.0) after the changelog is written. Without keys: the done items with no release label that were done since the last release. That date is since if given (YYYY-MM-DD or ISO date and time), else it comes from the release labels. With no date and more than ${MANY_RELEASE_ITEMS} items it refuses: pass since or keys. since applies only without keys.`,
     inputSchema: { project: z.string(), version: z.string().min(1), keys: z.array(z.string()).optional(), prefix: z.string().default('rel:'), since: z.string().optional() },
   }, guard(true, (a: { project: string; version: string; keys?: string[]; prefix: string; since?: string }) => {
-    const p = project(a.project);
+    const p = writable(project(a.project));
     const targets = labelReleased(store, p.id, a.prefix, a.version, a.keys?.map(item), emit, a.since);
     return text({ released: targets.map((i) => i.key), label: `${a.prefix}${a.version}` });
   }));

@@ -43,7 +43,7 @@ export function Schedules({ project }: { project: ProjectSummary }) {
                 <span className="text-[13px] text-muted shrink-0">{s.at_time} · {daysLabel(s.days)}</span>
               </div>
               <div className="text-[13px] text-muted mt-0.5 truncate">
-                {s.enabled ? (s.next_run ? `Next: ${when(s.next_run)}` : '') : 'Off'}
+                {s.enabled ? (s.next_run ? `Next: ${when(s.next_run)}` : '') : s.paused_by_disable ? 'Paused: project disabled' : 'Off'}
                 {s.last_error ? <span className="text-bad"> · Last run failed: {s.last_error}</span>
                   : s.last_session ? <> · Last: {s.last_session.last_text ?? s.last_session.status}</> : null}
               </div>
