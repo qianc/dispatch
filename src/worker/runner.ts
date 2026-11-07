@@ -6,6 +6,8 @@ import type { CrossProjectRequest, InputAnswer, PendingInputPayload, Question, S
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
 import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
+import { loginNotice } from './login.ts';
+import type { LoginHelp } from '../shared/accounts.ts';
 import { existsSync, globSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -46,8 +48,8 @@ export interface RunnerOptions {
   /** environment for a session's Claude process (its Claude account, its project's GitHub account) */
   sessionEnv?: (spec: StartSpec) => Record<string, string | undefined>;
   accountLabel?: (name: string | null) => string;
-  /** how to fix a login for an account (shown in the notice) */
-  loginHint?: (name: string | null) => string;
+  /** Claude refused an account's login: the worker notes it, and says how to sign in again (DISP-60) */
+  loginFailed?: (name: string | null, error: string, detail: string) => LoginHelp;
   /** Folders the assistant may read (absolute, ~ expanded). */
   assistantReadDirs: string[];
   /** Folder whose .claude/skills holds the skills work sessions may load (see linkAgentSkills). */
@@ -391,6 +393,8 @@ export class ClaudeRunner implements AgentRunner {
 
   push(text: string) {
     this.clearIdle();
+    // a retry after signing in again: a login that fails again is news again (DISP-60)
+    for (const k of this.noticed) if (k.startsWith('login-')) this.noticed.delete(k);
     this.betweenTurns = false; // the server already marked the session running for this message
     this.sent++;
     this.input.push(text);
@@ -467,7 +471,7 @@ export class ClaudeRunner implements AgentRunner {
   private noticed = new Set<string>();
 
   /** Tell the owner once per kind: shown in the session and sent as a push. */
-  private noticeOnce(key: string, n: { title: string; body: string }) {
+  private noticeOnce(key: string, n: { title: string; body: string; login?: LoginHelp }) {
     if (this.noticed.has(key)) return;
     this.noticed.add(key);
     this.deps.emit({ t: 'notice', session_id: this.sessionId, ...n });
@@ -524,10 +528,11 @@ export class ClaudeRunner implements AgentRunner {
     if (m.type === 'assistant') {
       if (m.error && LOGIN_ERRORS.has(m.error)) {
         const label = this.opts.accountLabel?.(this.spec.claude_account) ?? 'Claude';
-        this.noticeOnce(`login-${m.error}`, {
-          title: `${label} account needs attention (${m.error.replace(/_/g, ' ')})`,
-          body: this.opts.loginHint?.(this.spec.claude_account) ?? 'Log in again on the worker machine.',
-        });
+        // Claude's own words ("Failed to authenticate: …"), kept for support
+        const detail = m.message.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n').trim();
+        this.noticeOnce(`login-${m.error}`, this.opts.loginFailed
+          ? loginNotice(this.opts.loginFailed(this.spec.claude_account, m.error, detail))
+          : { title: `${label} account needs attention (${m.error.replace(/_/g, ' ')})`, body: 'Log in again on the worker machine.' });
       }
       if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
       if (this.betweenTurns) {

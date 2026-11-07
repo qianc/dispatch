@@ -1,5 +1,6 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
 import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
+import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
   ACTIVE_STATUSES,
   CHAT_KINDS,
@@ -48,6 +49,8 @@ function overlaps(a: Proposal, b: Proposal): boolean {
 }
 
 /** Sent when a session's Claude conversation is picked up again without a message from the owner. */
+/** Sent when the owner signed the session's account in again and pressed Retry (DISP-60). */
+const LOGIN_RESUME_NOTE = 'Your Claude account was signed in again, and Dispatch resumed this session. Your last turn stopped on the sign-in error; continue where you stopped.';
 const RESUME_NOTE = 'The Dispatch worker restarted and this session was resumed. Any question you asked before was not answered; ask it again if you still need it, otherwise continue.';
 
 export class SessionError extends Error {
@@ -514,11 +517,52 @@ export class Sessions {
     const reopen = FINAL_STATUSES.includes(s.status);
     if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
       // its worker is away: the reply waits, and the session resumes with it when the worker is back
-      this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
+      this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, login_needed: null, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
       return;
     }
-    this.setStatus(sessionId, 'running', { ended_at: reopen ? null : s.ended_at, waiting_reason: null });
+    this.setStatus(sessionId, 'running', { ended_at: reopen ? null : s.ended_at, waiting_reason: null, login_needed: null });
+  }
+
+  /**
+   * Retry a session that stopped on a signed-out Claude account (DISP-60): ask its worker whether
+   * the account is signed in now. If it is, the session resumes where it stopped, with no message
+   * from the owner; if not, nothing runs and the answer says what is still missing.
+   */
+  async retryLogin(sessionId: number): Promise<{ resumed: boolean; account: ClaudeAccountInfo; session: Session }> {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
+    const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
+    if (!this.hub.isConnected(s.worker_id ?? -1)) throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
+    const account = await this.hub.cmd<ClaudeAccountInfo>(s.worker_id, { c: 'check_login', account: s.claude_account }, 20_000);
+    this.accountChecked(s.worker_id!, account);
+    if (account.logged_in === false) return { resumed: false, account, session: s };
+    this.addEvent(s.id, { kind: 'system', text: `${account.label} account is signed in on ${name}. The session resumes where it stopped.` });
+    // a conversation that exists goes on; one that never got going starts from its first message
+    const text = s.sdk_session_id ? LOGIN_RESUME_NOTE : s.pending_prompt ?? s.initial_prompt;
+    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
+      throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
+    }
+    this.setStatus(s.id, 'running', { ended_at: null, waiting_reason: null, login_needed: null, pending_prompt: s.sdk_session_id ? s.pending_prompt : null });
+    return { resumed: true, account, session: this.store.session(s.id)! };
+  }
+
+  /** Check whether a worker's Claude account is signed in now, and keep the answer (DISP-60). */
+  async checkAccount(workerId: number, account: string): Promise<ClaudeAccountInfo> {
+    const name = this.workers.get(workerId)?.name ?? 'the worker';
+    if (!this.hub.isConnected(workerId)) throw new SessionError(`Worker ${name} is not connected.`, 503);
+    if (!this.hub.claudeAccounts(workerId).some((a) => a.name === account)) throw new SessionError(`Worker ${name} has no Claude account "${account}".`, 404);
+    const info = await this.hub.cmd<ClaudeAccountInfo>(workerId, { c: 'check_login', account }, 20_000);
+    this.accountChecked(workerId, info);
+    return info;
+  }
+
+  /** A worker's account status changed: what the server knows of the worker says so too. */
+  private accountChecked(workerId: number, info: ClaudeAccountInfo) {
+    const facts = this.hub.facts(workerId);
+    if (!facts?.claude_accounts.some((a) => a.name === info.name)) return;
+    facts.claude_accounts = facts.claude_accounts.map((a) => (a.name === info.name ? { ...a, logged_in: info.logged_in, missing: info.missing ?? null } : a));
+    this.workers.seen(workerId, facts);
   }
 
   answer(inputId: number, answer: InputAnswer) {
@@ -555,7 +599,7 @@ export class Sessions {
         if (it.status === 'in_progress') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
       }
     }
-    this.setStatus(sessionId, status, { ended_at: new Date().toISOString(), waiting_reason: null });
+    this.setStatus(sessionId, status, { ended_at: new Date().toISOString(), waiting_reason: null, login_needed: null });
     this.onFinished?.(this.store.session(sessionId)!, status, cleanup);
     this.dispatch();
   }
@@ -614,6 +658,12 @@ export class Sessions {
     switch (msg.t) {
       case 'notice': {
         this.addEvent(s.id, { kind: 'error', text: `${msg.title}\n${msg.body}` });
+        if (msg.login) {
+          // the session shows the sign-in steps and Retry (DISP-60); the worker's account reads "needs sign-in"
+          const worker = this.workers.get(workerId)?.name;
+          this.emitSession(this.store.updateSession(s.id, { login_needed: { ...msg.login, ...(worker ? { worker } : {}) } }));
+          this.accountChecked(workerId, { name: msg.login.account ?? 'default', label: msg.login.label, kind: msg.login.kind, config_dir: msg.login.config_dir, logged_in: false, missing: 'Claude refused the sign-in.' });
+        }
         this.notify(s, `${s.project_key ?? 'Dispatch'}: ${msg.title}`, msg.body, `notice-${s.id}`);
         return;
       }

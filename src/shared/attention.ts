@@ -30,12 +30,14 @@ export function waitsOnOwner(a: Attention): boolean {
 }
 
 /**
- * What an idle session needs from you: a stuck merge, a review, a check after merging, a planning
+ * What an idle session needs from you: a signed-out Claude account, a stuck merge, a review, a check after merging, a planning
  * chat's proposal, or a reply; or nothing yet while auto-merge runs or a merge is under way.
  * `events`: the transcript, for planning chats (their open proposal cards). `mergingNow`: ids of
  * PRs being merged at this moment.
  */
-export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 'kind'>>, prs: PullRequest[], events: Pick<SessionEvent, 'id' | 'body'>[] = [], mergingNow: ReadonlySet<number> = new Set()): Attention {
+export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 'kind' | 'login_needed'>>, prs: PullRequest[], events: Pick<SessionEvent, 'id' | 'body'>[] = [], mergingNow: ReadonlySet<number> = new Set()): Attention {
+  // the work stopped on a signed-out account: sign it in and retry before anything else (DISP-60)
+  if (s.login_needed) return { kind: 'login', login: s.login_needed, text: `${s.login_needed.label} account needs sign-in on ${s.login_needed.worker ?? s.login_needed.host}, then Retry.` };
   const open = prs.filter((p) => p.state === 'open');
   // a batch can have the same branch in several repos: name the repo
   const label = (p: PullRequest) => (p.local ? `${p.repo_full_name.split('/').pop()} branch ${p.head_ref}` : `PR #${p.number}`);

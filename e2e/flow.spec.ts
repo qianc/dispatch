@@ -1,3 +1,4 @@
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 test('phone flow: project → items → batch → answer → planner card → start', async ({ page }) => {
@@ -476,7 +477,7 @@ test('two Claude accounts: settings, project limits, batch picker', async ({ pag
 
   await page.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByText('Private', { exact: true })).toBeVisible();
-  await expect(page.getByText('needs login')).toBeVisible(); // the work folder has no login
+  await expect(page.getByText('needs sign-in')).toBeVisible(); // the work folder has no login
   await page.getByRole('group', { name: 'Assistant runs on' }).getByRole('radio', { name: 'Work' }).click();
   await expect(page.getByRole('group', { name: 'Assistant runs on' }).getByRole('radio', { name: 'Work' })).toHaveAttribute('aria-checked', 'true');
 
@@ -494,6 +495,64 @@ test('two Claude accounts: settings, project limits, batch picker', async ({ pag
   await picker.getByRole('radio', { name: 'Work' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Start session' }).click();
   await expect(page.getByText('Claude: Work')).toBeVisible();
+});
+
+test('a session stopped on a signed-out account: steps, Retry while signed out, sign in, Retry resumes (DISP-60)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Password').fill('e2e-pass');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  // earlier tests leave sessions holding the fake worker's slots: stop them so this one starts
+  for (const old of await (await page.request.get('/api/sessions?status=queued,running,waiting_input,idle')).json()) {
+    await page.request.post(`/api/sessions/${old.id}/finish`, { data: { status: 'stopped' } });
+  }
+  await page.request.post('/api/projects', { data: { key: 'SIG', name: 'Signin' } });
+  await page.request.post('/api/projects/SIG/repos', { data: { github_owner: 'me', github_name: 'sig' } });
+  // the fake runner answers like Claude on an expired sign-in
+  const started = await (await page.request.post('/api/projects/SIG/batches', { data: { title: 'Signed out', prompt: 'Go [fake:signed-out]', options: { claude_account: 'work' } } })).json();
+  await page.goto(`/s/${started.id}`);
+
+  const panel = page.getByRole('region', { name: 'Sign in to continue' });
+  await expect(panel.getByRole('heading', { name: 'Sign in the Work account to continue' })).toBeVisible();
+  const steps = panel.getByRole('list', { name: 'Steps to sign in' }).getByRole('listitem');
+  await expect(steps).toHaveCount(4);
+  await expect(steps.nth(1)).toContainText('CLAUDE_CONFIG_DIR=/tmp/dispatch-e2e-work claude');
+  await expect(panel.getByRole('button', { name: 'Copy the command' })).toBeVisible();
+  // Retry comes before Mark as complete
+  const buttons = panel.getByRole('button', { name: /^(Retry|Mark as complete)$/ });
+  await expect(buttons.nth(0)).toHaveText('Retry');
+  await expect(buttons.nth(1)).toHaveText('Mark as complete');
+  await panel.getByText('Error details').click();
+  await expect(panel.getByText(/OAuth session expired and could not be refreshed/)).toBeVisible();
+
+  // still signed out: the panel stays and says what is missing
+  await panel.getByRole('button', { name: 'Retry' }).click();
+  await expect(panel.getByRole('status')).toContainText('No sign-in found in /tmp/dispatch-e2e-work');
+
+  // Settings shows the same steps on the account row
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await expect(page.getByText('needs sign-in')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Steps to sign in' })).toContainText('CLAUDE_CONFIG_DIR=/tmp/dispatch-e2e-work claude');
+
+  // the owner signs in on the worker machine (here: the credentials file /login writes)
+  mkdirSync('/tmp/dispatch-e2e-work', { recursive: true });
+  writeFileSync('/tmp/dispatch-e2e-work/.credentials.json', JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 } }));
+  try {
+    await page.getByRole('button', { name: 'Retry Work sign-in' }).click();
+    await expect(page.getByText('logged in', { exact: true }).last()).toBeVisible();
+    await expect(page.getByText('needs sign-in')).toHaveCount(0);
+
+    await page.goto(`/s/${started.id}`);
+    await page.getByRole('region', { name: 'Sign in to continue' }).getByRole('button', { name: 'Retry' }).click();
+    await expect(page.getByText(/The session resumes where it stopped/)).toBeVisible();
+    await expect(page.getByText(/\(fake\) You said: Your Claude account was signed in again/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Sign in to continue' })).toHaveCount(0);
+    // free the worker slot for the tests after this one
+    await page.request.post(`/api/sessions/${started.id}/finish`, { data: { status: 'stopped' } });
+  } finally {
+    // later tests expect the work account signed out
+    rmSync('/tmp/dispatch-e2e-work/.credentials.json', { force: true });
+  }
 });
 
 test('a second worker: made in Settings, picked on the batch sheet, waits while offline, can be paused', async ({ page }) => {

@@ -1,10 +1,10 @@
 // Worker: connects to its servers (WORKER_CONFIG, or one from the env), runs Claude sessions and git commands.
-import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
 import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
+import { Logins } from './login.ts';
 import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, type ClaudeAccountInfo } from '../shared/accounts.ts';
 
 const env = process.env;
@@ -23,13 +23,8 @@ const opts: RunnerOptions = {
     ...githubEnv(pick(ghAccounts, spec.github_account)),
   }),
   accountLabel: (name) => (name ? pick(clAccounts, name) : undefined)?.label ?? name ?? 'default',
-  loginHint: (name) => {
-    const a = name ? pick(clAccounts, name) : clAccounts[0];
-    const dir = a?.config_dir ?? (a?.kind === 'machine' ? '~/.claude' : join(configRoot, a?.name ?? 'default'));
-    return a?.kind === 'oauth_token' ? `Create a new token with \`claude setup-token\` and update CLAUDE_ACCOUNT_${(a.name).toUpperCase()}_OAUTH_TOKEN.`
-      : a?.kind === 'api_key' ? 'Check the API key in the worker env.'
-      : `On the worker machine run \`CLAUDE_CONFIG_DIR=${dir} claude\`, then /login. After that, send the session a message to resume.`;
-  },
+  // how to sign in again, and noted for the login check (DISP-60)
+  loginFailed: (name, error, detail) => logins.failedNow(name, error, detail),
   // local-only repos (agents push branches into them): off unless LOCAL_REPO_DIRS is set
   assistantModel: env.ASSISTANT_MODEL || 'haiku',
   discussModel: env.DISCUSS_MODEL || env.ASSISTANT_MODEL || 'haiku',
@@ -41,6 +36,8 @@ const opts: RunnerOptions = {
 const ghAccounts = githubAccounts(env);
 const clAccounts = claudeAccounts(env);
 const configRoot = resolve(env.WORKSPACES_DIR ?? './data/workspaces', 'claude-config');
+// whether each account is signed in: reads the config folder the sessions run with
+const logins = new Logins(clAccounts, process.env, configRoot);
 
 // Let git and gh (ours and the agent's) authenticate to GitHub without writing a token to disk.
 // Each repo's / session's account sets DISPATCH_GH_TOKEN; the first account is the fallback.
@@ -53,13 +50,9 @@ if (ghAccounts.length) {
   env.GIT_CONFIG_COUNT = String(n + 1);
 }
 
-/** Which Claude accounts this worker has, and whether a login is present (for the app; no secrets). */
+/** Which Claude accounts this worker has, and whether each is signed in (for the app; no secrets). */
 function claudeAccountInfo(): ClaudeAccountInfo[] {
-  return clAccounts.map((a) => {
-    const dir = a.config_dir ?? (a.kind === 'machine' ? join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? '', '.claude')) : null);
-    const logged_in = a.kind === 'oauth_token' || a.kind === 'api_key' ? true : dir ? existsSync(join(dir, '.credentials.json')) : null;
-    return { name: a.name, label: a.label, kind: a.kind, logged_in, config_dir: dir };
-  });
+  return clAccounts.map((a) => logins.info(a.name));
 }
 
 const cfg = loadWorkerConfig(env);
@@ -71,6 +64,7 @@ const links = cfg.servers.map((entry, i) => new ServerLink(entry, {
   first: i === 0,
   slots,
   claudeAccounts: claudeAccountInfo,
+  checkLogin: (name) => logins.info(name),
   githubAccounts: ghAccounts.map((a) => a.name),
   gitEnv: (repo) => githubEnv(pick(ghAccounts, repo.github_account)),
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { WorkerError } from '../workers.ts';
 import { HttpError, intParam, type Ctx } from './ctx.ts';
 
-export function workerRoutes(app: FastifyInstance, { workers, hub }: Ctx) {
+export function workerRoutes(app: FastifyInstance, { workers, hub, sessions }: Ctx) {
   const wrap = <T>(fn: () => T): T => {
     try {
       return fn();
@@ -28,6 +28,13 @@ export function workerRoutes(app: FastifyInstance, { workers, hub }: Ctx) {
     wrap(() => workers.revoke(id));
     hub.drop(id, 'worker revoked');
     return { ok: true };
+  });
+  // is this Claude account signed in on the worker now? (DISP-60)
+  app.post('/api/workers/:id/claude-accounts/:name/check', async (req) => {
+    const p = req.params as { id: string; name: string };
+    const id = intParam(p.id);
+    if (!workers.get(id)) throw new HttpError(404, 'Unknown worker');
+    return sessions.checkAccount(id, p.name);
   });
   app.put('/api/settings/default-worker', async (req) => {
     const { worker_id } = z.object({ worker_id: z.number().int() }).parse(req.body);

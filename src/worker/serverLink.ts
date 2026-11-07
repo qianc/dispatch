@@ -62,6 +62,8 @@ export interface LinkShared {
   first: boolean;
   slots: Slots;
   claudeAccounts: () => ClaudeAccountInfo[];
+  /** whether a Claude account is signed in now (DISP-60) */
+  checkLogin?: (name: string | null) => ClaudeAccountInfo;
   githubAccounts: string[];
   gitEnv: ConstructorParameters<typeof Workspaces>[2];
   remoteBase: string;
@@ -311,7 +313,7 @@ export class ServerLink {
         },
         ...extra,
       };
-      const runner: AgentRunner = this.shared.fake ? new FakeRunner(spec, deps) : new ClaudeRunner(spec, deps, this.opts);
+      const runner: AgentRunner = this.shared.fake ? new FakeRunner(spec, deps, this.opts) : new ClaudeRunner(spec, deps, this.opts);
       const queued = this.starting.get(id) ?? [];
       this.starting.delete(id);
       this.runners.set(id, runner);
@@ -356,8 +358,12 @@ export class ServerLink {
     const outside = folders.find((f) => !insideDirs(f, this.entry.local_repo_dirs, '/'));
     if (outside) throw new Error(`${outside} is outside the folders this worker allows for server ${this.entry.name}`);
     // leftovers / tidy only look at real folders, so they run in fake mode too
-    if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy'].includes(cmd.c)) return { ok: true };
+    if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy', 'check_login'].includes(cmd.c)) return { ok: true };
     switch (cmd.c) {
+      case 'check_login':
+        if (!this.allowedClaude(cmd.account)) throw new Error(`Claude account ${cmd.account ?? 'default'} is not one this worker uses for server ${this.entry.name}`);
+        if (!this.shared.checkLogin) throw new Error('This worker cannot check logins');
+        return this.shared.checkLogin(cmd.account);
       case 'release_version':
         return ws.releaseVersion(cmd.repo);
       case 'leftovers':

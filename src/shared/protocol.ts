@@ -1,5 +1,5 @@
 // Messages on the internal WebSocket between server and worker.
-import type { ClaudeAccountInfo } from './accounts.ts';
+import type { ClaudeAccountInfo, LoginHelp } from './accounts.ts';
 import type { CheckProgress } from './checkProgress.ts';
 import type { GeneratorItem } from './generatorItems.ts';
 import type { ReleaseInfo, WorkerFacts } from './types.ts';
@@ -77,6 +77,8 @@ export type WorkerCommand =
   /** remove a finished session's worktrees, and its branch where merged */
   /** the newest version tag on a repo's default branch, and its VERSION file */
   | { c: 'release_version'; repo: Repo }
+  /** is this Claude account signed in on the worker (DISP-60)? Answers a ClaudeAccountInfo */
+  | { c: 'check_login'; account: string | null }
   | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
 
 export type WorkerToServer =
@@ -85,8 +87,11 @@ export type WorkerToServer =
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */
   | { t: 'refused'; session_id: number; reason: string }
-  /** something the owner should know now (login needed, rate limit): shown in the session and pushed */
-  | { t: 'notice'; session_id: number; title: string; body: string }
+  /**
+   * something the owner should know now (login needed, rate limit): shown in the session and pushed.
+   * `login`: the session stopped because its account is not signed in (DISP-60)
+   */
+  | { t: 'notice'; session_id: number; title: string; body: string; login?: LoginHelp }
   | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string }
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }

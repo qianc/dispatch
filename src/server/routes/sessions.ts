@@ -145,6 +145,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     return store.session(s.id);
   });
 
+  // the session stopped on a signed-out Claude account: check it on the worker, and resume if signed in (DISP-60)
+  app.post('/api/sessions/:id/retry-login', async (req) => sessions.retryLogin(session((req.params as { id: string }).id).id));
+
   app.post('/api/sessions/:id/move', async (req) => {
     const { worker_id } = z.object({ worker_id: z.number().int() }).parse(req.body);
     return sessions.move(session((req.params as { id: string }).id).id, worker_id);
