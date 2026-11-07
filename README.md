@@ -55,6 +55,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
   has its own account setting. Secrets stay in env; see `.env.example`.
+- **Disable a project** (the lock on the project page, or its Settings): it becomes read-only. Every
+  write to it is refused (app, API, `/mcp` and the agents' tools) with a message that says how to
+  enable it; reads still work. Its schedules pause and come back as they were when you enable it.
+  Its queued sessions wait; a running session goes on until you stop it.
 - Links in item text open in the app: repo files (markdown rendered, images shown), and `#anchor`
   links to other items imported from the same backlog.
 
