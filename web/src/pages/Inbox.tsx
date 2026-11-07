@@ -10,8 +10,9 @@ import { NextSteps } from '../components/nextSteps.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
-const ORDER: Record<Idle['attention']['kind'], number> = { merge_blocked: 0, review: 1, proposal: 2, turn: 3, merged: 4, checking: 5, merging: 6 };
+const ORDER: Record<Idle['attention']['kind'], number> = { login: 0, merge_blocked: 1, review: 2, proposal: 3, turn: 4, merged: 5, checking: 6, merging: 7 };
 const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string; spin?: boolean }> = {
+  login: { tone: 'bad', label: 'Needs sign-in', icon: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3' },
   merge_blocked: { tone: 'bad', label: 'Merge stopped', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
   // in progress, like a running session: Dispatch checks and merges it, nothing to do yet
   checking: { tone: 'run', label: 'Checking', icon: 'M21 12a9 9 0 1 1-6.219-8.56', spin: true },

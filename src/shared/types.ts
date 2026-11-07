@@ -1,4 +1,4 @@
-import type { ClaudeAccountInfo } from './accounts.ts';
+import type { ClaudeAccountInfo, LoginHelp } from './accounts.ts';
 import type { CheckRun } from './checkProgress.ts';
 import { PROJECT_COLOR_NAMES, PROJECT_ICONS, type ProjectColor } from './projectLook.ts';
 import { z } from 'zod';
@@ -207,6 +207,8 @@ export interface Session {
   release: ReleaseInfo | null;
   /** planner sessions a schedule started (null: started by hand, or the schedule was deleted) */
   schedule_id: number | null;
+  /** it stopped because its Claude account is not signed in; cleared when it runs again (DISP-60) */
+  login_needed: LoginHelp | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -454,7 +456,9 @@ export type Attention =
   | { kind: 'merged'; text: string }
   /** a planning chat with a batch or items card you have not acted on yet */
   | { kind: 'proposal'; text: string; proposals: OpenProposal[] }
-  | { kind: 'turn'; text: string };
+  | { kind: 'turn'; text: string }
+  /** its Claude account must be signed in again on the worker, then Retry (DISP-60) */
+  | { kind: 'login'; text: string; login: LoginHelp };
 
 /** A batch or items card that is still on offer in a planning chat. */
 export interface OpenProposal { event_id: number; proposal: Extract<Proposal, { type: 'batch' } | { type: 'items' }> }

@@ -4,6 +4,7 @@ import type { Attention, OpenProposal } from '../../../src/shared/types.ts';
 import { api, type Project, type Repo } from '../api.ts';
 import { useChosenWorker, useRunOptions } from './batch.tsx';
 import { useCardPicks, useProposalActions } from './proposals.ts';
+import { SignInPanel } from './signIn.tsx';
 import { Button, ErrorText, cx } from './ui.tsx';
 
 interface Ask { label: string; text: string }
@@ -84,6 +85,15 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
   });
   const busy = send.isPending || complete.isPending;
   const asks = asksFor(attention);
+  // a signed-out account: Retry comes first, so the owner does not close the work by mistake (DISP-60)
+  if (attention.kind === 'login') {
+    return (
+      <div className={cx(compact ? '' : 'mt-2.5')}>
+        <SignInPanel sessionId={sessionId} help={attention.login} busy={busy} onComplete={() => complete.mutate()} />
+        <ErrorText error={complete.error} />
+      </div>
+    );
+  }
   return (
     <div className={cx('flex flex-wrap gap-2', compact ? '' : 'mt-2.5')}>
       {attention.kind === 'merged' && (

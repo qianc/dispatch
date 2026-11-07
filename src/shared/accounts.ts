@@ -37,6 +37,32 @@ export interface ClaudeAccountInfo {
   /** null when it cannot be told without trying */
   logged_in: boolean | null;
   config_dir: string | null;
+  /** when not logged in: what is still missing, in words (DISP-60) */
+  missing?: string | null;
+}
+
+/**
+ * A session stopped because its Claude account is not signed in (DISP-60): what the owner needs
+ * to sign it in again. No secrets.
+ */
+export interface LoginHelp {
+  /** the account's name (null: the worker's legacy default login) */
+  account: string | null;
+  label: string;
+  kind: ClaudeAccountKind;
+  /** the folder the worker runs Claude with: the login must land there */
+  config_dir: string | null;
+  /** what to run on the worker machine, then /login (null for token and API key accounts) */
+  command: string | null;
+  /** for token and API key accounts, which /login cannot fix: what to do instead */
+  fix: string | null;
+  /** Claude's error code, e.g. authentication_failed */
+  error: string;
+  /** Claude's own words for it, for support */
+  detail: string;
+  /** the worker machine's host name, and the worker's name (the server adds that) */
+  host: string;
+  worker?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -79,6 +105,20 @@ export function claudeAccounts(env: Env): ClaudeAccount[] {
 }
 
 /**
+ * The config folder a Claude process on this account runs with, as claudeEnv sets it: its login
+ * lives there, so the login check reads the same folder the session uses (DISP-60).
+ */
+export function claudeConfigDir(account: ClaudeAccount | undefined, base: Env, fallbackConfigDir: (name: string) => string): string {
+  if (!account || (account.name === 'default' && !account.config_dir)) return base.CLAUDE_CONFIG_DIR ?? `${base.HOME ?? '~'}/.claude`;
+  return account.config_dir ?? fallbackConfigDir(account.name);
+}
+
+/** The command that opens Claude on this config folder, to run /login in. */
+export function loginCommand(configDir: string): string {
+  return `CLAUDE_CONFIG_DIR=${/[\s'"$`\\]/.test(configDir) ? `'${configDir.replace(/'/g, `'\\''`)}'` : configDir} claude`;
+}
+
+/**
  * Environment for a Claude process on this account. The legacy "default" account leaves the
  * environment as it is (existing sessions resume from ~/.claude). Others get their own config
  * folder, so work and private transcripts, memory and logins never mix.
@@ -89,7 +129,7 @@ export function claudeEnv(account: ClaudeAccount | undefined, base: Env, fallbac
   const env: Env = { ...base };
   delete env.CLAUDE_CODE_OAUTH_TOKEN;
   delete env.ANTHROPIC_API_KEY;
-  env.CLAUDE_CONFIG_DIR = account.config_dir ?? fallbackConfigDir(account.name);
+  env.CLAUDE_CONFIG_DIR = claudeConfigDir(account, base, fallbackConfigDir);
   if (account.oauth_token) env.CLAUDE_CODE_OAUTH_TOKEN = account.oauth_token;
   if (account.api_key) env.ANTHROPIC_API_KEY = account.api_key;
   return env;

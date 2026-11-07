@@ -5,6 +5,8 @@ import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
 import { Button, Card, Chip, ErrorText, Field, Section, Segmented, cx, inputCls } from '../components/ui.tsx';
 import { useWorkers, type WorkerRow } from '../workers.ts';
+import { SignInSteps } from '../components/signIn.tsx';
+import { loginCommand, type ClaudeAccountInfo } from '../../../src/shared/accounts.ts';
 import { getTheme, setTheme, type Theme } from '../theme.ts';
 import { currentSubscription, disablePush, enablePush, pushSupported } from '../push.ts';
 
@@ -136,28 +138,55 @@ const SCOPE_INFO: Record<string, string> = {
 };
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : 'never');
 
-/** A worker's own logins: its Claude accounts (with how to log in when one needs it) and GitHub accounts. */
+/** One Claude account on a worker: signed in or not, the steps to sign it in, and Retry to check (DISP-60). */
+function ClaudeAccountRow({ w, a }: { w: WorkerRow; a: ClaudeAccountInfo }) {
+  const qc = useQueryClient();
+  const check = useMutation({
+    mutationFn: () => api.post<ClaudeAccountInfo>(`/workers/${w.id}/claude-accounts/${encodeURIComponent(a.name)}/check`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['workers'] }),
+  });
+  const now = check.data ?? a;
+  const out = now.logged_in === false;
+  const tokenKind = a.kind === 'oauth_token' || a.kind === 'api_key';
+  return (
+    <div className="px-2.5 py-1.5">
+      <div className="flex items-center gap-2 text-[13px]">
+        <span className="text-muted shrink-0">Claude</span>
+        <span className="flex-1 min-w-0 truncate">{a.label}</span>
+        <Chip tone={out ? 'bad' : now.logged_in ? 'ok' : 'neutral'}>{out ? 'needs sign-in' : now.logged_in ? 'logged in' : a.kind}</Chip>
+        {w.connected && (
+          <Button small variant={out ? 'primary' : 'ghost'} disabled={check.isPending} onClick={() => check.mutate()} aria-label={`${out ? 'Retry' : 'Check'} ${a.label} sign-in`}>
+            {check.isPending ? 'Checking…' : out ? 'Retry' : 'Check'}
+          </Button>
+        )}
+      </div>
+      <div className="text-[12px] text-muted break-all">
+        {a.name} · {a.kind === 'config_dir' ? `login in ${a.config_dir}` : a.kind === 'oauth_token' ? 'setup-token' : a.kind === 'api_key' ? 'API key' : `login in ${a.config_dir ?? '~/.claude'}`}
+      </div>
+      {out && (
+        <div className="mt-1.5 mb-1">
+          <SignInSteps
+            worker={w.name} host={w.facts?.hostname}
+            command={!tokenKind && now.config_dir ? loginCommand(now.config_dir) : null}
+            fix={tokenKind ? now.missing ?? null : null}
+            last={w.connected ? 'Press Retry to check the sign-in.' : `Start the worker ${w.name}, then check here.`}
+          />
+          {now.missing && !tokenKind && <p role="status" className="mt-1.5 text-[12px] text-bad">Not signed in yet: {now.missing}</p>}
+        </div>
+      )}
+      <ErrorText error={check.error} />
+    </div>
+  );
+}
+
+/** A worker's own logins: its Claude accounts (with how to sign in when one needs it) and GitHub accounts. */
 function WorkerAccounts({ w }: { w: WorkerRow }) {
   const claude = w.facts?.claude_accounts ?? [];
   const github = w.facts?.github_accounts ?? [];
   if (!claude.length && !github.length) return null;
   return (
     <div className="mt-2 rounded-lg bg-bg border border-line divide-y divide-line">
-      {claude.map((a) => (
-        <div key={a.name} className="px-2.5 py-1.5">
-          <div className="flex items-center gap-2 text-[13px]">
-            <span className="text-muted shrink-0">Claude</span>
-            <span className="flex-1 min-w-0 truncate">{a.label}</span>
-            <Chip tone={a.logged_in === false ? 'bad' : a.logged_in ? 'ok' : 'neutral'}>{a.logged_in === false ? 'needs login' : a.logged_in ? 'logged in' : a.kind}</Chip>
-          </div>
-          <div className="text-[12px] text-muted break-all">
-            {a.name} · {a.kind === 'config_dir' ? `login in ${a.config_dir}` : a.kind === 'oauth_token' ? 'setup-token' : a.kind === 'api_key' ? 'API key' : `login in ${a.config_dir ?? '~/.claude'}`}
-          </div>
-          {a.logged_in === false && a.config_dir && (
-            <div className="text-[12px] text-wait mt-0.5">On {w.name}: <code>CLAUDE_CONFIG_DIR={a.config_dir} claude</code>, then /login</div>
-          )}
-        </div>
-      ))}
+      {claude.map((a) => <ClaudeAccountRow key={a.name} w={w} a={a} />)}
       {github.length > 0 && (
         <div className="px-2.5 py-1.5 flex items-center gap-2 text-[13px]">
           <span className="text-muted shrink-0">GitHub</span>

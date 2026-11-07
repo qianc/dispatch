@@ -27,6 +27,7 @@ export default async function setup() {
   rmSync('/tmp/dispatch-e2e', { recursive: true, force: true });
   rmSync(E2E_SRC, { recursive: true, force: true });
   rmSync(E2E_REPOS, { recursive: true, force: true });
+  rmSync('/tmp/dispatch-e2e-work', { recursive: true, force: true }); // the Work account starts signed out
   mkdirSync(E2E_REPOS, { recursive: true });
   mkdirSync(`${E2E_SRC}/docs`, { recursive: true });
   writeFileSync(`${E2E_SRC}/docs/triage.md`, '# Triage notes\n\nSee [the pic](pic.png).\n\n![diagram](pic.png)\n');

@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload } from '../shared/types.ts';
 import { releaseCommand } from './prompts.ts';
-import type { AgentRunner, RunnerDeps } from './runner.ts';
+import type { AgentRunner, RunnerDeps, RunnerOptions } from './runner.ts';
+import { loginNotice } from './login.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
 
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -19,10 +20,13 @@ export class FakeRunner implements AgentRunner {
   private turn = 0;
   private delay: number;
 
-  constructor(spec: StartSpec, deps: RunnerDeps, delayMs = Number(process.env.FAKE_DELAY_MS ?? 300)) {
+  private opts: Pick<RunnerOptions, 'loginFailed'>;
+
+  constructor(spec: StartSpec, deps: RunnerDeps, opts: Pick<RunnerOptions, 'loginFailed'> = {}, delayMs = Number(process.env.FAKE_DELAY_MS ?? 300)) {
     this.sessionId = spec.session_id;
     this.spec = spec;
     this.deps = deps;
+    this.opts = opts;
     this.delay = delayMs;
   }
 
@@ -73,6 +77,7 @@ export class FakeRunner implements AgentRunner {
     this.turn++;
     await sleep(this.delay);
     if (this.closed) return;
+    if (text.includes('[fake:signed-out]')) return this.signedOutTurn();
     if (imageMarkers(text).length) return this.pastedImagesTurn(text);
     if (this.spec.kind === 'planner') return this.plannerTurn();
     if (this.spec.kind === 'release' && this.turn === 1) return this.releaseTurn();
@@ -121,6 +126,15 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 't1', is_error: false, text: 'All tests passed' } });
     this.say(`(fake) Done with "${choice}". In a real session I would now push and open a PR.`);
+    this.finishTurn();
+  }
+
+  /** Like Claude on an account whose sign-in expired (DISP-60): the login notice, Claude's words, and the turn ends. */
+  private signedOutTurn() {
+    const detail = 'Failed to authenticate: OAuth session expired and could not be refreshed';
+    const help = this.opts.loginFailed?.(this.spec.claude_account, 'authentication_failed', detail);
+    if (help) this.deps.emit({ t: 'notice', session_id: this.sessionId, ...loginNotice(help) });
+    this.say(detail);
     this.finishTurn();
   }
 

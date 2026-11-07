@@ -85,6 +85,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/sessions/:id/start-now': 'sessions',
   'POST /api/sessions/:id/pause': 'sessions',
   'POST /api/sessions/:id/move': 'sessions',
+  'POST /api/sessions/:id/retry-login': 'sessions',
   'POST /api/sessions/:id/resume': 'sessions',
   'POST /api/sessions/:id/sync-prs': 'sessions',
   'POST /api/sessions/:id/prs': 'sessions',
@@ -122,6 +123,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/workers': 'user',
   'PATCH /api/workers/:id': 'user',
   'DELETE /api/workers/:id': 'user',
+  'POST /api/workers/:id/claude-accounts/:name/check': 'user',
   'PUT /api/settings/default-worker': 'user',
   // pairing a phone: it asks and polls before it is signed in; a person approves (not a device: see the route)
   'POST /api/devices/pair': 'public',
