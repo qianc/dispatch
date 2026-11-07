@@ -1,3 +1,4 @@
+import { Icon } from '../components/icons.tsx';
 import { ProjectBadge, ProjectKey } from '../components/ProjectBadge.tsx';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -45,7 +46,7 @@ export function Projects() {
             <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="flex-1 font-medium truncate">{p.name}</span>
-              {p.disabled && <Chip>read-only</Chip>}
+              {p.disabled && <Chip tone="wait"><Icon name="lock" size={12} /> read-only</Chip>}
               {!!p.counts?.waiting && <Chip tone="wait">{p.counts.waiting} waiting</Chip>}
               {!!p.counts?.running && !p.counts.waiting && <Chip tone="run">{p.counts.running} running</Chip>}
               {!!p.counts?.queued && !p.counts.waiting && !p.counts.running && <Chip>{p.counts.queued} queued</Chip>}
