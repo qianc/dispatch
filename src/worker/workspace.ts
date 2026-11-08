@@ -153,7 +153,11 @@ async function git(args: string[], cwd?: string) {
 /** A local merge's outcome; `check`: how the repo's check command went, when it ran */
 export interface MergeResult { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } }
 
-export interface Leftover { repo_id: number; repo: string; worktree: boolean; dirty: boolean; untracked: boolean; branch: string | null; merged: boolean }
+export interface Leftover {
+  repo_id: number; repo: string; worktree: boolean; dirty: boolean; untracked: boolean; branch: string | null; merged: boolean;
+  /** the branch is checked out in a worktree outside the session folder (DISP-62): it can't be deleted, so it is reported */
+  checked_out?: string | null;
+}
 export interface TidyResult { repo: string; worktree: 'none' | 'removed' | 'kept (uncommitted changes)'; branch: string }
 
 export class Workspaces {
@@ -680,9 +684,21 @@ export class Workspaces {
           merged = mergedHint.includes(repo.id) || (await run('git', ['merge-base', '--is-ancestor', `refs/heads/${branch}`, base], home)).code === 0;
         }
       }
-      out.push({ repo_id: repo.id, repo: repo.github_name, worktree, dirty, untracked, branch: branchExists ? branch : null, merged });
+      const checked_out = branchExists ? await this.checkedOutElsewhere(home, branch!, wt) : null;
+      out.push({ repo_id: repo.id, repo: repo.github_name, worktree, dirty, untracked, branch: branchExists ? branch : null, merged, checked_out });
     }
     return out;
+  }
+
+  /** A worktree other than `own` that has `branch` checked out, from `git worktree list` of `home`. */
+  private async checkedOutElsewhere(home: string, branch: string, own: string): Promise<string | null> {
+    const list = await run('git', ['worktree', 'list', '--porcelain'], home);
+    if (list.code !== 0) return null;
+    for (const block of list.out.split('\n\n')) {
+      const path = /^worktree (.+)$/m.exec(block)?.[1];
+      if (path && block.split('\n').includes(`branch refs/heads/${branch}`) && resolve(path) !== resolve(own)) return path;
+    }
+    return null;
   }
 
   /**
@@ -709,7 +725,9 @@ export class Workspaces {
             r.worktree = 'removed';
           }
         }
-        if (l.branch && l.merged && opts.deleteMerged && r.worktree !== 'kept (uncommitted changes)') {
+        // checked out in a worktree outside the session folder (DISP-62): git would refuse, and that worktree is not ours
+        if (l.branch && l.checked_out) r.branch = `kept (checked out in ${l.checked_out})`;
+        else if (l.branch && l.merged && opts.deleteMerged && r.worktree !== 'kept (uncommitted changes)') {
           // -D: a squash-merged branch is merged (its PR says so) but not in the history
           const res = await run('git', ['branch', '-D', l.branch], this.branchHome(repo));
           r.branch = res.code === 0 ? 'deleted' : `kept (${res.out.split('\n')[0]})`;

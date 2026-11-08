@@ -234,7 +234,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run (before a merge, or before a turn is reported done). |
 | `DEPLOY_TIMEOUT_MIN` | `30` | How long a repo's deploy command may run after a merge. |
 | `CHECK_RETRIES` | `3` | Fix turns an agent gets when the check fails at the end of its turn, before you are told. |
-| `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees. |
+| `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees, in `servers/<name>/` per server. A worker that finds the old layout (`sessions/`, `cache/`, … right in this folder) moves it once to its first server's folder at start; the file `legacy-server` records which. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
 | `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |
 | `REPO_ENV_DIR` | `~/.config/dispatch/repo-env` | This machine's env files per repo, in `<owner>/<name>/` (local repos: `local/<name>/`, hosted: `hosted/<name>/`). They are copied into every new worktree (session, merge check, deploy) before the setup command runs. Only files git ignores are copied. Commands get the folder as `DISPATCH_REPO_ENV_DIR`. With `WORKER_CONFIG`: a `repo_env_dir` key, at the top level or per server. |
@@ -257,7 +257,7 @@ web/    (React, Vite, Tailwind, vite-plugin-pwa)    — mobile-first PWA, built 
 
 The server holds no Claude credentials. The worker runs agents with full tool access inside its
 container, routes `AskUserQuestion` / `ExitPlanMode` to you, and keeps each session in its own
-worktree under `/workspaces/sessions/<id>`.
+worktree under `/workspaces/servers/<server>/sessions/<id>`.
 
 ## Several workers
 

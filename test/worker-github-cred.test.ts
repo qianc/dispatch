@@ -48,7 +48,7 @@ describe("the worker's link to a server (DISP-63)", () => {
     const entry = { name: 'default', url: 'ws://127.0.0.1:1/worker', token: 'dsw_worker_secret_123', local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: ['personal'], releases: [], repo_env_dir: '/nonexistent' };
     const link = new ServerLink(entry, {
       fake: true, opts: { assistantReadDirs: [], sessionEnv: (spec: StartSpec) => ({ ...sessionGithubEnv(spec, ENV_ACCOUNTS) }) } as never,
-      workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), first: true, slots: new Slots(2),
+      workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), slots: new Slots(2),
       claudeAccounts: () => [], githubAccounts: ['personal', 'work'], gitEnv: () => ({}), remoteBase: 'https://github.com', secrets,
     });
     expect((await link.facts()).caps).toEqual(['github_cred']);
@@ -84,7 +84,7 @@ describe("the worker's GitHub credential per command (DISP-63)", () => {
   const link = () => {
     const entry = { name: 'default', url: 'ws://127.0.0.1:1/worker', token: 'dsw_x', local_repo_dirs: ['/tmp'], read_dirs: [], claude_accounts: null, github_accounts: [], releases: [], repo_env_dir: '/nonexistent' };
     const l = new ServerLink(entry, {
-      fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), first: true, slots: new Slots(2),
+      fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), slots: new Slots(2),
       claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com', secrets: new Secrets(),
     });
     const used: { what: string; cred: unknown }[] = [];

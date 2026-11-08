@@ -1,11 +1,12 @@
 // Worker: connects to its servers (WORKER_CONFIG, or one from the env), runs Claude sessions and git commands.
 import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
+import { migrateLegacyLayout } from './layout.ts';
 import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
-import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
+import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 
 const env = process.env;
@@ -73,13 +74,19 @@ function claudeAccountInfo(): ClaudeAccountInfo[] {
 }
 
 const cfg = loadWorkerConfig(env);
+const workspacesDir = env.WORKSPACES_DIR ?? './data/workspaces';
+// older workers kept the first server's folders in WORKSPACES_DIR itself: move them to its own folder,
+// with Claude's transcripts for them, before any session starts (DISP-62)
+if (cfg.servers.length) {
+  const configDirs = [claudeConfigDir(undefined, env, (n) => join(configRoot, n)), ...clAccounts.map((a) => claudeConfigDir(a, env, (n) => join(configRoot, n)))];
+  await migrateLegacyLayout(workspacesDir, cfg.servers[0].name, configDirs);
+}
 const slots = new Slots(cfg.max_concurrent);
 for (const s of cfg.servers) secrets.add(s.token);
-const links = cfg.servers.map((entry, i) => new ServerLink(entry, {
+const links = cfg.servers.map((entry) => new ServerLink(entry, {
   fake: FAKE,
   opts,
-  workspacesDir: env.WORKSPACES_DIR ?? './data/workspaces',
-  first: i === 0,
+  workspacesDir,
   slots,
   claudeAccounts: claudeAccountInfo,
   checkLogin: (name) => logins.info(name),

@@ -129,7 +129,7 @@ describe('phase 2 review fixes', () => {
     try {
       const entry = { name: 'default', url: `ws://127.0.0.1:${s.port}/worker`, token: secret, local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' };
       const link = new ServerLink(entry, {
-        fake: false, opts: { assistantReadDirs: [], sessionEnv: () => ({ A: '1' }) } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-p2l-')), first: true, slots: new Slots(1),
+        fake: false, opts: { assistantReadDirs: [], sessionEnv: () => ({ A: '1' }) } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-p2l-')), slots: new Slots(1),
         claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
       });
       const spec = { session_id: 3, kind: 'work' as const, project_key: 'PR2', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/pr2-3-t', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };

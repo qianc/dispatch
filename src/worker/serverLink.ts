@@ -11,6 +11,7 @@ import type { GithubCred, RpcMethod, ServerToWorker, StartSpec, WorkerCommand, W
 import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
+import { serverRoot } from './layout.ts';
 import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
@@ -58,9 +59,8 @@ export interface LinkShared {
   fake: boolean;
   /** runner options; the link sets its own read dirs */
   opts: RunnerOptions;
+  /** each server's folders are WORKSPACES_DIR/servers/<name>, whatever its place in worker.json (DISP-62) */
   workspacesDir: string;
-  /** the first server keeps today's layout (WORKSPACES_DIR/sessions/<id>); others get their own folder */
-  first: boolean;
   slots: Slots;
   claudeAccounts: () => ClaudeAccountInfo[];
   /** whether a Claude account is signed in now (DISP-60) */
@@ -99,7 +99,7 @@ export class ServerLink {
     this.entry = entry;
     this.shared = shared;
     this.secrets = shared.secrets ?? new Secrets();
-    const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
+    const root = serverRoot(shared.workspacesDir, entry.name);
     // this server's hosted repos are at its own address, with this worker's token for it
     // git for a repo of this server: the project's GitHub account, else the first this server is allowed here
     const gitEnv = (repo: Repo) => shared.gitEnv?.({ ...repo, github_account: serverGithubAccount(entry, repo.github_account) }) ?? {};

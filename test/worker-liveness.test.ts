@@ -18,7 +18,7 @@ afterEach(async () => {
 function linkTo(url: string) {
   const entry = { name: 'home', url, token: 't', local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' };
   return new ServerLink(entry, {
-    fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: '/tmp/dsp-live-ws', first: true, slots: new Slots(1),
+    fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: '/tmp/dsp-live-ws', slots: new Slots(1),
     claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
   });
 }
