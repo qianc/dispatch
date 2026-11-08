@@ -143,7 +143,7 @@ describe('disabling a project', () => {
     expect(await rpc('get_item', { key: item.key })).toMatchObject({ title: 'Before' });
 
     // the assistant's tools, for this project
-    const assistant = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const assistant = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     const ask = (method: string, params: object) => s.ctx.sessions.rpc(assistant.id, method, params);
     await expect(ask('create_items', { project_key: 'LK', items: [{ title: 'x' }] })).rejects.toThrow(LOCKED);
     await expect(ask('update_item', { key: item.key, title: 'Changed' })).rejects.toThrow(LOCKED);

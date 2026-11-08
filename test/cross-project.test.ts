@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CrossProjectRequest } from '../src/shared/types.ts';
 import { crossProjectTools } from '../src/worker/mcp.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 // DISP-55: planner and discussion chats reach other projects, each request approved by the owner.
 describe('Cross-project access from planner and discussion chats', () => {
@@ -21,7 +21,7 @@ describe('Cross-project access from planner and discussion chats', () => {
   let n = 0;
   const chat = (kind: 'planner' | 'discuss' = 'planner', schedule_id: number | null = null) => {
     const pa = s.ctx.store.projectByKey('PA')!;
-    return s.ctx.store.createSession({ project_id: pa.id, kind, title: 'c', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [], worker_id: workerId, schedule_id });
+    return s.ctx.store.createSession({ started_by: OWNER, project_id: pa.id, kind, title: 'c', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [], worker_id: workerId, schedule_id });
   };
   /** what the worker does: ask the owner, who answers through the API */
   const ask = async (sessionId: number, req: CrossProjectRequest, approve: boolean | null) => {
@@ -85,7 +85,7 @@ describe('Cross-project access from planner and discussion chats', () => {
     await expect(s.ctx.sessions.rpc(own.id, 'cross_project', { action: 'search', project_key: 'PA', query: 'x', approval: r.approval })).rejects.toThrow(/own project/);
 
     const pa = s.ctx.store.projectByKey('PA')!;
-    const work = s.ctx.store.createSession({ project_id: pa.id, kind: 'work', title: 'w', status: 'running', force_plan: false, branch: 'b', initial_prompt: '', source_id: null, item_ids: [], worker_id: workerId });
+    const work = s.ctx.store.createSession({ started_by: OWNER, project_id: pa.id, kind: 'work', title: 'w', status: 'running', force_plan: false, branch: 'b', initial_prompt: '', source_id: null, item_ids: [], worker_id: workerId });
     await expect(s.ctx.sessions.rpc(work.id, 'cross_project', { action: 'search', project_key: 'PB', query: 'x', approval: 'l1' })).rejects.toThrow(/Only planner and discussion/);
   });
 });
@@ -128,7 +128,7 @@ describe('Own-project item tools', () => {
     await s.call('POST', '/projects', { key: 'QB', name: 'B' });
     const a1 = (await s.call('POST', '/projects/QA/items', { title: 'Here' })).data;
     await s.call('POST', '/projects/QB/items', { title: 'There' });
-    const c = s.ctx.store.createSession({ project_id: a1.project_id, kind: 'planner', title: 'c', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const c = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: a1.project_id, kind: 'planner', title: 'c', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     await expect(s.ctx.sessions.rpc(c.id, 'get_item', { key: 'QB-1' })).rejects.toThrow(/not in project QA.*read_other_item/);
     expect(await s.ctx.sessions.rpc(c.id, 'get_item', { key: 'QA-1' })).toMatchObject({ title: 'Here' });
     expect(await s.ctx.sessions.rpc(c.id, 'get_item', { key: '1' })).toMatchObject({ title: 'Here' });

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { compareVersions, MANY_RELEASE_ITEMS, normalizeVersion, VERSION_RE } from '../../shared/release.ts';
 import { releasable, releaseOptions, releaseProposal } from '../releases.ts';
@@ -14,8 +14,10 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
     if (!p) throw notFound('Project');
     return p;
   };
-  const option = (p: ReturnType<typeof project>, q: z.infer<typeof pick>) => {
-    const o = releaseOptions(ctx, p).find((x) => x.worker_id === q.worker_id && x.repo_id === q.repo_id);
+  /** releases run on the caller's own workers (a token without a user: the install owner's) */
+  const mine = (req: FastifyRequest) => req.principal!.user ?? ctx.cfg.installOwner;
+  const option = (req: FastifyRequest, p: ReturnType<typeof project>, q: z.infer<typeof pick>) => {
+    const o = releaseOptions(ctx, p, mine(req)).find((x) => x.worker_id === q.worker_id && x.repo_id === q.repo_id);
     if (!o) {
       const worker = ctx.workers.get(q.worker_id)?.name ?? q.worker_id;
       const repo = store.repo(q.repo_id)?.github_name ?? q.repo_id;
@@ -25,17 +27,17 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
   };
 
   /** Which connected worker can release which of the project's repos. */
-  app.get('/api/projects/:key/releases', async (req) => releaseOptions(ctx, project((req.params as { key: string }).key)));
+  app.get('/api/projects/:key/releases', async (req) => releaseOptions(ctx, project((req.params as { key: string }).key), mine(req)));
 
   app.get('/api/projects/:key/releases/proposal', async (req) => {
     const p = project((req.params as { key: string }).key);
-    return releaseProposal(ctx, p, option(p, pick.parse(req.query)));
+    return releaseProposal(ctx, p, option(req, p, pick.parse(req.query)));
   });
 
   app.post('/api/projects/:key/releases', async (req) => {
     const p = project((req.params as { key: string }).key);
     const input = create.parse(req.body);
-    const opt = option(p, input);
+    const opt = option(req, p, input);
     const proposal = await releaseProposal(ctx, p, opt);
     // typed without a v: follow the last release's style (for a first release, the proposal's)
     const version = normalizeVersion(input.version, proposal.last?.version ?? proposal.proposed);
@@ -50,6 +52,6 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
     return sessions.startRelease(p, {
       workerId: opt.worker_id, repo: store.repo(opt.repo_id)!, items,
       release: { repo_id: opt.repo_id, cap_repo: opt.cap_repo, version, label_prefix: opt.label_prefix, command: opt.command, notes: opt.notes, last_version: proposal.last?.version ?? null },
-    });
+    }, req.principal!.user);
   });
 }

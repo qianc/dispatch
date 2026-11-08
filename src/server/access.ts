@@ -105,8 +105,6 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/projects/:key/repos': 'admin',
   'PATCH /api/repos/:id': 'admin',
   'DELETE /api/repos/:id': 'admin',
-  'PUT /api/repos/:id/placements/:workerId': 'admin',
-  'DELETE /api/repos/:id/placements/:workerId': 'admin',
   'GET /api/settings': 'admin',
   'PATCH /api/settings': 'admin',
   'GET /api/push/devices': 'admin',
@@ -125,6 +123,9 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/workers/:id': 'user',
   'POST /api/workers/:id/claude-accounts/:name/check': 'user',
   'PUT /api/settings/default-worker': 'user',
+  // a local repo's copy on a worker: the install owner, or the worker's owner (the route checks)
+  'PUT /api/repos/:id/placements/:workerId': 'user',
+  'DELETE /api/repos/:id/placements/:workerId': 'user',
   // pairing a phone: it asks and polls before it is signed in; a person approves (not a device: see the route)
   'POST /api/devices/pair': 'public',
   'GET /api/devices/pair/:pairId': 'public',

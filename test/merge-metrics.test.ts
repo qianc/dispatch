@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 /** A session with one open GitHub PR (fake GitHub): `behind` commits behind main, mergeable or not. */
 async function setup(behind: number, mergeable = true) {
@@ -8,7 +8,7 @@ async function setup(behind: number, mergeable = true) {
   await s.call('POST', '/projects', { key: 'MM', name: 'MM' });
   await s.call('POST', '/projects/MM/repos', { github_owner: 'me', github_name: 'r' });
   const item = (await s.call('POST', '/projects/MM/items', { title: 'x' })).data;
-  const session = s.ctx.store.createSession({
+  const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
     project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/mm-1-x',
     initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
   });

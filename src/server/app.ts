@@ -45,6 +45,7 @@ import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
 import { Scheduler } from './scheduler.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
+import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
 
 
 declare module 'fastify' {
@@ -70,11 +71,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus);
-  const sessions = new Sessions(store, bus, hub, notifier, workers);
+  const sessions = new Sessions(store, bus, hub, notifier, workers, users);
   const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, cfg.githubApiUrl);
   github.gitBase = cfg.githubGitBase;
   github.hosted = hosted;
-  const assistant = new AssistantTools(store, bus, github, sessions, hub);
+  const assistant = new AssistantTools(store, bus, github, sessions, hub, cfg.installOwner);
   assistant.rules = (p) => projectRules({ store, hub, hosted }, p);
   const attachments = new Attachments(cfg.dataDir);
   sessions.attachments = attachments;
@@ -176,6 +177,14 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     if (!route || !route.startsWith('/api/')) return;
     const p = refusedWrite(store, req.method, route, req.params as Record<string, string>);
     if (p) return reply.status(423).send({ error: disabledMessage(p) });
+  });
+
+  // Other people's sessions are read-only (DISP-63): only the starter drives one; the install owner may also stop it.
+  app.addHook('preHandler', async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith('/api/') || !req.principal) return;
+    const s = refusedSession(store, req.principal, req.method, route, req.params as Record<string, string>, req.body, cfg.installOwner);
+    if (s) return reply.status(403).send({ error: readOnlyMessage(s) });
   });
 
   // "Sign in again": behind a sign-in proxy this path goes through its login, then back into the app

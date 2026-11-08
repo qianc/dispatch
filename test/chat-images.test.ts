@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { imageMarkers, withImageMarkers } from '../src/shared/chatImages.ts';
 import { userContent } from '../src/worker/runner.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const FILE = '0123abcd-0000-4000-8000-000000000001.png';
@@ -44,7 +44,7 @@ describe('images pasted into a chat (DISP-34)', () => {
 
     it('the session reads a pasted image and attaches it to an item', async () => {
       const p = s.ctx.store.projectByKey('PI')!;
-      const sess = s.ctx.store.createSession({
+      const sess = s.ctx.store.createSession({ started_by: OWNER,
         project_id: p.id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/pi-1-t', initial_prompt: '', source_id: null, item_ids: [],
         worker_id: s.ctx.workers.legacy().id,
       });
@@ -73,7 +73,7 @@ describe('images pasted into a chat (DISP-34)', () => {
 
     it('only a message with an image may have no text', async () => {
       const p = s.ctx.store.projectByKey('PI')!;
-      const sess = s.ctx.store.createSession({
+      const sess = s.ctx.store.createSession({ started_by: OWNER,
         project_id: p.id, kind: 'work', title: 't2', status: 'idle', force_plan: false, branch: 'dispatch/pi-2-t', initial_prompt: '', source_id: null, item_ids: [],
         worker_id: s.ctx.workers.legacy().id,
       });

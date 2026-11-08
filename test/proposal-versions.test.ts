@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const items = (title: string) => ({ type: 'items', source_id: null, items: [{ type: 'backlog', title, body_md: '', importance: 2, effort: null }] });
 
@@ -11,7 +11,7 @@ describe('proposal cards that were revised', () => {
   });
   afterAll(() => s.app.close());
 
-  const planner = () => s.ctx.store.createSession({ project_id: s.ctx.store.projectByKey('VER')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+  const planner = () => s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: s.ctx.store.projectByKey('VER')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
   const state = async (id: number) => {
     const ev = (await s.call('GET', `/sessions/${id}`)).data.events as { id: number; body: { kind: string; event_id?: number; note?: string; proposal?: { items: { title: string }[] } } }[];
     const done = new Map(ev.filter((e) => e.body.kind === 'proposal_done').map((e) => [e.body.event_id, e.body.note]));

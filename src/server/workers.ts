@@ -21,6 +21,7 @@ function toWorker(r: Row): WorkerRecord {
     revoked_at: (r.revoked_at as string | null) ?? null,
     facts: typeof r.facts === 'string' ? (JSON.parse(r.facts) as WorkerFacts) : null,
     legacy: r.hash === null || r.hash === undefined,
+    owner: (r.owner as string | null) ?? null,
   };
 }
 
@@ -31,8 +32,11 @@ export class Workers {
     this.db = db;
   }
 
-  list(): WorkerRecord[] {
-    return this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL ORDER BY id').map(toWorker);
+  /** Live workers: all, or only those `owner` has. */
+  list(owner?: string): WorkerRecord[] {
+    return (owner === undefined
+      ? this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL ORDER BY id')
+      : this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL AND owner = ? ORDER BY id', owner)).map(toWorker);
   }
 
   get(id: number): WorkerRecord | undefined {
@@ -86,6 +90,7 @@ export class Workers {
     return this.get(Number(lastId))!;
   }
 
+  /** The install's default worker (the install owner's): the setting, if it names a live worker, else the legacy one. */
   defaultId(): number {
     const set = Number(this.db.setting('default_worker_id'));
     if (set && this.get(set) && !this.get(set)!.revoked_at) return set;

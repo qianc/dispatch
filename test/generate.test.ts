@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generatorItems } from '../src/shared/generatorItems.ts';
 import type { Item, Repo } from '../src/shared/types.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -134,7 +134,7 @@ describe('a merge through Dispatch regenerates the file from the items (DISP-56)
     const fixed = s.ctx.store.createItem(repo.project_id, { ...base, title: 'Fixed', status: 'in_progress' });
     const open = s.ctx.store.createItem(repo.project_id, { ...base, title: 'Open', status: 'backlog' });
     const branch = 'dispatch/gen-1-x';
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: repo.project_id, kind: 'work', title: 'Fix it', status: 'idle', force_plan: false, branch,
       initial_prompt: '', source_id: null, item_ids: [fixed.id],
     });

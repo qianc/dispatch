@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { plannerPrompt } from '../src/worker/prompts.ts';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 // DISP-6: agents that file items follow the project's own CLAUDE.md over Dispatch's defaults.
 const RULES = 'Everything goes in the backlog, never as a bug. Every item carries an internal id (SLD-ID).';
@@ -42,7 +42,7 @@ describe("a project's own instructions for items", () => {
     });
     afterAll(() => s.app.close());
 
-    const chat = () => s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const chat = () => s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     const create = (sessionId: number, project_key: string) => s.ctx.sessions.rpc(sessionId, 'create_items', { project_key, items: [{ type: 'backlog', title: 'SLD-ID 7: tidy the title slide' }] });
 
     it('refuse the first create_items once, with the instructions, then create', async () => {

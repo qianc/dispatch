@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
@@ -71,14 +71,14 @@ describe('images on items', () => {
     const img = await (await upload(it.id, PNG, 'name=bug.png')).json();
     const project = s.ctx.store.projectByKey('IMG')!;
     for (const kind of ['work', 'discuss'] as const) {
-      const sess = s.ctx.store.createSession({ project_id: project.id, kind, title: 't', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [it.id] });
+      const sess = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: project.id, kind, title: 't', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [it.id] });
       const item = (await s.ctx.sessions.rpc(sess.id, 'get_item', { key: it.key })) as { images: { id: number; name: string }[] };
       expect(item.images).toEqual([expect.objectContaining({ id: img.id, name: 'bug.png' })]);
       expect(await s.ctx.sessions.rpc(sess.id, 'get_image', { id: img.id })).toEqual({ name: 'bug.png', mime: 'image/png', data: PNG.toString('base64') });
     }
     // not from another project
     await s.call('POST', '/projects', { key: 'OTH', name: 'Other' });
-    const other = s.ctx.store.createSession({ project_id: s.ctx.store.projectByKey('OTH')!.id, kind: 'work', title: 't', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const other = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: s.ctx.store.projectByKey('OTH')!.id, kind: 'work', title: 't', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     await expect(s.ctx.sessions.rpc(other.id, 'get_image', { id: img.id })).rejects.toThrow(/No image/);
   });
 

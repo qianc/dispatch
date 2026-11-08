@@ -42,13 +42,13 @@ describe('placement', () => {
 
   it('picks the worker: asked for, else the project default, else the global default', async () => {
     const p = s.ctx.store.projectByKey('PL')!;
-    expect(s.ctx.sessions.workerFor(p, null)).toBe(legacy());
-    expect(s.ctx.sessions.workerFor(p, b.id)).toBe(b.id);
+    expect(s.ctx.sessions.workerFor(p, null, OWNER)).toBe(legacy());
+    expect(s.ctx.sessions.workerFor(p, b.id, OWNER)).toBe(b.id);
     expect((await s.call('PATCH', '/projects/PL', { worker_id: b.id, placement_md: 'Use b for PowerPoint.' })).data).toMatchObject({ worker_id: b.id, placement_md: 'Use b for PowerPoint.' });
-    expect(s.ctx.sessions.workerFor(s.ctx.store.projectByKey('PL')!, null)).toBe(b.id);
+    expect(s.ctx.sessions.workerFor(s.ctx.store.projectByKey('PL')!, null, OWNER)).toBe(b.id);
     expect((await s.call('PATCH', '/projects/PL', { worker_id: 999 })).status).toBe(400);
     // the assistant has no project: the global default
-    expect(s.ctx.sessions.workerFor(null, null)).toBe(legacy());
+    expect(s.ctx.sessions.workerFor(null, null, OWNER)).toBe(legacy());
   });
 
   it("a project's local repos pick its worker: one with a copy of each; another worker is refused", async () => {
@@ -62,12 +62,12 @@ describe('placement', () => {
     expect(wb.got.some((m) => m.cmd?.c === 'inspect_local_repo')).toBe(true);
     expect(wa.got.some((m) => m.cmd?.c === 'inspect_local_repo')).toBe(false);
     const lo = s.ctx.store.projectByKey('LO')!;
-    expect(s.ctx.sessions.workerFor(lo, null)).toBe(b.id);
-    expect(() => s.ctx.sessions.workerFor(lo, legacy())).toThrow(/Worker default has no copy of one/);
+    expect(s.ctx.sessions.workerFor(lo, null, OWNER)).toBe(b.id);
+    expect(() => s.ctx.sessions.workerFor(lo, legacy(), OWNER)).toThrow(/Worker default has no copy of one/);
     // another local repo, only on the other worker: now no worker has both
     const second = await s.call('POST', '/projects/LO/repos', { local_path: '/r/two', worker_id: legacy() });
     expect(second.status).toBe(200);
-    expect(() => s.ctx.sessions.workerFor(lo, null)).toThrow(/No worker has an ok copy/);
+    expect(() => s.ctx.sessions.workerFor(lo, null, OWNER)).toThrow(/No worker has an ok copy/);
     wa.close();
     wb.close();
   });
@@ -85,7 +85,7 @@ describe('placement', () => {
     expect(s.ctx.store.repos(cp.id)).toHaveLength(1);
     expect(s.ctx.store.repo(one.id)!.placements!.map((p) => [p.worker_id, p.local_path])).toEqual([[legacy(), '/home/a/app'], [b.id, '/srv/b/app']].sort((x, y) => (x[0] as number) - (y[0] as number)));
     // either worker can run it; a session on b gets b's path
-    expect(s.ctx.sessions.workerFor(cp, b.id)).toBe(b.id);
+    expect(s.ctx.sessions.workerFor(cp, b.id, OWNER)).toBe(b.id);
     await s.call('POST', '/projects/CP/batches', { prompt: 'x', options: { worker_id: b.id } });
     await waitFor(() => wb.starts().length === 1, 'start on b');
     expect(wb.starts()[0].repos[0]).toMatchObject({ local_path: '/srv/b/app', worker_id: b.id });
@@ -112,8 +112,8 @@ describe('placement', () => {
     wb = await rawWorker(s.port, b.secret, undefined, ['/gone/app']);
     await waitFor(() => s.ctx.store.repo(repo.id)!.placements!.find((p) => p.worker_id === b.id)!.status === 'missing', 'missing');
     const mi = s.ctx.store.projectByKey('MI')!;
-    expect(() => s.ctx.sessions.workerFor(mi, b.id)).toThrow(/app at \/gone\/app is missing \(\/gone\/app is not a git repository\)/);
-    expect(s.ctx.sessions.workerFor(mi, null)).toBe(legacy());
+    expect(() => s.ctx.sessions.workerFor(mi, b.id, OWNER)).toThrow(/app at \/gone\/app is missing \(\/gone\/app is not a git repository\)/);
+    expect(s.ctx.sessions.workerFor(mi, null, OWNER)).toBe(legacy());
     wa.close();
     wb.close();
   });

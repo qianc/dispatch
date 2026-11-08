@@ -35,6 +35,7 @@ import { assertWritable, disabledMessage } from './projectLock.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
+import type { Users } from './users.ts';
 
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {
@@ -111,6 +112,8 @@ type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_
 const SCHEDULED_START = ['triage', 'backlog', 'todo'];
 /** The statuses a scheduled run may give an item: never done, and it cannot take one off hold. */
 const SCHEDULED_SET = ['triage', 'backlog', 'todo', 'hold', 'canceled'];
+/** Starting work for someone with no worker of their own (DISP-63). */
+export const NO_WORKER = 'You have no worker yet. Add one in Settings → Workers.';
 /** at most this many items from a cross-project search (DISP-55) */
 const CROSS_SEARCH_MAX = 20;
 /** The agents' `dispatch` tools that change their project: refused while it is disabled (DISP-59). */
@@ -124,13 +127,15 @@ export class Sessions {
   private hub: WorkerHub;
   private notifier: Notifier;
   private workers: Workers;
+  private users: Users;
   /** Where tool-result images are stored (set by app.ts). */
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
 
-  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers) {
+  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers, users: Users) {
     this.workers = workers;
+    this.users = users;
     this.store = store;
     this.bus = bus;
     this.hub = hub;
@@ -165,34 +170,50 @@ export class Sessions {
     return chosen === 'default' ? null : chosen;
   }
 
+  /** Whose workers a session started by `user` may use: theirs; no user (the legacy token) is the install owner. */
+  private workerOwner(user: string | null): string {
+    return user ?? this.users.installOwner;
+  }
+
+  /** The worker `id`, if it is live and `user`'s to start work on (DISP-63); else an error. */
+  private ownWorker(id: number, user: string | null) {
+    const w = this.workers.get(id);
+    if (!w || w.revoked_at) throw new SessionError(`Unknown worker ${id}`);
+    if (w.owner !== this.workerOwner(user)) throw new SessionError(`Worker ${w.name} is not yours.`);
+    return w;
+  }
+
   /**
-   * The worker a new session runs on: the requested worker, the project's default, or the global
-   * default. A project with local repos runs only on a worker with an ok copy of each (DISP-45):
-   * asking for another is an error, and without a request the first such worker is used (the
-   * project's, the global default, then a connected one).
+   * The worker a new session started by `user` runs on. Only that user's own workers count (the
+   * install owner's for no user): the requested one, else the project's default if it is theirs,
+   * their own default, a connected one, any. A project with local repos runs only on a worker with
+   * an ok copy of each (DISP-45): asking for another is an error, and without a request the first
+   * such worker in that order is used.
    */
-  workerFor(project: Project | null, requested: number | null | undefined): number {
+  workerFor(project: Project | null, requested: number | null | undefined, user: string | null): number {
+    if (requested) this.ownWorker(requested, user);
+    const who = this.workerOwner(user);
+    const mine = this.workers.list(who).map((w) => w.id);
+    if (!mine.length) throw new SessionError(NO_WORKER);
     const local = project ? this.store.repos(project.id).filter((r) => r.kind === 'local') : [];
     if (local.length) {
-      const live = (id: number | null | undefined): id is number => id != null && !!this.workers.get(id) && !this.workers.get(id)!.revoked_at;
       if (requested) {
         const why = placementProblem(this.store, local, requested);
         if (why) throw new SessionError(why);
         return requested;
       }
-      const holders = [...new Set(local.flatMap((r) => (r.placements ?? []).map((p) => p.worker_id)))];
-      const order = [project!.worker_id, this.workers.defaultId(), ...holders.filter((id) => this.hub.isConnected(id)), ...holders];
-      const pick = order.find((id) => live(id) && !placementProblem(this.store, local, id));
+      const holders = [...new Set(local.flatMap((r) => (r.placements ?? []).map((p) => p.worker_id)))].filter((id) => mine.includes(id));
+      const order = [project!.worker_id, this.users.defaultWorker(who), ...holders.filter((id) => this.hub.isConnected(id)), ...holders];
+      const pick = order.find((id): id is number => id != null && mine.includes(id) && !placementProblem(this.store, local, id));
       if (pick == null) {
-        const reasons = holders.filter(live).map((id) => placementProblem(this.store, local, id)).filter(Boolean);
+        const reasons = holders.map((id) => placementProblem(this.store, local, id)).filter(Boolean);
         throw new SessionError(`No worker has an ok copy of this project's local repos. ${reasons.join(' ')}`.trim());
       }
       return pick;
     }
-    const id = requested ?? project?.worker_id ?? this.workers.defaultId();
-    const w = this.workers.get(id);
-    if (!w || w.revoked_at) throw new SessionError(`Unknown worker ${id}`);
-    return id;
+    if (requested) return requested;
+    const order = [project?.worker_id, this.users.defaultWorker(who), ...mine.filter((id) => this.hub.isConnected(id)), ...mine];
+    return order.find((id): id is number => id != null && mine.includes(id))!;
   }
 
   /** A worker that said which accounts it has must have the session's (the start would fail). */
@@ -286,7 +307,8 @@ export class Sessions {
     return this.store.itemsByIds(card.body.proposal.item_ids.filter((id) => !picked.includes(id)));
   }
 
-  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }): Session {
+  /** `startedBy`: the user who starts it (null: no user, the legacy token); it runs on their worker. */
+  startBatch(project: Project, input: { title?: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan?: boolean; source_id?: number | null; options?: RunOptions; worker?: string; proposal?: { session_id: number; event_id: number } }, startedBy: string | null): Session {
     assertWritable(this.store, project.id);
     this.assertProposalOpen(input.proposal);
     let requested = input.options?.worker_id ?? null;
@@ -295,7 +317,7 @@ export class Sessions {
       if (!named) throw new SessionError(`Unknown worker "${input.worker}".`);
       requested = named.id;
     }
-    const workerId = this.workerFor(project, requested);
+    const workerId = this.workerFor(project, requested, startedBy);
     const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account, undefined, workerId);
     this.checkAccounts(workerId, claudeAccount, project);
     let items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
@@ -328,6 +350,7 @@ export class Sessions {
       options: { ...(input.options ?? DEFAULT_RUN_OPTIONS), worker_id: workerId },
       claude_account: claudeAccount,
       worker_id: workerId,
+      started_by: startedBy,
     });
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
@@ -376,37 +399,45 @@ export class Sessions {
     return this.store.session(s.id)!;
   }
 
-  /** The assistant chat: one open thread at a time. */
-  assistantSend(text: string, images: string[] = []): Session {
-    return this.chatSend(this.currentAssistant(), (prompt) => this.store.createSession({
-      project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
-      initial_prompt: prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', this.workerFor(null, null)),
-      worker_id: this.workerFor(null, null),
-    }), text, images);
+  /** The assistant chat: one open thread at a time per user. */
+  assistantSend(startedBy: string | null, text: string, images: string[] = []): Session {
+    return this.chatSend(this.currentAssistant(startedBy), (prompt) => {
+      const workerId = this.workerFor(null, null, startedBy);
+      return this.store.createSession({
+        project_id: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null,
+        initial_prompt: prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', workerId),
+        worker_id: workerId, started_by: startedBy,
+      });
+    }, text, images);
   }
 
-  currentAssistant(): Session | undefined {
-    return this.store.sessions({ kind: 'assistant', limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
+  /** `user`'s open assistant thread. */
+  currentAssistant(user: string | null): Session | undefined {
+    return this.store.sessions({ kind: 'assistant', started_by: user, limit: 1 }).find((s) => !FINAL_STATUSES.includes(s.status));
   }
 
-  /** "Discuss this" on an item: a read-only chat about it, one open thread per item. */
-  discussSend(itemId: number, text: string, images: string[] = []): Session {
+  /** "Discuss this" on an item: a read-only chat about it, one open thread per item and user. */
+  discussSend(itemId: number, startedBy: string | null, text: string, images: string[] = []): Session {
     const item = this.store.item(itemId);
     if (!item) throw new SessionError('Unknown item', 404);
     assertWritable(this.store, item.project_id);
-    return this.chatSend(this.currentDiscuss(itemId), (prompt) => this.store.createSession({
-      project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
-      claude_account: this.claudeAccountFor(this.store.project(item.project_id)!, null, undefined, this.workerFor(this.store.project(item.project_id)!, null)),
-      worker_id: this.workerFor(this.store.project(item.project_id)!, null),
-    }), text, images);
+    return this.chatSend(this.currentDiscuss(itemId, startedBy), (prompt) => {
+      const project = this.store.project(item.project_id)!;
+      const workerId = this.workerFor(project, null, startedBy);
+      return this.store.createSession({
+        project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
+        initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
+        claude_account: this.claudeAccountFor(project, null, undefined, workerId), worker_id: workerId, started_by: startedBy,
+      });
+    }, text, images);
   }
 
-  currentDiscuss(itemId: number): Session | undefined {
-    return this.store.sessionsForItem(itemId, 'discuss').find((s) => !FINAL_STATUSES.includes(s.status));
+  /** `user`'s open discussion of the item. */
+  currentDiscuss(itemId: number, user: string | null): Session | undefined {
+    return this.store.sessionsForItem(itemId, 'discuss').find((s) => s.started_by === user && !FINAL_STATUSES.includes(s.status));
   }
 
-  startPlanner(project: Project, input: { prompt: string; source_id: number | null; proposal?: { session_id: number; event_id: number } }): Session {
+  startPlanner(project: Project, input: { prompt: string; source_id: number | null; proposal?: { session_id: number; event_id: number } }, startedBy: string | null): Session {
     assertWritable(this.store, project.id);
     this.assertProposalOpen(input.proposal);
     const source = input.source_id ? this.store.source(input.source_id) : null;
@@ -415,10 +446,11 @@ export class Sessions {
     const prompt = input.prompt.trim() || (source
       ? 'Read the source document in your instructions and split it into backlog items and bugs. Call propose_items with the result.'
       : 'Look at the open backlog, bugs and the code, and propose the next batch of work. Call propose_batch with your suggestion.');
+    const workerId = this.workerFor(project, null, startedBy);
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null, undefined, this.workerFor(project, null)),
-      worker_id: this.workerFor(project, null),
+      initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null, undefined, workerId),
+      worker_id: workerId, started_by: startedBy,
     });
     this.markProposalDone(input.proposal, `Started planning chat #${session.id}`);
     this.emitSession(session);
@@ -428,19 +460,19 @@ export class Sessions {
 
   /**
    * A schedule's run (DISP-13): a planner that starts the work it picks, with nobody watching. One
-   * run of a schedule at a time.
+   * run of a schedule at a time. It runs as the schedule's owner, on their worker.
    */
   startScheduled(project: Project, schedule: Schedule): Session {
     assertWritable(this.store, project.id);
     const open = this.store.sessions({ project_id: project.id, kind: 'planner' }).find((s) => s.schedule_id === schedule.id && !FINAL_STATUSES.includes(s.status));
     if (open) throw new SessionError(`The last run of "${schedule.name}" (#${open.id}) has not finished yet.`, 409);
     if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
-    const workerId = this.workerFor(project, null);
+    const workerId = this.workerFor(project, null, schedule.owner);
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title: `Scheduled: ${schedule.name}`, status: 'queued', force_plan: false, branch: null,
       initial_prompt: `It is time for the scheduled run "${schedule.name}". Follow the scope in your instructions: start the work that clearly fits it, or nothing.`,
       source_id: null, item_ids: [], claude_account: this.claudeAccountFor(project, schedule.options.claude_account, undefined, workerId),
-      worker_id: workerId, schedule_id: schedule.id,
+      worker_id: workerId, schedule_id: schedule.id, started_by: schedule.owner,
     });
     this.emitSession(session);
     this.dispatch();
@@ -472,7 +504,7 @@ export class Sessions {
       session = this.startBatch(project, {
         title: proposal.title, item_ids: ok.map((i) => i.id), new_items: proposal.new_items, prompt: proposal.prompt,
         force_plan: proposal.force_plan || undefined, options: schedule.options, worker: proposal.worker, proposal: { session_id: s.id, event_id: ev.id },
-      });
+      }, s.started_by);
     } catch (e) {
       return refuse((e as Error).message);
     }
@@ -488,8 +520,9 @@ export class Sessions {
    * check the capability, version and items (routes/releases.ts). branch stays null: tidy treats
    * a session's merged branch as deletable, and a release works on the default branch itself.
    */
-  startRelease(project: Project, input: { workerId: number; repo: Repo; release: ReleaseInfo; items: Item[] }): Session {
+  startRelease(project: Project, input: { workerId: number; repo: Repo; release: ReleaseInfo; items: Item[] }, startedBy: string | null): Session {
     assertWritable(this.store, project.id);
+    this.ownWorker(input.workerId, startedBy);
     const live = this.store.sessions({ project_id: project.id, kind: 'release' })
       .find((s) => !FINAL_STATUSES.includes(s.status) && s.release?.repo_id === input.repo.id);
     if (live) throw new SessionError(`Release #${live.id} of ${input.repo.github_name} is not finished yet.`, 409);
@@ -499,7 +532,7 @@ export class Sessions {
       project_id: project.id, kind: 'release', title: `Release ${input.repo.github_name} ${input.release.version}`, status: 'queued',
       force_plan: false, branch: null, initial_prompt: `Release ${input.release.version} of ${input.repo.github_name}.`, source_id: null,
       item_ids: input.items.map((i) => i.id), options: { ...DEFAULT_RUN_OPTIONS, worker_id: input.workerId },
-      claude_account: claudeAccount, worker_id: input.workerId, release: input.release,
+      claude_account: claudeAccount, worker_id: input.workerId, release: input.release, started_by: startedBy,
     });
     this.emitSession(session);
     this.dispatch();
@@ -1269,15 +1302,15 @@ export class Sessions {
       github_account: project?.github_account ?? null,
       resume,
       resume_note: resumeNote,
-      ...(s.kind === 'planner' ? { workers: this.plannerWorkers(), placement_md: project?.placement_md ?? '' } : {}),
+      ...(s.kind === 'planner' ? { workers: this.plannerWorkers(s.started_by), placement_md: project?.placement_md ?? '' } : {}),
       ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
     };
   }
 
-  /** What the planner knows about the workers, to place a batch. */
-  private plannerWorkers() {
-    return this.workers.list().map((w) => {
+  /** What the planner knows about the workers of whoever started it, to place a batch. */
+  private plannerWorkers(user: string | null) {
+    return this.workers.list(this.workerOwner(user)).map((w) => {
       const facts = this.hub.facts(w.id) ?? w.facts;
       return {
         name: w.name,
@@ -1301,6 +1334,8 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     const target = this.workers.get(workerId);
     if (!target || target.revoked_at) throw new SessionError('Unknown worker');
+    // only to a worker of whoever started it (DISP-63)
+    this.ownWorker(workerId, s.started_by);
     if (FINAL_STATUSES.includes(s.status)) throw new SessionError('This session has ended; start a new batch instead.');
     if (s.worker_id === workerId) return s;
     const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
@@ -1335,7 +1370,7 @@ export class Sessions {
       project_id: s.project_id, kind: 'work', title: s.title, status: 'queued', force_plan: s.force_plan, branch: s.branch,
       initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} ${where}. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}`.trim(),
       source_id: s.source_id, item_ids: s.item_ids, options: { ...s.options, worker_id: workerId }, claude_account: s.claude_account,
-      worker_id: workerId, moved_from: s.id,
+      worker_id: workerId, moved_from: s.id, started_by: s.started_by,
     });
     for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);
     this.hub.send(s.worker_id, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });

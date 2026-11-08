@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Session } from '../src/shared/types.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import type { StartSpec } from '../src/shared/protocol.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 const spec = (o: Partial<typeof DEFAULT_RUN_OPTIONS>): StartSpec => ({
   session_id: 1, kind: 'work', project_key: 'P', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b',
@@ -80,7 +80,7 @@ describe('auto-merge', () => {
     await s.call('POST', '/projects', { key: 'AM', name: 'AM' });
     await s.call('POST', '/projects/AM/repos', { github_owner: 'me', github_name: 'r' });
     const item = (await s.call('POST', '/projects/AM/items', { title: 'x' })).data;
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/am-1-x',
       initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
     });
@@ -158,7 +158,7 @@ describe('auto-merge', () => {
     await s.call('POST', '/projects', { key: 'TWO', name: 'Two' });
     for (const name of ['front', 'back']) await s.call('POST', '/projects/TWO/repos', { github_owner: 'me', github_name: name });
     const item = (await s.call('POST', '/projects/TWO/items', { title: 'x' })).data;
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/two-1-x',
       initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
     });

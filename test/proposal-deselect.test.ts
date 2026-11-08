@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 // DISP-38: an item unticked on a batch card stays out of the session started from it
 describe('an item left out on a proposal card', () => {
@@ -12,7 +12,7 @@ describe('an item left out on a proposal card', () => {
   afterAll(() => s.app.close());
 
   const card = async (prompt: string) => {
-    const p = s.ctx.store.createSession({ project_id: s.ctx.store.projectByKey('DSL')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const p = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: s.ctx.store.projectByKey('DSL')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     const [a, b] = await Promise.all(['Keep me', 'Leave me out'].map(async (title) => (await s.call('POST', '/projects/DSL/items', { title })).data as { id: number; key: string }));
     s.ctx.store.addEvent(p.id, { kind: 'user', text: 'plan it' });
     await s.ctx.sessions.rpc(p.id, 'propose', { type: 'batch', title: 'Two things', item_ids: [a.id, b.id], prompt: prompt.replace('A', a.key).replace('B', b.key) });

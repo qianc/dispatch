@@ -28,18 +28,24 @@ export function suggestKey(name: string, taken: (k: string) => boolean): string 
   for (let i = 2; ; i++) if (!taken(`${base}${i}`)) return `${base}${i}`;
 }
 
+/** The assistant's tools that create or change projects and their repos. */
+const PROJECT_TOOLS = ['create_project', 'update_project', 'add_repo', 'remove_repo'];
+
 export class AssistantTools {
   private store: Store;
   private bus: Bus;
   private github: GitHub;
   private sessions: Sessions;
   private hub: WorkerHub;
+  /** only their assistant chats create and change projects (DISP-63) */
+  private installOwner: string;
   /** A project's own instructions (its CLAUDE.md, AGENTS.md); set by the app. */
   rules: (p: Project) => Promise<string> = async () => '';
   /** "session:project" pairs whose instructions the assistant has been shown. */
   private rulesShown = new Set<string>();
 
-  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub) {
+  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub, installOwner: string) {
+    this.installOwner = installOwner;
     this.hub = hub;
     this.store = store;
     this.bus = bus;
@@ -129,6 +135,10 @@ export class AssistantTools {
   }
 
   async call(s: Session, method: string, p: Record<string, unknown>): Promise<unknown> {
+    // projects are the install owner's to change (as over HTTP); a chat no user started acts for the install, like the legacy token
+    if (PROJECT_TOOLS.includes(method) && s.started_by !== null && s.started_by !== this.installOwner) {
+      throw new Error(`Only the install owner (${this.installOwner}) can create or change projects. Tell the user to ask them.`);
+    }
     switch (method) {
       case 'inspect_github_repo':
         return this.inspectRepo(String(p.repo ?? ''), p.project_key ? this.project(p.project_key).github_account : null);

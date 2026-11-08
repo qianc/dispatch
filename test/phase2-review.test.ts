@@ -78,7 +78,7 @@ describe('phase 2 review fixes', () => {
       const r = s.ctx.store.repo(repo.id)!;
       await s.ctx.hosted.pushUpstream(r, upstream, ['refs/heads/main'], {});
       const p = s.ctx.store.projectByKey('PR2')!;
-      const session = s.ctx.store.createSession({ project_id: p.id, kind: 'work', title: 'T', status: 'idle', force_plan: false, branch: 'dispatch/pr2-1-t', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: p.id, kind: 'work', title: 'T', status: 'idle', force_plan: false, branch: 'dispatch/pr2-1-t', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
       git(w, 'checkout', '--quiet', '-b', session.branch!);
       writeFileSync(join(w, 'b.txt'), 'b\n');
       git(w, 'add', '.');

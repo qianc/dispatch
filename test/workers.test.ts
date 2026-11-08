@@ -40,7 +40,7 @@ describe('worker records', () => {
       const gh = s.ctx.store.addRepo(p.id, { github_owner: 'o', github_name: 'r', default_branch: 'main', check_command: null });
       expect(local).toMatchObject({ kind: 'local', worker_id: s.ctx.workers.defaultId() });
       expect(gh).toMatchObject({ kind: 'github', worker_id: null });
-      const sess = s.ctx.store.createSession({ project_id: p.id, kind: 'work', title: 't', status: 'queued', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+      const sess = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: p.id, kind: 'work', title: 't', status: 'queued', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
       expect(sess).toMatchObject({ worker_id: s.ctx.workers.defaultId(), paused: false, pending_prompt: null, moved_from: null });
       expect(s.ctx.store.project(p.id)).toMatchObject({ worker_id: null, placement_md: '' });
     } finally {

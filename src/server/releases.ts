@@ -35,12 +35,14 @@ export function matchesRepo(cap: ReleaseCapability, repo: Repo, workerId: number
   return same.length === 1 && same[0].id === repo.id;
 }
 
-export function releaseOptions(deps: { store: Store; hub: WorkerHub; workers: Workers }, project: Project): ReleaseOption[] {
+export function releaseOptions(deps: { store: Store; hub: WorkerHub; workers: Workers }, project: Project, owner?: string): ReleaseOption[] {
   const repos = deps.store.repos(project.id);
   const out: ReleaseOption[] = [];
   for (const workerId of deps.hub.connectedIds()) {
     const worker = deps.workers.get(workerId);
     if (!worker || worker.revoked_at) continue;
+    // only workers of whoever releases (DISP-63)
+    if (owner !== undefined && worker.owner !== owner) continue;
     for (const cap of deps.hub.facts(workerId)?.releases ?? []) {
       for (const repo of repos) {
         if (!matchesRepo(cap, repo, workerId, repos)) continue;

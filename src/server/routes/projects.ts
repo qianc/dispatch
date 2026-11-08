@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
@@ -6,7 +6,7 @@ import { assertWritable, setDisabled } from '../projectLock.ts';
 import { principalName } from '../access.ts';
 import { addHostedRepo, addLocalRepo, mergeNote, ownerName, setPlacement } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, bus, hosted, sessions }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { cfg, store, hub, github, workers, users, bus, hosted, sessions }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -141,6 +141,14 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     return { ok: true };
   });
 
+  /** Copies on a worker are set by the install owner, or by the worker's owner (DISP-63). */
+  const mayPlace = (req: FastifyRequest, workerId: number) => {
+    const user = req.principal!.user;
+    if (users.isOwner(user)) return;
+    const w = workers.get(workerId);
+    if (!w || w.owner !== user) throw new HttpError(403, `Only the install owner (${cfg.installOwner}) or the worker's owner can change its copies.`);
+  };
+
   // a local repo's copy on a worker (DISP-45): add one, or change its path there
   app.put('/api/repos/:id/placements/:workerId', async (req) => {
     const params = req.params as { id: string; workerId: string };
@@ -148,6 +156,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     if (!repo) throw notFound('Repo');
     const workerId = intParam(params.workerId);
     if (!workers.get(workerId) || workers.get(workerId)!.revoked_at) throw new HttpError(400, `Unknown worker ${workerId}`);
+    mayPlace(req, workerId);
     const { local_path } = z.object({ local_path: z.string().min(1) }).parse(req.body);
     const { repo: updated, info } = await setPlacement(store, hub, repo, workerId, local_path);
     bus.emit({ t: 'project', key: store.project(repo.project_id)!.key });
@@ -158,6 +167,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const params = req.params as { id: string; workerId: string };
     const repo = store.repo(intParam(params.id));
     if (!repo) throw notFound('Repo');
+    mayPlace(req, intParam(params.workerId));
     let updated;
     try {
       updated = store.removePlacement(repo.id, intParam(params.workerId));

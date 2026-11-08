@@ -4,6 +4,7 @@
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { now } from './db.ts';
+import { Workers } from './workers.ts';
 
 export interface User {
   name: string;
@@ -71,6 +72,11 @@ export class Users {
     this.db.run('INSERT INTO users (name, last_seen_at) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_seen_at = excluded.last_seen_at', name, now());
   }
 
+  /** the install owner's name */
+  get installOwner(): string {
+    return this.owner;
+  }
+
   isOwner(name: string | null | undefined): boolean {
     return !!name && name === this.owner;
   }
@@ -80,12 +86,18 @@ export class Users {
     return this.isOwner(name) ? undefined : name ?? '';
   }
 
-  /** The user's own default worker, if it is still live. */
+  /**
+   * The user's own default worker: the one they picked, if it is still live and theirs, else their
+   * first worker. The install owner falls back to the install's default (the legacy worker).
+   * null: the user has no worker.
+   */
   defaultWorker(name: string): number | null {
-    const r = this.db.get<{ id: number }>(
-      'SELECT w.id FROM users u JOIN workers w ON w.id = u.default_worker_id WHERE u.name = ? AND w.revoked_at IS NULL', name,
-    );
-    return r?.id ?? null;
+    const own = (id: number | null | undefined) =>
+      !!id && !!this.db.get('SELECT id FROM workers WHERE id = ? AND owner = ? AND revoked_at IS NULL', id, name);
+    const picked = this.db.get<{ default_worker_id: number | null }>('SELECT default_worker_id FROM users WHERE name = ?', name)?.default_worker_id;
+    if (own(picked)) return picked!;
+    if (this.isOwner(name)) return new Workers(this.db).defaultId();
+    return this.db.get<{ id: number }>('SELECT id FROM workers WHERE owner = ? AND revoked_at IS NULL ORDER BY id LIMIT 1', name)?.id ?? null;
   }
 
   setDefaultWorker(name: string, id: number | null) {

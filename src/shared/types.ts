@@ -209,6 +209,8 @@ export interface Session {
   schedule_id: number | null;
   /** it stopped because its Claude account is not signed in; cleared when it runs again (DISP-60) */
   login_needed: LoginHelp | null;
+  /** the user who started it (a schedule's run: the schedule's owner); null: no user (the legacy API token) */
+  started_by: string | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -241,6 +243,8 @@ export interface Schedule {
   last_session_id: number | null;
   /** why the last run could not start */
   last_error: string | null;
+  /** who made it: its runs are theirs, on their workers */
+  owner: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -293,6 +297,8 @@ export interface WorkerRecord {
   facts: WorkerFacts | null;
   /** the legacy worker connects with the server's WORKER_TOKEN */
   legacy: boolean;
+  /** the user it belongs to: only they start work on it */
+  owner: string | null;
   connected?: boolean;
 }
 

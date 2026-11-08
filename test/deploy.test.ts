@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -44,7 +44,7 @@ describe('deploy after a merge (DISP-37)', () => {
     const repo = (await s.call('PATCH', `/repos/${added.id}`, { deploy_command: deploy })).data;
     expect(repo.deploy_command).toBe(deploy);
     const branch = `dispatch/${key.toLowerCase()}-1-x`;
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: repo.project_id, kind: 'work', title: 'Add b', status: 'idle', force_plan: false, branch,
       initial_prompt: '', source_id: null, item_ids: [],
       options: autoMerge ? { ...DEFAULT_RUN_OPTIONS, auto_merge: 'local' } : undefined,

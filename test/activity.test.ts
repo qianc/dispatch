@@ -4,7 +4,7 @@ import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
 import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, recentDiscussions, searchQuery, sessionLink, swipeOffset, waitingCount } from '../web/src/activity.ts';
 import type { Inbox } from '../web/src/api.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const pr = (patch: Partial<PullRequest>): PullRequest => ({
   id: 1, session_id: 1, repo_id: 1, repo_full_name: 'me/r', number: 7, url: '', title: '', state: 'open', mergeable: true, mergeable_state: null,
@@ -63,7 +63,7 @@ describe('Activity search over the full history (DISP-54)', () => {
     const { store } = s.ctx;
     const make = (key: string, kind: Session['kind'], title: string, at: string, messages: string[], prompt = '') => {
       const p = store.projectByKey(key)!;
-      const made = store.createSession({ project_id: p.id, kind, title, status: 'completed', force_plan: false, branch: null, initial_prompt: prompt, source_id: null, item_ids: [] });
+      const made = store.createSession({ started_by: OWNER, worker_id: store.defaultWorkerId(), project_id: p.id, kind, title, status: 'completed', force_plan: false, branch: null, initial_prompt: prompt, source_id: null, item_ids: [] });
       messages.forEach((text, i) => store.addEvent(made.id, { kind: i % 2 ? 'assistant' : 'user', text }));
       // a chat that ran long ago: dated after its events were written
       store.db.run('UPDATE sessions SET created_at = ?, updated_at = ? WHERE id = ?', at, at, made.id);

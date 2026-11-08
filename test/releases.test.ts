@@ -174,7 +174,7 @@ describe('releases from the interface', () => {
       const project = store.projectByKey('REL')!;
       const other = (await s.call('POST', '/projects/REL/repos', { github_owner: 'me', github_name: 'convert' })).data;
       const merge = (repo: number, number: number, state: 'merged' | 'open', ...items: { id: number }[]) => {
-        const session = store.createSession({ project_id: project.id, kind: 'work', title: 't', status: 'completed', force_plan: false, branch: `b${number}`, initial_prompt: 'x', source_id: null, item_ids: items.map((i) => i.id), options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: b.id });
+        const session = store.createSession({ started_by: OWNER, project_id: project.id, kind: 'work', title: 't', status: 'completed', force_plan: false, branch: `b${number}`, initial_prompt: 'x', source_id: null, item_ids: items.map((i) => i.id), options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: b.id });
         store.db.run("INSERT INTO pull_requests (session_id, repo_id, number, url, state, head_ref) VALUES (?, ?, ?, '', ?, 'b')", session.id, repo, number, state);
       };
       done('Shipped in convert', 'backlog', ['convert:v0.3.0']);

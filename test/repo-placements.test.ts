@@ -47,11 +47,11 @@ describe('local repo copies (DISP-45)', () => {
     delete found['/a/app'];
     await checkPlacements(s.ctx.store, s.ctx.hub, other);
     expect(status()).toMatchObject({ status: 'missing', detail: '/a/app is not a git repository' });
-    expect(() => s.ctx.sessions.workerFor(p, null)).toThrow(/No worker has an ok copy/);
+    expect(() => s.ctx.sessions.workerFor(p, null, OWNER)).toThrow(/No worker has an ok copy/);
     found['/a/app'] = { root_sha: 'aaa' };
     await checkPlacements(s.ctx.store, s.ctx.hub, other);
     expect(status()).toMatchObject({ status: 'ok', detail: null, root_sha: 'aaa' });
-    expect(s.ctx.sessions.workerFor(p, null)).toBe(other);
+    expect(s.ctx.sessions.workerFor(p, null, OWNER)).toBe(other);
   });
 
   it('a new local repo has its home copy', () => {
