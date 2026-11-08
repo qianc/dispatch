@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
@@ -39,11 +39,18 @@ import { fileRoutes } from './routes/files.ts';
 import { workerRoutes } from './routes/workers.ts';
 import { releaseRoutes } from './routes/releases.ts';
 import { Workers } from './workers.ts';
+import { Users } from './users.ts';
+import { Identities } from './identities.ts';
+import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
+import { githubRoutes } from './routes/github.ts';
+import { connectUrl, needsGithub, resolveGithubIdentity, safePath, type IdentityDeps } from './identity.ts';
+import type { Session } from '../shared/types.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
 import { Scheduler } from './scheduler.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
+import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
 
 
 declare module 'fastify' {
@@ -54,7 +61,18 @@ declare module 'fastify' {
 }
 
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
-  const db = new Db(opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db'));
+  const dbFile = opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db');
+  const db = new Db(dbFile);
+  // after the database: it made the data folder the key file goes into
+  const secretKey = loadKey(cfg, dbFile);
+  const users = new Users(db, cfg);
+  users.claim();
+  // people's own GitHub tokens, sealed with the secret key (DISP-63)
+  const box = new SecretBox(secretKey.key);
+  const identities = new Identities(db, box, cfg);
+  if (!keyMatches(db, box)) {
+    console.warn('The secret key changed: GitHub tokens stored with the old key cannot be read (Settings → Your GitHub says "connect again"). Start with the old key to read them again.');
+  }
   const store = new Store(db);
   const workers = new Workers(db);
   const hosted = new HostedGit(cfg.dataDir);
@@ -67,11 +85,31 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus);
-  const sessions = new Sessions(store, bus, hub, notifier, workers);
-  const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, cfg.githubApiUrl);
+  const sessions = new Sessions(store, bus, hub, notifier, workers, users);
+  // as whom each session acts on GitHub (DISP-63): its starter, the owner's env accounts, or the shared one
+  const identityDeps: IdentityDeps = {
+    identities,
+    get installOwner() {
+      return users.installOwner;
+    },
+    envAccounts: cfg.githubAccounts, oauth: !!cfg.githubOAuth,
+    workerAccounts: (id) => (hub.facts(id) ?? workers.get(id)?.facts)?.github_accounts ?? [],
+  };
+  sessions.identity = (startedBy, project, workerId) => resolveGithubIdentity(identityDeps, { started_by: startedBy }, project, workerId);
+  // never kept from a worker's messages: the starter's own token and the server's env accounts' (DISP-63)
+  sessions.secretsOf = (s) => {
+    const cred = s.started_by ? identities.get(s.started_by) : null;
+    return [...cfg.githubAccounts.map((a) => a.token), ...(cred && 'token' in cred ? [cred.token] : [])];
+  };
+  // as Sessions.identityFor: a session with no user may use its worker's own env account
+  const sessionIdentity = (s: Session) => {
+    const project = s.project_id ? store.project(s.project_id) : undefined;
+    return project && needsGithub(store, project) ? resolveGithubIdentity(identityDeps, s, project, s.worker_id ?? undefined) : null;
+  };
+  const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, identities, sessionIdentity, cfg.githubApiUrl);
   github.gitBase = cfg.githubGitBase;
   github.hosted = hosted;
-  const assistant = new AssistantTools(store, bus, github, sessions, hub);
+  const assistant = new AssistantTools(store, bus, github, sessions, hub, users);
   assistant.rules = (p) => projectRules({ store, hub, hosted }, p);
   const attachments = new Attachments(cfg.dataDir);
   sessions.attachments = attachments;
@@ -114,9 +152,9 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
   };
   const devices = new Devices(db);
-  const access = new Access(cfg, db, auth, devices);
+  const access = new Access(cfg, db, auth, devices, users);
   const scheduler = new Scheduler(store, sessions, bus);
-  const ctx: Ctx = { cfg, store, auth, access, devices, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
@@ -133,13 +171,24 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   await app.register(cookie);
   await app.register(websocket);
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
     if (err instanceof ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
-    if (err instanceof HttpError || err instanceof SessionError) return reply.status(err.status).send({ error: err.message });
+    if (err instanceof SessionError) return reply.status(err.status).send({ error: err.message, ...err.extra, ...connectBack(req, err.extra) });
+    if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number; status?: number }).statusCode ?? (err as { status?: number }).status ?? 500;
     if (status >= 500) console.error(err);
     return reply.status(status).send({ error: (err as Error).message });
   });
+
+  /**
+   * A person's missing GitHub connection: connecting brings them back to the page they are on (the
+   * web app sends it as x-dispatch-path), when that is a path in Dispatch.
+   */
+  const connectBack = (req: FastifyRequest, extra: Record<string, unknown>) => {
+    if (extra.code !== 'github_not_connected' && extra.code !== 'github_token_unreadable') return {};
+    const from = safePath(String(req.headers['x-dispatch-path'] ?? ''));
+    return from ? { connect_url: connectUrl(!!cfg.githubOAuth, from) } : {};
+  };
 
   // Proxy mode: the port is no way around the proxy's sign-in. Only this machine and the proxy get in.
   app.addHook('onRequest', async (req, reply) => {
@@ -159,6 +208,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     if (need === 'user' ? who.kind !== 'user' : !who.scopes.has(need)) {
       return reply.status(403).send({ error: need === 'user' ? 'Only a signed-in person can do this, not a token.' : `This needs the "${need}" scope${who.kind === 'token' && !who.local ? ' (tokens used from another machine are limited to read and tracker)' : ''}.` });
     }
+    // projects and install settings: the install owner only (or the legacy token, which acts for the install)
+    if (need === 'admin' && !who.legacy && !users.isOwner(who.user)) {
+      return reply.status(403).send({ error: `Only the install owner (${users.installOwner}) can change this.` });
+    }
+    if (who.kind === 'user') users.touch(who.name);
     req.principal = who;
   });
 
@@ -170,10 +224,17 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     if (p) return reply.status(423).send({ error: disabledMessage(p) });
   });
 
+  // Other people's sessions are read-only (DISP-63): only the starter drives one; the install owner may also stop it.
+  app.addHook('preHandler', async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith('/api/') || !req.principal) return;
+    const s = refusedSession(store, req.principal, req.method, route, req.params as Record<string, string>, req.body, users.installOwner);
+    if (s) return reply.status(403).send({ error: readOnlyMessage(s) });
+  });
+
   // "Sign in again": behind a sign-in proxy this path goes through its login, then back into the app
   app.get('/signin', async (req, reply) => {
-    const to = String((req.query as { to?: string }).to ?? '/');
-    return reply.redirect(to.startsWith('/') && !to.startsWith('//') ? to : '/');
+    return reply.redirect(safePath((req.query as { to?: string }).to) ?? '/');
   });
 
   // OAuth clients send forms (application/x-www-form-urlencoded)
@@ -209,6 +270,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   gitRoutes(app, ctx);
   imageRoutes(app, ctx);
   scheduleRoutes(app, ctx);
+  githubRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);

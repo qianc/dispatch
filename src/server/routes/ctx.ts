@@ -11,6 +11,8 @@ import type { Sessions } from '../sessions.ts';
 import type { Store } from '../store.ts';
 import type { WorkerHub } from '../workerHub.ts';
 import type { Workers } from '../workers.ts';
+import type { Users } from '../users.ts';
+import type { Identities } from '../identities.ts';
 import type { HostedGit } from '../hosted.ts';
 import type { Scheduler } from '../scheduler.ts';
 
@@ -20,6 +22,11 @@ export interface Ctx {
   auth: Auth;
   access: Access;
   devices: Devices;
+  users: Users;
+  /** each person's own GitHub connection */
+  identities: Identities;
+  /** the key file Dispatch generated for secrets in the database, or null (DISPATCH_SECRET_KEY, or in memory) */
+  secretKeyFile: string | null;
   bus: Bus;
   hub: WorkerHub;
   workers: Workers;

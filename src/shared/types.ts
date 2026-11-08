@@ -209,6 +209,10 @@ export interface Session {
   schedule_id: number | null;
   /** it stopped because its Claude account is not signed in; cleared when it runs again (DISP-60) */
   login_needed: LoginHelp | null;
+  /** the user who started it (a schedule's run: the schedule's owner); null: no user (the legacy API token) */
+  started_by: string | null;
+  /** the GitHub login it acts as: the starter's own account (null: the env accounts) */
+  github_login: string | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -241,6 +245,8 @@ export interface Schedule {
   last_session_id: number | null;
   /** why the last run could not start */
   last_error: string | null;
+  /** who made it: its runs are theirs, on their workers */
+  owner: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -280,6 +286,8 @@ export interface WorkerFacts {
   releases?: ReleaseCapability[];
   /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
   repo_envs?: string[];
+  /** what it can do; 'github_cred': runs a session as its user's own GitHub account (DISP-63; missing from older workers) */
+  caps?: string[];
 }
 
 export interface WorkerRecord {
@@ -293,6 +301,8 @@ export interface WorkerRecord {
   facts: WorkerFacts | null;
   /** the legacy worker connects with the server's WORKER_TOKEN */
   legacy: boolean;
+  /** the user it belongs to: only they start work on it */
+  owner: string | null;
   connected?: boolean;
 }
 
@@ -420,6 +430,38 @@ export interface PullRequest {
   blocked: string | null;
   /** commits the default branch had that the branch lacked, when it was merged */
   behind_at_merge: number | null;
+  /** who started its session (null: no user) */
+  started_by: string | null;
+  /** the GitHub login its session acts as (null: the env accounts) */
+  github_login: string | null;
+}
+
+/** A GitHub permission on a repo, from strongest to weakest; null: could not be checked. */
+export type GithubPermission = 'admin' | 'write' | 'read' | 'none';
+
+/** One account that can act on GitHub in a project (never its token). */
+export interface GithubAccessAccount {
+  /** the Dispatch user it acts for (owner-env: the install owner) */
+  user: string | null;
+  /** the GitHub login (null: not known) */
+  login: string | null;
+  /** `user`: their own connection; `owner-env`: the server's env account the install owner uses */
+  source: 'user' | 'owner-env';
+  /** owner-env: the env account's name */
+  account?: string;
+  /** with ?verify=1: the weakest permission over the project's GitHub repos (null: could not be checked) */
+  permission?: GithubPermission | null;
+  /** with ?verify=1: the permission on each GitHub repo ("owner/name") */
+  repos?: { repo: string; permission: GithubPermission | null }[];
+}
+
+/** GET /api/projects/:key/github-access: who can act on GitHub in a project (DISP-63). */
+export interface GithubAccess {
+  /** work in this project reaches GitHub */
+  needs_github: boolean;
+  /** can the caller start work here; else why, and where to connect */
+  you: { ok: boolean; message?: string; connect_url?: string };
+  accounts: GithubAccessAccount[];
 }
 
 /** A time the owner's hands were needed to get work merged. */

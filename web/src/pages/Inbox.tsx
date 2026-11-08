@@ -8,6 +8,7 @@ import { waitsOnOwner } from '../../../src/shared/attention.ts';
 import { crossProjectSummary } from '../../../src/shared/types.ts';
 import { Page } from '../components/Layout.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
+import { PrOpenedBy } from '../components/PrState.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
@@ -109,6 +110,7 @@ export function Inbox() {
               <Link key={pr.id} to={`/pr/${pr.id}`} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
                 <span className="text-[12px] text-faint shrink-0">{pr.local ? `${pr.repo_full_name.split('/')[1]} branch` : `${pr.repo_full_name.split('/')[1]}#${pr.number}`}</span>
                 <span className="flex-1 min-w-0 truncate">{pr.title}</span>
+                <PrOpenedBy pr={pr} className="shrink-0 hidden sm:inline" />
                 {pr.mergeable === false && <Chip tone="bad">Conflict</Chip>}
               </Link>
             ))}

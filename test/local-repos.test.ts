@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { listFolder } from '../src/worker/mcp.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -149,7 +149,7 @@ describe('local repos end to end on the server', () => {
   it('shows a pushed session branch for review, with its diff, and merges it into the folder', async () => {
     const repo = (await s.call('GET', '/projects/LOC')).data.repos[0];
     const item = (await s.call('POST', '/projects/LOC/items', { title: 'Add b', status: 'in_progress' })).data; // as a started batch leaves it
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: repo.project_id, kind: 'work', title: 'Add b', status: 'idle', force_plan: false, branch: 'dispatch/loc-1-add-b',
       initial_prompt: '', source_id: null, item_ids: [item.id],
     });

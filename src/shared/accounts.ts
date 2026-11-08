@@ -11,6 +11,8 @@
 //   CLAUDE_ACCOUNT_X_LABEL="Work"
 //   (without CLAUDE_ACCOUNTS: one account "default" = this machine's login / CLAUDE_CODE_OAUTH_TOKEN, unchanged)
 
+import type { GithubCred, StartSpec } from './protocol.ts';
+
 export interface GithubAccount {
   name: string;
   token: string;
@@ -142,6 +144,23 @@ export function githubEnv(account: GithubAccount | undefined): Env {
   if (account.git_name) env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = account.git_name;
   if (account.git_email) env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = account.git_email;
   return env;
+}
+
+/**
+ * Git and gh environment for a user's own GitHub credential (DISP-63): their token in every
+ * variable git, gh and other tools read, and their commit identity. It replaces the worker's own.
+ */
+export function githubCredEnv(c: GithubCred): Env {
+  return {
+    DISPATCH_GH_TOKEN: c.token, GH_TOKEN: c.token, GITHUB_TOKEN: c.token,
+    GIT_AUTHOR_NAME: c.git_name, GIT_COMMITTER_NAME: c.git_name,
+    GIT_AUTHOR_EMAIL: c.git_email, GIT_COMMITTER_EMAIL: c.git_email,
+  };
+}
+
+/** A session's GitHub environment: its starter's own credential when it has one, else the project's env account. */
+export function sessionGithubEnv(spec: Pick<StartSpec, 'github_account'> & { github?: GithubCred | null }, envAccounts: GithubAccount[]): Env {
+  return spec.github ? githubCredEnv(spec.github) : githubEnv(pick(envAccounts, spec.github_account));
 }
 
 /** The account a session or repo uses: the named one, else the first. */

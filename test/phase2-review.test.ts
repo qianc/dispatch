@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { ServerLink, Slots } from '../src/worker/serverLink.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
-import { startServer, waitFor } from './helpers.ts';
+import { startServer, waitFor, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_TERMINAL_PROMPT: '0' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -24,7 +25,7 @@ async function hostedServer(extraEnv: Record<string, string> = {}) {
   const s = await startServer({ DATA_DIR: mkdtempSync(join(tmpdir(), 'dsp-p2r-')), ...extraEnv });
   await s.call('POST', '/projects', { key: 'PR2', name: 'Phase 2 review' });
   const repo = (await s.call('POST', '/projects/PR2/repos', { hosted: { name: 'app' } })).data as Repo;
-  const secret = s.ctx.workers.create('linux', '').secret;
+  const secret = s.ctx.workers.create('linux', '', OWNER).secret;
   const url = `${s.base}/git/r${repo.id}.git`;
   const w = mkdtempSync(join(tmpdir(), 'dsp-p2w-'));
   const auth = ['-c', `http.extraHeader=Authorization: Bearer ${secret}`];
@@ -78,7 +79,7 @@ describe('phase 2 review fixes', () => {
       const r = s.ctx.store.repo(repo.id)!;
       await s.ctx.hosted.pushUpstream(r, upstream, ['refs/heads/main'], {});
       const p = s.ctx.store.projectByKey('PR2')!;
-      const session = s.ctx.store.createSession({ project_id: p.id, kind: 'work', title: 'T', status: 'idle', force_plan: false, branch: 'dispatch/pr2-1-t', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: p.id, kind: 'work', title: 'T', status: 'idle', force_plan: false, branch: 'dispatch/pr2-1-t', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
       git(w, 'checkout', '--quiet', '-b', session.branch!);
       writeFileSync(join(w, 'b.txt'), 'b\n');
       git(w, 'add', '.');
@@ -86,11 +87,11 @@ describe('phase 2 review fixes', () => {
       expect((await gitAsync(w, ...auth, 'push', '--quiet', 'origin', session.branch!)).code).toBe(0);
       let created = 0;
       const ghPr = () => ({ number: 5, html_url: 'u', title: 'T', state: 'open', merged_at: null, mergeable: true, mergeable_state: 'clean', head: { ref: session.branch, sha: 'old' }, base: { ref: 'main' }, body: '' });
-      Object.defineProperty(s.ctx.github, 'octo', { value: {
+      fakeGithub(s.ctx, {
         pulls: { create: async () => { created++; return { data: ghPr() }; }, get: async () => ({ data: ghPr() }), list: async () => ({ data: created ? [ghPr()] : [] }) },
         checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
         repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-      } });
+      });
       const [row] = await s.ctx.github.syncSession(session);
       await s.call('POST', `/prs/${row.id}/github-pr`);
       // a review fix, pushed to Dispatch's repo as always

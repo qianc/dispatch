@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 describe('Discuss suggests item changes; the owner applies them', () => {
   let s: Awaited<ReturnType<typeof startServer>>;
@@ -11,7 +11,7 @@ describe('Discuss suggests item changes; the owner applies them', () => {
 
   const setup = async () => {
     const it = (await s.call('POST', '/projects/DU/items', { title: 'Voice rules', importance: 2, labels: ['voice'] })).data;
-    const chat = s.ctx.store.createSession({ project_id: it.project_id, kind: 'discuss', title: 'd', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [it.id] });
+    const chat = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: it.project_id, kind: 'discuss', title: 'd', status: 'running', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [it.id] });
     const card = async () => {
       const ev = (await s.call('GET', `/sessions/${chat.id}`)).data.events as { id: number; body: { kind: string; proposal?: unknown; event_id?: number; note?: string } }[];
       return { proposal: ev.filter((e) => e.body.kind === 'proposal').at(-1)!, done: ev.filter((e) => e.body.kind === 'proposal_done') };

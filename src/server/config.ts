@@ -42,6 +42,21 @@ export interface Config {
   /** GitHub's API (GITHUB_API_URL), e.g. https://github.example.com/api/v3 for an enterprise GitHub */
   githubApiUrl: string;
   proxySecretHeader: string;
+  /**
+   * The person who owns this install (DISPATCH_OWNER, else the first AUTH_USERS entry in proxy mode,
+   * else the single user): inherits rows from before users, and alone manages projects and settings.
+   * With `adoptOwner` this is only a placeholder: read the owner from Users (users.installOwner).
+   */
+  installOwner: string;
+  /**
+   * proxy mode with neither DISPATCH_OWNER nor AUTH_USERS: the first person signed in through the
+   * proxy becomes the install owner (users.ts adopt()).
+   */
+  adoptOwner: boolean;
+  /** key for secrets kept in the database (DISPATCH_SECRET_KEY); null: a generated key file */
+  secretKey: string | null;
+  /** GitHub OAuth App for "Connect with GitHub" (GITHUB_OAUTH_CLIENT_ID / _SECRET); null: paste a token */
+  githubOAuth: { clientId: string; clientSecret: string } | null;
 }
 
 const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -89,7 +104,13 @@ export function loadConfig(raw = process.env): Config {
     githubGitBase: (env.GITHUB_GIT_BASE ?? 'https://github.com').replace(/\/$/, ''),
     githubApiUrl: (env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, ''),
     proxySecretHeader: (env.PROXY_SECRET_HEADER ?? 'X-Proxy-Secret').toLowerCase(),
+    installOwner: '',
+    adoptOwner: false,
+    secretKey: env.DISPATCH_SECRET_KEY || null,
+    githubOAuth: env.GITHUB_OAUTH_CLIENT_ID && env.GITHUB_OAUTH_CLIENT_SECRET ? { clientId: env.GITHUB_OAUTH_CLIENT_ID, clientSecret: env.GITHUB_OAUTH_CLIENT_SECRET } : null,
   };
+  cfg.installOwner = env.DISPATCH_OWNER?.trim() || (cfg.authMode === 'proxy' ? cfg.authUsers[0] : undefined) || (cfg.authMode === 'off' ? 'local' : 'owner');
+  cfg.adoptOwner = cfg.authMode === 'proxy' && !env.DISPATCH_OWNER?.trim() && !cfg.authUsers.length;
   if (cfg.proxySecret && cfg.proxySecret.length < 24) throw new Error('PROXY_SECRET must be at least 24 characters.');
   if (env.AUTH_MODE && !['password', 'proxy'].includes(env.AUTH_MODE)) throw new Error('AUTH_MODE must be password or proxy.');
   if (cfg.authMode === 'password' && !cfg.appPassword && !cfg.appPasswordHash) {

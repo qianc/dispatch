@@ -1,5 +1,7 @@
 // GitHub: link PRs to sessions by branch, sync item status, show diffs, merge.
 import { Octokit } from '@octokit/rest';
+import { createHash } from 'node:crypto';
+import type { GithubCred } from '../shared/protocol.ts';
 import type { GithubAccount } from '../shared/accounts.ts';
 import type { BranchFile, BranchStatus, MergeEvent, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -11,6 +13,21 @@ import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import type { HostedGit } from './hosted.ts';
+import type { Identities } from './identities.ts';
+import { isRefusal, type GithubIdentity, type IdentityRefusal } from './identity.ts';
+import { refusalError } from './sessions.ts';
+
+/** As whom a session acts on GitHub now (identity.ts; null: its project needs no GitHub). */
+export type SessionIdentity = (s: Session) => GithubIdentity | IdentityRefusal | null;
+
+/** A GitHub client and git environment, acting as someone: the session's user (`user`) or an env account. */
+interface Acting {
+  /** null: no env account is configured */
+  octo: Octokit | null;
+  gitEnv: Record<string, string>;
+  /** the starter's own credential (source `user`), for worker commands */
+  cred: GithubCred | null;
+}
 
 export interface PrFile {
   filename: string;
@@ -53,8 +70,15 @@ export class GitHub {
   /** check commands running now for local merges, with their progress (DISP-5) */
   readonly checks: CheckRuns;
 
-  constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub, apiUrl = 'https://api.github.com') {
+  private identities: Pick<Identities, 'markRejected'>;
+  private identityOf: SessionIdentity;
+  private apiUrl: string;
+
+  constructor(accounts: GithubAccount[], store: Store, bus: Bus, notifier: Notifier, hub: WorkerHub, identities: Pick<Identities, 'markRejected'>, identityOf: SessionIdentity, apiUrl = 'https://api.github.com') {
     this.accounts = accounts;
+    this.identities = identities;
+    this.identityOf = identityOf;
+    this.apiUrl = apiUrl;
     for (const a of accounts) this.clients.set(a.name, new Octokit({ auth: a.token, userAgent: 'dispatch', baseUrl: apiUrl }));
     this.store = store;
     this.bus = bus;
@@ -100,9 +124,13 @@ export class GitHub {
    */
   gitEnv(repo: Pick<Repo, 'github_account'>): Record<string, string> {
     const account = this.accounts.find((a) => a.name === repo.github_account) ?? this.accounts[0];
-    if (!account) return {};
+    return account ? this.gitEnvForToken(account.token) : {};
+  }
+
+  /** gitEnv for one token (a user's own, DISP-63). */
+  gitEnvForToken(token: string): Record<string, string> {
     return {
-      DISPATCH_GH_TOKEN: account.token,
+      DISPATCH_GH_TOKEN: token,
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '!f() { echo username=x-access-token; echo "password=$DISPATCH_GH_TOKEN"; }; f',
@@ -113,10 +141,81 @@ export class GitHub {
     return (repo?.github_account && this.clients.get(repo.github_account)) || this.octo;
   }
 
-  private gh(repo: Pick<Repo, 'github_account'> | null) {
-    const c = this.clientFor(repo);
+  private mustClient(c: Octokit | null, repo: Pick<Repo, 'github_account'> | null) {
     if (!c) throw new Error(repo?.github_account ? `GitHub account "${repo.github_account}" is not configured` : 'No GitHub account is configured (GITHUB_ACCOUNTS or GITHUB_TOKEN)');
     return c;
+  }
+
+  /** Clients for people's own tokens, by the token's hash (DISP-63). A seam: tests replace it. */
+  private tokenClients = new Map<string, Octokit>();
+  clientForToken(token: string): Octokit {
+    const key = createHash('sha256').update(token).digest('hex');
+    let c = this.tokenClients.get(key);
+    if (!c) {
+      c = new Octokit({ auth: token, userAgent: 'dispatch', baseUrl: this.apiUrl });
+      this.tokenClients.set(key, c);
+    }
+    return c;
+  }
+
+  /**
+   * GitHub as the session's starter (DISP-63). `write` (PRs, merges, pushes, branch deletes) uses
+   * only the starter's identity: refused, it throws. `read` falls back to the shared client.
+   * Without a session (or an identity rule), the env accounts as before.
+   */
+  private as(s: Session | null | undefined, repo: Repo, mode: 'read' | 'write'): Acting {
+    const env = (): Acting => ({ octo: this.clientFor(repo), gitEnv: this.gitEnv(repo), cred: null });
+    const id = s ? this.identityOf(s) : null;
+    if (!id) return env();
+    if (isRefusal(id)) {
+      if (mode === 'write') throw refusalError(id);
+      return env();
+    }
+    if (id.source !== 'user') return env();
+    return {
+      octo: this.rejecting(this.clientForToken(id.token), id.user, id.login),
+      gitEnv: this.gitEnvForToken(id.token),
+      cred: { token: id.token, login: id.login, git_name: id.git_name, git_email: id.git_email },
+    };
+  }
+
+  /**
+   * A user's client that notices GitHub turning their token away (401): the connection is marked
+   * (they must connect again) and the error names the account.
+   */
+  private rejecting(octo: Octokit, user: string, login: string): Octokit {
+    const fail = (e: unknown) => {
+      if ((e as { status?: number })?.status !== 401) throw e;
+      const why = `GitHub turned away the token of ${user}'s account @${login}. Connect again in Settings → Your GitHub.`;
+      this.identities.markRejected(user, why);
+      throw Object.assign(new Error(why), { status: 401 });
+    };
+    const wrap = <T extends object>(target: T, depth: number): T => new Proxy(target, {
+      get: (t, k) => {
+        const v = Reflect.get(t, k);
+        return depth < 2 && v && (typeof v === 'object' || typeof v === 'function') ? wrap(v as object, depth + 1) : v;
+      },
+      apply: (t, self, args) => {
+        try {
+          const r = Reflect.apply(t as (...a: unknown[]) => unknown, self, args);
+          return r instanceof Promise ? r.catch(fail) : r;
+        } catch (e) {
+          return fail(e);
+        }
+      },
+    });
+    return wrap(octo, 0);
+  }
+
+  /** The starter's own credential when the session acts as them (else null: env accounts); never refuses. */
+  private credOf(s: Session | null | undefined): GithubCred | null {
+    const id = s ? this.identityOf(s) : null;
+    return id && !isRefusal(id) && id.source === 'user' ? { token: id.token, login: id.login, git_name: id.git_name, git_email: id.git_email } : null;
+  }
+
+  /** The client for a session's repo, or the error gh() gives when there is none. */
+  private client(s: Session | null | undefined, repo: Repo, mode: 'read' | 'write') {
+    return this.mustClient(this.as(s, repo, mode).octo, repo);
   }
 
   /** Configured accounts with the GitHub login each token belongs to (checked once). */
@@ -166,16 +265,23 @@ export class GitHub {
         if (repo.kind === 'hosted') {
           // a PR the owner chose to open on the upstream, then the review in Dispatch
           const t = this.target(repo);
-          if (t && this.clientFor(repo)) {
-            const { data } = await this.gh(repo).pulls.list({ owner: t.owner, repo: t.repo, head: `${t.owner}:${s.branch}`, state: 'all', per_page: 5 });
+          const reader = t ? this.as(s, repo, 'read').octo : null;
+          if (t && reader) {
+            const { data } = await reader.pulls.list({ owner: t.owner, repo: t.repo, head: `${t.owner}:${s.branch}`, state: 'all', per_page: 5 });
             for (const p of data) out.push(await this.record(s, repo, p as GhPull));
             // the review moved to GitHub, but sessions push to Dispatch's repo: bring new commits over
             const open = out.find((p) => p.repo_id === repo.id && p.number > 0 && p.state === 'open');
             if (open) {
               const st = await this.hosted!.branchStatus(repo, s.branch);
               if (st.exists && st.head_sha !== open.head_sha) {
-                const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${s.branch}`], this.gitEnv(repo));
-                if (!pushed.ok) console.warn(`could not update ${t.owner}/${t.repo} ${s.branch}:`, pushed.output.slice(0, 200));
+                let env: Record<string, string> | null = null;
+                try {
+                  env = this.as(s, repo, 'write').gitEnv; // the starter's push, or none
+                } catch (e) {
+                  console.warn(`not updating ${t.owner}/${t.repo} ${s.branch}:`, (e as Error).message);
+                }
+                const pushed = env && await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${s.branch}`], env);
+                if (pushed && !pushed.ok) console.warn(`could not update ${t.owner}/${t.repo} ${s.branch}:`, pushed.output.slice(0, 200));
               }
             }
           }
@@ -183,8 +289,9 @@ export class GitHub {
           if (pr) out.push(pr);
           continue;
         }
-        if (!this.clientFor(repo)) continue;
-        const { data } = await this.gh(repo).pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
+        const reader = this.as(s, repo, 'read').octo;
+        if (!reader) continue;
+        const { data } = await reader.pulls.list({ owner: repo.github_owner, repo: repo.github_name, head: `${repo.github_owner}:${s.branch}`, state: 'all', per_page: 5 });
         for (const p of data) out.push(await this.record(s, repo, p as GhPull));
       }
     } finally {
@@ -196,12 +303,14 @@ export class GitHub {
   /** A PR changed state (merged, closed, opened): queued batches may now start. */
   onPrChange: (() => void) | null = null;
 
-  /** Delete a merged PR's head branch on GitHub (no error if it is already gone). */
-  async deleteRemoteBranch(repo: Repo, branch: string): Promise<boolean> {
+  /** Delete a merged PR's head branch on GitHub (no error if it is already gone), as the session's starter. */
+  async deleteRemoteBranch(repo: Repo, branch: string, s: Session | null): Promise<boolean> {
     if (repo.kind === 'hosted') return this.hosted?.deleteBranch(repo, branch) ?? false;
-    if (repo.local_path || !this.clientFor(repo)) return false;
+    if (repo.local_path) return false;
+    const octo = this.as(s, repo, 'write').octo;
+    if (!octo) return false;
     try {
-      await this.gh(repo).git.deleteRef({ owner: repo.github_owner, repo: repo.github_name, ref: `heads/${branch}` });
+      await octo.git.deleteRef({ owner: repo.github_owner, repo: repo.github_name, ref: `heads/${branch}` });
       return true;
     } catch (e) {
       const code = (e as { status?: number }).status;
@@ -290,7 +399,12 @@ export class GitHub {
   private async pushUpstreamAfterMerge(repo: Repo, s: Session) {
     const t = this.target(repo);
     if (!t || !this.hosted) return;
-    const res = await this.hosted.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${repo.default_branch}`], this.gitEnv(repo));
+    let res: { ok: boolean; output: string };
+    try {
+      res = await this.hosted.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${repo.default_branch}`], this.as(s, repo, 'write').gitEnv);
+    } catch (e) {
+      res = { ok: false, output: (e as Error).message }; // the starter may not push to GitHub
+    }
     if (res.ok) return;
     const key = `${repo.id}:${s.id}`;
     if (this.upstreamToldFor.has(key)) return;
@@ -304,7 +418,7 @@ export class GitHub {
   private async pullUpstream(repo: Repo, s: Session) {
     const t = this.target(repo);
     if (!t || !this.hosted) return;
-    const res = await this.hosted.fetchUpstreamDefault(repo, this.gitUrl(t.owner, t.repo), this.gitEnv(repo));
+    const res = await this.hosted.fetchUpstreamDefault(repo, this.gitUrl(t.owner, t.repo), this.as(s, repo, 'read').gitEnv);
     if (!res.ok) this.store.addEvent(s.id, { kind: 'error', text: `The PR was merged on GitHub, but ${repo.default_branch} here could not follow (it has commits GitHub lacks): ${res.output.slice(0, 300)}` });
   }
 
@@ -320,11 +434,13 @@ export class GitHub {
     const t = this.target(repo);
     if (!t) throw new Error(`${repo.github_name} has no GitHub repo to open a PR on. Link one in the repo's settings.`);
     const s = this.store.session(pr.session_id)!;
-    const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${pr.head_ref}`], this.gitEnv(repo));
+    const acting = this.as(s, repo, 'write');
+    const octo = this.mustClient(acting.octo, repo);
+    const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${pr.head_ref}`], acting.gitEnv);
     if (!pushed.ok) throw new Error(`Pushing ${pr.head_ref} to ${t.owner}/${t.repo} failed: ${pushed.output.slice(0, 300)}`);
     const keys = this.store.itemsByIds(s.item_ids).map((i) => i.key);
     const body = `From Dispatch session #${s.id}${keys.length ? ` (${keys.join(', ')})` : ''}.`;
-    const { data } = await this.gh(repo).pulls.create({ owner: t.owner, repo: t.repo, head: pr.head_ref, base: repo.default_branch, title: s.title, body });
+    const { data } = await octo.pulls.create({ owner: t.owner, repo: t.repo, head: pr.head_ref, base: repo.default_branch, title: s.title, body });
     const opened = await this.record(s, repo, data as GhPull);
     this.store.upsertPr({ session_id: s.id, repo_id: repo.id, number: pr.number, url: pr.url, title: pr.title, state: 'closed', mergeable: pr.mergeable, mergeable_state: pr.mergeable_state, head_ref: pr.head_ref, head_sha: pr.head_sha });
     this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
@@ -338,21 +454,23 @@ export class GitHub {
     if (repo.local_path) return (await this.syncLocal(this.store.session(pr.session_id)!, repo)) ?? pr;
     if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.store.session(pr.session_id)!, repo)) ?? pr;
     const t = this.mustTarget(repo);
-    const { data } = await this.gh(repo).pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
-    return this.record(this.store.session(pr.session_id)!, repo, data as GhPull);
+    const s = this.store.session(pr.session_id)!;
+    const { data } = await this.client(s, repo, 'read').pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
+    return this.record(s, repo, data as GhPull);
   }
 
   /**
    * The CI results for a commit: GitHub's check runs, or, when the token may not read them (a
    * fine-grained PAT has no Checks permission), the GitHub Actions runs for the commit (Actions: read).
    */
-  private async checkRuns(repo: Repo, sha: string, perPage = 100): Promise<{ name: string; status: string; conclusion: string | null; html_url: string | null }[]> {
+  private async checkRuns(s: Session | null | undefined, repo: Repo, sha: string, perPage = 100): Promise<{ name: string; status: string; conclusion: string | null; html_url: string | null }[]> {
     const t = this.mustTarget(repo);
+    const octo = this.client(s, repo, 'read');
     try {
-      return (await this.gh(repo).checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage })).data.check_runs;
+      return (await octo.checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage })).data.check_runs;
     } catch (e) {
       if ((e as { status?: number }).status !== 403) throw e;
-      const { data } = await this.gh(repo).actions.listWorkflowRunsForRepo({ owner: t.owner, repo: t.repo, head_sha: sha, per_page: perPage });
+      const { data } = await octo.actions.listWorkflowRunsForRepo({ owner: t.owner, repo: t.repo, head_sha: sha, per_page: perPage });
       return data.workflow_runs.map((r) => ({ name: r.name ?? 'workflow', status: r.status ?? 'queued', conclusion: r.conclusion ?? null, html_url: r.html_url }));
     }
   }
@@ -379,7 +497,7 @@ export class GitHub {
       return { behind: st.behind, differs: st.differs };
     }
     const t = this.mustTarget(repo);
-    const { data } = await this.gh(repo).repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    const { data } = await this.client(this.store.session(pr.session_id), repo, 'read').repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
     return { behind: data.behind_by, differs: true };
   }
 
@@ -456,7 +574,7 @@ export class GitHub {
         return;
       }
     }
-    const checks = pr.head_sha && !pr.local ? await this.checkRuns(repo, pr.head_sha) : [];
+    const checks = pr.head_sha && !pr.local ? await this.checkRuns(s, repo, pr.head_sha) : [];
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
@@ -472,7 +590,7 @@ export class GitHub {
     let full = p;
     if (p.state === 'open' && p.mergeable === undefined) {
       const t = this.mustTarget(repo);
-      full = (await this.gh(repo).pulls.get({ owner: t.owner, repo: t.repo, pull_number: p.number })).data as GhPull;
+      full = (await this.client(s, repo, 'read').pulls.get({ owner: t.owner, repo: t.repo, pull_number: p.number })).data as GhPull;
     }
     const state: PullRequest['state'] = full.merged_at || full.merged ? 'merged' : full.state === 'open' ? 'open' : 'closed';
     return this.recordRow(s, repo, {
@@ -538,11 +656,13 @@ export class GitHub {
       return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     const o = this.mustTarget(repo);
+    const s = this.store.session(pr.session_id);
+    const octo = this.client(s, repo, 'read');
     const [{ data: p }, files, checks] = await Promise.all([
-      this.gh(repo).pulls.get({ ...o, pull_number: pr.number }),
-      this.gh(repo).paginate(this.gh(repo).pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
+      octo.pulls.get({ ...o, pull_number: pr.number }),
+      octo.paginate(octo.pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
       pr.head_sha
-        ? this.checkRuns(repo, pr.head_sha, 50).catch(() => [])
+        ? this.checkRuns(s, repo, pr.head_sha, 50).catch(() => [])
         : Promise.resolve([]),
     ]);
     return {
@@ -585,7 +705,8 @@ export class GitHub {
     const s = this.store.session(pr.session_id);
     if (!repo?.deploy_command || !s) return;
     const name = pr.repo_full_name.split('/').pop();
-    if (this.hub.send(s.worker_id, { t: 'deploy', session_id: s.id, repo })) {
+    // as the starter (their credential: the worker forgets it when the session closes)
+    if (this.hub.send(s.worker_id, { t: 'deploy', session_id: s.id, repo, github: this.credOf(s) })) {
       this.store.addEvent(s.id, { kind: 'system', text: `Deploying ${name}: ${repo.deploy_command}` });
       return;
     }
@@ -604,7 +725,7 @@ export class GitHub {
     if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
     if (how === 'github') {
       const t = this.mustTarget(repo);
-      await this.gh(repo).pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
+      await this.client(this.store.session(pr.session_id), repo, 'write').pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
@@ -625,9 +746,12 @@ export class GitHub {
    */
   private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
     type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } };
+    // a GitHub repo's merge is pushed to GitHub: as the starter only. Elsewhere their name goes on the commit.
+    const s = this.store.session(pr.session_id);
+    const github = this.target(repo) && repo.kind !== 'hosted' ? this.as(s, repo, 'write').cred : this.credOf(s);
     let res: Res | undefined;
     try {
-      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo) }, 15 * 60_000,
+      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github }, 15 * 60_000,
         (p) => this.checks.progress(pr, repo, p as CheckProgress));
       return res;
     } finally {
@@ -659,7 +783,7 @@ export class GitHub {
       const res = await this.mergeOnWorker(pr, repo, message);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     } else {
-      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge');
+      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge', authorEnv(this.credOf(s)));
       if (!res.ok) return { ok: false as const, conflict: res.conflict, output: res.output };
     }
     // a squash leaves the branch outside the history: say it is merged, do not work it out
@@ -674,7 +798,9 @@ export class GitHub {
   async createPr(s: Session, repoId: number) {
     const repo = this.store.repo(repoId);
     if (!repo || repo.project_id !== s.project_id || !s.branch) throw new Error('Unknown repo for this session');
-    await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch });
+    // a GitHub repo: pushed and opened as the session's starter only (local and hosted repos stay in Dispatch)
+    const acting = repo.local_path || repo.kind === 'hosted' ? null : this.as(s, repo, 'write');
+    await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch, github: acting?.cred ?? this.credOf(s) });
     if (repo.local_path || repo.kind === 'hosted') {
       const pr = repo.kind === 'hosted' ? await this.syncHosted(s, repo) : await this.syncLocal(s, repo);
       if (!pr) throw new Error('The branch has no commits beyond the default branch yet');
@@ -682,7 +808,13 @@ export class GitHub {
     }
     const items = this.store.itemsByIds(s.item_ids);
     const body = [`Opened from Dispatch session #${s.id}.`, '', ...items.map((i) => `- ${i.key}: ${i.title}`)].join('\n');
-    const { data } = await this.gh(repo).pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
+    const { data } = await this.mustClient(acting!.octo, repo).pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
     return this.record(s, repo, data as GhPull);
   }
+}
+
+/** A commit's author and committer: the user's own name and email (null: the server's, as before). */
+function authorEnv(cred: GithubCred | null): Record<string, string> | undefined {
+  if (!cred) return undefined;
+  return { GIT_AUTHOR_NAME: cred.git_name, GIT_AUTHOR_EMAIL: cred.git_email, GIT_COMMITTER_NAME: cred.git_name, GIT_COMMITTER_EMAIL: cred.git_email };
 }

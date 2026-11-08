@@ -16,6 +16,7 @@ import type { Auth } from './auth.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { DEVICE_COOKIE, type Devices } from './devices.ts';
+import type { Users } from './users.ts';
 
 export const SCOPES = ['read', 'tracker', 'sessions', 'admin'] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -42,6 +43,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/projects/:key/releases': 'read',
   'GET /api/projects/:key/releases/proposal': 'read',
   'GET /api/projects/:key/schedules': 'read',
+  'GET /api/projects/:key/github-access': 'read',
   'GET /api/items/:id': 'read',
   'GET /api/items/by-key/:key': 'read',
   'GET /api/items/:id/discuss': 'read',
@@ -105,8 +107,6 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/projects/:key/repos': 'admin',
   'PATCH /api/repos/:id': 'admin',
   'DELETE /api/repos/:id': 'admin',
-  'PUT /api/repos/:id/placements/:workerId': 'admin',
-  'DELETE /api/repos/:id/placements/:workerId': 'admin',
   'GET /api/settings': 'admin',
   'PATCH /api/settings': 'admin',
   'GET /api/push/devices': 'admin',
@@ -125,6 +125,9 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/workers/:id': 'user',
   'POST /api/workers/:id/claude-accounts/:name/check': 'user',
   'PUT /api/settings/default-worker': 'user',
+  // a local repo's copy on a worker: the install owner, or the worker's owner (the route checks)
+  'PUT /api/repos/:id/placements/:workerId': 'user',
+  'DELETE /api/repos/:id/placements/:workerId': 'user',
   // pairing a phone: it asks and polls before it is signed in; a person approves (not a device: see the route)
   'POST /api/devices/pair': 'public',
   'GET /api/devices/pair/:pairId': 'public',
@@ -133,6 +136,12 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/devices/:id': 'user',
   'GET /api/oauth/grants': 'user',
   'DELETE /api/oauth/grants/:id': 'user',
+  // your own GitHub connection (a person's, never a token's)
+  'GET /api/me/github': 'user',
+  'PUT /api/me/github': 'user',
+  'DELETE /api/me/github': 'user',
+  'GET /api/github/oauth/start': 'user',
+  'GET /api/github/oauth/callback': 'user',
 };
 
 export interface Principal {
@@ -143,6 +152,10 @@ export interface Principal {
   /** the request came from this machine (not through the proxy or the LAN) */
   local: boolean;
   token_id?: number;
+  /** the person acting: the user, or whoever made the token or approved the OAuth client; null for the legacy token */
+  user: string | null;
+  /** the single API token from before named tokens (it acts for the install) */
+  legacy?: boolean;
 }
 
 /** Who did something, for the record: a user name, "token ci", "OAuth Claude Code". */
@@ -156,6 +169,8 @@ export interface ApiToken {
   name: string;
   prefix: string;
   scopes: Scope[];
+  /** who made it */
+  user: string | null;
   created_at: string;
   expires_at: string | null;
   last_used_at: string | null;
@@ -198,12 +213,19 @@ export class Access {
   private db: Db;
   private auth: Auth;
   private devices: Devices;
+  private users: Pick<Users, 'installOwner' | 'adopt'>;
 
-  constructor(cfg: Config, db: Db, auth: Auth, devices: Devices) {
+  constructor(cfg: Config, db: Db, auth: Auth, devices: Devices, users: Pick<Users, 'installOwner' | 'adopt'>) {
     this.cfg = cfg;
     this.db = db;
     this.auth = auth;
     this.devices = devices;
+    this.users = users;
+  }
+
+  /** the install owner now (it may be adopted after start: users.ts) */
+  get installOwner(): string {
+    return this.users.installOwner;
   }
 
   /** The paired device this request comes from (its cookie), or null. */
@@ -238,7 +260,7 @@ export class Access {
    * device counts as the person who approved it, unless `devices` is false (pairing more devices).
    */
   browserUser(req: FastifyRequest, { devices = true } = {}): string | null {
-    if (this.cfg.authMode === 'off') return 'local';
+    if (this.cfg.authMode === 'off') return this.installOwner;
     const f = this.from(req);
     const paired = () => (devices ? this.device(req)?.user ?? null : null);
     if (this.cfg.authMode === 'proxy') {
@@ -247,13 +269,14 @@ export class Access {
         // no user header: the proxy let a device through on its own cookie
         if (!user) return paired();
         if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(user)) return null;
+        this.users.adopt(user);
         return user;
       }
       // the password login is the way in from this machine when the proxy is down
       if (!f.local) return null;
       if (!this.cfg.appPassword && !this.cfg.appPasswordHash) return paired();
     }
-    return this.auth.hasSessionCookie(req) ? 'owner' : paired();
+    return this.auth.hasSessionCookie(req) ? this.installOwner : paired();
   }
 
   /** Who is making this request, or null (not signed in, or a bad token). */
@@ -262,7 +285,7 @@ export class Access {
     const bearer = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
     if (bearer) return this.tokenPrincipal(bearer, local);
     const user = this.browserUser(req);
-    return user ? { kind: 'user', name: user, scopes: new Set(SCOPES), local } : null;
+    return user ? { kind: 'user', name: user, scopes: new Set(SCOPES), local, user } : null;
   }
 
   private limit(scopes: Scope[], local: boolean): Set<Scope> {
@@ -273,32 +296,36 @@ export class Access {
     // the single token from before named tokens: kept working until it is retired in Settings
     const legacy = this.db.setting('api_token');
     if (legacy && secret.length === legacy.length && timingSafeEqual(Buffer.from(secret), Buffer.from(legacy))) {
-      return { kind: 'token', name: 'legacy API token', scopes: this.limit([...SCOPES], local), local };
+      return { kind: 'token', name: 'legacy API token', scopes: this.limit([...SCOPES], local), local, user: null, legacy: true };
     }
-    const row = this.db.get<{ id: number; name: string; scopes: string; expires_at: string | null; revoked_at: string | null }>(
-      'SELECT id, name, scopes, expires_at, revoked_at FROM api_tokens WHERE hash = ?', sha256(secret),
+    const row = this.db.get<{ id: number; name: string; scopes: string; user: string | null; expires_at: string | null; revoked_at: string | null }>(
+      'SELECT id, name, scopes, user, expires_at, revoked_at FROM api_tokens WHERE hash = ?', sha256(secret),
     );
     if (!row || row.revoked_at || (row.expires_at && row.expires_at < now())) return null;
     this.db.run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), row.id);
-    return { kind: 'token', name: row.name, scopes: this.limit(JSON.parse(row.scopes), local), local, token_id: row.id };
+    return { kind: 'token', name: row.name, scopes: this.limit(JSON.parse(row.scopes), local), local, token_id: row.id, user: row.user };
   }
 
   // ---------- named tokens ----------
 
-  tokens(): ApiToken[] {
-    return this.db.all<Record<string, unknown>>('SELECT * FROM api_tokens ORDER BY id DESC').map((r) => ({
-      id: Number(r.id), name: String(r.name), prefix: String(r.prefix), scopes: JSON.parse(String(r.scopes)),
+  /** All tokens, or only those `user` made. */
+  tokens(user?: string): ApiToken[] {
+    const rows = user === undefined
+      ? this.db.all<Record<string, unknown>>('SELECT * FROM api_tokens ORDER BY id DESC')
+      : this.db.all<Record<string, unknown>>('SELECT * FROM api_tokens WHERE user = ? ORDER BY id DESC', user);
+    return rows.map((r) => ({
+      id: Number(r.id), name: String(r.name), prefix: String(r.prefix), scopes: JSON.parse(String(r.scopes)), user: (r.user as string | null) ?? null,
       created_at: String(r.created_at), expires_at: (r.expires_at as string | null) ?? null,
       last_used_at: (r.last_used_at as string | null) ?? null, revoked_at: (r.revoked_at as string | null) ?? null,
     }));
   }
 
   /** A new token; its secret is returned this once and only its hash is kept. */
-  createToken(name: string, scopes: Scope[], expiresAt: string | null): { token: ApiToken; secret: string } {
+  createToken(name: string, scopes: Scope[], expiresAt: string | null, user: string): { token: ApiToken; secret: string } {
     const secret = `dsp_${randomBytes(32).toString('base64url')}`;
     const { lastId } = this.db.run(
-      'INSERT INTO api_tokens (name, prefix, hash, scopes, expires_at) VALUES (?, ?, ?, ?, ?)',
-      name, secret.slice(0, 10), sha256(secret), JSON.stringify(scopes), expiresAt,
+      'INSERT INTO api_tokens (name, prefix, hash, scopes, expires_at, user) VALUES (?, ?, ?, ?, ?, ?)',
+      name, secret.slice(0, 10), sha256(secret), JSON.stringify(scopes), expiresAt, user,
     );
     return { token: this.tokens().find((t) => t.id === Number(lastId))!, secret };
   }

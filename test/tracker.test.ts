@@ -75,7 +75,7 @@ describe('auth', () => {
     const res = await fetch(`${s.base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) });
     const cookie = res.headers.get('set-cookie')!.split(';')[0];
     expect((await s.call('GET', '/projects', undefined, { cookie })).status).toBe(200);
-    const { secret } = s.ctx.access.createToken('test', ['read'], null);
+    const { secret } = s.ctx.access.createToken('test', ['read'], null, s.ctx.cfg.installOwner);
     expect((await s.call('GET', '/projects', undefined, { authorization: `Bearer ${secret}` })).status).toBe(200);
     expect((await s.call('GET', '/projects', undefined, { authorization: 'Bearer wrong' })).status).toBe(401);
   });

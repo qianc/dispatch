@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_TERMINAL_PROMPT: '0' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -30,7 +30,7 @@ describe('git over HTTP for workers', () => {
     await s.ctx.hosted.create(repo, 'main');
     repoId = repo.id;
     githubRepoId = s.ctx.store.addRepo(p.id, { github_owner: 'me', github_name: 'gh', default_branch: 'main', check_command: null }).id;
-    secret = s.ctx.workers.create('linux', '').secret;
+    secret = s.ctx.workers.create('linux', '', OWNER).secret;
     url = `${s.base}/git/r${repoId}.git`;
   });
   afterAll(() => s.app.close());
@@ -55,7 +55,7 @@ describe('git over HTTP for workers', () => {
   });
 
   it('refuses no token, a wrong token and a personal token', async () => {
-    const personal = s.ctx.access.createToken('skills', ['read', 'tracker', 'sessions', 'admin'], null).secret;
+    const personal = s.ctx.access.createToken('skills', ['read', 'tracker', 'sessions', 'admin'], null, s.ctx.cfg.installOwner).secret;
     for (const token of [null, 'dsw_wrong', personal]) {
       const d = mkdtempSync(join(tmpdir(), 'dsp-gh-x-'));
       const r = await gitAuth(d, token, 'clone', '--quiet', url, '.');

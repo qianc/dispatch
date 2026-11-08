@@ -140,6 +140,8 @@ function toPr(r: Row): PullRequest {
     // only while open and for the commit it was checked at
     blocked: r.state === 'open' && r.blocked && (r.blocked_sha ?? null) === (r.head_sha ?? null) ? String(r.blocked) : null,
     behind_at_merge: numOrNull(r.behind_at_merge),
+    started_by: (r.started_by as string | null) ?? null,
+    github_login: (r.github_login as string | null) ?? null,
   };
 }
 
@@ -152,7 +154,8 @@ const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
   FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
-const PR_SELECT = 'SELECT pr.*, r.github_owner, r.github_name, r.local_path FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id';
+const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
+  FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
 
 export interface Comment {
   id: number;
@@ -464,16 +467,20 @@ export class Store {
       release: json(r.release_info, null),
       schedule_id: numOrNull(r.schedule_id),
       login_needed: json(r.login_needed, null),
+      started_by: (r.started_by as string | null) ?? null,
+      github_login: (r.github_login as string | null) ?? null,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
     };
   }
-  /** Chats (assistant, discuss) are left out unless asked for by `kind`. */
-  sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; limit?: number } = {}): Session[] {
+  /** Chats (assistant, discuss) are left out unless asked for by `kind`; `started_by`: only those that user started. */
+  sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; started_by?: string | null; limit?: number } = {}): Session[] {
     const where: string[] = [];
-    const params: (string | number)[] = [];
+    const params: (string | number | null)[] = [];
     if (filter.project_id) { where.push('s.project_id = ?'); params.push(filter.project_id); }
+    // null: started by no user
+    if (filter.started_by !== undefined) { where.push('s.started_by IS ?'); params.push(filter.started_by); }
     if (filter.kind) { where.push('s.kind = ?'); params.push(filter.kind); }
     else where.push("s.kind NOT IN ('assistant', 'discuss')");
     if (filter.statuses?.length) { where.push(`s.status IN (${filter.statuses.map(() => '?').join(',')})`); params.push(...filter.statuses); }
@@ -530,19 +537,19 @@ export class Store {
       .all(`${SESSION_SELECT} WHERE ${k} AND s.id IN (SELECT session_id FROM session_items WHERE item_id = ?) ORDER BY s.id DESC`, ...(kind ? [kind] : []), itemId)
       .map((r) => this.toSession(r));
   }
-  /** `worker_id` defaults to the default worker. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id?: number; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null }): Session {
+  /** `started_by`: the user who started it (null: no user); `worker_id`: the worker it runs on. */
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
-        s.worker_id ?? this.defaultWorkerId(), s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null,
+        s.worker_id, s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null, s.started_by,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -579,6 +586,7 @@ export class Store {
       last_slot: (r.last_slot as string | null) ?? null,
       last_session_id: numOrNull(r.last_session_id),
       last_error: (r.last_error as string | null) ?? null,
+      owner: (r.owner as string | null) ?? null,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
     };
@@ -593,14 +601,14 @@ export class Store {
     const r = this.db.get('SELECT * FROM schedules WHERE id = ?', id);
     return r && this.toSchedule(r);
   }
-  createSchedule(projectId: number, s: Pick<Schedule, 'name' | 'at_time' | 'days' | 'scope_md' | 'max_batches' | 'options' | 'enabled' | 'last_slot'>): Schedule {
+  createSchedule(projectId: number, s: Pick<Schedule, 'name' | 'at_time' | 'days' | 'scope_md' | 'max_batches' | 'options' | 'enabled' | 'last_slot'> & { owner: string }): Schedule {
     const { lastId } = this.db.run(
-      'INSERT INTO schedules (project_id, name, at_time, days, scope_md, max_batches, options, enabled, last_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      projectId, s.name, s.at_time, JSON.stringify(s.days), s.scope_md, s.max_batches, JSON.stringify(s.options), s.enabled ? 1 : 0, s.last_slot,
+      'INSERT INTO schedules (project_id, name, at_time, days, scope_md, max_batches, options, enabled, last_slot, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      projectId, s.name, s.at_time, JSON.stringify(s.days), s.scope_md, s.max_batches, JSON.stringify(s.options), s.enabled ? 1 : 0, s.last_slot, s.owner,
     );
     return this.schedule(lastId)!;
   }
-  updateSchedule(id: number, patch: Partial<Omit<Schedule, 'id' | 'project_id' | 'created_at' | 'updated_at'>>): Schedule {
+  updateSchedule(id: number, patch: Partial<Omit<Schedule, 'id' | 'project_id' | 'owner' | 'created_at' | 'updated_at'>>): Schedule {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {

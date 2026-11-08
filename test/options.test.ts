@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Session } from '../src/shared/types.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import type { StartSpec } from '../src/shared/protocol.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 const spec = (o: Partial<typeof DEFAULT_RUN_OPTIONS>): StartSpec => ({
   session_id: 1, kind: 'work', project_key: 'P', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b',
@@ -80,7 +81,7 @@ describe('auto-merge', () => {
     await s.call('POST', '/projects', { key: 'AM', name: 'AM' });
     await s.call('POST', '/projects/AM/repos', { github_owner: 'me', github_name: 'r' });
     const item = (await s.call('POST', '/projects/AM/items', { title: 'x' })).data;
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/am-1-x',
       initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
     });
@@ -96,8 +97,8 @@ describe('auto-merge', () => {
       checks: { listForRef: async () => ({ data: { check_runs: checks } }) },
       repos: { compareCommits: async () => ({ data: { behind_by: behind } }) },
     };
-    Object.defineProperty(s.ctx.github, 'octo', { value: fake });
-    return { s, session, item, merges };
+    fakeGithub(s.ctx, fake);
+    return { s, session, item, merges, fake: fake as Record<string, unknown> };
   };
 
   it('merges when the agent is done and every check passed, and closes the items', async () => {
@@ -113,7 +114,7 @@ describe('auto-merge', () => {
     type Run = { name: string; status: string; conclusion: string | null; html_url: string };
     const withRuns = async (runs: Run[]) => {
       const t = await setup([]);
-      const fake = (t.s.ctx.github as unknown as { octo: Record<string, unknown> }).octo;
+      const fake = t.fake;
       fake.checks = { listForRef: async () => { throw Object.assign(new Error('Resource not accessible by personal access token'), { status: 403 }); } };
       const asked: unknown[] = [];
       fake.actions = { listWorkflowRunsForRepo: async (args: unknown) => { asked.push(args); return { data: { workflow_runs: runs } }; } };
@@ -158,14 +159,14 @@ describe('auto-merge', () => {
     await s.call('POST', '/projects', { key: 'TWO', name: 'Two' });
     for (const name of ['front', 'back']) await s.call('POST', '/projects/TWO/repos', { github_owner: 'me', github_name: name });
     const item = (await s.call('POST', '/projects/TWO/items', { title: 'x' })).data;
-    const session = s.ctx.store.createSession({
+    const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
       project_id: item.project_id, kind: 'work', title: 't', status: 'idle', force_plan: false, branch: 'dispatch/two-1-x',
       initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
     });
     s.ctx.store.updateSession(session.id, { last_text: 'All fixed in both repos.' });
     const merged = new Set<string>();
     const pr = (repo: string) => ({ number: repo === 'front' ? 3 : 4, html_url: 'u', title: 'PR', state: merged.has(repo) ? 'closed' : 'open', merged_at: merged.has(repo) ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: 'dispatch/two-1-x', sha: `sha-${repo}` }, base: { ref: 'main' }, body: '' });
-    Object.defineProperty(s.ctx.github, 'octo', { value: {
+    fakeGithub(s.ctx, {
       pulls: {
         list: async ({ repo }: { repo: string }) => ({ data: [pr(repo)] }),
         get: async ({ repo }: { repo: string }) => ({ data: pr(repo) }),
@@ -173,7 +174,7 @@ describe('auto-merge', () => {
       },
       checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
       repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-    } });
+    });
     await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
     expect([...merged].sort()).toEqual(['back', 'front']);
     expect(s.ctx.notifier.sent.map((n) => `${n.title} | ${n.body}`)).toEqual(['TWO: done and merged (2 repos) | All fixed in both repos.']);
@@ -185,7 +186,7 @@ describe('auto-merge', () => {
   it('sends one notice when a turn ends: the merge result if there is one, else "waiting for you"', async () => {
     const turnEnds = async (checks: Check[], withPr = true) => {
       const { s, session } = await setup(checks);
-      if (!withPr) Object.defineProperty(s.ctx.github, 'octo', { value: { pulls: { list: async () => ({ data: [] }) } } });
+      if (!withPr) fakeGithub(s.ctx, { pulls: { list: async () => ({ data: [] }) } });
       s.ctx.store.updateSession(session.id, { status: 'running', last_text: 'Fixed the legend.' });
       s.ctx.sessions.onWorkerMessage(s.ctx.workers.legacy().id, { t: 'status', session_id: session.id, status: 'idle' });
       await new Promise((r) => setTimeout(r, 300));
@@ -314,7 +315,7 @@ describe('a queued "after" batch waits for the earlier batch to merge', () => {
       const n = numbers.get(branch)!;
       return { number: n, html_url: 'u', title: branch, state: merged.has(n) ? 'closed' : 'open', merged_at: merged.has(n) ? 'now' : null, mergeable: !stuck, mergeable_state: stuck ? 'dirty' : 'clean', head: { ref: branch, sha: `sha-${n}` }, base: { ref: 'main' }, body: '' };
     };
-    Object.defineProperty(s.ctx.github, 'octo', { value: {
+    fakeGithub(s.ctx, {
       pulls: {
         list: async ({ head }: { head: string }) => ({ data: [pr(head.split(':')[1])] }),
         get: async ({ pull_number }: { pull_number: number }) => ({ data: pr([...numbers].find(([, n]) => n === pull_number)![0]) }),
@@ -322,7 +323,7 @@ describe('a queued "after" batch waits for the earlier batch to merge', () => {
       },
       checks: { listForRef: async () => ({ data: { check_runs: [{ name: 'ci', status: checksDone ? 'completed' : 'in_progress', conclusion: checksDone ? 'success' : null, html_url: null }] } }) },
       repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-    } });
+    });
   });
   afterAll(async () => {
     await stopWorker(worker);

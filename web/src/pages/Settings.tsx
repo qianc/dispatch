@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Me } from '../api.ts';
+import { api, type Me, type MyGithub } from '../api.ts';
 import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
 import { Button, Card, Chip, ErrorText, Field, Section, Segmented, cx, inputCls } from '../components/ui.tsx';
@@ -13,7 +13,7 @@ import { currentSubscription, disablePush, enablePush, pushSupported } from '../
 export function Settings() {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ github: boolean; legacy_token: boolean; auth_mode: string }>('/settings') });
+  const { data: settings } = useSettings(me);
   const [subscribed, setSubscribed] = useState<boolean | null>(null);
   useEffect(() => { currentSubscription().then((s) => setSubscribed(!!s)).catch(() => setSubscribed(false)); }, []);
   const toggle = useMutation({
@@ -67,14 +67,19 @@ export function Settings() {
           )}
         </Card>
       </Section>
-      <ServerGithubSection />
-      <WorkersSection />
-      <AccessSection />
+      <YourGithubSection me={me} />
+      {me?.is_owner && <ServerGithubSection />}
+      <WorkersSection me={me} />
+      <AccessSection me={me} />
       <DevicesSection />
       <Section title="Status">
         <Card className="p-3 text-sm text-muted space-y-1">
-          <div>Sign-in: {settings?.auth_mode === 'proxy' ? `through the proxy${me?.user ? `, as ${me.user}` : ''}` : settings?.auth_mode === 'off' ? 'off (testing)' : 'password'}</div>
-          <div>GitHub token: {settings?.github ? 'configured' : 'missing (PR sync and merge are off)'}</div>
+          <div>Sign-in: {me?.auth_mode === 'proxy' ? `through the proxy${me?.user ? `, as ${me.user}` : ''}` : me?.auth_mode === 'off' ? 'off (testing)' : 'password'}</div>
+          {me?.install_owner && <div>Install owner: {me.install_owner}{me.is_owner ? ' (you)' : ''}</div>}
+          {settings && <div>Shared GitHub token: {settings.github ? 'configured' : 'missing (PR sync and merge are off)'}</div>}
+          {me?.secret_key_file && (
+            <div className="text-wait">GitHub tokens are encrypted with a key Dispatch generated at <code className="break-all">{me.secret_key_file}</code>. Set DISPATCH_SECRET_KEY to keep it apart from the data.</div>
+          )}
           <div>Installed as app: {standalone ? 'yes' : 'no'}</div>
           <div>Build: {__BUILD__} UTC</div>
         </Card>
@@ -103,12 +108,89 @@ function AppearanceSection() {
   );
 }
 
-/** The server's own GitHub access: it follows PRs and merges. Workers clone and push with theirs. */
+/** Install settings: only the install owner may read them (the route is the owner's). */
+const useSettings = (me: Me | undefined) =>
+  useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ github: boolean; legacy_token: boolean; auth_mode: string }>('/settings'), enabled: !!me?.is_owner });
+
+/** ?github=connected or ?github_error=… from the GitHub sign-in, once. */
+function useGithubReturn() {
+  const [msg] = useState(() => {
+    const q = new URLSearchParams(location.search);
+    return { connected: q.get('github') === 'connected', error: q.get('github_error') };
+  });
+  useEffect(() => {
+    if (!msg.connected && !msg.error) return;
+    const q = new URLSearchParams(location.search);
+    q.delete('github');
+    q.delete('github_error');
+    const rest = q.toString();
+    history.replaceState(history.state, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
+    document.getElementById('your-github')?.scrollIntoView();
+  }, [msg]);
+  return msg;
+}
+
+/** The signed-in person's own GitHub: their sessions commit, push and open PRs as this account. */
+function YourGithubSection({ me }: { me: Me | undefined }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['me-github'], queryFn: () => api.get<MyGithub>('/me/github'), enabled: !!me?.authed });
+  const [token, setToken] = useState('');
+  const back = useGithubReturn();
+  const done = (r: MyGithub) => { qc.setQueryData(['me-github'], r); setToken(''); };
+  const paste = useMutation({ mutationFn: () => api.put<MyGithub>('/me/github', { token }), onSuccess: done });
+  const disconnect = useMutation({ mutationFn: () => api.del<MyGithub>('/me/github'), onSuccess: done });
+  if (!data) return null;
+  return (
+    <Section title="Your GitHub" id="your-github">
+      {back.connected && data.connected && <p role="status" className="mx-4 mb-1.5 text-[13px] text-ok">GitHub connected.</p>}
+      {back.error && <p role="alert" className="mx-4 mb-1.5 text-[13px] text-bad">GitHub was not connected: {back.error}</p>}
+      <Card>
+        {data.connected ? (
+          <div className="px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 font-medium truncate">@{data.login}</span>
+              <Chip tone={data.last_error ? 'bad' : 'ok'}>{data.last_error ? 'connect again' : data.kind === 'oauth' ? 'connected with GitHub' : 'pasted token'}</Chip>
+              <Button small variant="ghost" disabled={disconnect.isPending} onClick={() => confirm('Disconnect your GitHub account? Your new sessions cannot use GitHub until you connect again.') && disconnect.mutate()}>Disconnect</Button>
+            </div>
+            <div className="text-[12px] text-muted">Commits as {data.git_name} · {data.git_email}</div>
+            {data.last_error && <p className="text-[12px] text-bad mt-1">{data.last_error}</p>}
+          </div>
+        ) : (
+          <p className="px-3 py-2.5 text-[13px] text-muted">
+            Not connected. Your sessions commit, push and open pull requests as your own GitHub account.
+          </p>
+        )}
+      </Card>
+      {(!data.connected || data.last_error) && (
+        <div className="mx-3 mt-3 rounded-xl border border-line bg-panel p-3 space-y-3">
+          {data.oauth_available && (
+            <a href="/api/github/oauth/start?to=/settings" className="inline-flex w-full items-center justify-center h-10 px-3.5 rounded-lg font-medium text-[15px] bg-accent-strong text-on-accent hover:brightness-110 active:brightness-95">Connect with GitHub</a>
+          )}
+          <form onSubmit={(e) => { e.preventDefault(); paste.mutate(); }}>
+            <Field label={data.oauth_available ? 'Or paste a token' : 'Paste a token'} hint='A classic token with the "repo" scope, or a fine-grained token with access to your repositories. Dispatch keeps it encrypted and never shows it again.'>
+              <input type="password" autoComplete="off" className={inputCls} value={token} onChange={(e) => setToken(e.target.value)} placeholder="ghp_… or github_pat_…" />
+            </Field>
+            <ErrorText error={paste.error} />
+            <Button variant={data.oauth_available ? 'secondary' : 'primary'} className="w-full" disabled={!token.trim() || paste.isPending}>{paste.isPending ? 'Checking…' : 'Save token'}</Button>
+          </form>
+        </div>
+      )}
+      <ErrorText error={disconnect.error} />
+      {data.uses_env_when_unconnected && (
+        <p className="mx-4 mt-1.5 text-[12px] text-muted">
+          Without a connection your actions use the server's GitHub accounts. Projects with a GitHub account set keep using that account.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/** The server's own GitHub access (the install owner's): it follows PRs and merges. Workers clone and push with theirs. */
 function ServerGithubSection() {
   const { data } = useAccounts();
   if (!data) return null;
   return (
-    <Section title="GitHub (server)">
+    <Section title="GitHub (shared, from env)">
       <Card>
         {data.github.map((a) => (
           <div key={a.name} className="px-3 py-2.5 border-b border-line last:border-b-0">
@@ -198,7 +280,7 @@ function WorkerAccounts({ w }: { w: WorkerRow }) {
 }
 
 /** The machines that run agents: each has its own token and a description the planner reads. */
-function WorkersSection() {
+function WorkersSection({ me }: { me: Me | undefined }) {
   const qc = useQueryClient();
   const { data } = useWorkers();
   const [form, setForm] = useState({ name: '', description: '' });
@@ -220,6 +302,8 @@ function WorkersSection() {
   });
   // the Assistant runs on the default worker, with one of its Claude logins
   const assistantChoices = workers.find((w) => w.id === data?.default_worker_id)?.facts?.claude_accounts ?? [];
+  // the install owner sees everyone's workers: only their own can be changed, any can be revoked
+  const mine = (w: WorkerRow) => !me?.user || w.owner === me.user;
   return (
     <Section title="Workers">
       <Card>
@@ -228,7 +312,7 @@ function WorkersSection() {
             <div className="flex items-center gap-2">
               <span className={cx('size-2 rounded-full shrink-0', w.connected ? 'bg-ok' : 'bg-faint')} aria-label={w.connected ? 'online' : 'offline'} />
               <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <Chip className="ml-2">used by default</Chip>}</div>
+                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <Chip className="ml-2">used by default</Chip>}{me?.is_owner && <Chip tone={mine(w) ? 'neutral' : 'accent'} className="ml-2">{w.owner ?? 'nobody'}</Chip>}</div>
                 <div className="text-[12px] text-muted">
                   {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}
@@ -237,10 +321,12 @@ function WorkersSection() {
                   {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
                 </div>
               </div>
-              {w.id !== data?.default_worker_id && <Button small variant="ghost" onClick={() => setDefault.mutate(w.id)}>Make default</Button>}
+              {w.id !== data?.default_worker_id && mine(w) && <Button small variant="ghost" onClick={() => setDefault.mutate(w.id)}>Make default</Button>}
               {!w.legacy && <Button small variant="ghost" onClick={() => confirm(`Revoke worker "${w.name}"? It is cut off at once.`) && revoke.mutate(w.id)}>Revoke</Button>}
             </div>
-            {editing?.id === w.id ? (
+            {!mine(w) ? (
+              w.description && <p className="mt-1 text-[13px] text-muted">{w.description}</p>
+            ) : editing?.id === w.id ? (
               <form className="mt-2" onSubmit={(e) => { e.preventDefault(); save.mutate(editing); }}>
                 <textarea className={cx(inputCls, 'min-h-16')} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} aria-label={`Description of ${w.name}`} />
                 <div className="flex gap-2 mt-1.5"><Button small variant="primary">Save</Button><Button small type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button></div>
@@ -286,9 +372,9 @@ function WorkersSection() {
 }
 
 /** Personal tokens for scripts and skills, and apps connected through OAuth (Claude's MCP connector). */
-function AccessSection() {
+function AccessSection({ me }: { me: Me | undefined }) {
   const qc = useQueryClient();
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ legacy_token: boolean }>('/settings') });
+  const { data: settings } = useSettings(me);
   const { data: tokens = [] } = useQuery({ queryKey: ['tokens'], queryFn: () => api.get<ApiTokenRow[]>('/tokens') });
   const { data: grants = [] } = useQuery({ queryKey: ['grants'], queryFn: () => api.get<GrantRow[]>('/oauth/grants') });
   const [form, setForm] = useState({ name: '', scopes: ['tracker'] as string[], days: '' });
@@ -333,7 +419,8 @@ function AccessSection() {
           <Field label="New token for"><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. laptop skills" /></Field>
           <Field label="It may" group hint="From another machine a token only gets read and tracker, whatever it was made with.">
             <div className="space-y-1.5">
-              {Object.entries(SCOPE_INFO).map(([scope, info]) => (
+              {/* projects and install settings are the install owner's alone */}
+              {Object.entries(SCOPE_INFO).filter(([scope]) => scope !== 'admin' || me?.is_owner).map(([scope, info]) => (
                 <label key={scope} className="flex items-center gap-2 text-[14px]">
                   <input type="checkbox" className="size-4 accent-[var(--color-accent-strong)]" checked={form.scopes.includes(scope)}
                     onChange={(e) => setForm({ ...form, scopes: e.target.checked ? [...form.scopes, scope] : form.scopes.filter((x) => x !== scope) })} />

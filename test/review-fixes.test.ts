@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { ServerLink, Slots } from '../src/worker/serverLink.ts';
-import { startServer, waitFor } from './helpers.ts';
+import { startServer, waitFor, OWNER } from './helpers.ts';
 
 type Msg = { t: string; spec?: Record<string, any>; cmd?: { c: string }; req_id?: string; session_id?: number; text?: string };
 
@@ -29,7 +29,7 @@ describe('review fixes', () => {
     s = await startServer();
     await s.call('POST', '/projects', { key: 'RF', name: 'Fixes' });
     await s.call('POST', '/projects/RF/repos', { github_owner: 'me', github_name: 'rf' });
-    const made = s.ctx.workers.create('b', '');
+    const made = s.ctx.workers.create('b', '', OWNER);
     b = { id: made.worker.id, secret: made.secret };
     s.ctx.workers.setDefault(b.id);
   });

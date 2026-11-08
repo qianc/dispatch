@@ -74,7 +74,7 @@ export class Janitor {
     const results = await this.hub.cmd<TidyResult[]>(s.worker_id, { c: 'tidy', session_id: s.id, repos, branch: s.branch, merged_repo_ids: merged, delete_merged: opts.deleteMerged, force: opts.force }, 120_000);
     if (opts.deleteMerged && s.branch) {
       for (const repo of repos.filter((r) => !r.local_path && merged.includes(r.id))) {
-        const gone = await this.github.deleteRemoteBranch(repo, s.branch).catch(() => false);
+        const gone = await this.github.deleteRemoteBranch(repo, s.branch, s).catch(() => false);
         if (gone) results.push({ repo: repo.github_name, worktree: 'none', branch: 'deleted on GitHub' });
       }
     }

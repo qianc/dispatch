@@ -1,14 +1,17 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { SESSION_KINDS, answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
 import { attentionOf } from '../../shared/attention.ts';
+import type { Principal } from '../access.ts';
+import { assertCanDrive, canDrive, canStop } from '../sessionGuard.ts';
+import type { Session } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 
 /** A chat message: text, images pasted into it (POST /api/chat-images first, DISP-34), or both. */
 const message = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
   .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.');
-export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, github, bus, janitor }: Ctx) {
+export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, users, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -19,18 +22,30 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     if (!s) throw notFound('Session');
     return s;
   };
+  /** who is asking (every /api route but the public ones has one) */
+  const who = (req: FastifyRequest): Principal => req.principal!;
+  const drives = (req: FastifyRequest) => (s: Session | undefined) => !!s && canDrive(who(req), s, users.installOwner);
+  /** the install owner (or the legacy token, which acts for the install) */
+  const ownsInstall = (req: FastifyRequest) => !!who(req).legacy || users.isOwner(who(req).user);
+  /** a proposal card is acted on by whoever may drive the chat it is in */
+  const fromProposal = (req: FastifyRequest, ref: { session_id: number } | undefined) => {
+    const from = ref && store.session(ref.session_id);
+    if (from) assertCanDrive(who(req), from, users.installOwner);
+  };
 
-  /** Everything waiting on you, across projects. */
-  app.get('/api/inbox', async () => {
-    const inputs = store.openInputs();
+  /** Everything waiting on you, across projects: only sessions you can act on (DISP-63). */
+  app.get('/api/inbox', async (req) => {
+    const mine = drives(req);
+    const inputs = store.openInputs().filter((i) => mine(store.session(i.session_id)));
     // a planning chat's open proposal cards decide what it offers
-    const idle = store.sessions({ statuses: ['idle'] }).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow) }));
+    const idle = store.sessions({ statuses: ['idle'] }).filter(mine).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow) }));
     const idleIds = new Set(idle.map((s) => s.id));
     // PRs of idle sessions are shown on their session's card
-    const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id));
+    const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id) && mine(store.session(p.session_id)));
     const sessionIds = new Set([...inputs.map((i) => i.session_id), ...prs.map((p) => p.session_id)]);
     const related = [...sessionIds].map((id) => store.session(id)).filter((s) => !!s);
-    // leftovers of finished sessions; re-checked in the background when the last check is old
+    // leftovers of finished sessions (the install owner's to clean up); re-checked in the background when the last check is old
+    if (!ownsInstall(req)) return { inputs, idle, prs, sessions: related, cleanup: null };
     if (!janitor.offer || Date.now() - Date.parse(janitor.offer.checked_at) > 10 * 60_000) void janitor.check().catch(() => undefined);
     return { inputs, idle, prs, sessions: related, cleanup: janitor.offer };
   });
@@ -58,18 +73,30 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     return store.searchSessions({ ...f, project_id: f.project ? project(f.project).id : undefined });
   });
 
-  app.get('/api/worker', async () => ({
-    connected: hub.connected,
-    workers: workers.list().map((w) => ({ id: w.id, name: w.name, connected: hub.isConnected(w.id) })),
-  }));
+  /** Your workers (the install owner: all), and whether any is connected. */
+  app.get('/api/worker', async (req) => {
+    const list = workers.list(users.manages(who(req).user ?? users.installOwner));
+    return {
+      connected: list.some((w) => hub.isConnected(w.id)),
+      workers: list.map((w) => ({ id: w.id, name: w.name, connected: hub.isConnected(w.id) })),
+    };
+  });
 
-  app.post('/api/projects/:key/batches', async (req) => sessions.startBatch(project((req.params as { key: string }).key), batchInput.parse(req.body)));
+  app.post('/api/projects/:key/batches', async (req) => {
+    const input = batchInput.parse(req.body);
+    fromProposal(req, input.proposal);
+    return sessions.startBatch(project((req.params as { key: string }).key), input, who(req).user);
+  });
 
-  app.post('/api/projects/:key/planner', async (req) => sessions.startPlanner(project((req.params as { key: string }).key), plannerInput.parse(req.body)));
+  app.post('/api/projects/:key/planner', async (req) => {
+    const input = plannerInput.parse(req.body);
+    fromProposal(req, input.proposal);
+    return sessions.startPlanner(project((req.params as { key: string }).key), input, who(req).user);
+  });
 
-  /** The assistant chat: the open thread (or null) with its unread replies, send a message, start a new thread. */
-  app.get('/api/assistant', async () => {
-    const cur = sessions.currentAssistant();
+  /** Your assistant chat: the open thread (or null) with its unread replies, send a message, start a new thread. */
+  app.get('/api/assistant', async (req) => {
+    const cur = sessions.currentAssistant(who(req).user);
     return cur ? { session_id: cur.id, ...store.unread(cur.id) } : { session_id: null, unread: 0, last_seq: 0 };
   });
 
@@ -82,24 +109,24 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/assistant/messages', async (req) => {
     const { text, images } = message.parse(req.body);
-    return sessions.assistantSend(text, images);
+    return sessions.assistantSend(who(req).user, text, images);
   });
 
-  app.post('/api/assistant/new', async () => {
-    const cur = sessions.currentAssistant();
+  app.post('/api/assistant/new', async (req) => {
+    const cur = sessions.currentAssistant(who(req).user);
     if (cur) sessions.finish(cur.id, 'completed');
     return { ok: true };
   });
 
-  app.get('/api/items/:id/discuss', async (req) => ({ session_id: sessions.currentDiscuss(intParam((req.params as { id: string }).id))?.id ?? null }));
+  app.get('/api/items/:id/discuss', async (req) => ({ session_id: sessions.currentDiscuss(intParam((req.params as { id: string }).id), who(req).user)?.id ?? null }));
 
   app.post('/api/items/:id/discuss', async (req) => {
     const { text, images } = message.parse(req.body);
-    return sessions.discussSend(intParam((req.params as { id: string }).id), text, images);
+    return sessions.discussSend(intParam((req.params as { id: string }).id), who(req).user, text, images);
   });
 
   app.post('/api/items/:id/discuss/new', async (req) => {
-    const cur = sessions.currentDiscuss(intParam((req.params as { id: string }).id));
+    const cur = sessions.currentDiscuss(intParam((req.params as { id: string }).id), who(req).user);
     if (cur) sessions.finish(cur.id, 'completed');
     return { ok: true };
   });
@@ -118,6 +145,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,
       checks: github.checks.of(s.id),
+      // what the caller may do with it (DISP-63)
+      access: { drive: canDrive(who(req), s, users.installOwner), stop: canStop(who(req), s, users.installOwner) },
     };
   });
 
@@ -165,11 +194,16 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   });
 
   /** Leftovers of finished sessions (worktrees, merged branches): check now, or clean them up. */
-  app.post('/api/cleanup/check', async () => {
+  const assertOwnsInstall = (req: FastifyRequest) => {
+    if (!ownsInstall(req)) throw new HttpError(403, `Only the install owner (${users.installOwner}) can clean up.`);
+  };
+  app.post('/api/cleanup/check', async (req) => {
+    assertOwnsInstall(req);
     await janitor.check();
     return janitor.offer;
   });
-  app.post('/api/cleanup', async () => {
+  app.post('/api/cleanup', async (req) => {
+    assertOwnsInstall(req);
     const results = await janitor.cleanAll();
     bus.emit({ t: 'cleanup' });
     return { results, left: janitor.offer };

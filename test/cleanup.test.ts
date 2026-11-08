@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 import { cleanupReport } from '../web/src/cleanup.ts';
+import { OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -103,7 +104,7 @@ describe('the janitor on the server', () => {
       const repo = (await s.call('POST', '/projects/JAN/repos', { local_path: dir })).data as Repo;
       const ws = new Workspaces(wsDir); // the worker's folders, to set up what a session leaves
       const make = async (title: string) => {
-        const sess = s.ctx.store.createSession({ project_id: repo.project_id, kind: 'work', title, status: 'idle', force_plan: false, branch: `dispatch/jan-${title}`, initial_prompt: '', source_id: null, item_ids: [] });
+        const sess = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: repo.project_id, kind: 'work', title, status: 'idle', force_plan: false, branch: `dispatch/jan-${title}`, initial_prompt: '', source_id: null, item_ids: [] });
         const spec = { session_id: sess.id, kind: 'work' as const, project_key: 'JAN', project_name: 'J', importance_scale: [], effort_scale: [], title, branch: sess.branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
         const wt = await ws.prepare(spec);
         writeFileSync(join(wt, `${title}.txt`), 'x\n');

@@ -9,14 +9,16 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { GeneratorItem } from '../shared/generatorItems.ts';
 import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
-import type { StartSpec } from '../shared/protocol.ts';
+import { githubCredEnv } from '../shared/accounts.ts';
+import type { GithubCred, StartSpec } from '../shared/protocol.ts';
 import type { Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
 import { mergedRange } from '../shared/mergedRange.ts';
 
 /**
  * Extra environment for commands run on behalf of a repo (its GitHub account's token and commit
- * identity). Set by Workspaces.withRepo, so every git call inside it uses the right account.
+ * identity, or a session's user's own: DISP-63). Set by Workspaces.withRepo, so every git call
+ * inside it uses the right account.
  */
 const repoEnv = new AsyncLocalStorage<Record<string, string | undefined>>();
 const procEnv = () => {
@@ -160,16 +162,22 @@ export class Workspaces {
   /** git can't run fetch / worktree add / merge in parallel on one repo, so serialize per repo. */
   private locks = new Map<string, Promise<unknown>>();
 
-  private withRepo<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
+  /** `cred`: the session's user's own GitHub account (DISP-63), instead of the repo's env account */
+  private withRepo<T>(repo: Repo, fn: () => Promise<T>, cred?: GithubCred | null): Promise<T> {
     const key = `${repo.github_owner}/${repo.github_name}`;
     const prev = this.locks.get(key) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(() => repoEnv.run({ ...this.gitEnv(repo), ...this.hostedEnv(repo) }, fn));
+    const next = prev.catch(() => undefined).then(() => repoEnv.run({ ...this.accountEnv(repo, cred), ...this.hostedEnv(repo) }, fn));
     this.locks.set(key, next);
     return next;
   }
 
   /** git environment for a repo (its project's GitHub account); empty = the worker's own */
   private gitEnv: (repo: Repo) => Record<string, string | undefined>;
+
+  /** A repo's GitHub account for git: the session user's own when there is one (DISP-63), else the repo's env account. */
+  private accountEnv(repo: Repo, cred?: GithubCred | null) {
+    return cred ? githubCredEnv(cred) : this.gitEnv(repo);
+  }
 
   /** the server this worker serves: where its hosted repos are, and the worker's token for them */
   private hosted: { base: string; token: string } | null;
@@ -207,9 +215,9 @@ export class Workspaces {
   }
 
   /** Environment for a repo's setup, check and deploy commands: its account, hosted-git access, its env overlay. */
-  private commandEnv(repo: Repo): Record<string, string | undefined> {
+  private commandEnv(repo: Repo, cred?: GithubCred | null): Record<string, string | undefined> {
     const overlay = this.overlayDir(repo);
-    return { ...this.gitEnv(repo), ...this.hostedEnv(repo), ...(overlay ? { DISPATCH_REPO_ENV_DIR: overlay } : {}) };
+    return { ...this.accountEnv(repo, cred), ...this.hostedEnv(repo), ...(overlay ? { DISPATCH_REPO_ENV_DIR: overlay } : {}) };
   }
 
   /**
@@ -240,12 +248,12 @@ export class Workspaces {
    * Make a new worktree ready to work, check or deploy in (DISP-44): the env overlay, then the
    * repo's setup command. Not ok when a file was refused or the setup failed.
    */
-  async prepareTree(repo: Repo, wt: string): Promise<{ ok: boolean; output: string; copied: string[] }> {
+  async prepareTree(repo: Repo, wt: string, cred?: GithubCred | null): Promise<{ ok: boolean; output: string; copied: string[] }> {
     const { copied, refused } = await this.applyOverlay(repo, wt);
     const notes: string[] = [];
     if (refused.length) notes.push(`Env files not copied, because git would track them in ${repo.github_name} (add them to .gitignore): ${refused.join(', ')}`);
     if (!repo.setup_command) return { ok: !refused.length, output: notes.join('\n'), copied };
-    const r = await this.setup(repo, wt);
+    const r = await this.setup(repo, wt, cred);
     if (!r.ok) notes.push(`Setup command \`${repo.setup_command}\` failed:\n${r.output}`);
     return { ok: r.ok && !refused.length, output: notes.join('\n\n'), copied };
   }
@@ -382,7 +390,7 @@ export class Workspaces {
           await git(['worktree', 'add', '-b', spec.branch, wt, base], owner);
         }
         created.push({ repo, wt });
-      });
+      }, spec.github);
     }
     return spec.repos.length === 1 ? this.repoDir(spec.session_id, spec.repos[0]) : this.sessionDir(spec.session_id);
   }
@@ -412,7 +420,7 @@ export class Workspaces {
       await run('git', ['worktree', 'prune'], owner);
       await git(['worktree', 'add', '-B', repo.default_branch, wt, `origin/${repo.default_branch}`], owner);
       await git(['branch', '--set-upstream-to', `origin/${repo.default_branch}`, repo.default_branch], wt);
-    });
+    }, spec.github);
     return wt;
   }
 
@@ -449,8 +457,8 @@ export class Workspaces {
   }
 
   /** Run a repo's setup command in a new worktree. */
-  async setup(repo: Repo, wt: string): Promise<{ ok: boolean; output: string }> {
-    const r = await repoEnv.run(this.commandEnv(repo), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
+  async setup(repo: Repo, wt: string, cred?: GithubCred | null): Promise<{ ok: boolean; output: string }> {
+    const r = await repoEnv.run(this.commandEnv(repo, cred), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
   }
 
@@ -472,16 +480,16 @@ export class Workspaces {
   }
 
   /** Run a repo's check command in a session's worktree, as its account (DISP-15). */
-  sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal) {
+  sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal, cred?: GithubCred | null) {
     const wt = this.repoDir(sessionId, repo);
-    return repoEnv.run(this.commandEnv(repo), () => runCheck(repo.check_command!, wt, checkTimeoutMs(), onProgress, signal));
+    return repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.check_command!, wt, checkTimeoutMs(), onProgress, signal));
   }
 
-  async pushBranch(repo: Repo, sessionId: number, branch: string) {
+  async pushBranch(repo: Repo, sessionId: number, branch: string, cred?: GithubCred | null) {
     const wt = this.repoDir(sessionId, repo);
     if (!existsSync(wt)) throw new Error(`No worktree for ${repo.github_name} in session ${sessionId}`);
     if (Workspaces.isAttached(wt, repo)) return; // the branch already lives in the owner's repo
-    await this.withRepo(repo, () => git(['push', '-u', 'origin', branch], wt));
+    await this.withRepo(repo, () => git(['push', '-u', 'origin', branch], wt), cred);
   }
 
   /**
@@ -490,7 +498,7 @@ export class Workspaces {
    * branch status and pushes must not wait for it. If the default branch moved on meanwhile,
    * nothing is pushed: the check did not test what would land.
    */
-  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = []): Promise<MergeResult> {
+  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = [], cred?: GithubCred | null): Promise<MergeResult> {
     const tmp = join(this.root, 'merge', randomUUID());
     const prep = await this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
@@ -507,23 +515,23 @@ export class Workspaces {
         return { dir, base, baseSha, failed: { ok: false, conflict: true, output: m.out } as MergeResult };
       }
       return { dir, base, baseSha, failed: null };
-    });
+    }, cred);
     const { dir, base, baseSha } = prep;
     let check: MergeResult['check'];
     try {
       if (prep.failed) return prep.failed;
       if (repo.check_command || repo.generate_command) {
         // the check runs in a worktree set up like a session's: env files and setup first (DISP-44)
-        const ready = await this.prepareTree(repo, tmp);
+        const ready = await this.prepareTree(repo, tmp, cred);
         if (!ready.ok) return { ok: false, output: `Could not set up the merge checkout, so the check did not run.\n${ready.output}` };
       }
       if (repo.generate_command) {
-        const g = await this.generate(repo, tmp, items);
+        const g = await this.generate(repo, tmp, items, cred);
         if (!g.ok) return { ok: false, output: g.output };
       }
       if (repo.check_command) {
         // the repo's account and hosted-git access, as the locked commands have them
-        const c = await repoEnv.run(this.commandEnv(repo), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
+        const c = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
         check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
         if (c.code !== 0) {
           const why = c.timed_out ? `Check stopped after ${Math.round(checkTimeoutMs() / 60_000)} minutes (CHECK_TIMEOUT_MIN on the worker)` : 'Check failed';
@@ -543,7 +551,7 @@ export class Workspaces {
           return { ok: false, output: why + push.out, check };
         }
         return check ? { ok: true, check } : { ok: true };
-      });
+      }, cred);
     } finally {
       await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
     }
@@ -554,11 +562,11 @@ export class Workspaces {
    * DISPATCH_ITEMS, and put what it changed in `generated_paths` (all tracked files when there are
    * none) into the merge commit: the merge stays one commit, with no extra one on the default branch.
    */
-  private async generate(repo: Repo, tmp: string, items: GeneratorItem[]): Promise<{ ok: boolean; output: string }> {
+  private async generate(repo: Repo, tmp: string, items: GeneratorItem[], cred?: GithubCred | null): Promise<{ ok: boolean; output: string }> {
     const file = `${tmp}.items.json`;
     await writeFile(file, JSON.stringify(items, null, 2));
     try {
-      return await repoEnv.run({ ...this.commandEnv(repo), DISPATCH_ITEMS: file }, async () => {
+      return await repoEnv.run({ ...this.commandEnv(repo, cred), DISPATCH_ITEMS: file }, async () => {
         const r = await run('sh', ['-c', repo.generate_command!], tmp, checkTimeoutMs());
         if (r.code !== 0) return { ok: false, output: `Generate command failed (${repo.generate_command}), so nothing was merged:\n${r.out.slice(-4000)}` };
         const paths = repo.generated_paths ?? [];
@@ -576,7 +584,7 @@ export class Workspaces {
    * the repo itself (the owner's deploy tooling lives there); others from a fresh checkout of the
    * default branch, removed afterwards. The repo is locked only while that checkout is made.
    */
-  async deploy(repo: Repo): Promise<{ ok: boolean; sha: string | null; output: string; duration_ms: number }> {
+  async deploy(repo: Repo, cred?: GithubCred | null): Promise<{ ok: boolean; sha: string | null; output: string; duration_ms: number }> {
     const tmp = repo.local_path ? null : join(this.root, 'deploy', randomUUID());
     const { dir, sha } = await this.withRepo(repo, async () => {
       const { dir, base } = await this.refs(repo, repo.default_branch);
@@ -586,14 +594,14 @@ export class Workspaces {
         await git(['worktree', 'add', '--detach', tmp, sha], dir);
       }
       return { dir, sha };
-    });
+    }, cred);
     try {
       // a fresh checkout is set up like a session's first (DISP-44); a local repo is already set up
       if (tmp) {
-        const ready = await this.prepareTree(repo, tmp);
+        const ready = await this.prepareTree(repo, tmp, cred);
         if (!ready.ok) return { ok: false, sha, output: `Could not set up the deploy checkout, so the deploy did not run.\n${ready.output}`.slice(-4000), duration_ms: 0 };
       }
-      const env = { ...this.commandEnv(repo), DISPATCH_DEPLOY_SHA: sha, DISPATCH_DEPLOY_BRANCH: repo.default_branch };
+      const env = { ...this.commandEnv(repo, cred), DISPATCH_DEPLOY_SHA: sha, DISPATCH_DEPLOY_BRANCH: repo.default_branch };
       const r = await repoEnv.run(env, () => runCheck(repo.deploy_command!, tmp ?? dir, deployTimeoutMs()));
       const output = r.timed_out ? `Stopped after ${Math.round(deployTimeoutMs() / 60_000)} minutes (DEPLOY_TIMEOUT_MIN on the worker).\n${r.out}` : r.out;
       return { ok: r.code === 0, sha, output: output.slice(-4000), duration_ms: r.duration_ms };

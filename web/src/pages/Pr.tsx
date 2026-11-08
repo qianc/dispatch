@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type PrDetail, type Session } from '../api.ts';
 import { autoMergePending } from '../../../src/shared/attention.ts';
 import { Page } from '../components/Layout.tsx';
-import { PrStateChip } from '../components/PrState.tsx';
+import { PrOpenedBy, PrStateChip } from '../components/PrState.tsx';
 import { Button, Chip, Empty, ErrorText, Md, Section, Segmented, cx } from '../components/ui.tsx';
 
 function Patch({ patch }: { patch: string }) {
@@ -58,6 +58,8 @@ export function PrView() {
   const conflict = pr.mergeable === false || (result && !result.ok && result.conflict);
   // auto-merge still has it: the owner need not act (the Merge button stays, as a way to merge sooner)
   const checking = autoMergePending(data.auto_merge, pr);
+  // only whoever started its session merges it (DISP-63; an older server sends no can_merge)
+  const canMerge = data.can_merge !== false;
 
   return (
     <Page title={pr.title} subtitle={pr.local ? `local branch ${pr.head_ref} → ${data.base_ref}` : `${pr.repo_full_name}#${pr.number} · ${pr.head_ref} → ${data.base_ref}`} back actions={<Button small variant="ghost" onClick={() => refetch()} disabled={isFetching}>↻</Button>}>
@@ -67,6 +69,7 @@ export function PrView() {
         <Chip><span className="text-ok">+{add}</span> <span className="text-bad">−{del}</span></Chip>
         {!pr.local && <a href={pr.url} target="_blank" rel="noreferrer" className="text-[13px] text-accent ml-auto">Open on GitHub ↗</a>}
       </div>
+      {pr.started_by && <div className="px-4 pt-1.5"><PrOpenedBy pr={pr} className="text-[13px]" /></div>}
 
       {data.checks.length > 0 && (
         <div className="px-4 mt-3 space-y-1">
@@ -87,7 +90,10 @@ export function PrView() {
       )}
       {pr.blocked && <p className="mx-4 mt-3 text-[13px] text-bad">Auto-merge stopped: {pr.blocked}.</p>}
 
-      {pr.state === 'open' && (
+      {pr.state === 'open' && !canMerge && (
+        <p className="mx-4 mt-3 text-[13px] text-muted">Only {pr.started_by ?? 'the person who started it'} can merge this.</p>
+      )}
+      {pr.state === 'open' && canMerge && (
         <div className="mx-3 mt-4 rounded-xl border border-line bg-panel p-3 space-y-2">
           {!pr.local && <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />}
           {how === 'github' && !pr.local && (

@@ -21,6 +21,7 @@ function toWorker(r: Row): WorkerRecord {
     revoked_at: (r.revoked_at as string | null) ?? null,
     facts: typeof r.facts === 'string' ? (JSON.parse(r.facts) as WorkerFacts) : null,
     legacy: r.hash === null || r.hash === undefined,
+    owner: (r.owner as string | null) ?? null,
   };
 }
 
@@ -31,8 +32,11 @@ export class Workers {
     this.db = db;
   }
 
-  list(): WorkerRecord[] {
-    return this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL ORDER BY id').map(toWorker);
+  /** Live workers: all, or only those `owner` has. */
+  list(owner?: string): WorkerRecord[] {
+    return (owner === undefined
+      ? this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL ORDER BY id')
+      : this.db.all('SELECT * FROM workers WHERE revoked_at IS NULL AND owner = ? ORDER BY id', owner)).map(toWorker);
   }
 
   get(id: number): WorkerRecord | undefined {
@@ -45,12 +49,12 @@ export class Workers {
     return r && toWorker(r);
   }
 
-  create(name: string, description: string): { worker: WorkerRecord; secret: string } {
+  create(name: string, description: string, owner: string): { worker: WorkerRecord; secret: string } {
     const n = name.trim();
     if (!WORKER_NAME.test(n)) throw new WorkerError('A worker name is lowercase letters, digits and dashes (at most 40).');
     if (this.db.get('SELECT id FROM workers WHERE name = ?', n)) throw new WorkerError(`A worker named "${n}" already exists.`);
     const secret = `dsw_${randomBytes(32).toString('base64url')}`;
-    const { lastId } = this.db.run('INSERT INTO workers (name, description, prefix, hash) VALUES (?, ?, ?, ?)', n, description.trim(), secret.slice(0, 10), sha256(secret));
+    const { lastId } = this.db.run('INSERT INTO workers (name, description, prefix, hash, owner) VALUES (?, ?, ?, ?, ?)', n, description.trim(), secret.slice(0, 10), sha256(secret), owner);
     return { worker: this.get(Number(lastId))!, secret };
   }
 
@@ -81,10 +85,12 @@ export class Workers {
   legacy(): WorkerRecord {
     const r = this.db.get('SELECT * FROM workers WHERE hash IS NULL ORDER BY id LIMIT 1');
     if (r) return toWorker(r);
-    const { lastId } = this.db.run("INSERT INTO workers (name) VALUES ('default')");
+    // the legacy worker is the install owner's (Users.claim stored who that is)
+    const { lastId } = this.db.run("INSERT INTO workers (name, owner) VALUES ('default', (SELECT value FROM settings WHERE key = 'install_owner'))");
     return this.get(Number(lastId))!;
   }
 
+  /** The install's default worker (the install owner's): the setting, if it names a live worker, else the legacy one. */
   defaultId(): number {
     const set = Number(this.db.setting('default_worker_id'));
     if (set && this.get(set) && !this.get(set)!.revoked_at) return set;

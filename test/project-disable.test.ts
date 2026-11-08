@@ -5,7 +5,7 @@ import { SCOPES } from '../src/server/access.ts';
 import { trackerTools } from '../src/server/mcp.ts';
 import { PROJECT_WRITES } from '../src/server/projectLock.ts';
 import type { WorkerLink } from '../src/server/workerHub.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const LOCKED = 'Project LK is disabled (read-only). The owner can enable it in Dispatch.';
 
@@ -28,7 +28,7 @@ describe('disabling a project', () => {
   /** the tracker MCP (/mcp) as a client with read and tracker scopes */
   const mcp = async () => {
     const [a, b] = InMemoryTransport.createLinkedPair();
-    const server = trackerTools(s.ctx.store, s.ctx.bus, null, { kind: 'oauth', name: 'test', scopes: new Set(SCOPES), local: true });
+    const server = trackerTools(s.ctx.store, s.ctx.bus, null, { kind: 'oauth', name: 'test', scopes: new Set(SCOPES), local: true, user: OWNER });
     await server.connect(a);
     const client = new Client({ name: 'test', version: '1' });
     await client.connect(b);
@@ -143,7 +143,7 @@ describe('disabling a project', () => {
     expect(await rpc('get_item', { key: item.key })).toMatchObject({ title: 'Before' });
 
     // the assistant's tools, for this project
-    const assistant = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const assistant = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     const ask = (method: string, params: object) => s.ctx.sessions.rpc(assistant.id, method, params);
     await expect(ask('create_items', { project_key: 'LK', items: [{ title: 'x' }] })).rejects.toThrow(LOCKED);
     await expect(ask('update_item', { key: item.key, title: 'Changed' })).rejects.toThrow(LOCKED);

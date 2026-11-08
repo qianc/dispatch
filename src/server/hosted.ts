@@ -206,7 +206,8 @@ export class HostedGit {
    * Merge a branch into the default branch without a working tree: merge-tree makes the result,
    * commit-tree the commit, and update-ref moves the branch only if nobody else moved it meanwhile.
    */
-  merge(repo: Repo, branch: string, message: string, method: 'merge' | 'squash'): Promise<MergeResult> {
+  /** `author`: GIT_AUTHOR_* / GIT_COMMITTER_* for the merge commit (the session's user, DISP-63); else the server's. */
+  merge(repo: Repo, branch: string, message: string, method: 'merge' | 'squash', author?: Env): Promise<MergeResult> {
     return this.serial(repo, async () => {
       const dir = this.dir(repo);
       const baseRef = this.base(repo);
@@ -218,7 +219,7 @@ export class HostedGit {
       if (mt.code !== 0) return { ok: false, conflict: false, output: (mt.err || mt.out).trim() };
       const tree = mt.out.split('\n')[0].trim();
       const parents = method === 'squash' ? ['-p', base] : ['-p', base, '-p', head];
-      const commit = await must(dir, ['commit-tree', tree, ...parents, '-m', message]);
+      const commit = await must(dir, ['commit-tree', tree, ...parents, '-m', message], author);
       const moved = await git(dir, ['update-ref', '-m', `dispatch: ${message}`, baseRef, commit, base]);
       if (moved.code !== 0) return { ok: false, conflict: false, output: `${repo.default_branch} moved during the merge; try again.` };
       return { ok: true, sha: commit };

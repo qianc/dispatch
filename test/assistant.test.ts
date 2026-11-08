@@ -5,7 +5,7 @@ import type { ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseRepo, suggestKey } from '../src/server/assistant.ts';
 import { insideDirs } from '../src/worker/runner.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 describe('assistant helpers', () => {
   it('parses GitHub repo references', () => {
@@ -109,7 +109,7 @@ describe('import_sections', () => {
   it('creates items with full text, detected scales and a linked source', async () => {
     const s = await startServer();
     await s.call('POST', '/projects', { key: 'SLD', name: 'slides', importance_scale: ['S1 a', 'S2 b', 'S3 c', 'New capability'], effort_scale: ['XS', 'S', 'M', 'L'] });
-    const chat = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'A', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const chat = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'A', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     const res = (await s.ctx.sessions.rpc(chat.id, 'import_sections', {
       project_key: 'SLD',
       source: { title: 'backlog.md', body_md: 'whole file' },
@@ -201,7 +201,7 @@ describe('assistant unread count (DISP-4)', () => {
   it('counts replies after the read point, and marking read clears them', async () => {
     const s = await startServer();
     expect((await s.call('GET', '/assistant')).data).toEqual({ session_id: null, unread: 0, last_seq: 0 });
-    const chat = s.ctx.store.createSession({ project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const chat = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
     s.ctx.store.addEvent(chat.id, { kind: 'user', text: 'hi' });
     s.ctx.store.addEvent(chat.id, { kind: 'assistant', text: 'one' });
     s.ctx.store.addEvent(chat.id, { kind: 'tool_use', tool_use_id: 't', name: 'x', summary: '', input: {} });

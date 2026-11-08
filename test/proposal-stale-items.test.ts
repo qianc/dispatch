@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 // DISP-2: a proposal card made earlier must not re-open or re-run items closed or started elsewhere since.
 describe('starting a proposal whose items moved on', () => {
@@ -11,7 +11,7 @@ describe('starting a proposal whose items moved on', () => {
   });
   afterAll(() => s.app.close());
 
-  const planner = () => s.ctx.store.createSession({ project_id: s.ctx.store.projectByKey('STL')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+  const planner = () => s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: s.ctx.store.projectByKey('STL')!.id, kind: 'planner', title: 'Plan', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
   const item = async (title: string) => (await s.call('POST', '/projects/STL/items', { title })).data as { id: number; key: string };
   const card = async (sessionId: number, item_ids: number[]) => {
     await s.ctx.sessions.rpc(sessionId, 'propose', { type: 'batch', title: 'Batch', item_ids });
@@ -33,7 +33,7 @@ describe('starting a proposal whose items moved on', () => {
     // meanwhile, other sessions moved on
     s.ctx.store.updateItem(done.id, { status: 'done' });
     s.ctx.store.updateItem(canceled.id, { status: 'canceled' });
-    s.ctx.sessions.startBatch(s.ctx.store.projectByKey('STL')!, { item_ids: [busy.id], new_items: [], prompt: '' });
+    s.ctx.sessions.startBatch(s.ctx.store.projectByKey('STL')!, { item_ids: [busy.id], new_items: [], prompt: '' }, OWNER);
 
     const res = await s.call('POST', '/projects/STL/batches', { title: 'Batch', item_ids: [open.id, done.id, canceled.id, busy.id], prompt: '', proposal: { session_id: p.id, event_id: ev } });
     expect(res.status).toBe(200);

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo, type RunOptions } from '../src/shared/types.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -29,7 +30,7 @@ async function setup(opts: { upstream?: boolean; check?: string; options?: Parti
   await s.ctx.hosted.importFrom(repo, seed, {});
   repo = s.ctx.store.repo(repo.id)!;
   const item = (await s.call('POST', '/projects/HV/items', { title: 'Add b' })).data;
-  const session = s.ctx.store.createSession({
+  const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
     project_id: p.id, kind: 'work', title: 'Add b', status: 'idle', force_plan: false, branch: 'dispatch/hv-1-add-b',
     initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, ...opts.options },
   });
@@ -64,7 +65,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
     try {
       const bare = s.ctx.hosted.dir(repo);
       // a second session that changed nothing: its branch is the old main
-      const s2 = s.ctx.store.createSession({ project_id: repo.project_id, kind: 'work', title: 'Nothing', status: 'idle', force_plan: false, branch: 'dispatch/hv-2-nothing', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      const s2 = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: repo.project_id, kind: 'work', title: 'Nothing', status: 'idle', force_plan: false, branch: 'dispatch/hv-2-nothing', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
       git(bare, 'branch', s2.branch!, 'main');
       // main rewritten: the same tree, a new SHA
       const rewritten = git(bare, 'commit-tree', 'main^{tree}', '-m', 'one, rewritten');
@@ -186,7 +187,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
       expect(git(upstream, 'rev-parse', 'refs/heads/main')).toBe(git(s.ctx.hosted.dir(repo), 'rev-parse', 'refs/heads/main'));
       // the upstream disappears: the next merge is still done here, and the owner hears about the push
       execFileSync('rm', ['-rf', upstream]);
-      const s2 = s.ctx.store.createSession({ project_id: repo.project_id, kind: 'work', title: 'More', status: 'idle', force_plan: false, branch: 'dispatch/hv-2-more', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      const s2 = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: repo.project_id, kind: 'work', title: 'More', status: 'idle', force_plan: false, branch: 'dispatch/hv-2-more', initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
       const w = mkdtempSync(join(tmpdir(), 'dsp-hrw2-'));
       git(w, 'clone', '--quiet', s.ctx.hosted.dir(repo), '.');
       git(w, 'checkout', '--quiet', '-b', s2.branch!);
@@ -212,7 +213,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
       let merged = false;
       const created: unknown[] = [];
       const pr = () => ({ number: 12, html_url: 'https://github.com/me/app/pull/12', title: 'Add b', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: session.branch, sha: 'x' }, base: { ref: 'main' }, body: '' });
-      Object.defineProperty(s.ctx.github, 'octo', { value: {
+      fakeGithub(s.ctx, {
         pulls: {
           create: async (a: unknown) => { created.push(a); return { data: pr() }; },
           get: async () => ({ data: pr() }),
@@ -220,7 +221,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
         },
         checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
         repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-      } });
+      });
       const [row] = await s.ctx.github.syncSession(session);
       const r = await s.call('POST', `/prs/${row.id}/github-pr`);
       expect(r.status).toBe(200);
@@ -253,7 +254,7 @@ describe('hosted repos elsewhere in the app', () => {
       expect(await r.text()).toBe('one\n');
       const [row] = await s.ctx.github.syncSession(session);
       await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
-      expect(await s.ctx.github.deleteRemoteBranch(repo, session.branch!)).toBe(true);
+      expect(await s.ctx.github.deleteRemoteBranch(repo, session.branch!, session)).toBe(true);
       expect(await s.ctx.hosted.branchStatus(repo, session.branch!)).toMatchObject({ exists: false });
     } finally {
       await s.app.close();
