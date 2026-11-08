@@ -572,3 +572,68 @@ test('project settings: inputs stand out from the page and Save is the primary a
     expect(await css(form.getByRole('button', { name: 'Save' }), 'background-color')).toBe(await role('accent-strong'));
   }
 });
+
+test('desktop menu: the signed-in user and Log out at the bottom (DISP-64)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  const menu = page.getByRole('complementary', { name: 'Menu' });
+  await expect(menu.getByText('owner', { exact: true })).toBeVisible();
+  const logOut = menu.getByRole('button', { name: 'Log out' });
+  await expect(logOut).toBeVisible();
+  // below the navigation, at the foot of the menu
+  const menuBox = (await menu.boundingBox())!;
+  const linkBox = (await logOut.boundingBox())!;
+  expect(linkBox.y).toBeGreaterThan((await menu.getByRole('link', { name: 'Settings' }).boundingBox())!.y);
+  expect(menuBox.y + menuBox.height - (linkBox.y + linkBox.height)).toBeLessThan(40);
+
+  // by keyboard: Tab reaches it, Enter signs out and shows the sign-in page
+  await logOut.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(logOut).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Password')).toBeVisible();
+  expect((await (await page.request.get('/api/me')).json()).authed).toBe(false);
+});
+
+test('desktop menu: a long name is cut short with the full name in its title; none on a phone (DISP-64)', async ({ page }) => {
+  const long = 'someone.with.a.very.long.name@example-company.example.com';
+  await page.route('**/api/me', async (route) => {
+    const me = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...me, user: long } });
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  const menu = page.getByRole('complementary', { name: 'Menu' });
+  const name = menu.getByTitle(long);
+  await expect(name).toHaveText(long);
+  // fits the menu on one line, with Log out still beside it
+  expect(await name.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  const nameBox = (await name.boundingBox())!;
+  const linkBox = (await menu.getByRole('button', { name: 'Log out' }).boundingBox())!;
+  expect(linkBox.x).toBeGreaterThanOrEqual(nameBox.x + nameBox.width);
+  expect(Math.abs(linkBox.y + linkBox.height / 2 - (nameBox.y + nameBox.height / 2))).toBeLessThan(4);
+  expect(linkBox.x + linkBox.width).toBeLessThanOrEqual((await menu.boundingBox())!.width);
+
+  // on a phone there is no menu, so no name or link
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('complementary', { name: 'Menu' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Log out' })).toHaveCount(0);
+});
+
+test('desktop menu: no name and no Log out when sign-in is off (DISP-64)', async ({ page }) => {
+  await page.route('**/api/me', async (route) => {
+    const me = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...me, auth_mode: 'off', auth_disabled: true } });
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  const menu = page.getByRole('complementary', { name: 'Menu' });
+  await expect(menu.getByRole('link', { name: 'Settings' })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Log out' })).toHaveCount(0);
+  await expect(menu.getByText('owner', { exact: true })).toHaveCount(0);
+  // the same as Settings, which hides its Sign out
+  await menu.getByRole('link', { name: 'Settings' }).click();
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+});
