@@ -72,6 +72,7 @@ export function Settings() {
       <WorkersSection me={me} />
       <AccessSection me={me} />
       <DevicesSection />
+      {me?.password_login && <LoginsSection />}
       <Section title="Status">
         <Card className="p-3 text-sm text-muted space-y-1">
           <div>Sign-in: {me?.auth_mode === 'proxy' ? `through the proxy${me?.user ? `, as ${me.user}` : ''}` : me?.auth_mode === 'off' ? 'off (testing)' : 'password'}</div>
@@ -211,6 +212,7 @@ function ServerGithubSection() {
 interface ApiTokenRow { id: number; name: string; prefix: string; scopes: string[]; created_at: string; expires_at: string | null; last_used_at: string | null; revoked_at: string | null }
 interface DeviceRow { id: number; name: string; user: string; created_at: string; expires_at: string; last_used_at: string | null }
 interface GrantRow { id: number; client_name: string; scopes: string[]; created_at: string; last_used_at: string | null; refresh_expires_at: string }
+interface LoginRow { id: number; name: string; created_at: string; expires_at: string; last_used_at: string | null; current: boolean }
 
 const SCOPE_INFO: Record<string, string> = {
   tracker: 'Items, comments, sources, images',
@@ -463,6 +465,36 @@ function AccessSection({ me }: { me: Me | undefined }) {
         </Card>
       </Section>
     </>
+  );
+}
+
+/** Browsers signed in with the password (DISP-71): each can be signed out from here, or all at once. */
+function LoginsSection() {
+  const qc = useQueryClient();
+  const { data: logins = [] } = useQuery({ queryKey: ['logins'], queryFn: () => api.get<LoginRow[]>('/logins') });
+  const refresh = () => void qc.invalidateQueries();
+  const revoke = useMutation({ mutationFn: (id: number) => api.del(`/logins/${id}`), onSuccess: refresh });
+  const revokeAll = useMutation({ mutationFn: () => api.del('/logins'), onSuccess: refresh });
+  return (
+    <Section title="Signed-in browsers">
+      <Card>
+        {logins.map((l) => (
+          <div key={l.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">{l.name}{l.current && <span className="text-muted font-normal"> · this browser</span>}</div>
+              <div className="text-[12px] text-muted">since {when(l.created_at)} · used {when(l.last_used_at)} · expires {when(l.expires_at)}</div>
+            </div>
+            <Button small variant="ghost" onClick={() => (l.current || confirm(`Sign out ${l.name}? It has to sign in again.`)) && revoke.mutate(l.id)}>Sign out</Button>
+          </div>
+        ))}
+        {!logins.length && <p className="px-3 py-2.5 text-[13px] text-muted">None.</p>}
+      </Card>
+      <div className="mx-3 mt-3">
+        <ErrorText error={revoke.error ?? revokeAll.error} />
+        <Button variant="danger" className="w-full" disabled={!logins.length || revokeAll.isPending} onClick={() => confirm('Sign out every browser, this one too? Each has to sign in again with the password.') && revokeAll.mutate()}>Sign out everywhere</Button>
+        <p className="text-[12px] text-faint mt-1">A password sign-in lasts 90 days. Changing the password signs every browser out.</p>
+      </div>
+    </Section>
   );
 }
 

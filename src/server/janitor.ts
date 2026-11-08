@@ -102,11 +102,12 @@ export class Janitor {
     setTimeout(() => void this.tidy(this.store.session(s.id) ?? s, opts).catch((e) => console.warn('tidy failed:', (e as Error).message)), this.closeDelayMs);
   }
 
-  /** Rows that outlived their use: OAuth clients nobody connected (DISP-70). Needs no worker. */
+  /** Rows that outlived their use: OAuth clients nobody connected (DISP-70), expired password sessions. Needs no worker. */
   private expireRecords() {
     try {
       const { never_connected, disconnected } = expireOAuthClients(this.store.db);
       if (never_connected || disconnected) console.log(`removed ${never_connected} OAuth client(s) that never connected and ${disconnected} disconnected for 30 days`);
+      this.store.db.run('DELETE FROM web_sessions WHERE expires_at <= ?', new Date().toISOString());
     } catch (e) {
       console.warn('expiring records failed:', (e as Error).message);
     }

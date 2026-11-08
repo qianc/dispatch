@@ -94,6 +94,8 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/projects': null,
   'POST /api/login': null,
   'POST /api/logout': null,
+  'DELETE /api/logins/:id': null,
+  'DELETE /api/logins': null,
   'POST /api/assistant/messages': null,
   'POST /api/assistant/new': null,
   'POST /api/assistant/read': null,
