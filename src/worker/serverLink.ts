@@ -7,10 +7,11 @@ import { hostname } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
-import type { RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
+import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
 import { checkTimeoutMs, hostedGitBase, run, Workspaces } from './workspace.ts';
@@ -67,6 +68,8 @@ export interface LinkShared {
   githubAccounts: string[];
   gitEnv: ConstructorParameters<typeof Workspaces>[2];
   remoteBase: string;
+  /** every secret the worker knows: scrubbed from all it sends (DISP-63) */
+  secrets?: Secrets;
 }
 
 export class ServerLink {
@@ -80,6 +83,9 @@ export class ServerLink {
   private kinds = new Map<number, StartSpec['kind']>();
   /** work sessions' checks before a turn is reported done (DISP-15); kept across runner restarts */
   private turnChecks = new Map<number, TurnCheck>();
+  /** sessions that act as their starter's own GitHub account (DISP-63): memory only, until the session closes */
+  private creds = new Map<number, GithubCred>();
+  private secrets: Secrets;
   /** messages produced while the server connection is down; flushed on reconnect so nothing is lost */
   private outbox: WorkerToServer[] = [];
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -92,6 +98,7 @@ export class ServerLink {
   constructor(entry: ServerEntry, shared: LinkShared) {
     this.entry = entry;
     this.shared = shared;
+    this.secrets = shared.secrets ?? new Secrets();
     const root = shared.first ? shared.workspacesDir : join(shared.workspacesDir, 'servers', entry.name);
     // this server's hosted repos are at its own address, with this worker's token for it
     // git for a repo of this server: the project's GitHub account, else the first this server is allowed here
@@ -125,6 +132,8 @@ export class ServerLink {
       local_repo_dirs: this.entry.local_repo_dirs,
       releases: this.entry.releases,
       repo_envs: await this.workspaces.overlays().catch(() => []),
+      // runs a session as its user's own GitHub account (DISP-63)
+      caps: ['github_cred'],
     };
   }
 
@@ -142,13 +151,26 @@ export class ServerLink {
       if (msg.status === 'running') this.shared.slots.set(this.slotKey(msg.session_id), true);
       if (['idle', 'failed', 'completed', 'stopped'].includes(msg.status)) this.shared.slots.set(this.slotKey(msg.session_id), false);
     }
+    msg = this.secrets.scrub(msg);
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
     // rpc calls time out on their own and are retried by the agent; old progress is of no use
     else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress' && !(msg.t === 'session_check' && msg.progress)) this.outbox.push(msg);
   }
 
   sendSlots() {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'slots', free: this.shared.slots.free } satisfies WorkerToServer));
+    if (this.ws?.readyState === WebSocket.OPEN) this.write(this.ws, { t: 'slots', free: this.shared.slots.free });
+  }
+
+  /** Every message to the server goes out scrubbed of the secrets this worker knows (DISP-63). */
+  private write(sock: WebSocket, msg: WorkerToServer) {
+    sock.send(JSON.stringify(this.secrets.scrub(msg)));
+  }
+
+  /** A user's GitHub credential for a session (DISP-63): remembered while it lives, its token never sent back. */
+  private remember(sessionId: number, cred: GithubCred | null | undefined) {
+    if (!cred) return void this.creds.delete(sessionId);
+    this.secrets.add(cred.token);
+    this.creds.set(sessionId, cred);
   }
 
   private rpcFor(sessionId: number) {
@@ -206,7 +228,7 @@ export class ServerLink {
     if (!spec.branch) return;
     for (const repo of spec.repos.filter((r) => r.kind === 'hosted')) {
       try {
-        await this.workspaces.pushBranch(repo, spec.session_id, spec.branch);
+        await this.workspaces.pushBranch(repo, spec.session_id, spec.branch, spec.github);
       } catch (e) {
         this.send({ t: 'event', session_id: spec.session_id, body: { kind: 'error', text: `Could not push ${spec.branch} of ${repo.github_name} to Dispatch: ${(e as Error).message}` } });
       }
@@ -223,7 +245,8 @@ export class ServerLink {
   /** Why this server may not run this spec here, or null. */
   private refusal(spec: StartSpec): string | null {
     if (!this.allowedClaude(spec.claude_account)) return `This worker does not allow the Claude account "${spec.claude_account ?? 'default'}" for server ${this.entry.name}.`;
-    if (spec.github_account && !this.allowedGithub(spec.github_account)) return `This worker does not allow the GitHub account "${spec.github_account}" for server ${this.entry.name}.`;
+    // a session as its user's own GitHub account uses none of this worker's (DISP-63)
+    if (!spec.github && spec.github_account && !this.allowedGithub(spec.github_account)) return `This worker does not allow the GitHub account "${spec.github_account}" for server ${this.entry.name}.`;
     const outside = spec.repos.find((r) => r.local_path && !insideDirs(r.local_path, this.entry.local_repo_dirs, '/'));
     if (outside) return `${outside.local_path} is outside the folders this worker allows for server ${this.entry.name}.`;
     if (spec.kind === 'release' && !this.releaseCapability(spec)) return `This worker does not offer releases of ${spec.release?.cap_repo ?? 'this repo'} (${spec.release?.label_prefix ?? '?'}) for server ${this.entry.name}.`;
@@ -240,6 +263,7 @@ export class ServerLink {
     // spec and text may be adjusted below (attached worktrees, setup notes)
     const id = spec.session_id;
     this.kinds.set(id, spec.kind);
+    this.remember(id, spec.github);
     const live = this.runners.get(id);
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();
@@ -253,11 +277,12 @@ export class ServerLink {
     // a release runs the command and notes of this worker's own config, never what a server sends
     const cap = spec.kind === 'release' ? this.releaseCapability(spec) : undefined;
     if (cap && spec.release) spec = { ...spec, release: { ...spec.release, command: cap.command, notes: cap.notes } };
-    // the agent's gh and git: the project's GitHub account, else the first this server is allowed here
-    spec = { ...spec, github_account: serverGithubAccount(this.entry, spec.github_account) };
+    // the agent's gh and git: the project's GitHub account, else the first this server is allowed
+    // here; a user's own account (DISP-63) instead of any
+    if (!spec.github) spec = { ...spec, github_account: serverGithubAccount(this.entry, spec.github_account) };
     // the worker owns its slots: a new agent session waits when they are all taken (by any server)
     if (isStart && !CHAT_KINDS.includes(spec.kind) && !this.shared.slots.has(this.slotKey(id)) && this.shared.slots.free <= 0) {
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'refused', session_id: id, reason: 'busy' } satisfies WorkerToServer));
+      if (this.ws?.readyState === WebSocket.OPEN) this.write(this.ws, { t: 'refused', session_id: id, reason: 'busy' });
       return;
     }
     this.starting.set(id, []);
@@ -291,7 +316,7 @@ export class ServerLink {
         // (DISP-44), then the setup command (venv, npm ci, ...)
         for (const { repo, wt } of created.filter((c) => c.repo.setup_command || this.workspaces.overlayDir(c.repo))) {
           if (repo.setup_command) this.send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
-          const res = await this.workspaces.prepareTree(repo, wt);
+          const res = await this.workspaces.prepareTree(repo, wt, spec.github);
           const files = res.copied.length ? ` Env files from this worker: ${res.copied.join(', ')}.` : '';
           this.send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.${files}` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
           if (!res.ok) text = `Note from Dispatch: setting up the worktree of ${repo.github_name} failed:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
@@ -340,7 +365,7 @@ export class ServerLink {
       tc = new TurnCheck({
         sessionId: id, repos, retries: checkRetries(), timeoutMin: Math.round(checkTimeoutMs() / 60_000),
         state: (repo) => this.workspaces.turnState(repo, id),
-        check: (repo, onProgress, signal) => this.workspaces.sessionCheck(repo, id, onProgress, signal),
+        check: (repo, onProgress, signal) => this.workspaces.sessionCheck(repo, id, onProgress, signal, this.creds.get(id)),
         send: (m) => this.send(m),
       });
       this.turnChecks.set(id, tc);
@@ -371,10 +396,10 @@ export class ServerLink {
       case 'tidy':
         return ws.tidy(cmd.session_id, cmd.repos, cmd.branch, { deleteMerged: cmd.delete_merged, force: cmd.force, mergedHint: cmd.merged_repo_ids });
       case 'push_branch':
-        await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch);
+        await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch, cmd.github ?? this.creds.get(cmd.session_id));
         return { ok: true };
       case 'merge_local':
-        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items);
+        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github);
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch);
       case 'branch_diff':
@@ -411,6 +436,9 @@ export class ServerLink {
   }
 
   private async onMessage(msg: ServerToWorker) {
+    // a user's token that comes with a command is a secret from now on (DISP-63)
+    if (msg.t === 'cmd' && 'github' in msg.cmd) this.secrets.add(msg.cmd.github?.token);
+    if ((msg.t === 'start' || msg.t === 'send') && msg.spec.github) this.secrets.add(msg.spec.github.token);
     switch (msg.t) {
       case 'start':
         return this.launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt, true);
@@ -425,6 +453,7 @@ export class ServerLink {
         this.starting.delete(msg.session_id);
         this.turnChecks.get(msg.session_id)?.cancel();
         this.turnChecks.delete(msg.session_id);
+        this.creds.delete(msg.session_id);
         const r = this.runners.get(msg.session_id);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);
@@ -463,7 +492,7 @@ export class ServerLink {
       }
       // the fake runner pushes nothing to GitHub, so only a local repo has a merge to deploy
       if (!repo.deploy_command || (this.shared.fake && !repo.local_path)) return;
-      result(await this.workspaces.deploy(repo).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
+      result(await this.workspaces.deploy(repo, this.creds.get(sessionId)).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
     };
     const next = (this.deploys.get(repo.id) ?? Promise.resolve()).then(go);
     this.deploys.set(repo.id, next);
@@ -488,8 +517,9 @@ export class ServerLink {
       console.log(`worker connected to ${url}${name === 'default' ? '' : ` (${name})`}${this.shared.fake ? ' (fake runner)' : ''}`);
       const facts = await this.facts();
       if (this.ws !== sock) return;
-      sock.send(JSON.stringify({ t: 'hello', live: [...this.runners.keys(), ...this.starting.keys()], claude_accounts: facts.claude_accounts, facts } satisfies WorkerToServer));
-      for (const m of this.outbox.splice(0)) sock.send(JSON.stringify(m));
+      // the worker's token goes in the connection's header, never in a message: every message is scrubbed
+      this.write(sock, { t: 'hello', live: [...this.runners.keys(), ...this.starting.keys()], claude_accounts: facts.claude_accounts, facts });
+      for (const m of this.outbox.splice(0)) this.write(sock, m);
     });
     sock.on('message', (data) => {
       heard();

@@ -25,6 +25,7 @@ import {
 } from '../shared/types.ts';
 import { z } from 'zod';
 import { CHAT_IMAGE_FILE, chatImageType, withImageMarkers } from '../shared/chatImages.ts';
+import { scrub } from '../shared/scrub.ts';
 import { searchTerms, snippetOf } from '../shared/search.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
@@ -146,6 +147,8 @@ export class Sessions {
   assistantRpc: AssistantRpc | null = null;
   /** As whom sessions act on GitHub (set by app.ts; without it, the env accounts as before users). */
   identity: IdentityResolver | null = null;
+  /** Secrets a session's worker messages must not carry: its starter's token, the env accounts' (set by app.ts; DISP-63). */
+  secretsOf: ((s: Session) => string[]) | null = null;
 
   constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers, users: Users) {
     this.workers = workers;
@@ -759,6 +762,8 @@ export class Sessions {
   onWorkerMessage(workerId: number, msg: WorkerEvent) {
     const s = this.store.session(msg.session_id);
     if (!s || s.worker_id !== workerId) return; // not this worker's session
+    // the worker scrubs what it sends; an old one does not: scrub again before anything is kept (DISP-63)
+    if ((msg.t === 'event' || msg.t === 'notice' || msg.t === 'status') && this.secretsOf) msg = scrub(msg, this.secretsOf(s));
     if (msg.t === 'deploy_result') return this.onDeployResult(s, msg); // often after the session ended
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.

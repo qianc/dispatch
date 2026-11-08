@@ -93,6 +93,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     workerAccounts: (id) => (hub.facts(id) ?? workers.get(id)?.facts)?.github_accounts ?? [],
   };
   sessions.identity = (startedBy, project, workerId) => resolveGithubIdentity(identityDeps, { started_by: startedBy }, project, workerId);
+  // never kept from a worker's messages: the starter's own token and the server's env accounts' (DISP-63)
+  sessions.secretsOf = (s) => {
+    const cred = s.started_by ? identities.get(s.started_by) : null;
+    return [...cfg.githubAccounts.map((a) => a.token), ...(cred && 'token' in cred ? [cred.token] : [])];
+  };
   const sessionIdentity = (s: Session) => {
     const project = s.project_id ? store.project(s.project_id) : undefined;
     return project && needsGithub(store, project) ? resolveGithubIdentity(identityDeps, s, project) : null;

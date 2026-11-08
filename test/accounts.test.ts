@@ -59,6 +59,13 @@ describe('accounts from env', () => {
     const wt = await ws.prepare(spec);
     await ws.setup(repo, wt);
     expect(readFileSync(join(wt, '.who'), 'utf8').trim()).toBe('tok-work me@work.example');
+    // a session of a user who connected their own GitHub (DISP-63): their token and author, not the project's account
+    const bob = { token: 'ghp_bobsOwnToken0001', login: 'bob-gh', git_name: 'Bob', git_email: 'bob@example.com' };
+    const wt2 = await ws.prepare({ ...spec, session_id: 2, branch: 'b2', github: bob });
+    await ws.setup(repo, wt2, bob);
+    expect(readFileSync(join(wt2, '.who'), 'utf8').trim()).toBe('ghp_bobsOwnToken0001 bob@example.com');
+    const checked = await ws.sessionCheck({ ...repo, check_command: 'echo "$GH_TOKEN $GITHUB_TOKEN $GIT_COMMITTER_NAME"' }, 2, undefined, undefined, bob);
+    expect(checked.out).toBe('ghp_bobsOwnToken0001 ghp_bobsOwnToken0001 Bob');
   });
 
   it('words rate limit notices', () => {

@@ -1,5 +1,5 @@
 // RUNNER=fake: a scripted stand-in for Claude, for UI work and e2e tests without using the subscription.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { StartSpec } from '../shared/protocol.ts';
 import type { InputAnswer, PendingInputPayload } from '../shared/types.ts';
 import { releaseCommand } from './prompts.ts';
@@ -20,9 +20,9 @@ export class FakeRunner implements AgentRunner {
   private turn = 0;
   private delay: number;
 
-  private opts: Pick<RunnerOptions, 'loginFailed'>;
+  private opts: Pick<RunnerOptions, 'loginFailed' | 'sessionEnv'>;
 
-  constructor(spec: StartSpec, deps: RunnerDeps, opts: Pick<RunnerOptions, 'loginFailed'> = {}, delayMs = Number(process.env.FAKE_DELAY_MS ?? 300)) {
+  constructor(spec: StartSpec, deps: RunnerDeps, opts: Pick<RunnerOptions, 'loginFailed' | 'sessionEnv'> = {}, delayMs = Number(process.env.FAKE_DELAY_MS ?? 300)) {
     this.sessionId = spec.session_id;
     this.spec = spec;
     this.deps = deps;
@@ -78,6 +78,7 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     if (this.closed) return;
     if (text.includes('[fake:signed-out]')) return this.signedOutTurn();
+    if (text.includes('[fake:env]')) return this.envTurn();
     if (imageMarkers(text).length) return this.pastedImagesTurn(text);
     if (this.spec.kind === 'planner') return this.plannerTurn();
     if (this.spec.kind === 'release' && this.turn === 1) return this.releaseTurn();
@@ -135,6 +136,17 @@ export class FakeRunner implements AgentRunner {
     const help = this.opts.loginFailed?.(this.spec.claude_account, 'authentication_failed', detail);
     if (help) this.deps.emit({ t: 'notice', session_id: this.sessionId, ...loginNotice(help) });
     this.say(detail);
+    this.finishTurn();
+  }
+
+  /**
+   * The session env's GitHub values in plain text, as an agent could print them (DISP-63 leak
+   * test): the worker must scrub the token; its hash tells whose it was.
+   */
+  private envTurn() {
+    const env = this.opts.sessionEnv?.(this.spec) ?? process.env;
+    const vars = ['GH_TOKEN', 'GITHUB_TOKEN', 'DISPATCH_GH_TOKEN', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'].map((k) => `${k}=${env[k] ?? ''}`);
+    this.say(`(fake) ${vars.join('\n')}\nsha256:${createHash('sha256').update(env.GH_TOKEN ?? '').digest('hex')}`);
     this.finishTurn();
   }
 
