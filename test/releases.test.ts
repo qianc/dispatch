@@ -9,7 +9,7 @@ import { MANY_RELEASE_ITEMS } from '../src/shared/release.ts';
 import type { ReleaseCapability, Repo } from '../src/shared/types.ts';
 import { releasePrompt } from '../src/worker/prompts.ts';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { startServer, startWorker, stopWorker, waitFor, OWNER } from './helpers.ts';
 
 type Version = { tag?: string | null; tag_date?: string | null; file?: string | null; file_date?: string | null; file_tagged?: boolean; fetch_error?: string | null };
 type Msg = { t: string; req_id?: string; cmd?: { c: string }; spec?: { session_id: number; kind: string; branch: string | null; repos: Repo[]; release?: { version: string } } };
@@ -79,7 +79,7 @@ describe('releases from the interface', () => {
     s = await startServer();
     await s.call('POST', '/projects', { key: 'REL', name: 'Releases' });
     await s.call('POST', '/projects/REL/repos', { github_owner: 'me', github_name: 'app' });
-    const made = s.ctx.workers.create('b', 'the release machine');
+    const made = s.ctx.workers.create('b', 'the release machine', OWNER);
     b = { id: made.worker.id, secret: made.secret };
   });
   afterEach(() => s.app.close());

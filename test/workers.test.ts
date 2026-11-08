@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 describe('worker records', () => {
   it('makes a worker with a dsw_ secret, keeps only its hash, and verifies it', async () => {
     const s = await startServer();
     try {
-      const { worker, secret } = s.ctx.workers.create('desktop', 'Windows desktop in WSL.');
+      const { worker, secret } = s.ctx.workers.create('desktop', 'Windows desktop in WSL.', OWNER);
       expect(secret).toMatch(/^dsw_[A-Za-z0-9_-]{43}$/);
       expect(worker).toMatchObject({ name: 'desktop', description: 'Windows desktop in WSL.', revoked_at: null });
       expect(JSON.stringify(s.ctx.store.db.all('SELECT * FROM workers'))).not.toContain(secret);
@@ -13,7 +13,7 @@ describe('worker records', () => {
       expect(s.ctx.workers.verify('dsw_nonsense')).toBeNull();
       s.ctx.workers.revoke(worker.id);
       expect(s.ctx.workers.verify(secret)).toBeNull();
-      expect(() => s.ctx.workers.create('desktop', '')).toThrow(/already/);
+      expect(() => s.ctx.workers.create('desktop', '', OWNER)).toThrow(/already/);
     } finally {
       await s.app.close();
     }

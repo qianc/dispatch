@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { ServerLink, Slots } from '../src/worker/serverLink.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
-import { startServer, waitFor } from './helpers.ts';
+import { startServer, waitFor, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_TERMINAL_PROMPT: '0' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -24,7 +24,7 @@ async function hostedServer(extraEnv: Record<string, string> = {}) {
   const s = await startServer({ DATA_DIR: mkdtempSync(join(tmpdir(), 'dsp-p2r-')), ...extraEnv });
   await s.call('POST', '/projects', { key: 'PR2', name: 'Phase 2 review' });
   const repo = (await s.call('POST', '/projects/PR2/repos', { hosted: { name: 'app' } })).data as Repo;
-  const secret = s.ctx.workers.create('linux', '').secret;
+  const secret = s.ctx.workers.create('linux', '', OWNER).secret;
   const url = `${s.base}/git/r${repo.id}.git`;
   const w = mkdtempSync(join(tmpdir(), 'dsp-p2w-'));
   const auth = ['-c', `http.extraHeader=Authorization: Bearer ${secret}`];

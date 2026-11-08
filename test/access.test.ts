@@ -33,8 +33,8 @@ describe('tokens', () => {
       const login = await s.app.inject({ method: 'POST', url: '/api/login', payload: { password: 'pw' } });
       const cookie = String(login.headers['set-cookie']).split(';')[0];
       await s.app.inject({ method: 'POST', url: '/api/projects', headers: { cookie }, payload: { key: 'TK', name: 'Tokens' } });
-      const tracker = s.ctx.access.createToken('skill', ['tracker', 'read'], null).secret;
-      const full = s.ctx.access.createToken('everything', ['read', 'tracker', 'sessions', 'admin'], null).secret;
+      const tracker = s.ctx.access.createToken('skill', ['tracker', 'read'], null, s.ctx.cfg.installOwner).secret;
+      const full = s.ctx.access.createToken('everything', ['read', 'tracker', 'sessions', 'admin'], null, s.ctx.cfg.installOwner).secret;
       const call = (method: string, url: string, token: string, remoteAddress = '127.0.0.1', payload?: object) =>
         s.app.inject({ method: method as 'GET', url, remoteAddress, headers: { authorization: `Bearer ${token}` }, payload });
 
@@ -59,7 +59,7 @@ describe('tokens', () => {
       // revoked and expired tokens stop working
       await s.app.inject({ method: 'DELETE', url: `/api/tokens/${made.json().token.id}`, headers: { cookie } });
       expect((await call('GET', '/api/projects', made.json().secret)).statusCode).toBe(401);
-      const old = s.ctx.access.createToken('old', ['read'], new Date(Date.now() - 1000).toISOString()).secret;
+      const old = s.ctx.access.createToken('old', ['read'], new Date(Date.now() - 1000).toISOString(), s.ctx.cfg.installOwner).secret;
       expect((await call('GET', '/api/projects', old)).statusCode).toBe(401);
       expect((await call('GET', '/api/projects', 'dsp_nonsense')).statusCode).toBe(401);
       // uses are recorded

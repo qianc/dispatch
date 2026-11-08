@@ -96,10 +96,17 @@ export class Devices {
     return row;
   }
 
-  list(): Device[] {
+  /** Live devices: all, or only those `user` approved. */
+  list(user?: string): Device[] {
     return this.db.all<Device>(
-      'SELECT id, name, user, created_at, expires_at, last_used_at FROM devices WHERE revoked_at IS NULL AND expires_at > ? ORDER BY id DESC', now(),
+      `SELECT id, name, user, created_at, expires_at, last_used_at FROM devices WHERE revoked_at IS NULL AND expires_at > ?${user === undefined ? '' : ' AND user = ?'} ORDER BY id DESC`,
+      now(), ...(user === undefined ? [] : [user]),
     );
+  }
+
+  /** Who a device acts as (live or not), or undefined. */
+  userOf(id: number): string | undefined {
+    return this.db.get<{ user: string }>('SELECT user FROM devices WHERE id = ?', id)?.user;
   }
 
   revoke(id: number) {

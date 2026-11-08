@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startServer, waitFor } from './helpers.ts';
+import { startServer, waitFor, OWNER } from './helpers.ts';
 
 type Msg = { t: string; spec?: { session_id: number; prompt: string; resume: string | null }; session_id?: number; text?: string };
 
@@ -24,7 +24,7 @@ describe('several workers on one server', () => {
     s = await startServer();
     await s.call('POST', '/projects', { key: 'MW', name: 'Multi' });
     await s.call('POST', '/projects/MW/repos', { github_owner: 'me', github_name: 'mw' });
-    const made = s.ctx.workers.create('b', 'second worker');
+    const made = s.ctx.workers.create('b', 'second worker', OWNER);
     b = { id: made.worker.id, secret: made.secret };
   });
   afterEach(() => s.app.close());
@@ -103,7 +103,7 @@ describe('the queue with workers that come and go', () => {
     s = await startServer();
     await s.call('POST', '/projects', { key: 'QW', name: 'Queue' });
     await s.call('POST', '/projects/QW/repos', { github_owner: 'me', github_name: 'qw' });
-    const made = s.ctx.workers.create('b', '');
+    const made = s.ctx.workers.create('b', '', OWNER);
     b = { id: made.worker.id, secret: made.secret };
   });
   afterEach(() => s.app.close());
@@ -244,8 +244,8 @@ describe('one worker serving two servers', () => {
       mkdirSync(join(root, d, 'repo'), { recursive: true });
       execFileSync('git', ['init', '-q', '-b', 'main', join(root, d, 'repo')]);
     }
-    const t1 = s1.ctx.workers.create('desk', '').secret;
-    const t2 = s2.ctx.workers.create('desk', '').secret;
+    const t1 = s1.ctx.workers.create('desk', '', OWNER).secret;
+    const t2 = s2.ctx.workers.create('desk', '', OWNER).secret;
     writeFileSync(join(root, 'worker.json'), JSON.stringify({
       max_concurrent: 1,
       servers: [

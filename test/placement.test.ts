@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { plannerPrompt } from '../src/worker/prompts.ts';
-import { startServer, waitFor } from './helpers.ts';
+import { startServer, waitFor, OWNER } from './helpers.ts';
 
 type Msg = { t: string; spec?: Record<string, any>; cmd?: { c: string; path?: string }; req_id?: string };
 
@@ -35,7 +35,7 @@ describe('placement', () => {
     s = await startServer();
     await s.call('POST', '/projects', { key: 'PL', name: 'Place' });
     await s.call('POST', '/projects/PL/repos', { github_owner: 'me', github_name: 'pl' });
-    const made = s.ctx.workers.create('b', 'Windows desktop with PowerPoint. Often asleep.');
+    const made = s.ctx.workers.create('b', 'Windows desktop with PowerPoint. Often asleep.', OWNER);
     b = { id: made.worker.id, secret: made.secret };
   });
   afterEach(() => s.app.close());

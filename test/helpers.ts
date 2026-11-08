@@ -29,6 +29,20 @@ export async function startServer(env: Record<string, string> = {}) {
   return { app, ctx, routes, port, base, call };
 }
 
+/** The install owner of a test server (auth off: the single local user). */
+export const OWNER = 'local';
+
+/**
+ * Several people behind a sign-in proxy (AUTH_USERS=alice,bob; alice is the install owner). This
+ * machine is the proxy, so `call(…, as('bob'))` is bob signed in.
+ */
+export function startMultiUser(env: Record<string, string> = {}) {
+  return startServer({ DISABLE_AUTH: '', AUTH_MODE: 'proxy', TRUSTED_PROXIES: '127.0.0.1', AUTH_USERS: 'alice,bob', ...env });
+}
+
+/** Headers for a request as `user` (through the proxy of `startMultiUser`). */
+export const as = (user: string): Record<string, string> => ({ 'remote-user': user });
+
 export function startWorker(port: number, env: Record<string, string> = {}): ChildProcess {
   const child = spawn(process.execPath, ['src/worker/main.ts'], {
     // WINDOWS_PATH off: test workers need no Windows tools, and asking Windows for its PATH is slow

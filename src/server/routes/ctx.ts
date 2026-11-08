@@ -11,6 +11,7 @@ import type { Sessions } from '../sessions.ts';
 import type { Store } from '../store.ts';
 import type { WorkerHub } from '../workerHub.ts';
 import type { Workers } from '../workers.ts';
+import type { Users } from '../users.ts';
 import type { HostedGit } from '../hosted.ts';
 import type { Scheduler } from '../scheduler.ts';
 
@@ -20,6 +21,7 @@ export interface Ctx {
   auth: Auth;
   access: Access;
   devices: Devices;
+  users: Users;
   bus: Bus;
   hub: WorkerHub;
   workers: Workers;

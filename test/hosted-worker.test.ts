@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { hostedGitBase, Workspaces } from '../src/worker/workspace.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -26,7 +26,7 @@ describe('a worker on a hosted repo', () => {
     git(seed, 'add', '.');
     git(seed, 'commit', '--quiet', '-m', 'one');
     await s.ctx.hosted.importFrom(repo, seed, {});
-    secret = s.ctx.workers.create('linux', '').secret;
+    secret = s.ctx.workers.create('linux', '', OWNER).secret;
   });
   afterAll(() => s.app.close());
 

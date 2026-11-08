@@ -2,7 +2,7 @@
 // another repo is not used.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addLocalRepo, checkPlacements, setPlacement, type LocalRepoInfo } from '../src/server/repos.ts';
-import { startServer } from './helpers.ts';
+import { startServer, OWNER } from './helpers.ts';
 
 describe('local repo copies (DISP-45)', () => {
   let s: Awaited<ReturnType<typeof startServer>>;
@@ -10,7 +10,7 @@ describe('local repo copies (DISP-45)', () => {
   let other: number;
   beforeEach(async () => {
     s = await startServer();
-    other = s.ctx.workers.create('other', '').worker.id;
+    other = s.ctx.workers.create('other', '', OWNER).worker.id;
     found = {};
     // a worker that finds the repos in `found`
     s.ctx.hub.cmd = (async (_w: number, cmd: { c: string; path: string }) => {

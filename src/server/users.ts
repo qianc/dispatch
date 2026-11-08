@@ -1,0 +1,98 @@
+// People who use this install (DISP-63). A user row appears the first time someone signs in. The
+// install owner (cfg.installOwner) inherits everything from before users: claim() gives them every
+// row that belongs to nobody, once.
+import type { Config } from './config.ts';
+import type { Db } from './db.ts';
+import { now } from './db.ts';
+
+export interface User {
+  name: string;
+  default_worker_id: number | null;
+  created_at: string;
+  last_seen_at: string | null;
+}
+
+/** Owners from before DISPATCH_OWNER was set: the single user's stand-in names. */
+const PLACEHOLDERS = ['owner', 'local'];
+
+/** Every column that names the person a row belongs to. */
+const OWNER_COLUMNS = [['workers', 'owner'], ['api_tokens', 'user'], ['schedules', 'owner'], ['sessions', 'started_by'], ['devices', 'user'], ['oauth_grants', 'user']] as const;
+
+export class Users {
+  private db: Db;
+  private owner: string;
+  /** name → when last_seen_at was last written (a write a minute is plenty) */
+  private seen = new Map<string, number>();
+
+  constructor(db: Db, cfg: Pick<Config, 'installOwner'>) {
+    this.db = db;
+    this.owner = cfg.installOwner;
+  }
+
+  /** Give rows from before users to the install owner; move them on when the owner gets a real name. */
+  claim() {
+    const was = this.db.setting('install_owner');
+    if (was === this.owner) return;
+    if (was === undefined) {
+      this.db.tx(() => {
+        // devices and grants always had a user: only the single user's placeholder names change
+        for (const [table, col] of OWNER_COLUMNS) {
+          if (table === 'devices' || table === 'oauth_grants') this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${col} IN (?, ?)`, this.owner, ...PLACEHOLDERS);
+          else this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${col} IS NULL`, this.owner);
+        }
+        const def = Number(this.db.setting('default_worker_id'));
+        const worker = def && this.db.get('SELECT id FROM workers WHERE id = ?', def) ? def : null;
+        this.db.run('INSERT INTO users (name, default_worker_id) VALUES (?, ?) ON CONFLICT(name) DO NOTHING', this.owner, worker);
+        this.db.setSetting('install_owner', this.owner);
+      });
+      return;
+    }
+    if (!PLACEHOLDERS.includes(was)) {
+      console.warn(`The install owner was "${was}" and is now "${this.owner}": rows stay with "${was}". Set DISPATCH_OWNER=${was} to keep the old owner.`);
+      return;
+    }
+    this.db.tx(() => {
+      for (const [table, col] of OWNER_COLUMNS) this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${col} = ?`, this.owner, was);
+      const old = this.db.get<{ default_worker_id: number | null }>('SELECT default_worker_id FROM users WHERE name = ?', was);
+      this.db.run('DELETE FROM users WHERE name = ?', was);
+      this.db.run(
+        'INSERT INTO users (name, default_worker_id) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET default_worker_id = COALESCE(users.default_worker_id, excluded.default_worker_id)',
+        this.owner, old?.default_worker_id ?? null,
+      );
+      this.db.setSetting('install_owner', this.owner);
+    });
+  }
+
+  /** A signed-in person was here: their row, and last_seen_at at most once a minute. */
+  touch(name: string) {
+    const t = Date.now();
+    if ((this.seen.get(name) ?? 0) > t - 60_000) return;
+    this.seen.set(name, t);
+    this.db.run('INSERT INTO users (name, last_seen_at) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_seen_at = excluded.last_seen_at', name, now());
+  }
+
+  isOwner(name: string | null | undefined): boolean {
+    return !!name && name === this.owner;
+  }
+
+  /** Whose tokens, devices and apps `name` manages: their own, or everyone's (undefined) for the install owner. */
+  manages(name: string | null): string | undefined {
+    return this.isOwner(name) ? undefined : name ?? '';
+  }
+
+  /** The user's own default worker, if it is still live. */
+  defaultWorker(name: string): number | null {
+    const r = this.db.get<{ id: number }>(
+      'SELECT w.id FROM users u JOIN workers w ON w.id = u.default_worker_id WHERE u.name = ? AND w.revoked_at IS NULL', name,
+    );
+    return r?.id ?? null;
+  }
+
+  setDefaultWorker(name: string, id: number | null) {
+    this.db.run('INSERT INTO users (name, default_worker_id) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET default_worker_id = excluded.default_worker_id', name, id);
+  }
+
+  list(): User[] {
+    return this.db.all<User>('SELECT name, default_worker_id, created_at, last_seen_at FROM users ORDER BY name');
+  }
+}

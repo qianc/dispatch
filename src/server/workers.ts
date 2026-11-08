@@ -45,12 +45,12 @@ export class Workers {
     return r && toWorker(r);
   }
 
-  create(name: string, description: string): { worker: WorkerRecord; secret: string } {
+  create(name: string, description: string, owner: string): { worker: WorkerRecord; secret: string } {
     const n = name.trim();
     if (!WORKER_NAME.test(n)) throw new WorkerError('A worker name is lowercase letters, digits and dashes (at most 40).');
     if (this.db.get('SELECT id FROM workers WHERE name = ?', n)) throw new WorkerError(`A worker named "${n}" already exists.`);
     const secret = `dsw_${randomBytes(32).toString('base64url')}`;
-    const { lastId } = this.db.run('INSERT INTO workers (name, description, prefix, hash) VALUES (?, ?, ?, ?)', n, description.trim(), secret.slice(0, 10), sha256(secret));
+    const { lastId } = this.db.run('INSERT INTO workers (name, description, prefix, hash, owner) VALUES (?, ?, ?, ?, ?)', n, description.trim(), secret.slice(0, 10), sha256(secret), owner);
     return { worker: this.get(Number(lastId))!, secret };
   }
 
@@ -81,7 +81,8 @@ export class Workers {
   legacy(): WorkerRecord {
     const r = this.db.get('SELECT * FROM workers WHERE hash IS NULL ORDER BY id LIMIT 1');
     if (r) return toWorker(r);
-    const { lastId } = this.db.run("INSERT INTO workers (name) VALUES ('default')");
+    // the legacy worker is the install owner's (Users.claim stored who that is)
+    const { lastId } = this.db.run("INSERT INTO workers (name, owner) VALUES ('default', (SELECT value FROM settings WHERE key = 'install_owner'))");
     return this.get(Number(lastId))!;
   }
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { WorkerError } from '../workers.ts';
 import { HttpError, intParam, type Ctx } from './ctx.ts';
 
-export function workerRoutes(app: FastifyInstance, { workers, hub, sessions }: Ctx) {
+export function workerRoutes(app: FastifyInstance, { workers, hub, sessions, users }: Ctx) {
   const wrap = <T>(fn: () => T): T => {
     try {
       return fn();
@@ -17,7 +17,7 @@ export function workerRoutes(app: FastifyInstance, { workers, hub, sessions }: C
   app.get('/api/workers', async () => ({ workers: withState(), default_worker_id: workers.defaultId() }));
   app.post('/api/workers', async (req) => {
     const b = z.object({ name: z.string(), description: z.string().default('') }).parse(req.body);
-    return wrap(() => workers.create(b.name, b.description));
+    return wrap(() => workers.create(b.name, b.description, req.principal!.user!));
   });
   app.patch('/api/workers/:id', async (req) => {
     const b = z.object({ name: z.string().optional(), description: z.string().optional() }).parse(req.body);
@@ -39,6 +39,7 @@ export function workerRoutes(app: FastifyInstance, { workers, hub, sessions }: C
   app.put('/api/settings/default-worker', async (req) => {
     const { worker_id } = z.object({ worker_id: z.number().int() }).parse(req.body);
     wrap(() => workers.setDefault(worker_id));
+    users.setDefaultWorker(req.principal!.user!, worker_id);
     return { default_worker_id: workers.defaultId() };
   });
 }

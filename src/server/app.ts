@@ -39,6 +39,7 @@ import { fileRoutes } from './routes/files.ts';
 import { workerRoutes } from './routes/workers.ts';
 import { releaseRoutes } from './routes/releases.ts';
 import { Workers } from './workers.ts';
+import { Users } from './users.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
@@ -55,6 +56,8 @@ declare module 'fastify' {
 
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
   const db = new Db(opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db'));
+  const users = new Users(db, cfg);
+  users.claim();
   const store = new Store(db);
   const workers = new Workers(db);
   const hosted = new HostedGit(cfg.dataDir);
@@ -116,7 +119,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices);
   const scheduler = new Scheduler(store, sessions, bus);
-  const ctx: Ctx = { cfg, store, auth, access, devices, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
@@ -159,6 +162,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     if (need === 'user' ? who.kind !== 'user' : !who.scopes.has(need)) {
       return reply.status(403).send({ error: need === 'user' ? 'Only a signed-in person can do this, not a token.' : `This needs the "${need}" scope${who.kind === 'token' && !who.local ? ' (tokens used from another machine are limited to read and tracker)' : ''}.` });
     }
+    // projects and install settings: the install owner only (or the legacy token, which acts for the install)
+    if (need === 'admin' && !who.legacy && !users.isOwner(who.user)) {
+      return reply.status(403).send({ error: `Only the install owner (${cfg.installOwner}) can change this.` });
+    }
+    if (who.kind === 'user') users.touch(who.name);
     req.principal = who;
   });
 

@@ -4,7 +4,7 @@
 // therefore checks that itself, so reaching this port directly gets no code. Secrets are stored as
 // SHA-256 only.
 import { createHash, randomBytes } from 'node:crypto';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sha256, type Access, type Principal, type Scope } from './access.ts';
 import type { Config } from './config.ts';
@@ -91,19 +91,21 @@ export class OAuth {
 
   /** The OAuth client behind an access token, for /mcp. */
   verify(token: string): Principal | null {
-    const r = this.db.get<{ id: number; scopes: string; access_expires_at: string; revoked_at: string | null; name: string }>(
-      'SELECT g.id, g.scopes, g.access_expires_at, g.revoked_at, c.name FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id WHERE g.access_hash = ?', sha256(token),
+    const r = this.db.get<{ id: number; scopes: string; access_expires_at: string; revoked_at: string | null; name: string; user: string }>(
+      'SELECT g.id, g.scopes, g.access_expires_at, g.revoked_at, g.user, c.name FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id WHERE g.access_hash = ?', sha256(token),
     );
     if (!r || r.revoked_at || r.access_expires_at < new Date().toISOString()) return null;
     this.db.run('UPDATE oauth_grants SET last_used_at = ? WHERE id = ?', new Date().toISOString(), r.id);
-    return { kind: 'oauth', name: r.name, scopes: new Set(JSON.parse(r.scopes)), local: false };
+    return { kind: 'oauth', name: r.name, scopes: new Set(JSON.parse(r.scopes)), local: false, user: r.user };
   }
 
-  grants(): OAuthGrantInfo[] {
+  /** Live grants: all, or only those `user` approved. */
+  grants(user?: string): OAuthGrantInfo[] {
     return this.db.all<Record<string, unknown>>(
       `SELECT g.id, g.client_id, c.name AS client_name, g.user, g.scopes, g.created_at, g.last_used_at, g.refresh_expires_at, g.revoked_at
        FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id
-       WHERE g.revoked_at IS NULL AND g.refresh_expires_at > ? ORDER BY g.id DESC`, new Date().toISOString(),
+       WHERE g.revoked_at IS NULL AND g.refresh_expires_at > ?${user === undefined ? '' : ' AND g.user = ?'} ORDER BY g.id DESC`,
+      new Date().toISOString(), ...(user === undefined ? [] : [user]),
     ).map((r) => ({ ...(r as unknown as OAuthGrantInfo), scopes: JSON.parse(String(r.scopes)) }));
   }
 
@@ -220,10 +222,15 @@ export class OAuth {
       return {}; // RFC 7009: always 200
     });
 
-    // Settings → Connected apps
-    app.get('/api/oauth/grants', async () => this.grants());
-    app.delete('/api/oauth/grants/:id', async (req) => {
-      this.revokeGrant(Number((req.params as { id: string }).id));
+    // Settings → Connected apps: your own; the install owner sees and revokes all
+    const mine = (req: FastifyRequest) => (req.principal!.user === this.cfg.installOwner ? undefined : req.principal!.user ?? '');
+    app.get('/api/oauth/grants', async (req) => this.grants(mine(req)));
+    app.delete('/api/oauth/grants/:id', async (req, reply) => {
+      const id = Number((req.params as { id: string }).id);
+      const user = mine(req);
+      const g = this.db.get<{ user: string }>('SELECT user FROM oauth_grants WHERE id = ?', id);
+      if (!g || (user !== undefined && g.user !== user)) return reply.status(404).send({ error: 'Connected app not found' });
+      this.revokeGrant(id);
       return { ok: true };
     });
   }
