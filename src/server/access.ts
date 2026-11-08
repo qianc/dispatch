@@ -134,6 +134,12 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/devices/:id': 'user',
   'GET /api/oauth/grants': 'user',
   'DELETE /api/oauth/grants/:id': 'user',
+  // your own GitHub connection (a person's, never a token's)
+  'GET /api/me/github': 'user',
+  'PUT /api/me/github': 'user',
+  'DELETE /api/me/github': 'user',
+  'GET /api/github/oauth/start': 'user',
+  'GET /api/github/oauth/callback': 'user',
 };
 
 export interface Principal {

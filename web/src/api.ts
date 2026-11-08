@@ -108,7 +108,36 @@ export interface PrDetail {
   auto_merge: Session['options']['auto_merge'];
 }
 
-export interface Me { authed: boolean; user: string | null; auth_mode: 'password' | 'proxy' | 'off'; auth_disabled: boolean; password_login: boolean; vapid_public_key: string }
+export interface Me {
+  authed: boolean;
+  user: string | null;
+  /** the signed-in person owns this install (projects, install settings) */
+  is_owner: boolean;
+  install_owner: string | null;
+  /** install owner only: the key file Dispatch made for stored GitHub tokens, or null */
+  secret_key_file: string | null;
+  auth_mode: 'password' | 'proxy' | 'off';
+  auth_disabled: boolean;
+  password_login: boolean;
+  vapid_public_key: string;
+}
+
+/** The signed-in person's own GitHub connection (never its token). */
+export interface MyGithub {
+  connected: boolean;
+  login: string | null;
+  git_name: string | null;
+  git_email: string | null;
+  kind: 'oauth' | 'pat' | null;
+  verified_at: string | null;
+  /** set when the token stopped working: connect again */
+  last_error: string | null;
+  /** "Connect with GitHub" is set up (GITHUB_OAUTH_CLIENT_ID / _SECRET) */
+  oauth_available: boolean;
+  /** the install owner: without a connection, actions use the server's GitHub accounts */
+  uses_env_when_unconnected: boolean;
+  env_accounts: { name: string; login: string | null }[];
+}
 
 export interface Accounts {
   claude: { name: string; label: string; kind: string; logged_in: boolean | null; config_dir: string | null }[];

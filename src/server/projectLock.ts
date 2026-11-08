@@ -117,6 +117,8 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/devices/pair': null,
   'POST /api/devices/approve': null,
   'DELETE /api/devices/:id': null,
+  'PUT /api/me/github': null,
+  'DELETE /api/me/github': null,
 };
 
 /** The disabled project an /api write route would change, if any. */

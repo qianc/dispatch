@@ -5,7 +5,7 @@ import { DEVICE_COOKIE } from '../devices.ts';
 import { SCOPES, isLoopback } from '../access.ts';
 import { HttpError, type Ctx } from './ctx.ts';
 
-export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices, users }: Ctx) {
+export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices, users, secretKeyFile }: Ctx) {
   const db = store.db;
   const passwordSet = !!(cfg.appPassword || cfg.appPasswordHash);
   /** Where the password login may be used: anywhere in password mode; only from this machine behind a proxy. */
@@ -38,6 +38,8 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       user,
       is_owner: users.isOwner(user),
       install_owner: user ? cfg.installOwner : null,
+      /** the install owner: the key file Dispatch made for stored GitHub tokens (null: DISPATCH_SECRET_KEY is set) */
+      secret_key_file: users.isOwner(user) ? secretKeyFile : null,
       auth_mode: cfg.authMode,
       auth_disabled: cfg.authMode === 'off',
       /** the password form makes sense here (else: sign in through the proxy) */

@@ -40,6 +40,9 @@ import { workerRoutes } from './routes/workers.ts';
 import { releaseRoutes } from './routes/releases.ts';
 import { Workers } from './workers.ts';
 import { Users } from './users.ts';
+import { Identities } from './identities.ts';
+import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
+import { githubRoutes } from './routes/github.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
@@ -56,9 +59,19 @@ declare module 'fastify' {
 }
 
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
-  const db = new Db(opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db'));
+  const dbFile = opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db');
+  const db = new Db(dbFile);
+  // after the database: it made the data folder the key file goes into
+  const secretKey = loadKey(cfg, dbFile);
   const users = new Users(db, cfg);
   users.claim();
+  // people's own GitHub tokens, sealed with the secret key (DISP-63)
+  const box = new SecretBox(secretKey.key);
+  const identities = new Identities(db, box, cfg);
+  if (!keyMatches(db, box)) {
+    console.warn('The secret key changed: stored GitHub tokens cannot be read. Everyone must connect GitHub again (Settings → Your GitHub).');
+    identities.markAllUnreadable();
+  }
   const store = new Store(db);
   const workers = new Workers(db);
   const hosted = new HostedGit(cfg.dataDir);
@@ -120,7 +133,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices);
   const scheduler = new Scheduler(store, sessions, bus);
-  const ctx: Ctx = { cfg, store, auth, access, devices, users, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
@@ -226,6 +239,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   gitRoutes(app, ctx);
   imageRoutes(app, ctx);
   scheduleRoutes(app, ctx);
+  githubRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);
