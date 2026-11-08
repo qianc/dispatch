@@ -38,7 +38,10 @@ export function fileRoutes(app: FastifyInstance, { store, hub, hosted }: Ctx) {
         const bytes = t.repo ? await readRepoFile({ store, hub, hosted }, project, t.repo, path)
           : Buffer.from((await hub.cmd<{ base64: string }>(project.worker_id ?? store.defaultWorkerId(), { c: 'read_file', ...t, path }, 60_000)).base64, 'base64');
         reply.header('cache-control', 'private, max-age=300');
-        return reply.type(mime(path)).send(bytes);
+        const type = mime(path);
+        // an SVG from a repo may carry a script: opened in a tab, it must not run as Dispatch itself
+        if (type === 'image/svg+xml') reply.header('content-security-policy', 'sandbox');
+        return reply.type(type).send(bytes);
       } catch {
         // not in this place; try the next
       }

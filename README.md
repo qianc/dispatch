@@ -444,7 +444,15 @@ home-screen app starts on `/pair`: not signed in, it shows a short code. Enter t
 (`dispatch_device`) and acts as you for 90 days. Codes last 10 minutes, a paired device cannot pair
 others, and signing out on the phone (or **Unpair** in Settings) ends it. For this, route around the
 proxy's sign-in: requests that carry the `dispatch_device` cookie, and `/pair` with the app's static
-files and `/api/devices/pair*`. Dispatch believes the cookie only from `TRUSTED_PROXIES`.
+files and `/api/devices/pair*`. Dispatch believes the cookie only from `TRUSTED_PROXIES`, and on a
+request that carries it, the device alone: a user header on such a request is the client's own, not
+the proxy's, and is ignored.
+
+**From the browser**, a change (anything but a read) is accepted only from Dispatch's own pages: the
+browser's `Sec-Fetch-Site` must say `same-origin` (older browsers: `Origin` must name the host). A
+page on another site, also on a sibling subdomain that shares the sign-in cookie, gets 403. Tokens
+are not held to this. Every response forbids framing (`frame-ancestors 'none'`) and MIME sniffing,
+and an SVG read from a repo is served sandboxed, so a script in it runs as nobody.
 
 **Scopes.** Every API route needs one: `read`, `tracker` (items, comments, sources, images),
 `sessions` (start and steer agents, merge) or `admin` (projects, repos, settings). A signed-in person
@@ -469,7 +477,11 @@ browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for
 `/api/*` requests that carry `Authorization: Bearer dsp_…`; `/worker` (the WebSocket that
 workers on other machines connect to, with their worker token); and `/git/` (hosted repos, also with
 worker tokens). Keep `/authorize` (the consent
-page) and everything else **behind** it. Dispatch checks all of these itself.
+page) and everything else **behind** it. Dispatch checks all of these itself. On the routes that go
+around the sign-in, have the proxy drop the identity headers the client sent (`Remote-User` and the
+like: set them to an empty value in Traefik), since no sign-in set them there. Give Dispatch no CORS
+headers: the app is same-origin, and a CORS allow-list with credentials for sibling sites would let
+any of them drive the API with the shared cookie.
 
 ## Tools for agents
 

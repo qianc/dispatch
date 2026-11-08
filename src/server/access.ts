@@ -206,6 +206,30 @@ export function ipInList(ip: string | undefined, list: string[]) {
   });
 }
 
+// ---------- browsers ----------
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * May a browser's request change something? Only from Dispatch's own origin. A page on another
+ * site (also a sibling subdomain, which shares a domain-wide SSO cookie) can send the cookie along
+ * but cannot forge these headers: `Sec-Fetch-Site` where the browser sends it, else `Origin`,
+ * which must name the host asked for. Neither header: not a browser (curl, a script); the scopes
+ * decide. Reads are not changes.
+ */
+export function fromOwnOrigin(req: Pick<FastifyRequest, 'method' | 'headers'>): boolean {
+  if (SAFE_METHODS.has(req.method)) return true;
+  const site = req.headers['sec-fetch-site'];
+  if (site) return site === 'same-origin' || site === 'none';
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- access ----------
 
 export class Access {
@@ -265,9 +289,11 @@ export class Access {
     const paired = () => (devices ? this.device(req)?.user ?? null : null);
     if (this.cfg.authMode === 'proxy') {
       if (f.proxy) {
+        // A device cookie means the proxy let the request through on that cookie, around its
+        // sign-in: a user header on it is the client's own, not the SSO's. Only the device counts.
+        if (req.cookies?.[DEVICE_COOKIE]) return paired();
         const user = String(req.headers[this.cfg.authHeader] ?? '').trim();
-        // no user header: the proxy let a device through on its own cookie
-        if (!user) return paired();
+        if (!user) return null;
         if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(user)) return null;
         this.users.adopt(user);
         return user;

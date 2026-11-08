@@ -15,7 +15,7 @@ import { projectRules } from './projectRules.ts';
 import { Attachments } from './attachments.ts';
 import { imageRoutes } from './routes/images.ts';
 import { Janitor } from './janitor.ts';
-import { Access, ROUTE_ACCESS, type Principal } from './access.ts';
+import { Access, ROUTE_ACCESS, fromOwnOrigin, type Principal } from './access.ts';
 import { Devices } from './devices.ts';
 import { OAuth } from './oauth.ts';
 import { mcpRoutes } from './mcp.ts';
@@ -171,6 +171,17 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   await app.register(cookie);
   await app.register(websocket);
 
+  // Every response: never shown in a frame (the consent page /authorize would be a clickjacking
+  // target), no MIME sniffing, no referrer to other sites. A route's own policy (e.g. sandbox) is kept.
+  app.addHook('onSend', (_req, reply, payload, done) => {
+    const own = reply.getHeader('content-security-policy');
+    reply.header('content-security-policy', own ? `${String(own)}; frame-ancestors 'none'` : "frame-ancestors 'none'");
+    reply.header('x-frame-options', 'DENY');
+    if (!reply.hasHeader('x-content-type-options')) reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'same-origin');
+    done(null, payload);
+  });
+
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
     if (err instanceof SessionError) return reply.status(err.status).send({ error: err.message, ...err.extra, ...connectBack(req, err.extra) });
@@ -204,6 +215,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     if (need === 'public') return;
     const who = access.principal(req);
     if (!who) return reply.status(401).send({ error: 'Not signed in' });
+    // a browser session changes things only from Dispatch's own pages, not from another site that sends the cookie along
+    if (who.kind === 'user' && !fromOwnOrigin(req)) return reply.status(403).send({ error: 'This request came from another site. Open Dispatch itself.' });
     if (who.kind === 'token') console.log(`token "${who.name}"${who.local ? '' : ' (remote)'}: ${req.method} ${req.url.split('?')[0]}`);
     if (need === 'user' ? who.kind !== 'user' : !who.scopes.has(need)) {
       return reply.status(403).send({ error: need === 'user' ? 'Only a signed-in person can do this, not a token.' : `This needs the "${need}" scope${who.kind === 'token' && !who.local ? ' (tokens used from another machine are limited to read and tracker)' : ''}.` });
