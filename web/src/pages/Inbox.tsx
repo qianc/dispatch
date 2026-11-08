@@ -140,7 +140,9 @@ function CleanupCard({ offer }: { offer: NonNullable<InboxData['cleanup']> }) {
     <Section title="Tidy up">
       <div className="mx-3 rounded-xl bg-panel border border-line px-3 py-2.5">
         <p className="text-[14px]">
-          {offer.sessions.length} finished session{offer.sessions.length === 1 ? '' : 's'} left {parts.join(' and ')} on disk.
+          {parts.length > 0 && <>{offer.sessions.length} finished session{offer.sessions.length === 1 ? '' : 's'} left {parts.join(' and ')} on disk.</>}
+          {parts.length > 0 && !!offer.checked_out && ' '}
+          {!!offer.checked_out && <>{offer.checked_out} merged branch{offer.checked_out === 1 ? ' is' : 'es are'} checked out in a worktree outside {offer.checked_out === 1 ? 'its' : 'their'} session folder; remove that worktree first.</>}
         </p>
         <p className="text-[12.5px] text-muted mt-0.5">Clean up removes them. Branches that are not merged, and worktrees with uncommitted changes, stay.</p>
         {report && (
@@ -163,6 +165,7 @@ function CleanupCard({ offer }: { offer: NonNullable<InboxData['cleanup']> }) {
               <li key={s.id} className="truncate">
                 <Link to={`/s/${s.id}`} className="text-fg">{s.project_key ? `${s.project_key} ` : ''}#{s.id} {s.title}</Link>
                 {' · '}{[s.branches ? `${s.branches} branch${s.branches === 1 ? '' : 'es'}` : '', s.worktrees ? `${s.worktrees} worktree${s.worktrees === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ')}
+                {s.checked_out?.map((c) => <span key={c.repo} className="block truncate">{c.repo}: branch checked out in {c.path}</span>)}
               </li>
             ))}
           </ul>

@@ -11,9 +11,11 @@ import type { Leftover, TidyResult } from '../worker/workspace.ts';
 const DAY = 24 * 3600_000;
 
 export interface CleanupOffer {
-  sessions: { id: number; title: string; project_key: string | null; worktrees: number; branches: number }[];
+  sessions: { id: number; title: string; project_key: string | null; worktrees: number; branches: number; checked_out?: { repo: string; path: string }[] }[];
   worktrees: number;
   branches: number;
+  /** merged branches checked out in a worktree outside their session folder: reported, not deleted (DISP-62) */
+  checked_out?: number;
   checked_at: string;
 }
 
@@ -49,7 +51,8 @@ export class Janitor {
     const sessions = this.checked.sessions.filter((o) => this.finished(o.id));
     if (!sessions.length) return null;
     const sum = (k: 'worktrees' | 'branches') => sessions.reduce((n, o) => n + o[k], 0);
-    return { ...this.checked, sessions, worktrees: sum('worktrees'), branches: sum('branches') };
+    const checked_out = sessions.reduce((n, o) => n + (o.checked_out?.length ?? 0), 0);
+    return { ...this.checked, sessions, worktrees: sum('worktrees'), branches: sum('branches'), checked_out };
   }
   private finished(id: number) {
     const s = this.store.session(id);
@@ -108,7 +111,7 @@ export class Janitor {
     if (!this.hub.connected) return;
     const since = Date.now() - 90 * DAY;
     const finished = this.store.sessions({ statuses: ['completed', 'stopped', 'failed'] }).filter((s) => Date.parse(s.updated_at) > since);
-    const offer: CleanupOffer = { sessions: [], worktrees: 0, branches: 0, checked_at: new Date().toISOString() };
+    const offer: CleanupOffer = { sessions: [], worktrees: 0, branches: 0, checked_out: 0, checked_at: new Date().toISOString() };
     for (const s of finished) {
       const repos = this.reposOf(s);
       if (!repos.length) continue;
@@ -116,11 +119,13 @@ export class Janitor {
       const left = await this.hub.cmd<Leftover[]>(s.worker_id, { c: 'leftovers', session_id: s.id, repos, branch: s.branch, merged_repo_ids: this.mergedRepoIds(s) }, 60_000);
       const removable = (l: Leftover) => l.worktree && (s.kind !== 'work' || !(l.dirty || (l.untracked && !(l.branch && l.merged))));
       const worktrees = left.filter(removable).length;
-      const branches = left.filter((l) => l.branch && l.merged).length;
-      if (worktrees || branches) {
-        offer.sessions.push({ id: s.id, title: s.title, project_key: s.project_key, worktrees, branches });
+      const branches = left.filter((l) => l.branch && l.merged && !l.checked_out).length;
+      const checked_out = left.filter((l) => l.branch && l.merged && l.checked_out).map((l) => ({ repo: l.repo, path: l.checked_out! }));
+      if (worktrees || branches || checked_out.length) {
+        offer.sessions.push({ id: s.id, title: s.title, project_key: s.project_key, worktrees, branches, ...(checked_out.length ? { checked_out } : {}) });
         offer.worktrees += worktrees;
         offer.branches += branches;
+        offer.checked_out! += checked_out.length;
       }
     }
     // chats keep a read-only checkout while open; after a week unused it goes (a new message brings it back)

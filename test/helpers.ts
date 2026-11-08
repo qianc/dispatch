@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildApp } from '../src/server/app.ts';
 import { loadConfig } from '../src/server/config.ts';
 
@@ -47,8 +50,9 @@ export function startWorker(port: number, env: Record<string, string> = {}): Chi
   const child = spawn(process.execPath, ['src/worker/main.ts'], {
     // WINDOWS_PATH off: test workers need no Windows tools, and asking Windows for its PATH is slow
     // when many test workers start at once. REPO_ENV_DIR: none of this machine's own env files.
-    // WORKER_CONFIG: not this machine's worker config (it would connect to the real servers)
-    env: { ...process.env, WORKER_CONFIG: '', SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', WINDOWS_PATH: 'off', REPO_ENV_DIR: '/nonexistent/dispatch-repo-env', ...env },
+    // WORKER_CONFIG: not this machine's worker config (it would connect to the real servers).
+    // WORKSPACES_DIR: a fresh folder, never this machine's own (a start moves an old layout there, DISP-62)
+    env: { ...process.env, WORKER_CONFIG: '', WORKSPACES_DIR: mkdtempSync(join(tmpdir(), 'dsp-worker-ws-')), SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKER_TOKEN: 'test-token', RUNNER: 'fake', FAKE_DELAY_MS: '20', WINDOWS_PATH: 'off', REPO_ENV_DIR: '/nonexistent/dispatch-repo-env', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stderr?.on('data', (d) => process.env.DEBUG_WORKER && process.stderr.write(d));

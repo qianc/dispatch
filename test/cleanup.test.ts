@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
+import { serverRoot } from '../src/worker/layout.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 import { cleanupReport } from '../web/src/cleanup.ts';
 import { OWNER } from './helpers.ts';
@@ -102,7 +103,7 @@ describe('the janitor on the server', () => {
       await waitFor(() => s.ctx.hub.connected, 'worker');
       await s.call('POST', '/projects', { key: 'JAN', name: 'Janitor' });
       const repo = (await s.call('POST', '/projects/JAN/repos', { local_path: dir })).data as Repo;
-      const ws = new Workspaces(wsDir); // the worker's folders, to set up what a session leaves
+      const ws = new Workspaces(serverRoot(wsDir, 'default')); // the worker's folders, to set up what a session leaves
       const make = async (title: string) => {
         const sess = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: repo.project_id, kind: 'work', title, status: 'idle', force_plan: false, branch: `dispatch/jan-${title}`, initial_prompt: '', source_id: null, item_ids: [] });
         const spec = { session_id: sess.id, kind: 'work' as const, project_key: 'JAN', project_name: 'J', importance_scale: [], effort_scale: [], title, branch: sess.branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
@@ -158,7 +159,8 @@ describe('the janitor on the server', () => {
       git(dir, 'worktree', 'add', '-q', '--force', other, d.sess.branch!); // also checked out where the owner works
       s.ctx.store.updateSession(d.sess.id, { status: 'completed' });
       const before = (await s.call('POST', '/cleanup/check')).data;
-      expect(before).toMatchObject({ sessions: [expect.objectContaining({ id: d.sess.id })] });
+      // DISP-62: reported as checked out there, not offered as a merged branch to delete
+      expect(before).toMatchObject({ branches: 0, checked_out: 1, sessions: [expect.objectContaining({ id: d.sess.id, branches: 0, checked_out: [{ repo: 'tpl', path: expect.stringMatching(/other$/) }] })] });
       const kept = (await s.call('POST', '/cleanup')).data;
       expect(kept.left).toMatchObject({ sessions: [expect.objectContaining({ id: d.sess.id })] });
       expect(existsSync(d.wt)).toBe(false);
@@ -166,7 +168,7 @@ describe('the janitor on the server', () => {
       expect(report.title).toBe('1 branch could not be removed:');
       expect(report.removed).toBe('Removed 1 worktree.');
       expect(report.kept).toEqual([expect.objectContaining({ session_id: d.sess.id, session: `JAN #${d.sess.id} d`, repo: 'tpl', what: 'branch' })]);
-      expect(report.kept[0]!.reason).toMatch(/^cannot delete branch 'dispatch\/jan-d' used by worktree at '.*other'/);
+      expect(report.kept[0]!.reason).toMatch(/^checked out in .*other$/);
     } finally {
       await stopWorker(worker);
       await s.app.close();
