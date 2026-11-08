@@ -65,6 +65,7 @@
 <ul class="notes">
   <li>Without a proxy (password mode) none of this applies: the app has its own password sign-in; tokens and workers work the same.</li>
   <li>Paired phones: only needed when the SSO cannot run in the home-screen app (see README → "Pair a phone with a code"). The app's static files load with <code>/pair</code>.</li>
+  <li>On the routes around the sign-in, the proxy must drop the identity headers the client sent (<code>Remote-User</code> …), and Dispatch gets no CORS headers: README → Security, and <code>docs/examples/traefik-dispatch.yml</code>.</li>
   <li>The proxy secret matters when other programs share the proxy's address (containers on the same network).</li>
 </ul>
 </main></body></html>

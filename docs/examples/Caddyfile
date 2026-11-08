@@ -1,4 +1,5 @@
-# HTTPS in front of the Dispatch server (Caddy gets the certificate itself).
+# HTTPS in front of the Dispatch server (Caddy gets the certificate itself), password mode.
+# For a sign-in proxy in front (AUTH_MODE=proxy) see traefik-dispatch.yml and README → Security.
 # The phone app and push notifications need HTTPS. WebSockets (/worker) and live updates pass through.
 dispatch.example.com {
 	reverse_proxy localhost:3000

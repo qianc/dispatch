@@ -1,0 +1,164 @@
+# Traefik (file provider) in front of Dispatch, with Authelia as the sign-in: AUTH_MODE=proxy.
+# README → Security says what this has to do; this file does it. Everything goes through Authelia,
+# except the routes Dispatch checks itself (tokens, OAuth, workers, hosted git, paired phones).
+#
+# Replace: dispatch.example.com, the Authelia address, the proxy secret, the entry point name and
+# the service URL. Authelia needs an access rule for dispatch.example.com as well (e.g. two_factor
+# for your user). Keep this file out of git (it holds the secret), or let Traefik template the value
+# in from its environment:  X-Proxy-Secret: '{{ env "DISPATCH_PROXY_SECRET" }}'
+#
+# Dispatch's side (server.env): AUTH_MODE=proxy, TRUSTED_PROXIES=<Traefik's address or network>,
+# PROXY_SECRET=<the same value>, AUTH_USERS=<who may sign in>, PUBLIC_URL=https://dispatch.example.com
+
+http:
+  middlewares:
+    # Authelia's forward-auth: it sets Remote-User (and the others) from the session. On the routes
+    # it covers it also deletes any such header the client sent; on the routes it does not cover,
+    # dispatch-strip-user-headers below has to.
+    dispatch-sso:
+      forwardAuth:
+        address: "http://authelia:9091/api/authz/forward-auth?authelia_url=https%3A%2F%2Fauth.example.com%2F"
+        trustForwardHeader: true
+        authResponseHeaders: ["Remote-User", "Remote-Groups", "Remote-Name", "Remote-Email"]
+
+    # Proves to Dispatch that a request came from Traefik and not from something else that shares
+    # Traefik's address (another container, the host). Same value as PROXY_SECRET. Replaces any
+    # value the client sent.
+    dispatch-proxy-secret:
+      headers:
+        customRequestHeaders:
+          X-Proxy-Secret: "CHANGE-ME-to-a-long-random-value-of-24-characters-or-more"
+
+    # Around the sign-in, the client's own identity headers must not reach Dispatch. An empty value
+    # deletes the header.
+    dispatch-strip-user-headers:
+      headers:
+        customRequestHeaders:
+          Remote-User: ""
+          Remote-Groups: ""
+          Remote-Name: ""
+          Remote-Email: ""
+
+    # HSTS only: Dispatch sets the framing, sniffing and referrer headers itself. No CORS: the app
+    # is same-origin, and an allow-list with credentials would let your other sites drive the API
+    # with the shared sign-in cookie.
+    dispatch-security-headers:
+      headers:
+        forceSTSHeader: true
+        stsSeconds: 15552000
+        stsIncludeSubdomains: true
+
+    # Dispatch has no rate limit of its own. Per client address; generous enough for the app's
+    # live stream and a few workers.
+    dispatch-rate-limit:
+      rateLimit:
+        average: 100
+        burst: 200
+
+    # live updates (SSE) and git packs must stream, not buffer
+    dispatch-streaming:
+      headers:
+        customResponseHeaders:
+          X-Accel-Buffering: "no"
+
+    # through the sign-in: the app, /api from the browser, the consent page
+    dispatch-chain-app:
+      chain:
+        middlewares:
+          - dispatch-rate-limit
+          - dispatch-sso
+          - dispatch-security-headers
+          - dispatch-proxy-secret
+
+    # around the sign-in: Dispatch checks these itself
+    dispatch-chain-public:
+      chain:
+        middlewares:
+          - dispatch-rate-limit
+          - dispatch-strip-user-headers
+          - dispatch-security-headers
+          - dispatch-proxy-secret
+
+  routers:
+    # The OAuth consent page: through the sign-in, and before the catch-all.
+    dispatch-authorize:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && Path(`/authorize`)"
+      priority: 100
+      middlewares: ["dispatch-chain-app"]
+      tls: {}
+      service: dispatch
+
+    # OAuth for MCP clients (Claude): metadata, registration, tokens. PKCE and registered return
+    # addresses; no data.
+    dispatch-oauth:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && (PathPrefix(`/.well-known/`) || Path(`/register`) || Path(`/token`) || Path(`/revoke`))"
+      priority: 90
+      middlewares: ["dispatch-chain-public"]
+      tls: {}
+      service: dispatch
+
+    # MCP: OAuth bearer tokens, read + tracker scopes at most.
+    dispatch-mcp:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && Path(`/mcp`)"
+      priority: 90
+      middlewares: ["dispatch-chain-public", "dispatch-streaming"]
+      tls: {}
+      service: dispatch
+
+    # Scripts and skills with a personal token. From another machine a token gets read + tracker only.
+    dispatch-api-token:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && PathPrefix(`/api/`) && HeaderRegexp(`Authorization`, `^Bearer dsp_`)"
+      priority: 80
+      middlewares: ["dispatch-chain-public"]
+      tls: {}
+      service: dispatch
+
+    # Workers: the WebSocket, with per-worker tokens.
+    dispatch-worker:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && Path(`/worker`)"
+      priority: 90
+      middlewares: ["dispatch-chain-public"]
+      tls: {}
+      service: dispatch
+
+    # Hosted repos: git over HTTP, worker tokens only.
+    dispatch-git:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && PathPrefix(`/git/`)"
+      priority: 90
+      middlewares: ["dispatch-chain-public", "dispatch-streaming"]
+      tls: {}
+      service: dispatch
+
+    # Paired phones (optional: only when the SSO cannot run in the home-screen app, README → Sign-in).
+    # The pairing page with the app's static files, the pairing API, and every request that carries
+    # the device cookie. Dispatch believes the cookie alone on such a request and ignores any user
+    # header. The static files are the public app shell; they hold no data.
+    dispatch-pair:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`) && (Path(`/pair`) || PathPrefix(`/assets/`) || Path(`/manifest.webmanifest`) || PathRegexp(`^/(icon|apple-touch-icon|sw|registerSW|workbox)[^/]*$`) || PathPrefix(`/api/devices/pair`) || HeaderRegexp(`Cookie`, `(^|; )dispatch_device=`))"
+      priority: 85
+      middlewares: ["dispatch-chain-public"]
+      tls: {}
+      service: dispatch
+
+    # Everything else: the app, through the sign-in.
+    dispatch:
+      entryPoints: ["websecure"]
+      rule: "Host(`dispatch.example.com`)"
+      priority: 1
+      middlewares: ["dispatch-chain-app", "dispatch-streaming"]
+      tls: {}
+      service: dispatch
+
+  services:
+    dispatch:
+      loadBalancer:
+        servers:
+          - url: "http://dispatch:3000"
+        passHostHeader: true

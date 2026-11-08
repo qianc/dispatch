@@ -448,12 +448,6 @@ files and `/api/devices/pair*`. Dispatch believes the cookie only from `TRUSTED_
 request that carries it, the device alone: a user header on such a request is the client's own, not
 the proxy's, and is ignored.
 
-**From the browser**, a change (anything but a read) is accepted only from Dispatch's own pages: the
-browser's `Sec-Fetch-Site` must say `same-origin` (older browsers: `Origin` must name the host). A
-page on another site, also on a sibling subdomain that shares the sign-in cookie, gets 403. Tokens
-are not held to this. Every response forbids framing (`frame-ancestors 'none'`) and MIME sniffing,
-and an SVG read from a repo is served sandboxed, so a script in it runs as nobody.
-
 **Scopes.** Every API route needs one: `read`, `tracker` (items, comments, sources, images),
 `sessions` (start and steer agents, merge) or `admin` (projects, repos, settings). A signed-in person
 has all of them.
@@ -477,11 +471,87 @@ browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for
 `/api/*` requests that carry `Authorization: Bearer dsp_…`; `/worker` (the WebSocket that
 workers on other machines connect to, with their worker token); and `/git/` (hosted repos, also with
 worker tokens). Keep `/authorize` (the consent
-page) and everything else **behind** it. Dispatch checks all of these itself. On the routes that go
-around the sign-in, have the proxy drop the identity headers the client sent (`Remote-User` and the
-like: set them to an empty value in Traefik), since no sign-in set them there. Give Dispatch no CORS
-headers: the app is same-origin, and a CORS allow-list with credentials for sibling sites would let
-any of them drive the API with the shared cookie.
+page) and everything else **behind** it. Dispatch checks all of these itself. What else the proxy
+must do (drop the client's identity headers on those routes, no CORS) is in [Security](#security),
+with a complete [Traefik example](docs/examples/traefik-dispatch.yml).
+
+## Security
+
+Dispatch runs code on your machines when it is told to, so who may tell it matters. The model in one
+paragraph: the server trusts no address except the proxy in front of it; every request is a signed-in
+person (password cookie, the proxy's user header, or a paired device), a named token, or an OAuth
+client; each route says which scope it needs; and the worker, not the server, holds the Claude login
+and runs the agents.
+
+**What Dispatch does itself**
+
+- Every `/api` route needs a scope (`read`, `tracker`, `sessions`, `admin`); a test fails when one has
+  none. Projects and install settings are the install owner's alone.
+- Tokens, worker tokens, OAuth codes and refresh tokens are stored as SHA-256 hashes and shown once.
+  A token used from another machine gets `read` and `tracker` only. Secrets are compared in constant
+  time.
+- The Claude connector is OAuth 2.1: PKCE (S256) is required, the return address must be one the
+  client registered (https, or http on localhost), refresh tokens rotate, and the consent page checks
+  the person again when they answer. A connector gets `read` and `tracker` at most; it never starts
+  agents.
+- People's GitHub tokens are AES-256-GCM encrypted at rest (`DISPATCH_SECRET_KEY`), never sent to the
+  browser, and scrubbed from everything a worker sends and from saved chats.
+- A browser session may change something only from Dispatch's own pages: `Sec-Fetch-Site` must say
+  `same-origin` (older browsers: `Origin` must name the host). A page on another site, also on a
+  sibling subdomain that shares the sign-in cookie, gets 403. Tokens are not held to this; reads are
+  not changes.
+- Every response carries `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. An SVG read from a repo is
+  served with `CSP: sandbox`, so a script in it runs as nobody. Item images are kept only when their
+  bytes are PNG, JPEG, GIF or WebP.
+- In proxy mode the user header is believed only from `TRUSTED_PROXIES`, with the `PROXY_SECRET`;
+  any other request not from the machine itself is refused on every path. A request that carries a
+  device cookie is believed for the device only, whatever header comes with it.
+- Hosted repos answer only the three git smart-HTTP endpoints, to worker tokens, without a shell; a
+  hook keeps the default branch from being force-pushed or deleted.
+- Paths from clients are checked: a repo file cannot leave the repo, an attachment name must be one
+  Dispatch made, and redirects (`/signin?to=`, `connect_url`) stay on Dispatch's own origin.
+
+**What the proxy in front must do** (proxy mode)
+
+1. Terminate HTTPS and send everything through the SSO check, except the paths listed under
+   [Sign-in](#sign-in-tokens-and-claude-connectors): OAuth (`/.well-known/*`, `/register`, `/token`,
+   `/revoke`), `/mcp`, `/api/*` with a `dsp_` bearer token, `/worker`, `/git/`, and for paired phones
+   `/pair`, the app's static files, `/api/devices/pair*` and requests with the `dispatch_device`
+   cookie.
+2. Add the `PROXY_SECRET` header to every request, on both kinds of route.
+3. On the routes that go around the SSO check, **drop the identity headers the client sent**
+   (`Remote-User`, `Remote-Groups`, `Remote-Name`, `Remote-Email`): nothing signed them there. A
+   forward-auth middleware does this on the routes it covers, and only on those.
+4. **Give Dispatch no CORS headers.** The app is same-origin and needs none. An allow-list with
+   credentials for your other sites (common in a shared middleware chain) lets a script on any of
+   them call Dispatch's API with the shared sign-in cookie.
+5. Rate limiting is the proxy's job: Dispatch has none of its own.
+6. Requests from Dispatch's own machine count as local (password login, full token scopes). Do not
+   put the proxy or a tunnel there, unless Dispatch runs in a container on a bridge network, which
+   sees the proxy's address and not loopback.
+
+[`docs/examples/traefik-dispatch.yml`](docs/examples/traefik-dispatch.yml) is a complete Traefik
+file-provider config that does all of this with Authelia.
+
+**Password mode** (the default) needs none of that: put HTTPS in front
+([Caddy example](docs/examples/Caddyfile)), on another host or in Docker. Known limits, tracked as
+work to do: the login is not rate limited (a 500 ms delay per wrong password only), and a session
+cookie cannot be revoked before it expires (90 days; logging out clears it in the browser). Use a
+long password, or `APP_PASSWORD_HASH`.
+
+**What you accept by design**
+
+- Agents on a worker have full tool access on that machine: they can read what the worker process
+  can, including its tokens and the GitHub token of their own session. A worker belongs to one
+  person, so that person's secrets are what an agent can reach. Use separate machines or users for
+  separate trust.
+- Anyone with `tracker` scope (a token, a connected Claude app, another person) writes item text that
+  an agent will read and act on; with auto-merge and a deploy command, that can land and deploy code.
+  Treat `tracker` tokens and connected apps as sensitive, and keep a check command on repos that
+  auto-merge.
+- The database holds the encrypted GitHub tokens; `secret.key` beside it (or `DISPATCH_SECRET_KEY`)
+  opens them. Backups copy the database, not the key: keep the key in your password manager.
 
 ## Tools for agents
 
