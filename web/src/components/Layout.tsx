@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
-import { useQuery } from '@tanstack/react-query';
-import { api, type AssistantChat, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, type AssistantChat, type Inbox, type Me, type ProjectSummary, type Session } from '../api.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { Icon, icons } from './icons.tsx';
 import { cx } from './ui.tsx';
@@ -149,7 +149,24 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
           </SideGroup>
         )}
       </div>
+      <SignedInAs />
     </aside>
+  );
+}
+
+/** The foot of the menu: who is signed in, and Log out (the same as Settings' Sign out). */
+function SignedInAs() {
+  const qc = useQueryClient();
+  // same query as App and Settings
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  const logout = useMutation({ mutationFn: () => api.post('/logout'), onSuccess: () => qc.invalidateQueries() });
+  // no sign-in to end when auth is off
+  if (!me?.authed || me.auth_disabled) return null;
+  return (
+    <div className="shrink-0 flex items-center gap-2 h-11 px-4 border-t border-line text-[13px]">
+      <span className="flex-1 min-w-0 truncate text-muted" title={me.user ?? undefined}>{me.user}</span>
+      <button type="button" className="shrink-0 text-accent hover:underline underline-offset-2 disabled:opacity-50" disabled={logout.isPending} onClick={() => logout.mutate()}>Log out</button>
+    </div>
   );
 }
 
