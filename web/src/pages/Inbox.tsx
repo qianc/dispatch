@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, type Inbox as InboxData } from '../api.ts';
+import { cleanupReport, type CleanupAnswer, type CleanupReport } from '../cleanup.ts';
 import { waitsOnOwner } from '../../../src/shared/attention.ts';
 import { crossProjectSummary } from '../../../src/shared/types.ts';
 import { Page } from '../components/Layout.tsx';
@@ -123,9 +124,14 @@ export function Inbox() {
 function CleanupCard({ offer }: { offer: NonNullable<InboxData['cleanup']> }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  // what the last Clean up could not remove; with nothing left the card goes, with no message
+  const [report, setReport] = useState<CleanupReport | null>(null);
   const clean = useMutation({
-    mutationFn: () => api.post<{ left: InboxData['cleanup'] }>('/cleanup'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['inbox'] }),
+    mutationFn: () => api.post<CleanupAnswer>('/cleanup'),
+    onSuccess: (answer) => {
+      setReport(cleanupReport(answer, offer));
+      return qc.invalidateQueries({ queryKey: ['inbox'] });
+    },
   });
   const parts = [offer.branches ? `${offer.branches} merged branch${offer.branches === 1 ? '' : 'es'}` : '', offer.worktrees ? `${offer.worktrees} worktree${offer.worktrees === 1 ? '' : 's'}` : ''].filter(Boolean);
   return (
@@ -135,6 +141,20 @@ function CleanupCard({ offer }: { offer: NonNullable<InboxData['cleanup']> }) {
           {offer.sessions.length} finished session{offer.sessions.length === 1 ? '' : 's'} left {parts.join(' and ')} on disk.
         </p>
         <p className="text-[12.5px] text-muted mt-0.5">Clean up removes them. Branches that are not merged, and worktrees with uncommitted changes, stay.</p>
+        {report && (
+          <div className="mt-2 text-[13px]">
+            {report.removed && <p className="text-muted">{report.removed}</p>}
+            <p className="text-wait">{report.title}</p>
+            <ul className="mt-0.5 text-muted space-y-0.5">
+              {report.kept.map((k, i) => (
+                <li key={i} className="break-words">
+                  <Link to={`/s/${k.session_id}`} className="text-fg">{k.session}</Link>
+                  {' · '}{k.repo ? `${k.repo} ` : ''}{k.what}: {k.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {open && (
           <ul className="mt-2 text-[13px] text-muted space-y-0.5">
             {offer.sessions.map((s) => (

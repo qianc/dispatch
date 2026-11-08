@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
+import { cleanupReport } from '../web/src/cleanup.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -129,6 +130,7 @@ describe('the janitor on the server', () => {
       expect((await s.call('GET', '/inbox')).data.cleanup).toMatchObject({ branches: 1 });
       const res = (await s.call('POST', '/cleanup')).data;
       expect(res.left).toBeNull();
+      expect(cleanupReport(res, offer)).toBeNull(); // everything went: the card clears, no message
       expect(existsSync(b.wt)).toBe(false);
       expect(branches()).toBe('');
       expect((await s.call('GET', '/inbox')).data.cleanup).toBeNull();
@@ -148,9 +150,49 @@ describe('the janitor on the server', () => {
       s.ctx.janitor.check = checking;
       expect(existsSync(c.wt)).toBe(true);
       expect(branches()).toContain('jan-c');
+
+      // DISP-61: a merged branch checked out in another worktree stays, and the card says why
+      const d = await make('d');
+      const other = join(root, 'other');
+      git(dir, 'worktree', 'add', '-q', '--force', other, d.sess.branch!); // also checked out where the owner works
+      s.ctx.store.updateSession(d.sess.id, { status: 'completed' });
+      const before = (await s.call('POST', '/cleanup/check')).data;
+      expect(before).toMatchObject({ sessions: [expect.objectContaining({ id: d.sess.id })] });
+      const kept = (await s.call('POST', '/cleanup')).data;
+      expect(kept.left).toMatchObject({ sessions: [expect.objectContaining({ id: d.sess.id })] });
+      expect(existsSync(d.wt)).toBe(false);
+      const report = cleanupReport(kept, before)!;
+      expect(report.title).toBe('1 branch could not be removed:');
+      expect(report.removed).toBe('Removed 1 worktree.');
+      expect(report.kept).toEqual([expect.objectContaining({ session_id: d.sess.id, session: `JAN #${d.sess.id} d`, repo: 'tpl', what: 'branch' })]);
+      expect(report.kept[0]!.reason).toMatch(/^cannot delete branch 'dispatch\/jan-d' used by worktree at '.*other'/);
     } finally {
       await stopWorker(worker);
       await s.app.close();
     }
   }, 40_000);
+});
+
+describe('what the Tidy up card says after Clean up (DISP-61)', () => {
+  const offer = { sessions: [{ id: 3, title: 'Fix it', project_key: 'ACME', worktrees: 2, branches: 2 }, { id: 4, title: 'Other', project_key: null, worktrees: 0, branches: 1 }], worktrees: 2, branches: 3, checked_at: '' };
+  it('nothing left: no message', () => {
+    expect(cleanupReport({ results: [{ session_id: 3, results: [{ repo: 'a', worktree: 'removed', branch: 'deleted' }] }], left: null }, offer)).toBeNull();
+  });
+  it('lists what was kept per session and repo, with the reason, and briefly what went', () => {
+    const report = cleanupReport({
+      results: [{ session_id: 3, results: [
+        { repo: 'a', worktree: 'removed', branch: 'deleted' },
+        { repo: 'b', worktree: 'kept (uncommitted changes)', branch: 'kept' },
+      ] }],
+      left: { ...offer, sessions: offer.sessions },
+    }, offer)!;
+    expect(report.removed).toBe('Removed 1 worktree and 1 branch.');
+    expect(report.title).toBe('2 branches and 1 worktree could not be removed:');
+    expect(report.kept).toEqual([
+      { session_id: 3, session: 'ACME #3 Fix it', repo: 'b', what: 'worktree', reason: 'uncommitted changes' },
+      { session_id: 3, session: 'ACME #3 Fix it', repo: 'b', what: 'branch', reason: 'its worktree stays' },
+      // still offered, but its worker did not answer
+      { session_id: 4, session: '#4 Other', repo: '', what: 'branch', reason: 'its worker did not tidy it; is it online?' },
+    ]);
+  });
 });
