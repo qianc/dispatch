@@ -12,7 +12,12 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   a card you edit and start.
 - Sessions are normal multi-turn Claude Code. Claude's questions and plan approvals show up as
   cards, with a **push notification** to your phone. **Activity** shows all running work across
-  projects.
+  projects and the open item discussions (drag one left, or **Close** on desktop, to close it; one
+  untouched for 10 days drops out). Its search box finds older chats by their words, project, kind
+  and dates.
+- If a worker's Claude account is logged out, the session shows the steps to sign in again on that
+  machine and a **Retry** that resumes the session where it stopped. Settings shows each account's
+  state.
 - Review the PR diff on your phone and **merge** on GitHub, or merge locally on the worker and push.
 - An **Assistant** tab (Haiku by default) that runs the tracker for you: "new project Decks for
   github.com/me/decks", "read ~/notes/retro.md and file the issues under Decks". It changes
@@ -21,6 +26,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
 - **Discuss this** on any item: a read-only Haiku chat (`DISCUSS_MODEL`) that knows the item and the
   repo's `CLAUDE.md`, and can read the code in the project's repos (or the folder an imported source
   came from). It never changes anything; starting work stays on the item page.
+- Planning and discussion chats can **reach other projects**: to search one, read one of its items
+  or comment on it, Claude asks you first with a card that shows the request (or the exact comment).
+  Nothing is read or written without your yes. Scheduled planner runs cannot do this.
 - **Local repos** (no GitHub): add a project repo as a folder path (inside `LOCAL_REPO_DIRS`).
   Agents push their branches into that folder; Dispatch shows the branch for review (diff on the
   phone) and merges it by pushing the default branch back (the folder's working tree must be clean;
@@ -55,6 +63,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
   has its own account setting. Secrets stay in env; see `.env.example`.
+- **Several people** on one install (sign-in proxy with `AUTH_USERS`): each person connects their own
+  GitHub account (Settings → Your GitHub), and the sessions they start clone, push, open PRs and merge
+  as them. See [Several people](#several-people).
 - **Disable a project** (the lock on the project page, or its Settings): it becomes read-only. Every
   write to it is refused (app, API, `/mcp` and the agents' tools) with a message that says how to
   enable it; reads still work. Its schedules pause and come back as they were when you enable it.
@@ -98,7 +109,8 @@ for f in server.env worker.env; do sed "s/^WORKER_TOKEN=.*/WORKER_TOKEN=$T/" $f 
 ```
 
 1. In `server.env`, set `APP_PASSWORD`, and `GITHUB_TOKEN` if you use GitHub (a fine-grained token
-   with *Contents* read/write, *Pull requests* read/write and *Checks* read, on your repos).
+   with *Contents* read/write, *Pull requests* read/write and *Actions* read, on your repos; a
+   classic token with `repo` works too).
 2. In `worker.env`, set `CLAUDE_CODE_OAUTH_TOKEN`: run `claude setup-token` on your own computer and
    paste the token (to bill the API instead, set `ANTHROPIC_API_KEY`). Set the same `GITHUB_TOKEN`
    and your commit name and email. To try the app without using Claude, set `RUNNER=fake`.
@@ -277,7 +289,10 @@ A server can have several workers, for example a Linux VM for most work and a Wi
   session, and move it to another worker (a started work session moves as a new session that
   continues from its pushed branch).
 - **Logins stay on the worker.** Each worker uses its own Claude login and GitHub token. The
-  server never sends credentials to a worker.
+  one exception: a session started by a person who connected their own GitHub account gets that
+  account's token from the server, kept in memory only for that session (see
+  [Several people](#several-people)).
+- **Workers belong to people.** Only the person who made a worker starts work on it.
 
 **A worker that serves several servers** (separate environments, each with its own server) reads a
 JSON file named by `WORKER_CONFIG`. The worker owns its slots (`max_concurrent`, over all
@@ -300,6 +315,34 @@ These lists stop a server from asking for the wrong folder or account. They do n
 of one server from reading the other server's files on the same machine: agents have full tool
 access. Use separate machines (or users) when that matters. Without `WORKER_CONFIG`, the worker
 uses `SERVER_WS_URL`, `WORKER_TOKEN`, `LOCAL_REPO_DIRS` and `ASSISTANT_READ_DIRS` as one server.
+
+A project with no GitHub account set uses the first account in its server's `github_accounts`, so a
+personal and a work server on one worker each default to their own account. Each agent gets
+`DISPATCH_URL`, the web address of the server that started it (from `url`), so the
+[dispatch CLI](#claude-code-skill-keep-the-backlog-in-dispatch) reports back to that server.
+
+## Several people
+
+Behind a sign-in proxy, `AUTH_USERS` can name several people. One of them is the **install owner**
+(`DISPATCH_OWNER`, else the first of `AUTH_USERS`): they alone manage projects and install settings,
+they get everything made before there were users, and only they may use the server's `GITHUB_TOKEN`
+/ `GITHUB_ACCOUNTS`. A single-user install works as before.
+
+- **Your GitHub.** In Settings → Your GitHub, each person connects their account: **Connect with
+  GitHub** (needs a GitHub OAuth App, `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`) or
+  **Paste a token**. Tokens are stored encrypted with `DISPATCH_SECRET_KEY` (or a generated
+  `secret.key` beside the database) and never shown again.
+- **Work runs as the person who started it.** Clone, push, PRs and merges use their token, and
+  commits their GitHub name and email. A person with no connected account is stopped before the
+  session starts, with a Connect link; Dispatch never falls back to the shared account for them. A
+  queued session waits with "Needs GitHub" until they connect. Schedules run as the person who made
+  them. Workers must be up to date to run such a session.
+- **Ownership.** Workers, schedules, tokens and paired devices belong to the person who made them;
+  the install owner sees all of them and can revoke any. Sessions show who started them, and PRs who
+  opened them. Another person's session is read-only (the install owner can also stop it and clean
+  it up).
+- A project page lists **who can act on GitHub here**, and shows a Connect banner to someone who
+  cannot. Tokens are scrubbed from everything the worker sends and from the saved chat.
 
 ## Releases
 
@@ -394,11 +437,20 @@ itself (so the port is no way around the proxy), and keeps the password login fo
 only, as a way in when the proxy is down. When the proxy's session expires the app shows
 "Signed out" and sends you through `/signin`, which the proxy guards.
 
+**Pair a phone with a code** when the proxy's SSO cannot run in the home-screen app (on iOS it has
+its own browser context, so a policy that admits only a managed browser turns it away). The
+home-screen app starts on `/pair`: not signed in, it shows a short code. Enter that code in
+**Settings → Paired devices** in a signed-in browser, and the phone gets a device cookie
+(`dispatch_device`) and acts as you for 90 days. Codes last 10 minutes, a paired device cannot pair
+others, and signing out on the phone (or **Unpair** in Settings) ends it. For this, route around the
+proxy's sign-in: requests that carry the `dispatch_device` cookie, and `/pair` with the app's static
+files and `/api/devices/pair*`. Dispatch believes the cookie only from `TRUSTED_PROXIES`.
+
 **Scopes.** Every API route needs one: `read`, `tracker` (items, comments, sources, images),
 `sessions` (start and steer agents, merge) or `admin` (projects, repos, settings). A signed-in person
 has all of them.
 
-**Tokens** for scripts and skills: Settings → Tokens. A token has a name, scopes (`tracker` by
+**Tokens** for scripts and skills: Settings → Tokens (each person has their own). A token has a name, scopes (`tracker` by
 default), an optional expiry and a last-used time, is shown once and stored only as a hash, and can
 be revoked on its own. Used from another machine, a token only gets `read` and `tracker`
 (`TOKEN_REMOTE_SCOPES`), so a leaked token cannot start agents from outside. Making tokens needs a
