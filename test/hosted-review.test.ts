@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo, type RunOptions } from '../src/shared/types.ts';
 import { startServer, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -212,7 +213,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
       let merged = false;
       const created: unknown[] = [];
       const pr = () => ({ number: 12, html_url: 'https://github.com/me/app/pull/12', title: 'Add b', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: session.branch, sha: 'x' }, base: { ref: 'main' }, body: '' });
-      Object.defineProperty(s.ctx.github, 'octo', { value: {
+      fakeGithub(s.ctx, {
         pulls: {
           create: async (a: unknown) => { created.push(a); return { data: pr() }; },
           get: async () => ({ data: pr() }),
@@ -220,7 +221,7 @@ describe('review and merge of hosted repos in Dispatch', () => {
         },
         checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
         repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-      } });
+      });
       const [row] = await s.ctx.github.syncSession(session);
       const r = await s.call('POST', `/prs/${row.id}/github-pr`);
       expect(r.status).toBe(200);
@@ -253,7 +254,7 @@ describe('hosted repos elsewhere in the app', () => {
       expect(await r.text()).toBe('one\n');
       const [row] = await s.ctx.github.syncSession(session);
       await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge' });
-      expect(await s.ctx.github.deleteRemoteBranch(repo, session.branch!)).toBe(true);
+      expect(await s.ctx.github.deleteRemoteBranch(repo, session.branch!, session)).toBe(true);
       expect(await s.ctx.hosted.branchStatus(repo, session.branch!)).toMatchObject({ exists: false });
     } finally {
       await s.app.close();

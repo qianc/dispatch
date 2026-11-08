@@ -24,6 +24,8 @@ export interface StartSpec {
   claude_account: string | null;
   /** the project's GitHub account: token for git/gh and the commit identity */
   github_account: string | null;
+  /** the starter's own GitHub account (DISP-63): when set, the worker uses it instead of its env accounts (memory only) */
+  github?: GithubCred | null;
   resume: string | null; // sdk session id
   /** Text sent right after resume, when a session is restarted rather than continued by the user. */
   resume_note: string | null;
@@ -34,6 +36,14 @@ export interface StartSpec {
   schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
   release?: ReleaseInfo;
+}
+
+/** A user's own GitHub credential, sent for the sessions they started (DISP-63). */
+export interface GithubCred {
+  token: string;
+  login: string;
+  git_name: string;
+  git_email: string;
 }
 
 export interface PlannerWorker {
@@ -62,9 +72,9 @@ export type ServerToWorker =
   | { t: 'deploy'; session_id: number; repo: Repo };
 
 export type WorkerCommand =
-  | { c: 'push_branch'; repo: Repo; session_id: number; branch: string }
+  | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }
   /** `items`: the export for the repo's generate command (DISP-56), when it has one */
-  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[] }
+  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null }
   | { c: 'branch_status'; repo: Repo; branch: string }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
   | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string }

@@ -43,6 +43,8 @@ import { Users } from './users.ts';
 import { Identities } from './identities.ts';
 import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
 import { githubRoutes } from './routes/github.ts';
+import { needsGithub, resolveGithubIdentity, type IdentityDeps } from './identity.ts';
+import type { Session } from '../shared/types.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
@@ -85,7 +87,17 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus);
   const sessions = new Sessions(store, bus, hub, notifier, workers, users);
-  const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, cfg.githubApiUrl);
+  // as whom each session acts on GitHub (DISP-63): its starter, the owner's env accounts, or the shared one
+  const identityDeps: IdentityDeps = {
+    identities, installOwner: cfg.installOwner, envAccounts: cfg.githubAccounts, oauth: !!cfg.githubOAuth,
+    workerAccounts: (id) => (hub.facts(id) ?? workers.get(id)?.facts)?.github_accounts ?? [],
+  };
+  sessions.identity = (startedBy, project, workerId) => resolveGithubIdentity(identityDeps, { started_by: startedBy }, project, workerId);
+  const sessionIdentity = (s: Session) => {
+    const project = s.project_id ? store.project(s.project_id) : undefined;
+    return project && needsGithub(store, project) ? resolveGithubIdentity(identityDeps, s, project) : null;
+  };
+  const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, identities, sessionIdentity, cfg.githubApiUrl);
   github.gitBase = cfg.githubGitBase;
   github.hosted = hosted;
   const assistant = new AssistantTools(store, bus, github, sessions, hub, cfg.installOwner);
@@ -152,7 +164,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
-    if (err instanceof HttpError || err instanceof SessionError) return reply.status(err.status).send({ error: err.message });
+    if (err instanceof SessionError) return reply.status(err.status).send({ error: err.message, ...err.extra });
+    if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number; status?: number }).statusCode ?? (err as { status?: number }).status ?? 500;
     if (status >= 500) console.error(err);
     return reply.status(status).send({ error: (err as Error).message });

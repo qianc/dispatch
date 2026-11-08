@@ -1,5 +1,5 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
-import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
   ACTIVE_STATUSES,
@@ -36,6 +36,10 @@ import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
 import type { Users } from './users.ts';
+import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
+
+/** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
+export type IdentityResolver = (startedBy: string | null, project: Project, workerId?: number) => GithubIdentity | IdentityRefusal;
 
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {
@@ -56,11 +60,19 @@ const RESUME_NOTE = 'The Dispatch worker restarted and this session was resumed.
 
 export class SessionError extends Error {
   readonly status: number;
+  /** more for the answer, e.g. `code` and `connect_url` of a GitHub identity refusal (DISP-63) */
+  readonly extra: Record<string, unknown>;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, extra: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
+    this.extra = extra;
   }
+}
+
+/** A refused GitHub identity as an answer: 403 with its code and the link to connect. `message`: in the caller's words. */
+export function refusalError(r: IdentityRefusal, message = r.message) {
+  return new SessionError(message, 403, { code: r.code, connect_url: r.connect_url });
 }
 
 const slug = (s: string) =>
@@ -132,6 +144,8 @@ export class Sessions {
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
+  /** As whom sessions act on GitHub (set by app.ts; without it, the env accounts as before users). */
+  identity: IdentityResolver | null = null;
 
   constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers, users: Users) {
     this.workers = workers;
@@ -216,8 +230,11 @@ export class Sessions {
     return order.find((id): id is number => id != null && mine.includes(id))!;
   }
 
-  /** A worker that said which accounts it has must have the session's (the start would fail). */
-  private checkAccounts(workerId: number, claudeAccount: string | null, project: Project | null) {
+  /**
+   * A worker that said which accounts it has must have the session's (the start would fail). A
+   * session that acts as its user's own GitHub account needs none of the worker's.
+   */
+  private checkAccounts(workerId: number, claudeAccount: string | null, project: Project | null, identity?: GithubIdentity | null) {
     const facts = this.hub.facts(workerId) ?? this.workers.get(workerId)?.facts ?? null;
     if (!facts) return;
     const name = this.workers.get(workerId)?.name ?? String(workerId);
@@ -225,10 +242,49 @@ export class Sessions {
     if (claudeAccount && claude.length && !claude.includes(claudeAccount)) {
       throw new SessionError(`Worker ${name} has no Claude account "${claudeAccount}" (it has: ${claude.join(', ')}).`);
     }
-    const gh = project?.github_account;
+    const gh = identity?.source === 'user' ? null : project?.github_account;
     if (gh && facts.github_accounts.length && !facts.github_accounts.includes(gh)) {
       throw new SessionError(`Worker ${name} has no GitHub account "${gh}" (it has: ${facts.github_accounts.join(', ')}).`);
     }
+  }
+
+  /**
+   * As whom a session of `project`, started by `startedBy` on `workerId`, acts on GitHub; null when
+   * the project needs no GitHub. A refusal comes back as one, and so does a worker too old to act as
+   * the user (known only while it is connected: an offline one is checked again at dispatch).
+   */
+  private identityFor(startedBy: string | null, project: Project | null | undefined, workerId: number | null | undefined): GithubIdentity | IdentityRefusal | null {
+    if (!project || !this.identity || !needsGithub(this.store, project)) return null;
+    const id = this.identity(startedBy, project, workerId ?? undefined);
+    if (isRefusal(id) || id.source !== 'user' || workerId == null) return id;
+    const facts = this.hub.facts(workerId);
+    if (facts && !facts.caps?.includes('github_cred')) {
+      const name = this.workers.get(workerId)?.name ?? String(workerId);
+      return { refused: true, code: 'worker_too_old', user: startedBy, message: `Worker ${name} is too old to act as you on GitHub; update it.`, connect_url: '/settings#workers' };
+    }
+    return id;
+  }
+
+  /**
+   * Before any row of a new session exists (DISP-63): who acts on GitHub for it. A refusal is a 403
+   * with the link to connect; `context` words it for the caller (a schedule names its owner).
+   */
+  private preflight(startedBy: string | null, project: Project | null | undefined, workerId: number | null | undefined, context?: (r: IdentityRefusal) => string): GithubIdentity | null {
+    const id = this.identityFor(startedBy, project, workerId);
+    if (isRefusal(id)) throw refusalError(id, context?.(id) ?? id.message);
+    return id;
+  }
+
+  /** As whom an existing session acts on GitHub now (null: no GitHub needed, or an assistant chat). */
+  private identityOf(s: Session) {
+    if (s.kind === 'assistant' || !s.project_id) return null;
+    return this.identityFor(s.started_by, this.store.project(s.project_id), s.worker_id);
+  }
+
+  /** The starter's own GitHub credential for a worker command, when the session acts as them (else null: the worker's env accounts). */
+  private credOf(s: Session): GithubCred | null {
+    const id = this.identityOf(s);
+    return id && !isRefusal(id) && id.source === 'user' ? { token: id.token, login: id.login, git_name: id.git_name, git_email: id.git_email } : null;
   }
 
   /** Remember that a proposal card was acted on, so no device offers it again. */
@@ -318,8 +374,9 @@ export class Sessions {
       requested = named.id;
     }
     const workerId = this.workerFor(project, requested, startedBy);
+    const identity = this.preflight(startedBy, project, workerId);
     const claudeAccount = this.claudeAccountFor(project, input.options?.claude_account, undefined, workerId);
-    this.checkAccounts(workerId, claudeAccount, project);
+    this.checkAccounts(workerId, claudeAccount, project, identity);
     let items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     // a card can be older than the items on it: never re-open or re-run what moved on since
     const gone = input.proposal ? items.filter((i) => this.movedOn(i)) : [];
@@ -424,6 +481,7 @@ export class Sessions {
     return this.chatSend(this.currentDiscuss(itemId, startedBy), (prompt) => {
       const project = this.store.project(item.project_id)!;
       const workerId = this.workerFor(project, null, startedBy);
+      this.preflight(startedBy, project, workerId);
       return this.store.createSession({
         project_id: item.project_id, kind: 'discuss', title: `Discuss ${item.key}`, status: 'queued', force_plan: false, branch: null,
         initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
@@ -447,6 +505,7 @@ export class Sessions {
       ? 'Read the source document in your instructions and split it into backlog items and bugs. Call propose_items with the result.'
       : 'Look at the open backlog, bugs and the code, and propose the next batch of work. Call propose_batch with your suggestion.');
     const workerId = this.workerFor(project, null, startedBy);
+    this.preflight(startedBy, project, workerId);
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title, status: 'queued', force_plan: false, branch: null,
       initial_prompt: prompt, source_id: source?.id ?? null, item_ids: [], claude_account: this.claudeAccountFor(project, null, undefined, workerId),
@@ -468,6 +527,10 @@ export class Sessions {
     if (open) throw new SessionError(`The last run of "${schedule.name}" (#${open.id}) has not finished yet.`, 409);
     if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
     const workerId = this.workerFor(project, null, schedule.owner);
+    this.preflight(schedule.owner, project, workerId, (r) => (r.code === 'github_not_connected'
+      ? `Schedule '${schedule.name}' runs as ${r.user}, who has not connected GitHub.`
+      : r.code === 'github_token_unreadable' ? `Schedule '${schedule.name}' runs as ${r.user}, whose GitHub connection cannot be used. Connect again in Settings → Your GitHub.`
+      : `Schedule '${schedule.name}': ${r.message}`));
     const session = this.store.createSession({
       project_id: project.id, kind: 'planner', title: `Scheduled: ${schedule.name}`, status: 'queued', force_plan: false, branch: null,
       initial_prompt: `It is time for the scheduled run "${schedule.name}". Follow the scope in your instructions: start the work that clearly fits it, or nothing.`,
@@ -526,8 +589,9 @@ export class Sessions {
     const live = this.store.sessions({ project_id: project.id, kind: 'release' })
       .find((s) => !FINAL_STATUSES.includes(s.status) && s.release?.repo_id === input.repo.id);
     if (live) throw new SessionError(`Release #${live.id} of ${input.repo.github_name} is not finished yet.`, 409);
+    const identity = this.preflight(startedBy, project, input.workerId);
     const claudeAccount = this.claudeAccountFor(project, null, undefined, input.workerId);
-    this.checkAccounts(input.workerId, claudeAccount, project);
+    this.checkAccounts(input.workerId, claudeAccount, project, identity);
     const session = this.store.createSession({
       project_id: project.id, kind: 'release', title: `Release ${input.repo.github_name} ${input.release.version}`, status: 'queued',
       force_plan: false, branch: null, initial_prompt: `Release ${input.release.version} of ${input.repo.github_name}.`, source_id: null,
@@ -546,9 +610,12 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     if (s.status === 'queued') throw new SessionError('Session has not started yet.');
     if (s.status === 'waiting_input') throw new SessionError('Answer the open question first.');
+    // before the message is kept: a session that may not act on GitHub now does not go on
+    const identity = this.identityOf(s);
+    if (isRefusal(identity)) throw refusalError(identity);
     const text = this.userMessage(sessionId, ownText, images);
     const reopen = FINAL_STATUSES.includes(s.status);
-    if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
+    if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       // its worker is away: the reply waits, and the session resumes with it when the worker is back
       this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, login_needed: null, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
@@ -567,13 +634,15 @@ export class Sessions {
     if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
     const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
     if (!this.hub.isConnected(s.worker_id ?? -1)) throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
+    const identity = this.identityOf(s);
+    if (isRefusal(identity)) throw refusalError(identity);
     const account = await this.hub.cmd<ClaudeAccountInfo>(s.worker_id, { c: 'check_login', account: s.claude_account }, 20_000);
     this.accountChecked(s.worker_id!, account);
     if (account.logged_in === false) return { resumed: false, account, session: s };
     this.addEvent(s.id, { kind: 'system', text: `${account.label} account is signed in on ${name}. The session resumes where it stopped.` });
     // a conversation that exists goes on; one that never got going starts from its first message
     const text = s.sdk_session_id ? LOGIN_RESUME_NOTE : s.pending_prompt ?? s.initial_prompt;
-    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null) })) {
+    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
     }
     this.setStatus(s.id, 'running', { ended_at: null, waiting_reason: null, login_needed: null, pending_prompt: s.sdk_session_id ? s.pending_prompt : null });
@@ -644,9 +713,11 @@ export class Sessions {
     for (const id of live) {
       const s = this.store.session(id);
       if (s && s.worker_id !== workerId) continue; // another worker's session: not this one's to close
-      if (s && s.status === 'queued' && s.pending_prompt) {
-        // the runner kept going while the link was down, and the owner replied: deliver it there
-        this.hub.send(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null) });
+      // the runner kept going while the link was down, and the owner replied: deliver it there
+      // (unless it may not act on GitHub now: then it is closed and waits in the queue, see dispatch)
+      const identity = s?.status === 'queued' && s.pending_prompt ? this.identityOf(s) : null;
+      if (s && s.status === 'queued' && s.pending_prompt && !isRefusal(identity)) {
+        this.hub.send(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null, identity) });
         this.setStatus(s.id, 'running', { waiting_reason: null, pending_prompt: null });
         continue;
       }
@@ -666,9 +737,15 @@ export class Sessions {
         this.setStatus(s.id, 'queued');
         continue;
       }
+      const identity = this.identityOf(s);
+      if (isRefusal(identity)) {
+        // it may not act on GitHub now: it waits in the queue (dispatch says why), and resumes from there
+        this.setStatus(s.id, 'queued');
+        continue;
+      }
       const note = RESUME_NOTE;
       this.addEvent(s.id, { kind: 'system', text: 'Worker restarted — session resumed.' });
-      this.hub.send(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note) });
+      this.hub.send(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note, identity) });
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
@@ -1171,6 +1248,8 @@ export class Sessions {
 
   /** Sessions already told about (push) that they wait for their worker. */
   private toldWaiting = new Set<number>();
+  /** Sessions already told (push) that they wait for their user to connect GitHub. */
+  private toldGithub = new Set<number>();
   /** A worker away for less than this (a restart, a short sleep) is not worth a push. */
   workerGraceMs = 2 * 60_000;
   private timers = new Set<NodeJS.Timeout>();
@@ -1229,10 +1308,21 @@ export class Sessions {
           continue;
         }
       }
+      // as whom it acts on GitHub, now: a user may have disconnected since, or not connected yet
+      const identity = this.identityOf(next);
+      if (isRefusal(identity)) {
+        wait(`Needs GitHub: ${identity.message}`);
+        if (!this.toldGithub.has(next.id)) {
+          this.toldGithub.add(next.id);
+          this.notify(next, `${next.project_key ?? 'Dispatch'}: needs GitHub`, identity.message, `github-wait-${next.id}`);
+        }
+        continue;
+      }
+      this.toldGithub.delete(next.id);
       // a conversation that already exists continues: with the owner's waiting reply, or a note
       const note = next.sdk_session_id && !next.pending_prompt ? RESUME_NOTE : null;
       const prompt = next.pending_prompt ?? note ?? next.initial_prompt;
-      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, note) });
+      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, note, identity) });
       // until the worker reports again, count the slot as taken
       if (!chat && link.facts && link.facts.free_slots > 0) link.facts.free_slots--;
       this.toldWaiting.delete(next.id);
@@ -1276,9 +1366,19 @@ export class Sessions {
   /** A work session's check before its turn is reported done (app.ts wires it to the check runs, DISP-15). */
   onTurnCheck: ((s: Session, repo: Repo, msg: Extract<WorkerEvent, { t: 'session_check' }>) => void) | null = null;
 
-  spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null): StartSpec {
+  /**
+   * What the worker needs to run the session. A session that acts as its user gets their GitHub
+   * credential (`github`) and no env account; one that may not act on GitHub now is refused
+   * (SessionError with the link to connect). `identity`: already resolved by the caller.
+   */
+  spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null, identity: GithubIdentity | IdentityRefusal | null = this.identityOf(s)): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;
     const schedule = s.kind === 'planner' && s.schedule_id ? this.store.schedule(s.schedule_id) : undefined;
+    if (isRefusal(identity)) throw refusalError(identity);
+    const user = identity?.source === 'user' ? identity : null;
+    // the PR views say whose account it acted as (Phase 6)
+    const login = user?.login ?? null;
+    if (s.github_login !== login) this.store.updateSession(s.id, { github_login: login });
     return {
       session_id: s.id,
       kind: s.kind,
@@ -1299,7 +1399,8 @@ export class Sessions {
       force_plan: s.force_plan,
       options: s.options,
       claude_account: s.claude_account,
-      github_account: project?.github_account ?? null,
+      github_account: user ? null : project?.github_account ?? null,
+      ...(user ? { github: { token: user.token, login: user.login, git_name: user.git_name, git_email: user.git_email } } : {}),
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(s.started_by), placement_md: project?.placement_md ?? '' } : {}),
@@ -1345,7 +1446,8 @@ export class Sessions {
       const why = placementProblem(this.store, local, workerId);
       if (why) throw new SessionError(why);
     }
-    this.checkAccounts(workerId, s.claude_account, project);
+    const identity = this.preflight(s.started_by, project, workerId);
+    this.checkAccounts(workerId, s.claude_account, project, identity);
     if (s.status === 'queued' && !s.sdk_session_id) {
       const moved = this.store.updateSession(s.id, { worker_id: workerId, options: { ...s.options, worker_id: workerId }, waiting_reason: null });
       this.emitSession(moved);
@@ -1359,7 +1461,7 @@ export class Sessions {
     if (pushed) {
       for (const repo of this.reposOf(s)) {
         try {
-          await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch }, 120_000);
+          await this.hub.cmd(s.worker_id, { c: 'push_branch', repo, session_id: s.id, branch: s.branch, github: this.credOf(s) }, 120_000);
         } catch {
           pushed = false; // nothing to push in that repo, or it failed: say so below
         }

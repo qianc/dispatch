@@ -211,6 +211,8 @@ export interface Session {
   login_needed: LoginHelp | null;
   /** the user who started it (a schedule's run: the schedule's owner); null: no user (the legacy API token) */
   started_by: string | null;
+  /** the GitHub login it acts as: the starter's own account (null: the env accounts) */
+  github_login: string | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -284,6 +286,8 @@ export interface WorkerFacts {
   releases?: ReleaseCapability[];
   /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
   repo_envs?: string[];
+  /** what it can do; 'github_cred': runs a session as its user's own GitHub account (DISP-63; missing from older workers) */
+  caps?: string[];
 }
 
 export interface WorkerRecord {

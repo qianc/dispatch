@@ -23,6 +23,9 @@ describe('who owns workers, schedules and sessions', () => {
     await s.call('POST', '/projects', { key: 'OW', name: 'Owned' }, as('alice'));
     await s.call('POST', '/projects/OW/repos', { github_owner: 'me', github_name: 'ow' }, as('alice'));
     legacy = s.ctx.workers.legacy().id;
+    // OW has a GitHub repo: bob acts there with his own GitHub connection (DISP-63)
+    s.ctx.identities.profile = async () => ({ id: 42, login: 'bob-gh', name: 'Bob', email: 'bob@example.com', scopes: 'repo' });
+    await s.ctx.identities.connect('bob', 'ghp_bob', 'pat');
   });
   afterEach(() => s.app.close());
 

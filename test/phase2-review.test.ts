@@ -8,6 +8,7 @@ import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { ServerLink, Slots } from '../src/worker/serverLink.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import { startServer, waitFor, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_TERMINAL_PROMPT: '0' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
@@ -86,11 +87,11 @@ describe('phase 2 review fixes', () => {
       expect((await gitAsync(w, ...auth, 'push', '--quiet', 'origin', session.branch!)).code).toBe(0);
       let created = 0;
       const ghPr = () => ({ number: 5, html_url: 'u', title: 'T', state: 'open', merged_at: null, mergeable: true, mergeable_state: 'clean', head: { ref: session.branch, sha: 'old' }, base: { ref: 'main' }, body: '' });
-      Object.defineProperty(s.ctx.github, 'octo', { value: {
+      fakeGithub(s.ctx, {
         pulls: { create: async () => { created++; return { data: ghPr() }; }, get: async () => ({ data: ghPr() }), list: async () => ({ data: created ? [ghPr()] : [] }) },
         checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
         repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
-      } });
+      });
       const [row] = await s.ctx.github.syncSession(session);
       await s.call('POST', `/prs/${row.id}/github-pr`);
       // a review fix, pushed to Dispatch's repo as always

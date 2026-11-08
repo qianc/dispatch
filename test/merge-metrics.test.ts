@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { startServer, OWNER } from './helpers.ts';
+import { fakeGithub } from './github.ts';
 
 /** A session with one open GitHub PR (fake GitHub): `behind` commits behind main, mergeable or not. */
 async function setup(behind: number, mergeable = true) {
@@ -14,12 +15,12 @@ async function setup(behind: number, mergeable = true) {
   });
   let merged = false;
   const pr = () => ({ number: 7, html_url: 'u', title: 'PR', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable, mergeable_state: 'clean', head: { ref: 'dispatch/mm-1-x', sha: 'abc' }, base: { ref: 'main' }, body: '' });
-  Object.defineProperty(s.ctx.github, 'octo', { value: {
+  fakeGithub(s.ctx, {
     pulls: { list: async () => ({ data: [pr()] }), get: async () => ({ data: pr() }), merge: async () => { merged = true; return { data: {} }; }, listFiles: async () => ({ data: [] }) },
     checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
     repos: { compareCommits: async () => ({ data: { behind_by: behind } }) },
     paginate: async () => [],
-  } });
+  });
   s.ctx.github.onBehind = () => undefined;
   await s.ctx.github.syncSession(session);
   const prRow = s.ctx.store.prs({ session_id: session.id })[0];

@@ -465,6 +465,7 @@ export class Store {
       schedule_id: numOrNull(r.schedule_id),
       login_needed: json(r.login_needed, null),
       started_by: (r.started_by as string | null) ?? null,
+      github_login: (r.github_login as string | null) ?? null,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
@@ -545,7 +546,7 @@ export class Store {
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
