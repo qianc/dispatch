@@ -16,6 +16,10 @@ const ACCESS_TTL_S = 24 * 3600;
 const REFRESH_TTL_S = 60 * 24 * 3600;
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_CLIENTS = 200;
+/** a registered client nobody connected: gone after a day (expireOAuthClients) */
+const UNUSED_CLIENT_TTL_MS = 24 * 3600_000;
+/** a client whose every grant is revoked or expired: gone 30 days after the last one ended */
+const DISCONNECTED_CLIENT_TTL_MS = 30 * 24 * 3600_000;
 
 const iso = (msFromNow: number) => new Date(Date.now() + msFromNow).toISOString();
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -25,6 +29,25 @@ interface Pending { client: Client; redirect_uri: string; challenge: string; sco
 interface Code { client_id: string; redirect_uri: string; challenge: string; scopes: Scope[]; user: string; expires: number }
 
 export interface OAuthGrantInfo { id: number; client_id: string; client_name: string; user: string; scopes: Scope[]; created_at: string; last_used_at: string | null; refresh_expires_at: string; revoked_at: string | null }
+
+/**
+ * Free registration slots (DISP-70): /register is public, so anyone can fill the MAX_CLIENTS. A client
+ * nobody connected within a day goes, and one whose grants are all revoked or expired for 30 days
+ * (its grants go with it: ON DELETE CASCADE). A client with a live grant is never touched.
+ */
+export function expireOAuthClients(db: Db, now = Date.now()) {
+  const at = (msAgo: number) => new Date(now - msAgo).toISOString();
+  const nowIso = new Date(now).toISOString();
+  const never = db.run('DELETE FROM oauth_clients WHERE created_at < ? AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.client_id)', at(UNUSED_CLIENT_TTL_MS));
+  const gone = db.run(
+    `DELETE FROM oauth_clients WHERE client_id IN (
+       SELECT client_id FROM oauth_grants GROUP BY client_id
+       HAVING sum(CASE WHEN revoked_at IS NULL AND refresh_expires_at > ? THEN 1 ELSE 0 END) = 0
+          AND max(coalesce(revoked_at, refresh_expires_at)) < ?)`,
+    nowIso, at(DISCONNECTED_CLIENT_TTL_MS),
+  );
+  return { never_connected: never.changes, disconnected: gone.changes };
+}
 
 /** Redirect URIs a client may register: https, or a loopback http address (native apps such as Claude Code). */
 export function allowedRedirect(uri: string) {
@@ -128,7 +151,7 @@ export class OAuth {
       const bad = b.data.redirect_uris.find((u) => !allowedRedirect(u));
       if (bad) return fail(reply, 400, 'invalid_redirect_uri', `Not allowed: ${bad} (https, or http on localhost)`);
       const count = Number(this.db.get<{ n: number }>('SELECT count(*) AS n FROM oauth_clients')!.n);
-      if (count >= MAX_CLIENTS) return fail(reply, 429, 'too_many_clients', 'Client registration is full; revoke old clients in Settings');
+      if (count >= MAX_CLIENTS) return fail(reply, 429, 'too_many_clients', 'Client registration is full. Registrations that never connected are removed after 24 hours, disconnected ones after 30 days: try again later.');
       const client_id = `mcp_${randomBytes(16).toString('base64url')}`;
       const name = (b.data.client_name ?? 'MCP client').trim() || 'MCP client';
       this.db.run('INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES (?, ?, ?)', client_id, name, JSON.stringify(b.data.redirect_uris));
