@@ -138,6 +138,9 @@ describe('acting on GitHub as the session starter', () => {
     const pr = await s.call('POST', `/sessions/${job.id}/prs`, { repo_id: repo.id }, as('bob'));
     expect(pr.status).toBe(200);
     expect(w.cmds('push_branch')[0].github).toMatchObject({ token: BOB_TOKEN, login: 'bob-gh' });
+    // the PR says who opened it (Phase 6)
+    expect(pr.data).toMatchObject({ started_by: 'bob', github_login: 'bob-gh' });
+    expect(s.ctx.store.prs({ session_id: job.id })[0]).toMatchObject({ started_by: 'bob', github_login: 'bob-gh' });
     const merged = await s.call('POST', `/prs/${pr.data.id}/merge`, { how: 'github', method: 'squash' }, as('bob'));
     expect(merged.status).toBe(200);
     expect(await s.ctx.github.deleteRemoteBranch(repo, job.branch, s.ctx.store.session(job.id)!)).toBe(true);

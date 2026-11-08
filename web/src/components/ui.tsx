@@ -227,9 +227,16 @@ export function Segmented<T extends string | number>({ value, options, onChange 
   );
 }
 
+/** An error; one that needs your GitHub connected links to connecting it (a server route: a plain link). */
 export function ErrorText({ error }: { error: unknown }) {
   if (!error) return null;
-  return <p className="text-bad text-sm my-2">{(error as Error).message}</p>;
+  const connect = (error as { connect_url?: unknown }).connect_url;
+  return (
+    <p className="text-bad text-sm my-2">
+      {(error as Error).message}
+      {typeof connect === 'string' && <> <a href={connect} className="text-accent font-medium underline">Connect GitHub</a></>}
+    </p>
+  );
 }
 
 export function timeAgo(iso: string) {

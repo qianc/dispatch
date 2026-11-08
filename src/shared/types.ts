@@ -430,6 +430,38 @@ export interface PullRequest {
   blocked: string | null;
   /** commits the default branch had that the branch lacked, when it was merged */
   behind_at_merge: number | null;
+  /** who started its session (null: no user) */
+  started_by: string | null;
+  /** the GitHub login its session acts as (null: the env accounts) */
+  github_login: string | null;
+}
+
+/** A GitHub permission on a repo, from strongest to weakest; null: could not be checked. */
+export type GithubPermission = 'admin' | 'write' | 'read' | 'none';
+
+/** One account that can act on GitHub in a project (never its token). */
+export interface GithubAccessAccount {
+  /** the Dispatch user it acts for (owner-env: the install owner) */
+  user: string | null;
+  /** the GitHub login (null: not known) */
+  login: string | null;
+  /** `user`: their own connection; `owner-env`: the server's env account the install owner uses */
+  source: 'user' | 'owner-env';
+  /** owner-env: the env account's name */
+  account?: string;
+  /** with ?verify=1: the weakest permission over the project's GitHub repos (null: could not be checked) */
+  permission?: GithubPermission | null;
+  /** with ?verify=1: the permission on each GitHub repo ("owner/name") */
+  repos?: { repo: string; permission: GithubPermission | null }[];
+}
+
+/** GET /api/projects/:key/github-access: who can act on GitHub in a project (DISP-63). */
+export interface GithubAccess {
+  /** work in this project reaches GitHub */
+  needs_github: boolean;
+  /** can the caller start work here; else why, and where to connect */
+  you: { ok: boolean; message?: string; connect_url?: string };
+  accounts: GithubAccessAccount[];
 }
 
 /** A time the owner's hands were needed to get work merged. */

@@ -18,6 +18,7 @@ import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { useVeryWide } from '../wide.ts';
+import { canAct, readOnlyText, startedBy } from '../access.ts';
 import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
 
 /** Where each chat was scrolled to (null: at the newest message), for coming back to it. This app run only. */
@@ -144,6 +145,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   const canSend = s.status !== 'queued' && s.status !== 'waiting_input';
+  // someone else's session: read it, but no replies, answers or proposals (DISP-63)
+  const drive = canAct(data.access, 'drive');
+  const stop = canAct(data.access, 'stop');
+  const starter = startedBy(s);
 
   const peekPanel = peek && <ItemDetail key={peek} itemId={peek} onClose={closePeek} />;
   // one tree whether or not the item shows, so opening it does not rebuild the chat and lose its place
@@ -157,6 +162,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
               <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} /></dd>
+              {s.started_by && <><dt className="text-muted">Started by</dt><dd className="truncate">{s.started_by}{s.github_login && <span className="text-muted"> as @{s.github_login}</span>}</dd></>}
               {workers.length > 0 && <><dt className="text-muted">Worker</dt><dd className="truncate">{workerName(workers, s.worker_id)}</dd></>}
               {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
               {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
@@ -193,7 +199,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       title={chat ? chat.title : s.title}
-      subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.release ? `release ${s.release.version}` : s.branch}</span></span>}
+      subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span className="truncate">{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.release ? `release ${s.release.version}` : s.branch}{starter && ` · ${starter}`}</span></span>}
       back={chat ? chat.back : true}
       keepScroll={false}
       actions={
@@ -204,7 +210,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }
-      footer={
+      footer={drive && (
         <ChatInput
           value={text}
           onChange={setText}
@@ -215,7 +221,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {...images.input}
           action={s.status === 'running' && !text && !images.files.length ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
         />
-      }
+      )}
     >
       {/* below xl these sit above the conversation; from xl they are in the side panel */}
       {(chat || !sidePanel) && (<div>
@@ -252,12 +258,15 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       </div>)}
-      <Transcript session={s} events={data.events} inputs={data.inputs} project={project} />
+      {!drive && (
+        <div role="status" className="mx-4 mt-3 rounded-xl border border-wait/40 bg-wait/5 px-3 py-2.5 text-[14px]">{readOnlyText(s)}</div>
+      )}
+      <Transcript session={s} events={data.events} inputs={data.inputs} project={project} readOnly={!drive} />
       {s.status === 'queued' && (
         <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
           <p>{s.waiting_reason ?? 'Waiting for a free worker slot…'}</p>
           {s.pending_prompt && <p className="text-[12.5px] text-muted mt-0.5">Your reply is delivered when the session starts.</p>}
-          <div className="flex flex-wrap gap-2 mt-2">
+          {drive && <div className="flex flex-wrap gap-2 mt-2">
             <Button small disabled={pause.isPending} onClick={() => pause.mutate(!s.paused)}>{s.paused ? 'Resume' : 'Pause'}</Button>
             {workers.length > 1 && (
               <select className="h-8 rounded-lg border border-line-strong bg-panel pl-2.5 text-[13px] text-fg" aria-label="Move to worker" value="" onChange={(e) => e.target.value && move.mutate(Number(e.target.value))}>
@@ -265,9 +274,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
                 {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
               </select>
             )}
-          </div>
+          </div>}
           <ErrorText error={pause.error ?? move.error} />
-          {s.waiting_reason && s.waiting_reason.startsWith('Waiting for #') && (
+          {drive && s.waiting_reason && s.waiting_reason.startsWith('Waiting for #') && (
             <>
               <p className="text-[12.5px] text-muted mt-0.5">This batch starts from the main branch once the earlier batch is merged, so their changes do not collide.</p>
               <Button small className="mt-2" disabled={startNow.isPending} onClick={() => startNow.mutate()}>Start anyway</Button>
@@ -278,7 +287,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       )}
       {s.status === 'running' && <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>}
       {data.checks?.map((c) => <CheckProgressCard key={`${c.pr_id ?? 'turn'}-${c.repo}`} run={c} />)}
-      {((s.status === 'idle' && s.kind === 'work') || (attention.kind === 'login' && (s.status === 'idle' || s.status === 'failed'))) && (
+      {drive && ((s.status === 'idle' && s.kind === 'work') || (attention.kind === 'login' && (s.status === 'idle' || s.status === 'failed'))) && (
         <div className="px-4 pt-2 pb-1">
           {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
@@ -306,16 +315,17 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
       <Sheet open={menu} onClose={() => setMenu(false)} title="Session">
         <div className="space-y-2">
+          {!drive && <p className="text-[13px] text-muted">{readOnlyText(s)}</p>}
           {s.kind === 'work' && (
             <>
               <Button className="w-full" disabled={syncPrs.isPending} onClick={() => syncPrs.mutate()}>Check for PRs and branches</Button>
-              {data.repos.filter((r) => !data.prs.some((p) => p.repo_id === r.id)).map((r) => (
+              {drive && data.repos.filter((r) => !data.prs.some((p) => p.repo_id === r.id)).map((r) => (
                 <Button key={r.id} className="w-full" disabled={createPr.isPending} onClick={() => createPr.mutate(r.id)}>{r.local_path ? `Push branch for review in ${r.github_name}` : `Push branch & open PR in ${r.github_name}`}</Button>
               ))}
             </>
           )}
-          {s.status === 'running' && <Button className="w-full" onClick={() => interrupt.mutate()}>Interrupt Claude</Button>}
-          {!final && s.status !== 'queued' && s.kind === 'work' && workers.length > 1 && (
+          {stop && s.status === 'running' && <Button className="w-full" onClick={() => interrupt.mutate()}>Interrupt Claude</Button>}
+          {drive && !final && s.status !== 'queued' && s.kind === 'work' && workers.length > 1 && (
             <select className={cx(inputCls)} aria-label="Move to another worker" value="" onChange={(e) => {
               const to = workers.find((w) => w.id === Number(e.target.value));
               if (to && confirm(`This stops the session and starts a new one on ${to.name} from the pushed branch.`)) move.mutate(to.id);
@@ -324,10 +334,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
             </select>
           )}
-          {!final && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
-          {!final && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
-          {final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
-          <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error ?? move.error} />
+          {stop && !final && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
+          {stop && !final && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
+          {stop && final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
+          <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error ?? move.error ?? interrupt.error} />
           {s.usage?.cost_usd !== undefined && <p className="text-[12px] text-faint text-center pt-2">Estimated usage ${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} model turns</p>}
         </div>
       </Sheet>

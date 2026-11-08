@@ -69,7 +69,7 @@ export function Settings() {
       </Section>
       <YourGithubSection me={me} />
       {me?.is_owner && <ServerGithubSection />}
-      <WorkersSection />
+      <WorkersSection me={me} />
       <AccessSection me={me} />
       <DevicesSection />
       <Section title="Status">
@@ -280,7 +280,7 @@ function WorkerAccounts({ w }: { w: WorkerRow }) {
 }
 
 /** The machines that run agents: each has its own token and a description the planner reads. */
-function WorkersSection() {
+function WorkersSection({ me }: { me: Me | undefined }) {
   const qc = useQueryClient();
   const { data } = useWorkers();
   const [form, setForm] = useState({ name: '', description: '' });
@@ -302,6 +302,8 @@ function WorkersSection() {
   });
   // the Assistant runs on the default worker, with one of its Claude logins
   const assistantChoices = workers.find((w) => w.id === data?.default_worker_id)?.facts?.claude_accounts ?? [];
+  // the install owner sees everyone's workers: only their own can be changed, any can be revoked
+  const mine = (w: WorkerRow) => !me?.user || w.owner === me.user;
   return (
     <Section title="Workers">
       <Card>
@@ -310,7 +312,7 @@ function WorkersSection() {
             <div className="flex items-center gap-2">
               <span className={cx('size-2 rounded-full shrink-0', w.connected ? 'bg-ok' : 'bg-faint')} aria-label={w.connected ? 'online' : 'offline'} />
               <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <Chip className="ml-2">used by default</Chip>}</div>
+                <div className="font-medium truncate">{w.name}{w.id === data?.default_worker_id && <Chip className="ml-2">used by default</Chip>}{me?.is_owner && <Chip tone={mine(w) ? 'neutral' : 'accent'} className="ml-2">{w.owner ?? 'nobody'}</Chip>}</div>
                 <div className="text-[12px] text-muted">
                   {w.connected ? 'online' : `last seen ${when(w.last_seen_at)}`}
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}
@@ -319,10 +321,12 @@ function WorkersSection() {
                   {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
                 </div>
               </div>
-              {w.id !== data?.default_worker_id && <Button small variant="ghost" onClick={() => setDefault.mutate(w.id)}>Make default</Button>}
+              {w.id !== data?.default_worker_id && mine(w) && <Button small variant="ghost" onClick={() => setDefault.mutate(w.id)}>Make default</Button>}
               {!w.legacy && <Button small variant="ghost" onClick={() => confirm(`Revoke worker "${w.name}"? It is cut off at once.`) && revoke.mutate(w.id)}>Revoke</Button>}
             </div>
-            {editing?.id === w.id ? (
+            {!mine(w) ? (
+              w.description && <p className="mt-1 text-[13px] text-muted">{w.description}</p>
+            ) : editing?.id === w.id ? (
               <form className="mt-2" onSubmit={(e) => { e.preventDefault(); save.mutate(editing); }}>
                 <textarea className={cx(inputCls, 'min-h-16')} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} aria-label={`Description of ${w.name}`} />
                 <div className="flex gap-2 mt-1.5"><Button small variant="primary">Save</Button><Button small type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button></div>
@@ -415,7 +419,8 @@ function AccessSection({ me }: { me: Me | undefined }) {
           <Field label="New token for"><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. laptop skills" /></Field>
           <Field label="It may" group hint="From another machine a token only gets read and tracker, whatever it was made with.">
             <div className="space-y-1.5">
-              {Object.entries(SCOPE_INFO).map(([scope, info]) => (
+              {/* projects and install settings are the install owner's alone */}
+              {Object.entries(SCOPE_INFO).filter(([scope]) => scope !== 'admin' || me?.is_owner).map(([scope, info]) => (
                 <label key={scope} className="flex items-center gap-2 text-[14px]">
                   <input type="checkbox" className="size-4 accent-[var(--color-accent-strong)]" checked={form.scopes.includes(scope)}
                     onChange={(e) => setForm({ ...form, scopes: e.target.checked ? [...form.scopes, scope] : form.scopes.filter((x) => x !== scope) })} />

@@ -8,7 +8,7 @@ import { startServer, OWNER } from './helpers.ts';
 
 const pr = (patch: Partial<PullRequest>): PullRequest => ({
   id: 1, session_id: 1, repo_id: 1, repo_full_name: 'me/r', number: 7, url: '', title: '', state: 'open', mergeable: true, mergeable_state: null,
-  head_ref: 'b', head_sha: null, last_synced: null, local: false, blocked: null, behind_at_merge: null, ...patch,
+  head_ref: 'b', head_sha: null, last_synced: null, local: false, blocked: null, behind_at_merge: null, started_by: null, github_login: null, ...patch,
 });
 const session = (id: number, status: Session['status']) => ({ id, status, title: `S${id}`, project_key: 'DISP' }) as Session;
 const idle = (id: number, attention: Attention) => ({ ...session(id, 'idle'), attention });

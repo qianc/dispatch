@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type RunOptions } from '../../../src/shared/types.ts';
-import { api, type ProjectSummary, type ScheduleView, type Session } from '../api.ts';
+import { api, type Me, type ProjectSummary, type ScheduleView, type Session } from '../api.ts';
+import { scheduleRights } from '../access.ts';
 import { RunOptionsFields, runOptionsSummary } from './batch.tsx';
 import { Button, Card, ErrorText, Field, Section, SessionStatusChip, Sheet, cx, inputCls } from './ui.tsx';
 
@@ -43,6 +44,7 @@ export function Schedules({ project }: { project: ProjectSummary }) {
                 <span className="text-[13px] text-muted shrink-0">{s.at_time} · {daysLabel(s.days)}</span>
               </div>
               <div className="text-[13px] text-muted mt-0.5 truncate">
+                {s.owner && <>{s.owner} · </>}
                 {s.enabled ? (s.next_run ? `Next: ${when(s.next_run)}` : '') : s.paused_by_disable ? 'Paused: project disabled' : 'Off'}
                 {s.last_error ? <span className="text-bad"> · Last run failed: {s.last_error}</span>
                   : s.last_session ? <> · Last: {s.last_session.last_text ?? s.last_session.status}</> : null}
@@ -62,6 +64,9 @@ export function Schedules({ project }: { project: ProjectSummary }) {
 
 function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; onDone: () => void }) {
   const qc = useQueryClient();
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  // someone else's schedule: read it; the install owner may switch it off and delete it
+  const rights = schedule ? scheduleRights(schedule, me?.user ?? null, !!me?.is_owner) : { edit: true, run: false, toggle: true, remove: false };
   const [f, setF] = useState({
     name: schedule?.name ?? 'Nightly',
     at_time: schedule?.at_time ?? '02:00',
@@ -80,11 +85,14 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
     onSuccess: () => { refresh(); onDone(); },
   });
   const run = useMutation({ mutationFn: () => api.post<Session>(`/schedules/${schedule!.id}/run`), onSuccess: refresh });
+  const switchOff = useMutation({ mutationFn: () => api.patch(`/schedules/${schedule!.id}`, { enabled: false }), onSuccess: () => { refresh(); onDone(); } });
   const remove = useMutation({ mutationFn: () => api.del(`/schedules/${schedule!.id}`), onSuccess: () => { refresh(); onDone(); } });
   const toggleDay = (d: number) => setF({ ...f, days: f.days.includes(d) ? f.days.filter((x) => x !== d) : [...f.days, d].sort() });
   const summary = runOptionsSummary(options);
   return (
     <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+      {schedule && !rights.edit && <p className="text-[13px] mb-3 rounded-lg border border-wait/40 bg-wait/5 px-3 py-2">{schedule.owner ?? 'Nobody'}'s schedule. It runs as them. Only they can change it.</p>}
+      <fieldset disabled={!rights.edit} className="min-w-0">
       <p className="text-[13px] text-muted mb-3">At this time a planner looks at the backlog within the scope and starts the batches it picks, with the options below. It asks nothing; starting nothing is fine. It never starts items on hold.</p>
       <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Schedule name" /></Field>
       <Field label="Time" hint="The server's local time.">
@@ -115,8 +123,10 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
         On
         <input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" aria-label="Schedule on" />
       </label>
-      <ErrorText error={save.error ?? run.error ?? remove.error} />
-      <Button variant="primary" className="w-full" disabled={!f.name.trim() || !f.days.length || save.isPending}>{schedule ? 'Save' : 'Add schedule'}</Button>
+      </fieldset>
+      <ErrorText error={save.error ?? run.error ?? remove.error ?? switchOff.error} />
+      {rights.edit && <Button variant="primary" className="w-full" disabled={!f.name.trim() || !f.days.length || save.isPending}>{schedule ? 'Save' : 'Add schedule'}</Button>}
+      {!rights.edit && rights.toggle && <Button type="button" className="w-full" disabled={switchOff.isPending} onClick={() => switchOff.mutate()}>Switch off</Button>}
       {schedule && (
         <>
           {schedule.last_session && (
@@ -126,10 +136,12 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
             </Link>
           )}
           {run.data && <p className="text-[13px] text-muted mt-2">Started <Link className="text-accent" to={`/s/${run.data.id}`}>session #{run.data.id}</Link>.</p>}
-          <div className="flex gap-2 mt-3">
-            <Button type="button" className="flex-1" disabled={run.isPending} onClick={() => run.mutate()}>Run now</Button>
-            <Button type="button" variant="danger" className="flex-1" onClick={() => { if (confirm(`Delete the schedule "${schedule.name}"?`)) remove.mutate(); }}>Delete</Button>
-          </div>
+          {(rights.run || rights.remove) && (
+            <div className="flex gap-2 mt-3">
+              {rights.run && <Button type="button" className="flex-1" disabled={run.isPending} onClick={() => run.mutate()}>Run now</Button>}
+              {rights.remove && <Button type="button" variant="danger" className="flex-1" onClick={() => { if (confirm(`Delete the schedule "${schedule.name}"?`)) remove.mutate(); }}>Delete</Button>}
+            </div>
+          )}
         </>
       )}
     </form>

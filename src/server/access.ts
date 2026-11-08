@@ -42,6 +42,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/projects/:key/releases': 'read',
   'GET /api/projects/:key/releases/proposal': 'read',
   'GET /api/projects/:key/schedules': 'read',
+  'GET /api/projects/:key/github-access': 'read',
   'GET /api/items/:id': 'read',
   'GET /api/items/by-key/:key': 'read',
   'GET /api/items/:id/discuss': 'read',

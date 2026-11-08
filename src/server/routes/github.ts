@@ -3,7 +3,8 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { HttpError, type Ctx } from './ctx.ts';
+import { GithubAccessChecker } from '../githubAccess.ts';
+import { HttpError, notFound, type Ctx } from './ctx.ts';
 
 export const STATE_COOKIE = 'dsp_gh_state';
 const STATE_MS = 10 * 60_000;
@@ -18,7 +19,7 @@ function withConnected(to: string) {
   return `${path}${path.includes('?') ? '&' : '?'}github=connected${hash !== undefined ? `#${hash}` : ''}`;
 }
 
-export function githubRoutes(app: FastifyInstance, { cfg, identities, users, github, sessions }: Ctx) {
+export function githubRoutes(app: FastifyInstance, { cfg, identities, users, github, sessions, store }: Ctx) {
   /** OAuth sign-ins under way: state → who started it and where to go back */
   const states = new Map<string, { user: string; to: string; exp: number }>();
   const userOf = (req: FastifyRequest) => req.principal!.user!;
@@ -55,6 +56,18 @@ export function githubRoutes(app: FastifyInstance, { cfg, identities, users, git
     const user = userOf(req);
     await identities.disconnect(user);
     return view(user);
+  });
+
+  // who can act on GitHub in a project, and can the caller; ?verify=1 asks GitHub each account's permission
+  const access = new GithubAccessChecker({
+    store, github, identities, installOwner: cfg.installOwner,
+    identity: (user, project) => sessions.identity!(user, project),
+  });
+  app.get('/api/projects/:key/github-access', async (req) => {
+    const project = store.projectByKey((req.params as { key: string }).key);
+    if (!project) throw notFound('Project');
+    const verify = ['1', 'true'].includes(String((req.query as { verify?: string }).verify ?? ''));
+    return access.view(project, req.principal!.user, verify);
   });
 
   app.get('/api/github/oauth/start', async (req, reply) => {

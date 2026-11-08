@@ -11,6 +11,7 @@ import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { Schedules } from '../components/schedules.tsx';
+import { GithubAccessPanel, GithubConnectBanner } from '../components/githubAccess.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { noteProject } from '../nav.ts';
@@ -113,6 +114,7 @@ export function Project() {
       ) : undefined}
     >
       {project.disabled && <DisabledBanner project={project} onEnable={() => lock.mutate(false)} pending={lock.isPending} error={lock.error} />}
+      {!project.disabled && <GithubConnectBanner projectKey={project.key} />}
       <div className="px-3 pt-3 overflow-x-auto">
         <Segmented<Tab>
           value={tab}
@@ -151,9 +153,11 @@ export function Project() {
         <NewItemForm project={project} type={type} onDone={() => setSheet(null)} />
       </Sheet>
       <Sheet open={sheet === 'batch'} onClose={() => setSheet(null)} title="Start batch">
+        <GithubConnectBanner projectKey={project.key} className="mb-3" />
         <BatchForm project={project} items={marked} onStarted={(s) => nav(`/s/${s.id}`)} />
       </Sheet>
       <Sheet open={sheet === 'planner'} onClose={() => setSheet(null)} title="Plan with Claude">
+        <GithubConnectBanner projectKey={project.key} className="mb-3" />
         <PlannerForm project={project} onStarted={(s) => nav(`/s/${s.id}`)} />
       </Sheet>
       <Sheet open={sheet === 'release'} onClose={() => setSheet(null)} title="Create release">
@@ -663,6 +667,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
       </Sheet>
       <ProjectLook project={project} onSave={(patch) => save.mutate(patch)} />
       <ProjectAccounts project={project} onSaved={refresh} />
+      <GithubAccessPanel projectKey={project.key} />
       <ProjectWorkers project={project} onSave={(patch) => save.mutate(patch)} />
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">

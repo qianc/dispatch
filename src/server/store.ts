@@ -140,6 +140,8 @@ function toPr(r: Row): PullRequest {
     // only while open and for the commit it was checked at
     blocked: r.state === 'open' && r.blocked && (r.blocked_sha ?? null) === (r.head_sha ?? null) ? String(r.blocked) : null,
     behind_at_merge: numOrNull(r.behind_at_merge),
+    started_by: (r.started_by as string | null) ?? null,
+    github_login: (r.github_login as string | null) ?? null,
   };
 }
 
@@ -152,7 +154,8 @@ const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
   FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
-const PR_SELECT = 'SELECT pr.*, r.github_owner, r.github_name, r.local_path FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id';
+const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
+  FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
 
 export interface Comment {
   id: number;

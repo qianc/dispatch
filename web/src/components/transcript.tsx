@@ -84,7 +84,8 @@ function MessageTime({ at }: { at: string }) {
   return <time dateTime={at} title={fullTime(at)} className="block mt-0.5 text-[11px] leading-4 text-faint tabular-nums">{messageTime(at)}</time>;
 }
 
-export function Transcript({ session, events, inputs, project }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null }) {
+/** `readOnly`: someone else's session (DISP-63): no answers, approvals or proposal buttons. */
+export function Transcript({ session, events, inputs, project, readOnly = false }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null; readOnly?: boolean }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
     for (const e of events) if (e.body.kind === 'tool_result') m.set(e.body.tool_use_id, e.body);
@@ -131,10 +132,10 @@ export function Transcript({ session, events, inputs, project }: { session: Sess
         return <div key={e.seq} className="text-[13px] text-bad rounded-lg bg-bad/10 border border-bad/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>;
       case 'input_request': {
         const input = inputById.get(b.input_id);
-        return input ? <InputCard key={e.seq} input={input} /> : null;
+        return input ? <InputCard key={e.seq} input={input} readOnly={readOnly} /> : null;
       }
       case 'proposal':
-        return <ProposalLoader key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} />;
+        return <ProposalLoader key={e.seq} eventId={e.id} done={proposalDone.get(e.id) ?? null} proposal={b.proposal} session={session} project={project} readOnly={readOnly} />;
       case 'proposal_done':
         return null;
     }
@@ -196,9 +197,11 @@ function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: s
   );
 }
 
-export function InputCard({ input }: { input: PendingInput }) {
+export function InputCard({ input, readOnly = false }: { input: PendingInput; readOnly?: boolean }) {
   const qc = useQueryClient();
-  const open = !input.answered_at && !input.expired;
+  const waiting = !input.answered_at && !input.expired;
+  // only whoever started the session answers it
+  const open = waiting && !readOnly;
   const [answers, setAnswers] = useState<Record<string, string>>(() =>
     input.answer?.kind === 'question' ? input.answer.answers : {},
   );
@@ -209,9 +212,9 @@ export function InputCard({ input }: { input: PendingInput }) {
   });
   const p = input.payload;
   return (
-    <div className={cx('rounded-xl border p-3', open ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
+    <div className={cx('rounded-xl border p-3', waiting ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
       {!open && (
-        <div className="text-[12px] text-faint mb-2">{input.expired ? 'Closed without an answer' : 'Answered'}</div>
+        <div className="text-[12px] text-faint mb-2">{waiting ? 'Waiting for an answer' : input.expired ? 'Closed without an answer' : 'Answered'}</div>
       )}
       {p.kind === 'question' ? (
         <>
@@ -302,7 +305,7 @@ function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; pr
 }
 
 /** Assistant proposals name their project; others belong to the session's project. */
-function ProposalLoader(props: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project | null }) {
+function ProposalLoader(props: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project | null; readOnly: boolean }) {
   const key = 'project_key' in props.proposal ? props.proposal.project_key : undefined;
   const { data: loaded } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<Project>(`/projects/${key}`), enabled: !!key });
   const project = key ? loaded : props.project;
@@ -315,7 +318,7 @@ function ProposalLoader(props: { eventId: number; done: string | null; proposal:
 const FIELD_LABEL: Record<string, string> = { title: 'Title', body_md: 'Description', type: 'Type', status: 'Status', importance: 'Importance', effort: 'Effort', labels: 'Tags', modules: 'Modules' };
 
 /** A change to an item that a Discuss chat suggests: old → new for each field, a comment, Apply / Dismiss. */
-function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'item_update' }>; session: Session; project: Project }) {
+function ItemUpdateCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'item_update' }>; session: Session; project: Project; readOnly: boolean }) {
   const qc = useQueryClient();
   const [showBody, setShowBody] = useState(false);
   const refresh = () => {
@@ -363,7 +366,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId
       </div>
       {done ? (
         <p className={cx('mt-2 text-[13px]', replaced ? 'text-faint' : 'text-ok')}>{done}</p>
-      ) : (
+      ) : !readOnly && (
         <div className="flex gap-2 mt-3">
           <Button variant="primary" className="flex-1" disabled={apply.isPending || dismiss.isPending} onClick={() => apply.mutate()}>Apply</Button>
           <Button disabled={apply.isPending || dismiss.isPending} onClick={() => dismiss.mutate()}>Dismiss</Button>
@@ -374,7 +377,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project }: { eventId
   );
 }
 
-function PlannerProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'planner' }>; session: Session; project: Project }) {
+function PlannerProposalCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'planner' }>; session: Session; project: Project; readOnly: boolean }) {
   const nav = useNavigate();
   const [prompt, setPrompt] = useState(proposal.prompt);
   const start = useMutation({
@@ -386,6 +389,8 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
       <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">Planning chat · {project.name}</div>
       {done ? (
         <p className={cx('text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
+      ) : readOnly ? (
+        proposal.prompt && <p className="text-[14px] whitespace-pre-wrap">{proposal.prompt}</p>
       ) : (
         <>
           <textarea className={cx(inputCls, 'min-h-16 text-[14px]')} placeholder="Focus (optional)" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
@@ -397,7 +402,7 @@ function PlannerProposalCard({ eventId, done, proposal, session, project }: { ev
   );
 }
 
-function ProposalCard({ eventId, done, proposal, session, project }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' }>; session: Session; project: Project }) {
+function ProposalCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' }>; session: Session; project: Project; readOnly: boolean }) {
   const { data: items = [] } = useQuery({
     queryKey: ['items', project.id],
     queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),
@@ -431,6 +436,8 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
   };
   const existing = items.filter((i) => picked.has(i.id) || (proposal.type === 'batch' && proposal.item_ids.includes(i.id)));
   const replaced = !!done && /^(Replaced|Not used)/.test(done);
+  // done, or someone else's card: nothing to pick or start here
+  const locked = !!done || readOnly;
 
   return (
     <div className={cx('rounded-xl border border-accent/50 bg-panel shadow-sm p-3', replaced && 'opacity-60')}>
@@ -438,7 +445,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
         {proposal.type === 'batch' ? 'Proposed batch' : 'Proposed items'}{session.kind === 'assistant' && ` · ${project.name}`}
       </div>
       {proposal.type === 'batch' && (
-        <input className={cx(inputCls, 'mb-2 font-medium')} value={title} onChange={(e) => setTitle(e.target.value)} disabled={!!done} aria-label="Batch title" />
+        <input className={cx(inputCls, 'mb-2 font-medium')} value={title} onChange={(e) => setTitle(e.target.value)} disabled={locked} aria-label="Batch title" />
       )}
       {existing.map((it) => {
         const gone = !done && goneIds.has(it.id);
@@ -446,7 +453,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
         return (
           // the key opens the item; the rest of the row picks it (a key inside the pick button would be a button in a button)
           <div key={it.id} className="relative flex items-center gap-2 py-1.5">
-            <button type="button" disabled={!!done || gone} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={on} aria-label={it.title} className="absolute inset-0" />
+            <button type="button" disabled={locked || gone} onClick={() => toggle(picked, it.id, setPicked)} aria-pressed={on} aria-label={it.title} className="absolute inset-0" />
             <span className={cx('size-4 rounded border shrink-0', on ? 'bg-accent-strong border-accent-strong' : 'border-line')} />
             <ImportanceIcon value={it.importance} />
             <ItemKeyLink id={it.id} itemKey={it.key} className="relative text-[12px]" />
@@ -460,9 +467,9 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
       )}
       {newItems.length > 0 && proposal.type === 'batch' && <div className="text-[12px] text-muted mt-2">New items</div>}
       {newItems.map((it, i) => (
-        <ProposedItemRow key={i} item={it} project={project} on={pickedNew.has(i)} toggle={() => !done && toggle(pickedNew, i, setPickedNew)} />
+        <ProposedItemRow key={i} item={it} project={project} on={pickedNew.has(i)} toggle={() => !locked && toggle(pickedNew, i, setPickedNew)} />
       ))}
-      {proposal.type === 'batch' && !done && (
+      {proposal.type === 'batch' && !locked && (
         <>
           <textarea className={cx(inputCls, 'mt-2 min-h-16 text-[14px]')} placeholder="Instructions for the session" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
           <label className="flex items-center gap-2 mt-2 text-[14px]">
@@ -478,7 +485,7 @@ function ProposalCard({ eventId, done, proposal, session, project }: { eventId: 
       )}
       {done ? (
         <p className={cx('mt-2 text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
-      ) : proposal.type === 'batch' ? (
+      ) : readOnly ? null : proposal.type === 'batch' ? (
         <Button variant="primary" className="w-full mt-3" disabled={start.isPending || (!usable.length && !pickedNew.size)} onClick={startBatch}>
           Start batch ({usable.length + pickedNew.size})
         </Button>

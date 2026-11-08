@@ -1,20 +1,34 @@
 import type {
-  Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
+  Attention, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
+import type { SessionAccess } from './access.ts';
 import type { CheckRun } from '../../src/shared/checkProgress.ts';
 
-export type { Attention, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
+export type { Attention, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
 
 export class ApiError extends Error {
   status: number;
   /** the answer did not come from Dispatch (a sign-in proxy turned the request away) */
   foreign: boolean;
-  constructor(status: number, message: string, foreign = false) {
+  /** why, for the app to act on (e.g. `github_not_connected`) */
+  code?: string;
+  /** where to connect GitHub, when that is what is missing (DISP-63) */
+  connect_url?: string;
+  constructor(status: number, message: string, foreign = false, extra: { code?: string; connect_url?: string } = {}) {
     super(message);
     this.status = status;
     this.foreign = foreign;
+    if (extra.code) this.code = extra.code;
+    if (extra.connect_url) this.connect_url = extra.connect_url;
   }
 }
+
+/** The error's body as the server sent it. */
+type ErrorBody = { error?: string; code?: unknown; connect_url?: unknown };
+const extraOf = (d: ErrorBody) => ({
+  code: typeof d.code === 'string' ? d.code : undefined,
+  connect_url: typeof d.connect_url === 'string' ? d.connect_url : undefined,
+});
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -28,7 +42,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   const data = json ? await res.json().catch(() => ({})) : {};
   if (!res.ok) {
     if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('dispatch:unauthorized'));
-    throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText, !json);
+    throw new ApiError(res.status, (data as ErrorBody).error ?? res.statusText, !json, extraOf(data as ErrorBody));
   }
   return data as T;
 }
@@ -44,7 +58,7 @@ export async function uploadImage(itemId: number, file: File, commentId?: number
     credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, (data as ErrorBody).error ?? res.statusText, false, extraOf(data as ErrorBody));
   return data as ItemImage;
 }
 
@@ -78,6 +92,8 @@ export interface SessionDetail {
   project: Project | null;
   /** check commands running now for this session's merges (DISP-5) */
   checks?: CheckRun[];
+  /** what you may do with it (DISP-63; missing from older servers) */
+  access?: SessionAccess;
 }
 
 /** The open assistant thread (or null), with Claude's replies since the owner last read it. */
@@ -106,6 +122,8 @@ export interface PrDetail {
   files: { filename: string; status: string; additions: number; deletions: number; patch: string | null }[];
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
   auto_merge: Session['options']['auto_merge'];
+  /** you may merge it: you started its session (DISP-63; missing from older servers) */
+  can_merge?: boolean;
 }
 
 export interface Me {
