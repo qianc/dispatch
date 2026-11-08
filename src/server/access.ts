@@ -134,6 +134,10 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/devices/approve': 'user',
   'GET /api/devices': 'user',
   'DELETE /api/devices/:id': 'user',
+  // password sessions: all are the install owner's (a signed-in person, so the owner or a device of theirs)
+  'GET /api/logins': 'user',
+  'DELETE /api/logins/:id': 'user',
+  'DELETE /api/logins': 'user',
   'GET /api/oauth/grants': 'user',
   'DELETE /api/oauth/grants/:id': 'user',
   // your own GitHub connection (a person's, never a token's)

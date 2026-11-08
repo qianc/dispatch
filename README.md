@@ -424,7 +424,10 @@ need in `AGENT_SKILLS`, e.g. `AGENT_SKILLS=~/.claude/skills/asd-ste100`.
 ![Behind a sign-in proxy: which paths go through the SSO check and which go around it](docs/illustrations/proxy-routes.png)
 
 Dispatch needs no other infrastructure: by default you sign in with a password (`AUTH_MODE=password`,
-`APP_PASSWORD` or `APP_PASSWORD_HASH`). `DISABLE_AUTH=1` turns sign-in off for local testing.
+`APP_PASSWORD` or `APP_PASSWORD_HASH`). A sign-in lasts 90 days; **Settings → Signed-in browsers**
+lists them and signs one out, or every one at once. Changing the password signs every browser out.
+After five wrong passwords an address waits (30 s, then doubling, up to an hour); every failure is
+logged with the address. `DISABLE_AUTH=1` turns sign-in off for local testing.
 
 **Behind a sign-in proxy** (e.g. Traefik with an SSO forward-auth): set `AUTH_MODE=proxy`,
 `TRUSTED_PROXIES` to the proxy's address(es) (IPs or IPv4 CIDRs) and optionally `AUTH_USERS` to the
@@ -464,7 +467,9 @@ add and edit items, comments, sources, images, release labels, the project's own
 as a connector in Claude (claude.ai, the apps, Claude Code: `claude mcp add --transport http dispatch
 https://dispatch.example.com/mcp`). Claude registers itself, you approve it once on a consent page
 (signed in as above), and it renews its access by itself (24 h access, 60-day rotating refresh
-tokens). Settings → Connected apps lists them and disconnects them.
+tokens). Settings → Connected apps lists them and disconnects them. Registration is open to anyone
+and capped at 200 clients; a registration nobody connected is removed after 24 hours, a disconnected
+app 30 days after its last grant ended.
 
 Behind a proxy, route these paths **around** the proxy's sign-in, because the client is not a
 browser: `/.well-known/*`, `/register`, `/token`, `/revoke` and `/mcp`; and, for tokens,
@@ -487,9 +492,13 @@ and runs the agents.
 
 - Every `/api` route needs a scope (`read`, `tracker`, `sessions`, `admin`); a test fails when one has
   none. Projects and install settings are the install owner's alone.
-- Tokens, worker tokens, OAuth codes and refresh tokens are stored as SHA-256 hashes and shown once.
-  A token used from another machine gets `read` and `tracker` only. Secrets are compared in constant
-  time.
+- Tokens, worker tokens, session cookies, OAuth codes and refresh tokens are stored as SHA-256 hashes
+  and shown once. A token used from another machine gets `read` and `tracker` only. Secrets are
+  compared in constant time.
+- The password login waits after five wrong passwords from an address, before the password is
+  checked, and verifies `APP_PASSWORD_HASH` off the event loop, so a flood of guesses does not stall
+  the server. Password sessions are rows in the database: sign-out, "sign out everywhere" and a
+  changed password end them at once.
 - The Claude connector is OAuth 2.1: PKCE (S256) is required, the return address must be one the
   client registered (https, or http on localhost), refresh tokens rotate, and the consent page checks
   the person again when they answer. A connector gets `read` and `tracker` at most; it never starts
@@ -526,7 +535,7 @@ and runs the agents.
 4. **Give Dispatch no CORS headers.** The app is same-origin and needs none. An allow-list with
    credentials for your other sites (common in a shared middleware chain) lets a script on any of
    them call Dispatch's API with the shared sign-in cookie.
-5. Rate limiting is the proxy's job: Dispatch has none of its own.
+5. Rate limiting is the proxy's job: Dispatch limits only its own password login.
 6. Requests from Dispatch's own machine count as local (password login, full token scopes). Do not
    put the proxy or a tunnel there, unless Dispatch runs in a container on a bridge network, which
    sees the proxy's address and not loopback.
@@ -535,10 +544,8 @@ and runs the agents.
 file-provider config that does all of this with Authelia.
 
 **Password mode** (the default) needs none of that: put HTTPS in front
-([Caddy example](docs/examples/Caddyfile)), on another host or in Docker. Known limits, tracked as
-work to do: the login is not rate limited (a 500 ms delay per wrong password only), and a session
-cookie cannot be revoked before it expires (90 days; logging out clears it in the browser). Use a
-long password, or `APP_PASSWORD_HASH`.
+([Caddy example](docs/examples/Caddyfile)), on another host or in Docker. Use a long password, or
+`APP_PASSWORD_HASH`. Sessions last 90 days and can be ended in Settings → Signed-in browsers.
 
 **What you accept by design**
 

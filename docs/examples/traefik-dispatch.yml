@@ -48,8 +48,8 @@ http:
         stsSeconds: 15552000
         stsIncludeSubdomains: true
 
-    # Dispatch has no rate limit of its own. Per client address; generous enough for the app's
-    # live stream and a few workers.
+    # Dispatch limits only its own password login (not used behind a proxy). Per client address;
+    # generous enough for the app's live stream and a few workers.
     dispatch-rate-limit:
       rateLimit:
         average: 100

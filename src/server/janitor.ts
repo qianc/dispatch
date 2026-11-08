@@ -4,6 +4,7 @@
 import { CHAT_KINDS, FINAL_STATUSES, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
+import { expireOAuthClients } from './oauth.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import type { Leftover, TidyResult } from '../worker/workspace.ts';
@@ -101,6 +102,17 @@ export class Janitor {
     setTimeout(() => void this.tidy(this.store.session(s.id) ?? s, opts).catch((e) => console.warn('tidy failed:', (e as Error).message)), this.closeDelayMs);
   }
 
+  /** Rows that outlived their use: OAuth clients nobody connected (DISP-70), expired password sessions. Needs no worker. */
+  private expireRecords() {
+    try {
+      const { never_connected, disconnected } = expireOAuthClients(this.store.db);
+      if (never_connected || disconnected) console.log(`removed ${never_connected} OAuth client(s) that never connected and ${disconnected} disconnected for 30 days`);
+      this.store.db.run('DELETE FROM web_sessions WHERE expires_at <= ?', new Date().toISOString());
+    } catch (e) {
+      console.warn('expiring records failed:', (e as Error).message);
+    }
+  }
+
   /** What finished sessions left behind: refresh the offer, and tidy chats unused for a week. */
   check(): Promise<void> {
     this.checking ??= this.checkNow().finally(() => (this.checking = null));
@@ -108,6 +120,7 @@ export class Janitor {
   }
 
   private async checkNow() {
+    this.expireRecords();
     if (!this.hub.connected) return;
     const since = Date.now() - 90 * DAY;
     const finished = this.store.sessions({ statuses: ['completed', 'stopped', 'failed'] }).filter((s) => Date.parse(s.updated_at) > since);

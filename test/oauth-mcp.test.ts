@@ -164,6 +164,49 @@ describe('OAuth for MCP clients', () => {
     }
   });
 
+  // DISP-70: /register is public and capped; the janitor frees the slots of clients nobody connected
+  it('the janitor removes clients that never got a grant, and long-disconnected ones, never a connected one', async () => {
+    const { s, cookie } = await setup();
+    try {
+      const db = s.ctx.store.db;
+      const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+      const granted = async () => {
+        const { client_id, verifier, code } = await connect(s, cookie);
+        const tok = await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id, code_verifier: verifier }) });
+        expect(tok.statusCode).toBe(200);
+        return client_id;
+      };
+      const live = await granted();
+      // a client disconnected yesterday, and one disconnected a month ago
+      const fresh = await granted();
+      const old = await granted();
+      for (const [id, when] of [[fresh, daysAgo(1)], [old, daysAgo(31)]] as const) expect(db.run('UPDATE oauth_grants SET revoked_at = ? WHERE client_id = ?', when, id).changes).toBe(1);
+      db.run('UPDATE oauth_clients SET created_at = ? WHERE client_id = ?', daysAgo(40), old);
+      // strangers fill the rest: registered two days ago, never connected
+      const count = () => Number(db.get<{ n: number }>('SELECT count(*) AS n FROM oauth_clients')!.n);
+      for (let i = count(); i < 199; i++) db.run('INSERT INTO oauth_clients (client_id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)', `mcp_junk${i}`, 'junk', '["https://x.example/cb"]', daysAgo(2));
+      // ...and one registered just now
+      expect((await s.app.inject({ method: 'POST', url: '/register', payload: { client_name: 'new', redirect_uris: [REDIRECT] } })).statusCode).toBe(201);
+      const full = await s.app.inject({ method: 'POST', url: '/register', payload: { client_name: 'one more', redirect_uris: [REDIRECT] } });
+      expect(full.statusCode).toBe(429);
+      expect(full.json().error_description).toMatch(/never connected.*24 hours/);
+
+      await s.ctx.janitor.check();
+      const ids = db.all<{ client_id: string }>('SELECT client_id FROM oauth_clients').map((r) => r.client_id);
+      expect(ids).toContain(live);
+      expect(ids).toContain(fresh); // disconnected a day ago: kept for 30 days
+      expect(ids).not.toContain(old);
+      expect(ids.filter((id) => id.startsWith('mcp_junk'))).toEqual([]);
+      expect(ids).toHaveLength(3); // live, fresh, and the one registered just now
+      expect(db.all('SELECT * FROM oauth_grants WHERE client_id = ?', old)).toEqual([]);
+      // the live grant still works, and registration is open again
+      expect((await s.app.inject({ method: 'GET', url: '/api/oauth/grants', headers: { cookie } })).json()).toEqual([expect.objectContaining({ client_id: live })]);
+      expect((await s.app.inject({ method: 'POST', url: '/register', payload: { client_name: 'again', redirect_uris: [REDIRECT] } })).statusCode).toBe(201);
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('accepts only https or loopback return addresses', () => {
     expect(allowedRedirect('https://claude.ai/api/mcp/auth_callback')).toBe(true);
     expect(allowedRedirect('http://localhost:5555/cb')).toBe(true);
