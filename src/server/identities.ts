@@ -138,33 +138,51 @@ export class Identities {
     return this.info(user)!;
   }
 
+  /** The token, or null when this key cannot read it (sealed with another key). */
+  private open(user: string, sealed: string): string | null {
+    try {
+      return this.box.open(sealed, aad(user));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Why the connection cannot be used, or null. A token this key cannot read is told at read time,
+   * never written down: with the right key back, it works again. GitHub turning it away is kept.
+   */
+  private errorOf(r: { user: string; token_enc: string; last_error: string | null }): string | null {
+    if (this.open(r.user, r.token_enc) === null) return KEY_CHANGED;
+    // an older Dispatch wrote "key changed" down; the token reads now
+    return r.last_error === KEY_CHANGED ? null : r.last_error;
+  }
+
   /** The user's credential; `{error}` when it cannot be used (connect again); null: not connected. */
   get(user: string): GithubCredential | { error: string } | null {
-    const r = this.db.get<{ login: string; git_name: string; git_email: string; token_enc: string; last_error: string | null }>(
-      'SELECT login, git_name, git_email, token_enc, last_error FROM github_identities WHERE user = ?', user,
+    const r = this.db.get<{ user: string; login: string; git_name: string; git_email: string; token_enc: string; last_error: string | null }>(
+      'SELECT user, login, git_name, git_email, token_enc, last_error FROM github_identities WHERE user = ?', user,
     );
     if (!r) return null;
-    if (r.last_error) return { error: r.last_error };
-    let token: string;
-    try {
-      token = this.box.open(r.token_enc, aad(user));
-    } catch {
-      this.markRejected(user, KEY_CHANGED);
-      return { error: KEY_CHANGED };
-    }
-    return { login: r.login, token, git_name: r.git_name, git_email: r.git_email };
+    const error = this.errorOf(r);
+    if (error) return { error };
+    return { login: r.login, token: this.open(user, r.token_enc)!, git_name: r.git_name, git_email: r.git_email };
   }
 
   /** The connection without its token, or null. */
   info(user: string): IdentityInfo | null {
-    return this.db.get<IdentityInfo>(
-      'SELECT kind, github_id, login, git_name, git_email, scopes, created_at, verified_at, last_error FROM github_identities WHERE user = ?', user,
-    ) ?? null;
+    const r = this.db.get<IdentityInfo & { user: string; token_enc: string }>(
+      'SELECT user, token_enc, kind, github_id, login, git_name, git_email, scopes, created_at, verified_at, last_error FROM github_identities WHERE user = ?', user,
+    );
+    if (!r) return null;
+    const { user: _u, token_enc: _t, ...info } = r;
+    return { ...info, last_error: this.errorOf(r) };
   }
 
   /** Users whose connection works (as far as Dispatch knows). */
   listConnected(): { user: string; login: string }[] {
-    return this.db.all<{ user: string; login: string }>('SELECT user, login FROM github_identities WHERE last_error IS NULL ORDER BY user');
+    return this.db.all<{ user: string; login: string; token_enc: string; last_error: string | null }>('SELECT user, login, token_enc, last_error FROM github_identities ORDER BY user')
+      .filter((r) => !this.errorOf(r))
+      .map(({ user, login }) => ({ user, login }));
   }
 
   /** Forgets the connection; an OAuth one is also ended on GitHub (best effort). */
@@ -178,13 +196,8 @@ export class Identities {
     }
   }
 
-  /** GitHub turned the token away (or it cannot be read): the user must connect again. */
+  /** GitHub turned the token away: the user must connect again. */
   markRejected(user: string, message: string) {
     this.db.run('UPDATE github_identities SET last_error = ? WHERE user = ?', message, user);
-  }
-
-  /** The key changed: no stored token can be read any more. */
-  markAllUnreadable() {
-    this.db.run('UPDATE github_identities SET last_error = ?', KEY_CHANGED);
   }
 }

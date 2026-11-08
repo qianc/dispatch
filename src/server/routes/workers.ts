@@ -5,7 +5,7 @@ import { HttpError, intParam, type Ctx } from './ctx.ts';
 
 // Workers belong to the person who added them (DISP-63): only they change one or start work on it.
 // The install owner sees every worker and may remove any.
-export function workerRoutes(app: FastifyInstance, { cfg, workers, hub, sessions, users }: Ctx) {
+export function workerRoutes(app: FastifyInstance, { workers, hub, sessions, users }: Ctx) {
   const wrap = <T>(fn: () => T): T => {
     try {
       return fn();
@@ -15,7 +15,7 @@ export function workerRoutes(app: FastifyInstance, { cfg, workers, hub, sessions
     }
   };
   /** the person asking; a token without a user (the legacy one) acts for the install owner */
-  const me = (req: FastifyRequest) => req.principal!.user ?? cfg.installOwner;
+  const me = (req: FastifyRequest) => req.principal!.user ?? users.installOwner;
   const withState = (req: FastifyRequest) => workers.list(users.manages(me(req))).map((w) => ({ ...w, connected: hub.isConnected(w.id) }));
   /** a live worker of the caller's (or, with `ownerToo`, any one for the install owner) */
   const owned = (req: FastifyRequest, ownerToo = false) => {

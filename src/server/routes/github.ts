@@ -4,14 +4,12 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { GithubAccessChecker } from '../githubAccess.ts';
+import { safePath } from '../identity.ts';
 import { HttpError, notFound, type Ctx } from './ctx.ts';
 
 export const STATE_COOKIE = 'dsp_gh_state';
 const STATE_MS = 10 * 60_000;
 const SCOPES = 'repo read:user user:email';
-
-/** Only a path in Dispatch (not "//host" or "/\host", which browsers read as another site). */
-const safePath = (to: string | undefined) => (to && to.startsWith('/') && !to.startsWith('//') && !to.startsWith('/\\') ? to : '/settings');
 
 /** `to` with `?github=connected`, before any #fragment. */
 function withConnected(to: string) {
@@ -55,12 +53,20 @@ export function githubRoutes(app: FastifyInstance, { cfg, identities, users, git
   app.delete('/api/me/github', async (req) => {
     const user = userOf(req);
     await identities.disconnect(user);
+    // the connection is gone: a live agent acting as this person stops now (its next message is refused until they connect again)
+    const live = { started_by: user, statuses: ['running' as const, 'waiting_input' as const] };
+    for (const s of [...store.sessions(live), ...store.sessions({ ...live, kind: 'discuss' })]) {
+      if (s.github_login) sessions.interrupt(s.id);
+    }
     return view(user);
   });
 
   // who can act on GitHub in a project, and can the caller; ?verify=1 asks GitHub each account's permission
   const access = new GithubAccessChecker({
-    store, github, identities, installOwner: cfg.installOwner,
+    store, github, identities,
+    get installOwner() {
+      return users.installOwner;
+    },
     identity: (user, project) => sessions.identity!(user, project),
   });
   app.get('/api/projects/:key/github-access', async (req) => {
@@ -76,7 +82,7 @@ export function githubRoutes(app: FastifyInstance, { cfg, identities, users, git
     const t = Date.now();
     for (const [k, v] of states) if (v.exp < t) states.delete(k);
     const state = randomBytes(24).toString('base64url');
-    states.set(state, { user: userOf(req), to: safePath((req.query as { to?: string }).to), exp: t + STATE_MS });
+    states.set(state, { user: userOf(req), to: safePath((req.query as { to?: string }).to) ?? '/settings', exp: t + STATE_MS });
     reply.setCookie(STATE_COOKIE, state, {
       path: '/api/github/oauth', httpOnly: true, sameSite: 'lax', maxAge: STATE_MS / 1000,
       secure: cfg.publicUrl.startsWith('https://'),

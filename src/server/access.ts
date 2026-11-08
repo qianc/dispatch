@@ -16,6 +16,7 @@ import type { Auth } from './auth.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { DEVICE_COOKIE, type Devices } from './devices.ts';
+import type { Users } from './users.ts';
 
 export const SCOPES = ['read', 'tracker', 'sessions', 'admin'] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -212,12 +213,19 @@ export class Access {
   private db: Db;
   private auth: Auth;
   private devices: Devices;
+  private users: Pick<Users, 'installOwner' | 'adopt'>;
 
-  constructor(cfg: Config, db: Db, auth: Auth, devices: Devices) {
+  constructor(cfg: Config, db: Db, auth: Auth, devices: Devices, users: Pick<Users, 'installOwner' | 'adopt'>) {
     this.cfg = cfg;
     this.db = db;
     this.auth = auth;
     this.devices = devices;
+    this.users = users;
+  }
+
+  /** the install owner now (it may be adopted after start: users.ts) */
+  get installOwner(): string {
+    return this.users.installOwner;
   }
 
   /** The paired device this request comes from (its cookie), or null. */
@@ -252,7 +260,7 @@ export class Access {
    * device counts as the person who approved it, unless `devices` is false (pairing more devices).
    */
   browserUser(req: FastifyRequest, { devices = true } = {}): string | null {
-    if (this.cfg.authMode === 'off') return this.cfg.installOwner;
+    if (this.cfg.authMode === 'off') return this.installOwner;
     const f = this.from(req);
     const paired = () => (devices ? this.device(req)?.user ?? null : null);
     if (this.cfg.authMode === 'proxy') {
@@ -261,13 +269,14 @@ export class Access {
         // no user header: the proxy let a device through on its own cookie
         if (!user) return paired();
         if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(user)) return null;
+        this.users.adopt(user);
         return user;
       }
       // the password login is the way in from this machine when the proxy is down
       if (!f.local) return null;
       if (!this.cfg.appPassword && !this.cfg.appPasswordHash) return paired();
     }
-    return this.auth.hasSessionCookie(req) ? this.cfg.installOwner : paired();
+    return this.auth.hasSessionCookie(req) ? this.installOwner : paired();
   }
 
   /** Who is making this request, or null (not signed in, or a bad token). */

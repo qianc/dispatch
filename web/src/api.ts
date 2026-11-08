@@ -33,8 +33,9 @@ const extraOf = (d: ErrorBody) => ({
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    // ask for JSON: a sign-in proxy then answers 401 instead of redirecting to its login page
-    headers: { accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+    // ask for JSON: a sign-in proxy then answers 401 instead of redirecting to its login page.
+    // x-dispatch-path: the page this comes from, where connecting GitHub comes back to (DISP-63)
+    headers: { accept: 'application/json', ...(globalThis.location ? { 'x-dispatch-path': location.pathname + location.search } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });

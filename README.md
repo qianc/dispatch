@@ -213,6 +213,9 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `GITHUB_GIT_BASE`, `GITHUB_API_URL` | `https://github.com`, `https://api.github.com` | Another GitHub (enterprise) for hosted repos' upstreams. |
 | `AUTH_MODE` | `password` | `proxy` behind a sign-in proxy; `DISABLE_AUTH=1` turns sign-in off (testing only). |
 | `TRUSTED_PROXIES`, `AUTH_USERS`, `AUTH_HEADER`, `PROXY_SECRET`, `PROXY_SECRET_HEADER` | | Proxy mode, see [Sign-in](#sign-in-tokens-and-claude-connectors). |
+| `DISPATCH_OWNER` | first of `AUTH_USERS` (proxy mode), else the single user | The install owner's user name: they manage projects and settings, inherit everything from before users, and may use the server's `GITHUB_TOKEN` / `GITHUB_ACCOUNTS`. Set it in proxy mode: without it and without `AUTH_USERS`, the first person to sign in through the proxy becomes the owner. |
+| `DISPATCH_SECRET_KEY` | a `secret.key` file beside the database | Key for the GitHub tokens people connect (64 hex characters, e.g. `openssl rand -hex 32`). Keep it apart from the data; with another key the stored tokens cannot be read until the old key is back. |
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | | A GitHub OAuth App for "Connect with GitHub" (Settings → Your GitHub). Its callback URL is `PUBLIC_URL/api/github/oauth/callback`. Without it, people paste a token. |
 | `TOKEN_REMOTE_SCOPES` | `read,tracker` | What personal tokens may do from another machine. |
 | `TZ` | `UTC` (Docker) | Time zone of scheduled runs, e.g. `Europe/Berlin`. In Docker the compose files set it, so put it in the shell or the `.env` file next to them, not in `server.env`. |
 

@@ -3,12 +3,12 @@ import { mergeInput } from '../../shared/types.ts';
 import { canDrive } from '../sessionGuard.ts';
 import { HttpError, intParam, type Ctx } from './ctx.ts';
 
-export function prRoutes(app: FastifyInstance, { cfg, github, sessions, store }: Ctx) {
+export function prRoutes(app: FastifyInstance, { github, sessions, store, users }: Ctx) {
   app.get('/api/prs/:id', async (req) => {
     const detail = await github.detail(intParam((req.params as { id: string }).id));
     // merged by whoever started its session (DISP-63)
     const s = store.session(detail.pr.session_id);
-    return { ...detail, can_merge: !!s && canDrive(req.principal!, s, cfg.installOwner) };
+    return { ...detail, can_merge: !!s && canDrive(req.principal!, s, users.installOwner) };
   });
 
   app.post('/api/prs/:id/merge', async (req) => {

@@ -15,7 +15,7 @@ export function releaseRoutes(app: FastifyInstance, ctx: Ctx) {
     return p;
   };
   /** releases run on the caller's own workers (a token without a user: the install owner's) */
-  const mine = (req: FastifyRequest) => req.principal!.user ?? ctx.cfg.installOwner;
+  const mine = (req: FastifyRequest) => req.principal!.user ?? ctx.users.installOwner;
   const option = (req: FastifyRequest, p: ReturnType<typeof project>, q: z.infer<typeof pick>) => {
     const o = releaseOptions(ctx, p, mine(req)).find((x) => x.worker_id === q.worker_id && x.repo_id === q.repo_id);
     if (!o) {

@@ -60,7 +60,8 @@ describe('resolveGithubIdentity', () => {
     expect(resolveGithubIdentity(deps({ connected: { bob: BOB } }), { started_by: null }, project(), 3)).toEqual({
       refused: true, code: 'github_shared_missing', user: null,
       message: 'This session has no user, and the server has no shared GitHub account (GITHUB_TOKEN or GITHUB_ACCOUNTS).',
-      connect_url: '/settings#your-github',
+      // the install owner's setting, not anyone's own connection
+      connect_url: '/settings',
     });
   });
 });

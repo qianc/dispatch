@@ -21,7 +21,8 @@ export function scheduleRoutes(app: FastifyInstance, { store, bus, scheduler, us
       last_session: last ? { id: last.id, status: last.status, title: last.title, last_text: last.last_text, created_at: last.created_at } : null,
     };
   };
-  const user = (req: FastifyRequest) => req.principal!.user;
+  /** who acts: the caller, or the install owner for the legacy API token (it acts for the install) */
+  const user = (req: FastifyRequest) => req.principal!.user ?? (req.principal!.legacy ? users.installOwner : null);
   const notYours = (s: Schedule) => new HttpError(403, `This schedule is ${s.owner ?? 'nobody'}'s: only they can change or run it.`);
   const changed = (s: Schedule) => bus.emit({ t: 'project', key: store.project(s.project_id)!.key });
 

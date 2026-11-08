@@ -6,7 +6,7 @@ import { assertWritable, setDisabled } from '../projectLock.ts';
 import { principalName } from '../access.ts';
 import { addHostedRepo, addLocalRepo, mergeNote, ownerName, setPlacement } from '../repos.ts';
 
-export function projectRoutes(app: FastifyInstance, { cfg, store, hub, github, workers, users, bus, hosted, sessions }: Ctx) {
+export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, users, bus, hosted, sessions }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -146,7 +146,7 @@ export function projectRoutes(app: FastifyInstance, { cfg, store, hub, github, w
     const user = req.principal!.user;
     if (users.isOwner(user)) return;
     const w = workers.get(workerId);
-    if (!w || w.owner !== user) throw new HttpError(403, `Only the install owner (${cfg.installOwner}) or the worker's owner can change its copies.`);
+    if (!w || w.owner !== user) throw new HttpError(403, `Only the install owner (${users.installOwner}) or the worker's owner can change its copies.`);
   };
 
   // a local repo's copy on a worker (DISP-45): add one, or change its path there

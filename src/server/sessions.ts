@@ -40,7 +40,7 @@ import type { Users } from './users.ts';
 import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 
 /** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
-export type IdentityResolver = (startedBy: string | null, project: Project, workerId?: number) => GithubIdentity | IdentityRefusal;
+export type IdentityResolver = (startedBy: string | null, project: Project | null, workerId?: number) => GithubIdentity | IdentityRefusal;
 
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {

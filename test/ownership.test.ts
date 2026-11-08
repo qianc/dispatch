@@ -119,10 +119,10 @@ describe('who owns workers, schedules and sessions', () => {
     const reply = String(await s.ctx.sessions.rpc(run.id, 'propose', { type: 'batch', title: 'Fixes', item_ids: [], prompt: 'fix it' }));
     expect(reply).toMatch(/^Started session #\d+/);
     expect(s.ctx.store.sessions({ kind: 'work' })[0]).toMatchObject({ started_by: 'bob', worker_id: b.id });
-    // a user-less token cannot make one (it would run as nobody)
+    // the legacy token acts for the install: its schedule is the install owner's
     s.ctx.store.db.setSetting('api_token', 'dsp_legacy_token_value_1234567890');
     const legacyToken = await s.call('POST', '/projects/OW/schedules', { name: 'Token', at_time: '03:00' }, { authorization: 'Bearer dsp_legacy_token_value_1234567890' });
-    expect(legacyToken.status).toBe(400);
+    expect(legacyToken).toMatchObject({ status: 200, data: { owner: 'alice' } });
     // the install owner may remove it
     expect((await s.call('DELETE', `/schedules/${id}`, undefined, as('alice'))).status).toBe(200);
   });

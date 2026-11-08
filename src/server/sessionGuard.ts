@@ -30,6 +30,8 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   'POST /api/sessions/:id/accept-items': { find: bySessionParam, need: 'drive' },
   'POST /api/sessions/:id/apply-update': { find: bySessionParam, need: 'drive' },
   'POST /api/sessions/:id/dismiss-proposal': { find: bySessionParam, need: 'drive' },
+  // a PR sync may push to the upstream and auto-merge, as the starter
+  'POST /api/sessions/:id/sync-prs': { find: bySessionParam, need: 'drive' },
   'POST /api/sessions/:id/interrupt': { find: bySessionParam, need: 'stop' },
   'POST /api/sessions/:id/finish': { find: bySessionParam, need: 'stop' },
   'POST /api/inputs/:id/answer': { find: byInput, need: 'drive' },
@@ -39,8 +41,6 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   // only moves the caller's read point, but of a chat that is theirs
   'POST /api/assistant/read': { find: (_store, _p, body) => id((body as { session_id?: unknown } | undefined)?.session_id) || undefined, need: 'drive' },
 
-  // a PR sync only asks GitHub for news
-  'POST /api/sessions/:id/sync-prs': null,
   // new work: the handler checks the proposal card it comes from, if any
   'POST /api/projects/:key/batches': null,
   'POST /api/projects/:key/planner': null,

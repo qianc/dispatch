@@ -1,6 +1,7 @@
 // People who use this install (DISP-63). A user row appears the first time someone signs in. The
-// install owner (cfg.installOwner) inherits everything from before users: claim() gives them every
-// row that belongs to nobody, once.
+// install owner inherits everything from before users: claim() gives them every row that belongs to
+// nobody, once. Read the owner here (installOwner), not from the config: in proxy mode without
+// DISPATCH_OWNER or AUTH_USERS the first person signed in through the proxy becomes it (adopt()).
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { now } from './db.ts';
@@ -22,17 +23,29 @@ const OWNER_COLUMNS = [['workers', 'owner'], ['api_tokens', 'user'], ['schedules
 export class Users {
   private db: Db;
   private owner: string;
+  /** the owner is still a placeholder, for the first person signed in through the proxy to take */
+  private adoptable: boolean;
   /** name → when last_seen_at was last written (a write a minute is plenty) */
   private seen = new Map<string, number>();
 
-  constructor(db: Db, cfg: Pick<Config, 'installOwner'>) {
+  constructor(db: Db, cfg: Pick<Config, 'installOwner'> & Partial<Pick<Config, 'adoptOwner'>>) {
     this.db = db;
     this.owner = cfg.installOwner;
+    this.adoptable = !!cfg.adoptOwner;
   }
 
   /** Give rows from before users to the install owner; move them on when the owner gets a real name. */
   claim() {
     const was = this.db.setting('install_owner');
+    if (this.adoptable) {
+      // taken before: that person stays the owner
+      if (was !== undefined && !PLACEHOLDERS.includes(was)) {
+        this.owner = was;
+        this.adoptable = false;
+        return;
+      }
+      console.warn('AUTH_MODE=proxy without DISPATCH_OWNER or AUTH_USERS: the first person to sign in through the proxy becomes the install owner. Set DISPATCH_OWNER to your user name to choose.');
+    }
     if (was === this.owner) return;
     if (was === undefined) {
       this.db.tx(() => {
@@ -52,6 +65,11 @@ export class Users {
       console.warn(`The install owner was "${was}" and is now "${this.owner}": rows stay with "${was}". Set DISPATCH_OWNER=${was} to keep the old owner.`);
       return;
     }
+    this.moveFrom(was);
+  }
+
+  /** Every row of the placeholder owner `was` goes to the install owner, who then is the one on record. */
+  private moveFrom(was: string) {
     this.db.tx(() => {
       for (const [table, col] of OWNER_COLUMNS) this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${col} = ?`, this.owner, was);
       const old = this.db.get<{ default_worker_id: number | null }>('SELECT default_worker_id FROM users WHERE name = ?', was);
@@ -62,6 +80,19 @@ export class Users {
       );
       this.db.setSetting('install_owner', this.owner);
     });
+  }
+
+  /**
+   * Someone signed in through the proxy. While the install owner is still a placeholder (proxy mode
+   * without DISPATCH_OWNER or AUTH_USERS), the first such person becomes it and gets its rows.
+   */
+  adopt(name: string) {
+    if (!this.adoptable || !name || PLACEHOLDERS.includes(name)) return;
+    const was = this.owner;
+    this.owner = name;
+    this.adoptable = false;
+    this.moveFrom(was);
+    console.warn(`${name} is the install owner: the first person to sign in through the proxy. Set DISPATCH_OWNER=${name} to make it explicit.`);
   }
 
   /** A signed-in person was here: their row, and last_seen_at at most once a minute. */

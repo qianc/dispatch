@@ -223,7 +223,7 @@ export class OAuth {
     });
 
     // Settings → Connected apps: your own; the install owner sees and revokes all
-    const mine = (req: FastifyRequest) => (req.principal!.user === this.cfg.installOwner ? undefined : req.principal!.user ?? '');
+    const mine = (req: FastifyRequest) => (req.principal!.user === this.access.installOwner ? undefined : req.principal!.user ?? '');
     app.get('/api/oauth/grants', async (req) => this.grants(mine(req)));
     app.delete('/api/oauth/grants/:id', async (req, reply) => {
       const id = Number((req.params as { id: string }).id);

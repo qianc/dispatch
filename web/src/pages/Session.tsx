@@ -318,7 +318,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {!drive && <p className="text-[13px] text-muted">{readOnlyText(s)}</p>}
           {s.kind === 'work' && (
             <>
-              <Button className="w-full" disabled={syncPrs.isPending} onClick={() => syncPrs.mutate()}>Check for PRs and branches</Button>
+              {drive && <Button className="w-full" disabled={syncPrs.isPending} onClick={() => syncPrs.mutate()}>Check for PRs and branches</Button>}
               {drive && data.repos.filter((r) => !data.prs.some((p) => p.repo_id === r.id)).map((r) => (
                 <Button key={r.id} className="w-full" disabled={createPr.isPending} onClick={() => createPr.mutate(r.id)}>{r.local_path ? `Push branch for review in ${r.github_name}` : `Push branch & open PR in ${r.github_name}`}</Button>
               ))}

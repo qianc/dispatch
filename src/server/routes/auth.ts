@@ -37,7 +37,7 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       authed: !!user,
       user,
       is_owner: users.isOwner(user),
-      install_owner: user ? cfg.installOwner : null,
+      install_owner: user ? users.installOwner : null,
       /** the install owner: the key file Dispatch made for stored GitHub tokens (null: DISPATCH_SECRET_KEY is set) */
       secret_key_file: users.isOwner(user) ? secretKeyFile : null,
       auth_mode: cfg.authMode,
@@ -60,7 +60,7 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       scopes: z.array(z.enum(SCOPES)).min(1).default(['tracker']),
       expires_days: z.number().int().min(1).max(3650).nullable().default(null),
     }).parse(req.body);
-    if (b.scopes.includes('admin') && !users.isOwner(user)) throw new HttpError(400, `Only the install owner (${cfg.installOwner}) can make a token with the admin scope.`);
+    if (b.scopes.includes('admin') && !users.isOwner(user)) throw new HttpError(400, `Only the install owner (${users.installOwner}) can make a token with the admin scope.`);
     const scopes = [...new Set(b.scopes.includes('tracker') ? [...b.scopes, 'read' as const] : b.scopes)];
     const expires = b.expires_days ? new Date(Date.now() + b.expires_days * 86_400_000).toISOString() : null;
     return access.createToken(b.name, scopes, expires, user);
@@ -69,7 +69,7 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
     const id = (req.params as { id: string }).id;
     const user = mine(req);
     if (id === 'legacy') {
-      if (user !== undefined) throw new HttpError(403, `Only the install owner (${cfg.installOwner}) can retire the legacy token.`);
+      if (user !== undefined) throw new HttpError(403, `Only the install owner (${users.installOwner}) can retire the legacy token.`);
       access.retireLegacyToken();
     } else {
       if (!access.tokens(user).some((t) => t.id === Number(id))) throw new HttpError(404, 'Token not found');

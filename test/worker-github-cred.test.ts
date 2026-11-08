@@ -80,6 +80,46 @@ describe("the worker's link to a server (DISP-63)", () => {
   });
 });
 
+describe("the worker's GitHub credential per command (DISP-63)", () => {
+  const link = () => {
+    const entry = { name: 'default', url: 'ws://127.0.0.1:1/worker', token: 'dsw_x', local_repo_dirs: ['/tmp'], read_dirs: [], claude_accounts: null, github_accounts: [], releases: [], repo_env_dir: '/nonexistent' };
+    const l = new ServerLink(entry, {
+      fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), first: true, slots: new Slots(2),
+      claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com', secrets: new Secrets(),
+    });
+    const used: { what: string; cred: unknown }[] = [];
+    const sent: WorkerToServer[] = [];
+    const x = l as unknown as { workspaces: unknown; creds: Map<number, GithubCred>; ws: unknown; onMessage: (m: unknown) => Promise<void>; command: (c: unknown) => Promise<unknown> };
+    x.workspaces = {
+      pushBranch: async (_r: unknown, _id: unknown, _b: unknown, cred: unknown) => void used.push({ what: 'push', cred }),
+      deploy: async (_r: unknown, cred: unknown) => {
+        used.push({ what: 'deploy', cred });
+        return { ok: true, sha: 'abc', output: `deployed with ${(cred as GithubCred | null)?.token ?? 'env'}`, duration_ms: 1 };
+      },
+    };
+    x.ws = { readyState: WebSocket.OPEN, send: (d: string) => sent.push(JSON.parse(d)) };
+    return { x, used, sent };
+  };
+  const repo = { id: 1, project_id: 1, github_owner: 'me', github_name: 'r', default_branch: 'main', local_path: '/tmp/r', deploy_command: './deploy.sh' } as never;
+
+  it('push_branch: github null (the env accounts) is not replaced by the session credential; no github key falls back to it', async () => {
+    const { x, used } = link();
+    x.creds.set(7, BOB);
+    await x.command({ c: 'push_branch', repo, session_id: 7, branch: 'b', github: null });
+    await x.command({ c: 'push_branch', repo, session_id: 7, branch: 'b' });
+    expect(used).toEqual([{ what: 'push', cred: null }, { what: 'push', cred: BOB }]);
+  });
+
+  it("deploy: uses the credential the server sends, even after the session closed, and scrubs its token", async () => {
+    const { x, used, sent } = link();
+    await x.onMessage({ t: 'deploy', session_id: 7, repo, github: BOB });
+    await x.onMessage({ t: 'deploy', session_id: 8, repo, github: null });
+    expect(used).toEqual([{ what: 'deploy', cred: BOB }, { what: 'deploy', cred: null }]);
+    expect(JSON.stringify(sent)).not.toContain(BOB_TOKEN);
+    expect(sent[0]).toMatchObject({ t: 'deploy_result', output: 'deployed with [redacted]' });
+  });
+});
+
 describe("a real worker running bob's session (DISP-63)", () => {
   let s: Awaited<ReturnType<typeof startMultiUser>>;
   let worker: ChildProcess | null = null;

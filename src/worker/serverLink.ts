@@ -396,7 +396,8 @@ export class ServerLink {
       case 'tidy':
         return ws.tidy(cmd.session_id, cmd.repos, cmd.branch, { deleteMerged: cmd.delete_merged, force: cmd.force, mergedHint: cmd.merged_repo_ids });
       case 'push_branch':
-        await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch, cmd.github ?? this.creds.get(cmd.session_id));
+        // github null: the server chose the env accounts on purpose; absent (an older server): the session's
+        await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch, 'github' in cmd ? cmd.github : this.creds.get(cmd.session_id));
         return { ok: true };
       case 'merge_local':
         return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github);
@@ -438,6 +439,7 @@ export class ServerLink {
   private async onMessage(msg: ServerToWorker) {
     // a user's token that comes with a command is a secret from now on (DISP-63)
     if (msg.t === 'cmd' && 'github' in msg.cmd) this.secrets.add(msg.cmd.github?.token);
+    if (msg.t === 'deploy') this.secrets.add(msg.github?.token);
     if ((msg.t === 'start' || msg.t === 'send') && msg.spec.github) this.secrets.add(msg.spec.github.token);
     switch (msg.t) {
       case 'start':
@@ -475,7 +477,7 @@ export class ServerLink {
         }
         return;
       case 'deploy':
-        return this.deploy(msg.session_id, msg.repo);
+        return this.deploy(msg.session_id, msg.repo, 'github' in msg ? msg.github ?? null : this.creds.get(msg.session_id));
     }
   }
 
@@ -483,7 +485,7 @@ export class ServerLink {
   private deploys = new Map<number, Promise<void>>();
 
   /** Run a repo's deploy command and report the result, also after a reconnect (DISP-37). */
-  private deploy(sessionId: number, repo: Repo) {
+  private deploy(sessionId: number, repo: Repo, cred: GithubCred | null | undefined) {
     const result = (r: { ok: boolean; sha: string | null; output: string; duration_ms: number }) =>
       this.send({ t: 'deploy_result', session_id: sessionId, repo_id: repo.id, ...r });
     const go = async () => {
@@ -492,7 +494,7 @@ export class ServerLink {
       }
       // the fake runner pushes nothing to GitHub, so only a local repo has a merge to deploy
       if (!repo.deploy_command || (this.shared.fake && !repo.local_path)) return;
-      result(await this.workspaces.deploy(repo, this.creds.get(sessionId)).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
+      result(await this.workspaces.deploy(repo, cred).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
     };
     const next = (this.deploys.get(repo.id) ?? Promise.resolve()).then(go);
     this.deploys.set(repo.id, next);

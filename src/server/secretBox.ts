@@ -80,19 +80,19 @@ export class SecretBox {
 const CHECK = 'dispatch';
 
 /**
- * Is this the key the database's secrets were sealed with? A check value in the settings tells.
- * false: the key changed (the old secrets cannot be read); the check is sealed again with this key.
+ * Is this the key the database's secrets were first sealed with? A check value in the settings tells
+ * (sealed on the first start only). false: another key; secrets sealed with the first one cannot be
+ * read with it, but nothing is changed, so starting again with the first key reads them again.
  */
 export function keyMatches(db: Db, box: SecretBox): boolean {
   const check = db.setting('secret_key_check');
-  let ok = true;
-  if (check) {
-    try {
-      ok = box.open(check, 'check') === CHECK;
-    } catch {
-      ok = false;
-    }
+  if (!check) {
+    db.setSetting('secret_key_check', box.seal(CHECK, 'check'));
+    return true;
   }
-  if (!check || !ok) db.setSetting('secret_key_check', box.seal(CHECK, 'check'));
-  return ok;
+  try {
+    return box.open(check, 'check') === CHECK;
+  } catch {
+    return false;
+  }
 }

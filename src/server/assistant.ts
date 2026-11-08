@@ -6,10 +6,12 @@ import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_K
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Sessions } from './sessions.ts';
+import type { Users } from './users.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import { addLocalRepo, looksLikePath, mergeNote } from './repos.ts';
 import { assertWritable } from './projectLock.ts';
+import { isRefusal } from './identity.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
 export function parseRepo(input: string): { owner: string; name: string } {
@@ -37,15 +39,15 @@ export class AssistantTools {
   private github: GitHub;
   private sessions: Sessions;
   private hub: WorkerHub;
-  /** only their assistant chats create and change projects (DISP-63) */
-  private installOwner: string;
+  /** only the install owner's assistant chats create and change projects (DISP-63) */
+  private users: Pick<Users, 'installOwner'>;
   /** A project's own instructions (its CLAUDE.md, AGENTS.md); set by the app. */
   rules: (p: Project) => Promise<string> = async () => '';
   /** "session:project" pairs whose instructions the assistant has been shown. */
   private rulesShown = new Set<string>();
 
-  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub, installOwner: string) {
-    this.installOwner = installOwner;
+  constructor(store: Store, bus: Bus, github: GitHub, sessions: Sessions, hub: WorkerHub, users: Pick<Users, 'installOwner'>) {
+    this.users = users;
     this.hub = hub;
     this.store = store;
     this.bus = bus;
@@ -110,9 +112,15 @@ export class AssistantTools {
     ].join('\n'));
   }
 
-  async inspectRepo(input: string, account: string | null = null) {
+  /**
+   * The repo as GitHub sees it, asked as the chat's starter (DISP-63): their own token, or the env
+   * accounts for the install owner and a chat with no user. Someone not connected gets told why.
+   */
+  async inspectRepo(s: Session, input: string, project: Project | null = null) {
     const { owner, name } = parseRepo(input);
-    const client = this.github.clientFor({ github_account: account });
+    const id = this.sessions.identity?.(s.started_by, project) ?? null;
+    if (id && isRefusal(id)) return { owner, name, verified: false, note: `Could not check the repo on GitHub: ${id.message}` };
+    const client = id?.source === 'user' ? this.github.clientForToken(id.token) : this.github.clientFor({ github_account: project?.github_account ?? null });
     if (!client) return { owner, name, verified: false, note: 'No GitHub token: could not check the repo. Assume branch "main" unless the user says otherwise.' };
     try {
       const { data } = await client.repos.get({ owner, repo: name });
@@ -136,12 +144,13 @@ export class AssistantTools {
 
   async call(s: Session, method: string, p: Record<string, unknown>): Promise<unknown> {
     // projects are the install owner's to change (as over HTTP); a chat no user started acts for the install, like the legacy token
-    if (PROJECT_TOOLS.includes(method) && s.started_by !== null && s.started_by !== this.installOwner) {
-      throw new Error(`Only the install owner (${this.installOwner}) can create or change projects. Tell the user to ask them.`);
+    const owner = this.users.installOwner;
+    if (PROJECT_TOOLS.includes(method) && s.started_by !== null && s.started_by !== owner) {
+      throw new Error(`Only the install owner (${owner}) can create or change projects. Tell the user to ask them.`);
     }
     switch (method) {
       case 'inspect_github_repo':
-        return this.inspectRepo(String(p.repo ?? ''), p.project_key ? this.project(p.project_key).github_account : null);
+        return this.inspectRepo(s, String(p.repo ?? ''), p.project_key ? this.project(p.project_key) : null);
 
       case 'list_projects':
         return this.store.projects().map((x) => ({ ...this.projectSummary(x), ...this.store.facets(x.id) }));
@@ -161,7 +170,7 @@ export class AssistantTools {
         const project = this.store.createProject({ ...input, key });
         this.bus.emit({ t: 'project', key: project.key });
         const added = [];
-        for (const r of input.repos) added.push(await this.addRepo(project, r, undefined, null));
+        for (const r of input.repos) added.push(await this.addRepo(s, project, r, undefined, null));
         return { ...this.projectSummary(project), added_repos: added };
       }
 
@@ -180,7 +189,7 @@ export class AssistantTools {
       }
 
       case 'add_repo':
-        return this.addRepo(this.writable(p.project_key), String(p.repo ?? ''), p.default_branch ? String(p.default_branch) : undefined, p.check_command ? String(p.check_command) : null);
+        return this.addRepo(s, this.writable(p.project_key), String(p.repo ?? ''), p.default_branch ? String(p.default_branch) : undefined, p.check_command ? String(p.check_command) : null);
 
       case 'remove_repo': {
         const project = this.writable(p.project_key);
@@ -321,14 +330,14 @@ export class AssistantTools {
     }
   }
 
-  private async addRepo(project: Project, input: string, branch: string | undefined, check: string | null) {
+  private async addRepo(s: Session, project: Project, input: string, branch: string | undefined, check: string | null) {
     if (looksLikePath(input)) {
       const { repo, info, already } = await addLocalRepo(this.store, this.hub, project, input, { default_branch: branch, check_command: check });
       this.bus.emit({ t: 'project', key: project.key });
       if (already) return `${info.path} is already in ${project.key}`;
       return { repo: `local: ${repo.local_path}`, default_branch: repo.default_branch, note: mergeNote(info) ?? undefined };
     }
-    const info = await this.inspectRepo(input, project.github_account);
+    const info = await this.inspectRepo(s, input, project);
     const default_branch = branch ?? ('default_branch' in info && info.default_branch ? info.default_branch : 'main');
     const exists = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === info.owner.toLowerCase() && r.github_name.toLowerCase() === info.name.toLowerCase());
     if (exists) return `${info.owner}/${info.name} is already in ${project.key}`;

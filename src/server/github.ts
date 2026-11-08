@@ -705,7 +705,8 @@ export class GitHub {
     const s = this.store.session(pr.session_id);
     if (!repo?.deploy_command || !s) return;
     const name = pr.repo_full_name.split('/').pop();
-    if (this.hub.send(s.worker_id, { t: 'deploy', session_id: s.id, repo })) {
+    // as the starter (their credential: the worker forgets it when the session closes)
+    if (this.hub.send(s.worker_id, { t: 'deploy', session_id: s.id, repo, github: this.credOf(s) })) {
       this.store.addEvent(s.id, { kind: 'system', text: `Deploying ${name}: ${repo.deploy_command}` });
       return;
     }

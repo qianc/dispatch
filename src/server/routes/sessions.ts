@@ -11,7 +11,7 @@ import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 /** A chat message: text, images pasted into it (POST /api/chat-images first, DISP-34), or both. */
 const message = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
   .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.');
-export function sessionRoutes(app: FastifyInstance, { cfg, store, sessions, hub, workers, users, github, bus, janitor }: Ctx) {
+export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, users, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -24,13 +24,13 @@ export function sessionRoutes(app: FastifyInstance, { cfg, store, sessions, hub,
   };
   /** who is asking (every /api route but the public ones has one) */
   const who = (req: FastifyRequest): Principal => req.principal!;
-  const drives = (req: FastifyRequest) => (s: Session | undefined) => !!s && canDrive(who(req), s, cfg.installOwner);
+  const drives = (req: FastifyRequest) => (s: Session | undefined) => !!s && canDrive(who(req), s, users.installOwner);
   /** the install owner (or the legacy token, which acts for the install) */
   const ownsInstall = (req: FastifyRequest) => !!who(req).legacy || users.isOwner(who(req).user);
   /** a proposal card is acted on by whoever may drive the chat it is in */
   const fromProposal = (req: FastifyRequest, ref: { session_id: number } | undefined) => {
     const from = ref && store.session(ref.session_id);
-    if (from) assertCanDrive(who(req), from, cfg.installOwner);
+    if (from) assertCanDrive(who(req), from, users.installOwner);
   };
 
   /** Everything waiting on you, across projects: only sessions you can act on (DISP-63). */
@@ -75,7 +75,7 @@ export function sessionRoutes(app: FastifyInstance, { cfg, store, sessions, hub,
 
   /** Your workers (the install owner: all), and whether any is connected. */
   app.get('/api/worker', async (req) => {
-    const list = workers.list(users.manages(who(req).user ?? cfg.installOwner));
+    const list = workers.list(users.manages(who(req).user ?? users.installOwner));
     return {
       connected: list.some((w) => hub.isConnected(w.id)),
       workers: list.map((w) => ({ id: w.id, name: w.name, connected: hub.isConnected(w.id) })),
@@ -146,7 +146,7 @@ export function sessionRoutes(app: FastifyInstance, { cfg, store, sessions, hub,
       project: s.project_id ? store.project(s.project_id) : null,
       checks: github.checks.of(s.id),
       // what the caller may do with it (DISP-63)
-      access: { drive: canDrive(who(req), s, cfg.installOwner), stop: canStop(who(req), s, cfg.installOwner) },
+      access: { drive: canDrive(who(req), s, users.installOwner), stop: canStop(who(req), s, users.installOwner) },
     };
   });
 
@@ -195,7 +195,7 @@ export function sessionRoutes(app: FastifyInstance, { cfg, store, sessions, hub,
 
   /** Leftovers of finished sessions (worktrees, merged branches): check now, or clean them up. */
   const assertOwnsInstall = (req: FastifyRequest) => {
-    if (!ownsInstall(req)) throw new HttpError(403, `Only the install owner (${cfg.installOwner}) can clean up.`);
+    if (!ownsInstall(req)) throw new HttpError(403, `Only the install owner (${users.installOwner}) can clean up.`);
   };
   app.post('/api/cleanup/check', async (req) => {
     assertOwnsInstall(req);

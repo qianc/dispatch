@@ -146,7 +146,7 @@ describe('your own GitHub connection', () => {
   });
 
   it('OAuth start only goes back into Dispatch', async () => {
-    for (const to of ['//evil.example.com', 'https://evil.example.com', '/\\evil.example.com']) {
+    for (const to of ['//evil.example.com', 'https://evil.example.com', '/\\evil.example.com', '/\t/evil.example.com', '/\n/evil.example.com']) {
       const state = stateOf(String((await start('bob', to)).headers.location));
       const r = await callback('bob', { code: 'good-code', state }, state);
       expect(r.headers.location).toBe('/settings?github=connected');

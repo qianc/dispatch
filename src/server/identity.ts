@@ -42,6 +42,24 @@ export function needsGithub(store: Pick<Store, 'repos'>, project: Pick<Project, 
   return store.repos(project.id).some((r) => (r.kind ?? (r.local_path ? 'local' : 'github')) === 'github' || (r.kind === 'hosted' && !!r.upstream_owner && !!r.upstream_name));
 }
 
+const BASE = 'http://x.invalid';
+
+/**
+ * `to` when it is a path in Dispatch, else null. Not "//host", "/\host" or "/<tab>/host": browsers
+ * read those as another site (they drop tabs and newlines, and take "\" for "/"), so any whitespace
+ * or control character is refused and the path must resolve on Dispatch's own origin.
+ */
+export function safePath(to: string | undefined | null): string | null {
+  if (!to || !to.startsWith('/') || /[\s\x00-\x1f\x7f]/.test(to)) return null;
+  let u: URL;
+  try {
+    u = new URL(to, BASE);
+  } catch {
+    return null;
+  }
+  return u.origin === BASE ? u.pathname + u.search + u.hash : null;
+}
+
 /** Where to connect GitHub: the OAuth sign-in (back to `to`), else Settings. */
 export function connectUrl(oauth: boolean, to: string) {
   return oauth ? `/api/github/oauth/start?to=${encodeURIComponent(to)}` : '/settings#your-github';
@@ -53,8 +71,9 @@ export function resolveGithubIdentity(deps: IdentityDeps, who: { started_by: str
   const user = who.started_by;
   if (user === null) {
     if (deps.envAccounts.length || (workerId !== undefined && deps.workerAccounts(workerId).length)) return { source: 'shared', account };
+    // nobody's own connection helps: the install owner sets up a shared account
     return {
-      refused: true, code: 'github_shared_missing', user: null, connect_url: link,
+      refused: true, code: 'github_shared_missing', user: null, connect_url: '/settings',
       message: 'This session has no user, and the server has no shared GitHub account (GITHUB_TOKEN or GITHUB_ACCOUNTS).',
     };
   }

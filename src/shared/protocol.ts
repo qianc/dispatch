@@ -68,8 +68,10 @@ export type ServerToWorker =
   /**
    * run the repo's deploy command on its merged default branch (DISP-37). No reply: a deploy often
    * restarts the server, so the result comes as `deploy_result`, kept until the server is back.
+   * `github`: the starter's credential (DISP-63; the session may be closed by now), null: the
+   * worker's env accounts; absent (an older server): the session's, while it lives.
    */
-  | { t: 'deploy'; session_id: number; repo: Repo };
+  | { t: 'deploy'; session_id: number; repo: Repo; github?: GithubCred | null };
 
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }
