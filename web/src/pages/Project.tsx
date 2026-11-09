@@ -69,7 +69,6 @@ export function Project() {
   });
   const qc = useQueryClient();
   const toggle = useMutation(toggleMarked(qc));
-  const lock = useProjectLock(key);
   if (!project) return <Page title={key} back="/projects"><Empty>Loading…</Empty></Page>;
 
   const marked = items.filter((i) => i.marked);
@@ -91,11 +90,11 @@ export function Project() {
       title={project.name}
       subtitle={<span style={{ color: lookColor(project) }} className="font-semibold">{project.key}</span>}
       back="/projects"
+      // locking is deliberate (DISP-76): only in Settings; the header only shows that it is locked
       actions={project.disabled ? (
-        <Button small variant="ghost" onClick={() => lock.mutate(false)} disabled={lock.isPending}><Icon name="lock" size={16} /> Enable</Button>
+        <span role="status" aria-label="Project locked" title="Locked: read-only, schedules paused" className="flex items-center gap-1 px-2 text-[13px] font-medium text-wait"><Icon name="lock" size={16} /> Locked</span>
       ) : (
         <>
-          <button onClick={() => lock.mutate(true)} disabled={lock.isPending} aria-label="Disable project (read-only)" title="Disable: read-only, schedules paused" className="size-10 flex items-center justify-center rounded-lg text-muted hover:text-fg active:bg-raised"><Icon name="lock" size={18} /></button>
           {releases.length > 0 && <Button small variant="ghost" onClick={() => setSheet('release')} aria-label="Create release">Release</Button>}
           <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude"><Icon name="discuss" size={16} /> Plan</Button>
           {listTab && (wide ? (
@@ -113,7 +112,7 @@ export function Project() {
         </div>
       ) : undefined}
     >
-      {project.disabled && <DisabledBanner project={project} onEnable={() => lock.mutate(false)} pending={lock.isPending} error={lock.error} />}
+      {project.disabled && <DisabledBanner project={project} />}
       {!project.disabled && <GithubConnectBanner projectKey={project.key} />}
       <div className="px-3 pt-3 overflow-x-auto">
         <Segmented<Tab>
@@ -720,19 +719,17 @@ function useProjectLock(key: string) {
 
 const disabledLine = (p: ProjectSummary) => `Disabled${p.disabled_by ? ` by ${p.disabled_by}` : ''}${p.disabled_at ? `, ${messageTime(p.disabled_at)}` : ''}.`;
 
-/** At the top of a disabled project: what it means, who did it, and the way back. */
-function DisabledBanner({ project, onEnable, pending, error }: { project: ProjectSummary; onEnable: () => void; pending: boolean; error: unknown }) {
+/** At the top of a disabled project: what it means, who did it, and where to unlock it (DISP-76). */
+function DisabledBanner({ project }: { project: ProjectSummary }) {
   return (
     <div className="mx-3 mt-3 rounded-xl border border-wait/40 bg-wait/10 px-3 py-2.5" role="status">
       <div className="flex items-center gap-2">
         <Icon name="lock" size={16} className="shrink-0 text-wait" />
         <div className="flex-1 min-w-0">
           <div className="text-[14px] font-medium">Read-only</div>
-          <div className="text-[12px] text-muted">{disabledLine(project)} Nothing changes, schedules are paused and queued sessions wait until you enable it.</div>
+          <div className="text-[12px] text-muted">{disabledLine(project)} Nothing changes, schedules are paused and queued sessions wait until it is unlocked. To unlock it, set its state to Active in <Link to={`/p/${project.key}?tab=settings`} className="text-accent underline underline-offset-2">Settings</Link>.</div>
         </div>
-        <Button small variant="primary" onClick={onEnable} disabled={pending}>Enable</Button>
       </div>
-      <ErrorText error={error} />
     </div>
   );
 }

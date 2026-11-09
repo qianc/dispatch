@@ -430,6 +430,33 @@ test('projects get a colour and an icon, shown in the list', async ({ page }) =>
   await expect(row.getByText('LOOK', { exact: true })).toHaveCSS('color', 'rgb(20, 184, 166)');
 });
 
+test('a project locks and unlocks in Settings; the header only shows that it is locked (DISP-76)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'LCK', name: 'Locking' } });
+  await page.goto('/p/LCK');
+  await expect(page.getByRole('button', { name: 'Plan with Claude' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Disable project|lock/i })).toHaveCount(0);
+  await expect(page.getByLabel('Project locked')).toHaveCount(0);
+  // lock in Settings
+  await page.goto('/p/LCK?tab=settings');
+  await page.getByRole('radio', { name: 'Disabled (read-only)' }).click();
+  await expect(page.getByRole('radio', { name: 'Disabled (read-only)' })).toHaveAttribute('aria-checked', 'true');
+  expect(await (await page.request.get('/api/projects/LCK')).json()).toMatchObject({ disabled: true });
+  const locked = page.getByRole('status', { name: 'Project locked' });
+  await expect(locked).toHaveText('Locked');
+  await expect(page.getByRole('button', { name: /Enable/ })).toHaveCount(0);
+  await expect(page.getByText(/To unlock it, set its state to Active in/)).toBeVisible();
+  // the banner's link leads back to Settings, where it unlocks
+  await page.goto('/p/LCK');
+  await page.getByRole('status').filter({ hasText: 'Read-only' }).getByRole('link', { name: 'Settings' }).click();
+  await expect(page).toHaveURL(/\/p\/LCK\?tab=settings$/);
+  await page.getByRole('radio', { name: 'Active' }).click();
+  await expect(locked).toHaveCount(0);
+  expect(await (await page.request.get('/api/projects/LCK')).json()).toMatchObject({ disabled: false });
+  await expect(page.getByRole('button', { name: 'Plan with Claude' })).toBeVisible();
+});
+
 test('Discuss suggests a change to the item, and nothing changes until Apply', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'SUG', name: 'Suggestions' } });
