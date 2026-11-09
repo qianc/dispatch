@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { api, type Me, type MyGithub } from '../api.ts';
 import { useAccounts } from '../accounts.ts';
 import { Page } from '../components/Layout.tsx';
@@ -308,6 +309,9 @@ function WorkersSection({ me }: { me: Me | undefined }) {
   const mine = (w: WorkerRow) => !me?.user || w.owner === me.user;
   return (
     <Section title="Workers">
+      <p className="px-4 mb-2 text-[13px] text-muted">
+        New machine? <Link to="/settings/worker-setup" className="text-accent font-medium underline underline-offset-2">Set up a new worker</Link>: the steps, and a prompt for an LLM on that machine that walks you through them.
+      </p>
       <Card>
         {workers.map((w) => (
           <div key={w.id} className="px-3 py-2.5 border-b border-line last:border-b-0">

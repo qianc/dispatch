@@ -20,6 +20,7 @@ import { SessionView } from './pages/Session.tsx';
 import { SourceView } from './pages/Source.tsx';
 import { PrView } from './pages/Pr.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { WorkerSetup } from './pages/WorkerSetup.tsx';
 import { Assistant } from './pages/Assistant.tsx';
 import { Discuss } from './pages/Discuss.tsx';
 import { FileView } from './pages/FileView.tsx';
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
       { path: '/sources/:id', element: <SourceView /> },
       { path: '/pr/:id', element: <PrView /> },
       { path: '/settings', element: <Settings /> },
+      { path: '/settings/worker-setup', element: <WorkerSetup /> },
       { path: '/assistant', element: <Assistant /> },
       { path: '/items/:id/discuss', element: <Discuss /> },
       { path: '/files/:key', element: <FileView /> },
