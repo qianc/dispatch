@@ -72,13 +72,13 @@ describe('attach_image from a file in the session checkout (DISP-74)', () => {
         calls.push(p);
         return { attached: 1, item: 'PI-1', name: 'collab-17-account-dev.png' };
       }, cwd);
-      const done = await t.handler({ key: 'PI-1', path: SHOT }, {});
+      const done = await t.handler({ key: 'PI-1', path: SHOT } as never, {});
       expect(done.isError).toBeUndefined();
       expect(calls).toEqual([{ key: 'PI-1', path: SHOT, data: PNG.toString('base64') }]);
-      const refused = await t.handler({ key: 'PI-1', path: 'link.png' }, {});
+      const refused = await t.handler({ key: 'PI-1', path: 'link.png' } as never, {});
       expect(refused).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/outside the session checkout/) }] });
       // a pasted image still goes as before
-      await t.handler({ key: 'PI-1', image: 'x.png' }, {});
+      await t.handler({ key: 'PI-1', image: 'x.png' } as never, {});
       expect(calls).toHaveLength(2);
       expect(calls[1]).toEqual({ key: 'PI-1', image: 'x.png' });
     });
