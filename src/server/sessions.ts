@@ -24,7 +24,7 @@ import {
   type SessionStatus,
 } from '../shared/types.ts';
 import { z } from 'zod';
-import { CHAT_IMAGE_FILE, chatImageType, withImageMarkers } from '../shared/chatImages.ts';
+import { CHAT_IMAGE_FILE, MAX_IMAGE_BYTES, chatImageType, sniffImage, withImageMarkers } from '../shared/chatImages.ts';
 import { scrub } from '../shared/scrub.ts';
 import { searchTerms, snippetOf } from '../shared/search.ts';
 import type { Attachments } from './attachments.ts';
@@ -131,6 +131,15 @@ export const NO_WORKER = 'You have no worker yet. Add one in Settings → Worker
 const CROSS_SEARCH_MAX = 20;
 /** The agents' `dispatch` tools that change their project: refused while it is disabled (DISP-59). */
 const RPC_WRITES = ['attach_image', 'add_comment', 'add_to_batch', 'create_item', 'release_items', 'update_item', 'propose'];
+
+/** An image file the worker read from the session checkout (DISP-74): checked again here, as for a paste. */
+function checkoutImageData(path: string, data: unknown): { data: Buffer } {
+  if (!path || typeof data !== 'string') throw new Error('Give the path of an image file in the session checkout.');
+  const buf = Buffer.from(data, 'base64');
+  if (buf.length > MAX_IMAGE_BYTES) throw new Error(`${path} is too large: the limit is ${MAX_IMAGE_BYTES / (1024 * 1024)} MB. Save a smaller image and attach that.`);
+  if (!sniffImage(buf)) throw new Error(`${path} is not an image: only PNG, JPEG, GIF and WebP files can be attached.`);
+  return { data: buf };
+}
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -1096,23 +1105,29 @@ export class Sessions {
   }
 
   /**
-   * Put an image the owner pasted into this chat on an item (DISP-34). A work or planning session
-   * reaches the items of its project; the assistant those of any project.
+   * Put an image the owner pasted into this chat on an item (DISP-34), or an image file from the
+   * session checkout (DISP-74: the worker checked the path and sends the bytes; the type and size
+   * are checked again here). A work or planning session reaches the items of its project; the
+   * assistant those of any project.
    */
   private async attachChatImage(s: Session, p: Record<string, unknown>) {
     if (s.kind === 'discuss' || s.kind === 'release') throw new Error(`A ${s.kind === 'discuss' ? 'discussion' : 'release session'} cannot attach images.`);
-    const file = String(p.image ?? '').replace(/^\[pasted image (.*)\]$/, '$1').trim();
-    const img = CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
+    const path = p.path === undefined ? null : String(p.path).trim();
+    const file = path ?? String(p.image ?? '').replace(/^\[pasted image (.*)\]$/, '$1').trim();
+    const img = path !== null ? checkoutImageData(path, p.data) : CHAT_IMAGE_FILE.test(file) ? await this.attachments?.read(s.id, file) : null;
     if (!img) throw new Error(`No pasted image ${file} in this chat. Use the name from its "[pasted image …]" marker.`);
     const item = this.itemByKey(p.key, s.kind === 'assistant' ? null : this.store.project(s.project_id!)!);
     assertWritable(this.store, item.project_id);
     const commentId = p.comment_id ? Number(p.comment_id) : null;
     if (commentId !== null && !this.store.comments(item.id).some((c) => c.id === commentId)) throw new Error(`Comment ${commentId} is not on ${item.key}`);
     const saved = this.attachments!.saveItemImage(item.id, img.data)!;
-    const name = String(p.name ?? '').replace(/[/\\\0]/g, '').trim().slice(0, 120) || `pasted.${file.split('.').pop()}`;
+    const fallback = path !== null ? path.split('/').pop()! : `pasted.${file.split('.').pop()}`;
+    const name = String(p.name ?? '').replace(/[/\\\0]/g, '').trim().slice(0, 120) || fallback.replace(/[\\\0]/g, '').slice(0, 120);
     const { file: _f, ...added } = this.store.addItemImage({ item_id: item.id, comment_id: commentId, name, file: saved.file, mime: saved.mime, size: img.data.length, author: 'claude' });
+    // the item's activity says where a file came from, so the owner can find it (DISP-74)
+    if (path !== null) this.store.addComment(item.id, 'claude', `Attached the image \`${name}\` from the file \`${path}\` in the session checkout.`, s.id);
     this.bus.emit({ t: 'item', item: this.store.item(item.id)! });
-    this.addEvent(s.id, { kind: 'system', text: `Attached a pasted image to ${item.key}.` });
+    this.addEvent(s.id, { kind: 'system', text: path !== null ? `Attached ${path} from the checkout to ${item.key}.` : `Attached a pasted image to ${item.key}.` });
     return { attached: added.id, item: item.key, name };
   }
 

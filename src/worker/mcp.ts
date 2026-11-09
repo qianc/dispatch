@@ -1,9 +1,10 @@
 // The in-process `dispatch` MCP server: tracker tools for the agent, backed by server RPC.
 import { createSdkMcpServer, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile as readBytes, readdir, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { MAX_IMAGE_BYTES, sniffImage } from '../shared/chatImages.ts';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
 import { crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
@@ -31,14 +32,59 @@ const viewImage = (rpc: Rpc) =>
     }
   });
 
-/** Images the owner pasted into this chat (DISP-34) go onto an item: one the agent created or changes. */
-const attachImage = (rpc: Rpc) =>
-  tool('attach_image', 'Attach an image the owner pasted into this chat to an item, e.g. a screenshot for a bug you filed or an item you changed. Name the image by the file in its "[pasted image <file>]" marker. Attach only when the owner asks, or when the image documents the item.', {
+const inside = (root: string, path: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+const MAX_MB = MAX_IMAGE_BYTES / (1024 * 1024);
+
+/**
+ * An image file in the session's checkout, read for attach_image (DISP-74). Only a file inside
+ * the checkout (also after following symlinks), a PNG, JPEG, GIF or WebP by its content, and no
+ * larger than a pasted image. Each refusal says which rule failed and what to do.
+ */
+export async function checkoutImage(cwd: string, path: string): Promise<{ path: string; data: Buffer; mime: string }> {
+  const root = await realpath(cwd);
+  const asked = resolve(root, path);
+  const rel = relative(root, asked);
+  if (!path.trim() || !inside(root, asked) || isAbsolute(rel)) throw new Error(`${path} is outside the session checkout. Save the image inside the checkout and give its path from the checkout root, e.g. screenshots/shot.png.`);
+  let real: string;
+  try {
+    real = await realpath(asked);
+  } catch {
+    throw new Error(`File not found: ${rel} is not in the session checkout. Check the path; give it from the checkout root, e.g. screenshots/shot.png.`);
+  }
+  if (!inside(root, real)) throw new Error(`${rel} is a symlink to a file outside the session checkout. Copy the image into the checkout and attach the copy.`);
+  const st = await stat(real);
+  if (!st.isFile()) throw new Error(`File not found: ${rel} is not a file. Give the path of the image file.`);
+  if (st.size > MAX_IMAGE_BYTES) throw new Error(`${rel} is too large: ${(st.size / (1024 * 1024)).toFixed(1)} MB, and the limit is ${MAX_MB} MB. Save a smaller image (lower resolution, or JPEG/WebP) and attach that.`);
+  const data = await readBytes(real);
+  const mime = sniffImage(data);
+  if (!mime) throw new Error(`${rel} is not an image: only PNG, JPEG, GIF and WebP files can be attached. Save it in one of these formats and attach that.`);
+  return { path: rel.split(sep).join('/'), data, mime };
+}
+
+/**
+ * Images go onto an item: one the agent created or changes. Either one the owner pasted into this
+ * chat (DISP-34), or an image file the session made in its checkout (DISP-74), which the worker
+ * reads and checks here and sends to the server.
+ */
+export const attachImage = (rpc: Rpc, cwd?: string) =>
+  tool('attach_image', `Attach an image to an item, e.g. a screenshot for a bug you filed or an item you changed. The image is either one the owner pasted into this chat: give \`image\`, the file in its "[pasted image <file>]" marker; or an image file in your session checkout, e.g. a screenshot, rendered slide or chart you saved: give \`path\`, relative to the checkout root (PNG, JPEG, GIF or WebP, at most ${MAX_MB} MB, inside the checkout). Give one of the two. Attach only when the owner asks, or when the image documents the item.`, {
     key: z.string().describe('Item key, e.g. HC-42'),
-    image: z.string().describe('The file from the marker, e.g. 3f2c…-….png'),
+    image: z.string().optional().describe('A pasted image: the file from its marker, e.g. 3f2c…-….png'),
+    path: z.string().optional().describe('An image file in the session checkout, relative to its root, e.g. .superpowers/screenshots/hc-42.png'),
     name: z.string().optional().describe('File name to show on the item, e.g. "login-error.png"'),
     comment_id: z.number().int().optional().describe('Put it on this comment of the item (id from add_comment or get_item)'),
-  }, call(rpc, 'attach_image'));
+  }, async (p) => {
+    if (!p.path) return call(rpc, 'attach_image')(p);
+    try {
+      if (p.image) throw new Error('Give either image (a pasted image) or path (a file in the checkout), not both.');
+      if (!cwd) throw new Error('This session has no checkout to attach a file from. Attach a pasted image with image instead.');
+      const img = await checkoutImage(cwd, p.path);
+      const { path: _p, ...rest } = p;
+      return ok(await rpc('attach_image', { ...rest, path: img.path, data: img.data.toString('base64') }));
+    } catch (e) {
+      return fail(e);
+    }
+  });
 
 const itemShape = {
   type: z.enum(['backlog', 'bug']).describe('bug = defect, backlog = improvement or feature'),
@@ -73,7 +119,7 @@ export async function listFolder(dir: string, name?: string): Promise<{ path: st
 
 type ListFolder = (path: string, name?: string) => ReturnType<typeof listFolder>;
 
-const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, list: ListFolder): SdkMcpToolDefinition<any>[] => {
+const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, list: ListFolder, cwd?: string): SdkMcpToolDefinition<any>[] => {
   const label = z.union([z.number(), z.string()]);
   const newItem = z.object({
     type: z.enum(['backlog', 'bug']).default('backlog'),
@@ -126,7 +172,7 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
     tool('get_item', 'Read one item (any project) with its description, comments and image list.', { key: z.string().describe('e.g. HC-42') }, call(rpc, 'get_item')),
     viewImage(rpc),
     tool('add_comment', 'Add a comment (markdown) to an item in any project.', { key: z.string().describe('e.g. HC-42'), body: z.string() }, call(rpc, 'add_comment')),
-    attachImage(rpc),
+    attachImage(rpc, cwd),
     tool('list_items', 'List open items in a project.', {
       project_key: z.string(),
       status: z.array(z.string()).optional(),
@@ -245,11 +291,11 @@ const noFiles = async () => {
 /**
  * `scheduled`: a scheduled planner run (DISP-13), which starts batches and changes items itself.
  * `cross`: planner (not scheduled: nobody is there to approve) and discussion chats get the
- * cross-project tools (DISP-55).
+ * cross-project tools (DISP-55). `cwd`: the session checkout, where attach_image may take files from (DISP-74).
  */
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }) {
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
-  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list) });
+  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
       name: 'dispatch',
@@ -294,7 +340,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       body: z.string(),
     }, call(rpc, 'add_comment')),
   ];
-  if (kind !== 'release') tools.push(attachImage(rpc));
+  if (kind !== 'release') tools.push(attachImage(rpc, cwd));
   if (kind === 'release') {
     tools.push(
       tool('release_items', 'Label these items as released, with the version of this release. Call it only after the release succeeded (the release command exited 0, and the commit and tag are pushed); never after a failure.', {
