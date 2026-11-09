@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import { MAX_IMAGE_BYTES as MAX_BYTES } from '../../shared/chatImages.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
-
-const MAX_BYTES = 15 * 1024 * 1024;
 
 /**
  * Images on items. Upload: POST the raw file (any image/* or application/octet-stream body) to

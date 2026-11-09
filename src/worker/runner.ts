@@ -354,7 +354,7 @@ export class ClaudeRunner implements AgentRunner {
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         // a scheduled run has nobody to answer a question
         disallowedTools: planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }) },
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }, this.deps.cwd) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
