@@ -603,7 +603,8 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
               <div className="flex-1 min-w-0">
                 <div className="truncate">
                   {r.kind === 'hosted' ? <><Chip className="mr-1.5">hosted</Chip>{r.github_name}{r.upstream_owner && <span className="text-muted"> → {r.upstream_owner}/{r.upstream_name}</span>}</>
-                    : r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</> : `${r.github_owner}/${r.github_name}`}
+                    : r.local_path ? <><Chip className="mr-1.5">local</Chip>{r.local_path}</>
+                    : <><span role="img" aria-label="GitHub repo" title="GitHub repo" className="inline-flex align-text-bottom mr-1.5 text-muted"><Icon name="github" size={15} /></span>{r.github_owner}/{r.github_name}</>}
                 </div>
                 <div className="text-[12px] text-muted truncate">
                   base {r.default_branch}
