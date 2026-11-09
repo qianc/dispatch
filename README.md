@@ -158,6 +158,12 @@ optional here: workers get their own tokens.
 (`linux`, `desktop`) and a description the planner reads ("Windows desktop, has PowerPoint, often
 asleep"). Copy the token it shows once (`dsw_…`).
 
+Setting up the machine itself is the longer part. **Settings → Workers → Set up a new worker** has the
+steps below as a page, and a prompt you paste into an LLM (Claude Code, say) on the new machine, which
+then walks you through them: it clones the code, writes the config, checks the Claude and GitHub
+sign-ins and starts the service. The prompt holds the server address, the build and the worker's name
+and description, never a token: you paste that into the config file yourself.
+
 *With Docker* (a Linux VM, a server):
 
 ```bash
