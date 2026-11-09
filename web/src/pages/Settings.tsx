@@ -395,7 +395,7 @@ function AccessSection({ me }: { me: Me | undefined }) {
   const live = tokens.filter((t) => !t.revoked_at && (!t.expires_at || t.expires_at > new Date().toISOString()));
   return (
     <>
-      <Section title="Tokens">
+      <Section title="Tokens" intro="Personal keys for your own scripts and skills, such as a command-line tool that calls Dispatch. You make one here, copy it once, and it is not shown again. Revoke it to stop every script that uses it. Each token has the actions it may take and an optional expiry.">
         <Card>
           {live.map((t) => (
             <div key={t.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
@@ -450,7 +450,7 @@ function AccessSection({ me }: { me: Me | undefined }) {
           )}
         </form>
       </Section>
-      <Section title="Connected apps">
+      <Section title="Connected apps" intro="Apps that sign in to Dispatch as you through a connector, such as Claude's connector for /mcp. Nothing to copy: you approve the app once, from the app. Disconnect to end its access. It stops until you connect it again.">
         <Card>
           {grants.map((g) => (
             <div key={g.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
@@ -507,7 +507,7 @@ function DevicesSection() {
   const approve = useMutation({ mutationFn: () => api.post<DeviceRow>('/devices/approve', { code }), onSuccess: () => { setCode(''); refresh(); } });
   const revoke = useMutation({ mutationFn: (id: number) => api.del(`/devices/${id}`), onSuccess: refresh });
   return (
-    <Section title="Paired devices">
+    <Section title="Paired devices" intro="Phones and home-screen apps you have signed in on with a code shown on the device. Each pairing lasts 90 days, then it must be paired again. Unpair to end the device's access at once.">
       <Card>
         {devices.map((d) => (
           <div key={d.id} className="flex items-center gap-2 px-3 py-2.5 border-b border-line last:border-b-0">
