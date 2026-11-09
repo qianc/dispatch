@@ -13,6 +13,7 @@ import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
+import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -158,6 +159,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     <Page
       aside={chat || peek ? undefined : (
         <div className="px-4 pt-4 space-y-5 text-[13px]">
+          {s.initial_prompt && <SessionPrompt key={s.id} sessionId={s.id} text={s.initial_prompt} />}
           <div>
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">

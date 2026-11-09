@@ -621,6 +621,41 @@ test('desktop menu: a long name is cut short with the full name in its title; no
   await expect(page.getByRole('button', { name: 'Log out' })).toHaveCount(0);
 });
 
+test('session: the prompt in the side panel, collapsed when long, each session its own (DISP-66)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login(page);
+  // earlier tests leave sessions in the menu's Running and Queued lists: stop them so ours are listed
+  for (const old of await (await page.request.get('/api/sessions?status=queued,running,waiting_input,idle')).json()) {
+    await page.request.post(`/api/sessions/${old.id}/finish`, { data: { status: 'stopped' } });
+  }
+  await page.request.post('/api/projects', { data: { key: 'PRM', name: 'Prompts' } });
+  await page.request.post('/api/projects/PRM/repos', { data: { github_owner: 'me', github_name: 'prm' } });
+  const long = Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: check the login form in every browser we support`).join('\n');
+  const a = await (await page.request.post('/api/projects/PRM/batches', { data: { title: 'Long prompt', prompt: long } })).json();
+  const b = await (await page.request.post('/api/projects/PRM/batches', { data: { title: 'Short prompt', prompt: 'Just fix it' } })).json();
+
+  await page.goto(`/s/${a.id}`);
+  const panel = page.getByRole('complementary').filter({ hasText: 'Details' });
+  const prompt = panel.getByRole('heading', { name: 'Prompt' });
+  await expect(prompt).toBeVisible();
+  expect((await prompt.boundingBox())!.y).toBeLessThan((await panel.getByRole('heading', { name: 'Details' }).boundingBox())!.y);
+  await expect(panel.getByText(/Step 1:/)).toBeVisible();
+  await expect(panel.getByText(/Step 12:/)).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Show more' }).click();
+  await expect(panel.getByText(/Step 12:/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Show less' })).toBeVisible();
+
+  // the other session: a short prompt, whole, nothing to expand
+  const menu = page.getByRole('complementary', { name: 'Menu' });
+  await menu.getByRole('link', { name: /Short prompt/ }).click();
+  await expect(panel.getByText('Just fix it')).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Show (more|less)$/ })).toHaveCount(0);
+  // back: the long prompt is still expanded
+  await menu.getByRole('link', { name: /Long prompt/ }).click();
+  await expect(panel.getByText(/Step 12:/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Show less' })).toBeVisible();
+});
+
 test('desktop menu: no name and no Log out when sign-in is off (DISP-64)', async ({ page }) => {
   await page.route('**/api/me', async (route) => {
     const me = await (await route.fetch()).json();
