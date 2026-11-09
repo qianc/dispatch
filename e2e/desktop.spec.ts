@@ -657,12 +657,14 @@ test('session: the prompt in the side panel, collapsed when long, each session i
 });
 
 test('desktop menu: no name and no Log out when sign-in is off (DISP-64)', async ({ page }) => {
-  await page.route('**/api/me', async (route) => {
-    const me = await (await route.fetch()).json();
-    await route.fulfill({ json: { ...me, auth_mode: 'off', auth_disabled: true } });
-  });
   await page.setViewportSize({ width: 1280, height: 800 });
   await login(page);
+  // sign-in off has no password sessions, so no Signed-in browsers with their own Sign out (DISP-75)
+  await page.route('**/api/me', async (route) => {
+    const me = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...me, auth_mode: 'off', auth_disabled: true, password_login: false } });
+  });
+  await page.reload();
   const menu = page.getByRole('complementary', { name: 'Menu' });
   await expect(menu.getByRole('link', { name: 'Settings' })).toBeVisible();
   await expect(menu.getByRole('button', { name: 'Log out' })).toHaveCount(0);
