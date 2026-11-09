@@ -157,6 +157,14 @@ const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
 const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
   FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
 
+/** A device that gets push notifications, and whose (DISP-65). */
+export interface PushSubscription {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  user: string;
+}
+
 export interface Comment {
   id: number;
   item_id: number;
@@ -744,16 +752,24 @@ export class Store {
   }
 
   // ---------- push ----------
-  pushSubscriptions() {
-    return this.db.all<{ endpoint: string; p256dh: string; auth: string }>('SELECT endpoint, p256dh, auth FROM push_subscriptions');
+  /** Every device that gets notifications, or only `user`'s. */
+  pushSubscriptions(user?: string): PushSubscription[] {
+    return user === undefined
+      ? this.db.all<PushSubscription>('SELECT endpoint, p256dh, auth, user FROM push_subscriptions')
+      : this.db.all<PushSubscription>('SELECT endpoint, p256dh, auth, user FROM push_subscriptions WHERE user = ?', user);
   }
-  addPushSubscription(endpoint: string, p256dh: string, auth: string, ua: string | null) {
+  /** A device subscribes for `user`; subscribing again on the same device (another person signed in there) moves it to them. */
+  addPushSubscription(endpoint: string, p256dh: string, auth: string, ua: string | null, user: string) {
     this.db.run(
-      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth',
-      endpoint, p256dh, auth, ua,
+      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, user) VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user = excluded.user',
+      endpoint, p256dh, auth, ua, user,
     );
   }
-  removePushSubscription(endpoint: string) {
-    this.db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', endpoint);
+  /** Removes the subscription; with `user`, only if it is theirs. Returns whether a row went. */
+  removePushSubscription(endpoint: string, user?: string): boolean {
+    const r = user === undefined
+      ? this.db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', endpoint)
+      : this.db.run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user = ?', endpoint, user);
+    return r.changes > 0;
   }
 }

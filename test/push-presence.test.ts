@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LiveEvent } from '../src/shared/types.ts';
-import { startServer } from './helpers.ts';
+import { OWNER, startServer } from './helpers.ts';
 
 const sub = (n: number) => ({ endpoint: `https://push.example/${n}`, keys: { p256dh: 'p', auth: 'a' } });
 
@@ -28,7 +28,7 @@ describe('notifications while the app is in focus (DISP-12)', () => {
     expect((await s.call('POST', '/push/presence', { endpoint: sub(1).endpoint, active: true })).status).toBe(200);
     await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', tag: 'x' });
     expect(delivered).toEqual([sub(2).endpoint]);
-    expect(live).toContainEqual({ t: 'notice', notice: { title: 'T', body: 'B', url: '/s/1', tag: 'x' } });
+    expect(live).toContainEqual({ t: 'notice', notice: { title: 'T', body: 'B', url: '/s/1', tag: 'x' }, to: [OWNER] });
   });
 
   it('pushes again once the app goes to the background', async () => {

@@ -678,7 +678,8 @@ export type LiveEvent =
   /** finished sessions' leftovers were cleaned up */
   | { t: 'cleanup' }
   /** a notification: open apps show it in the page (devices with the app in focus get no system notification) */
-  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string } }
+  /** `to`: the users it is for (DISP-65); the server's stream sends it to their tabs only and leaves `to` out */
+  | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string }; to?: string[] }
   /** the check commands running now for a session's merges, with their progress (empty: none, DISP-5) */
   | { t: 'check'; session_id: number; checks: CheckRun[] };
 

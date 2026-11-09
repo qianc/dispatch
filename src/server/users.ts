@@ -18,7 +18,7 @@ export interface User {
 const PLACEHOLDERS = ['owner', 'local'];
 
 /** Every column that names the person a row belongs to. */
-const OWNER_COLUMNS = [['workers', 'owner'], ['api_tokens', 'user'], ['schedules', 'owner'], ['sessions', 'started_by'], ['devices', 'user'], ['oauth_grants', 'user']] as const;
+const OWNER_COLUMNS = [['workers', 'owner'], ['api_tokens', 'user'], ['schedules', 'owner'], ['sessions', 'started_by'], ['devices', 'user'], ['oauth_grants', 'user'], ['push_subscriptions', 'user']] as const;
 
 export class Users {
   private db: Db;
