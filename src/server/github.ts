@@ -344,7 +344,7 @@ export class GitHub {
     const project_id = s.project_id ?? undefined;
     if (stopped.length) {
       const body = stopped.map((x) => `${x.label}: ${x.why}`).join('\n') + (merged.length ? `\nMerged: ${merged.join(', ')}` : '');
-      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id });
+      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id }, s.started_by);
       return;
     }
     // a deploy follows: its result is the one notice for this turn (sessions.ts, DISP-40)
@@ -355,7 +355,7 @@ export class GitHub {
       title: `${s.project_key}: done and merged${merged.length > 1 ? ` (${merged.length} repos)` : ''}`,
       body: summary || merged.join(', '),
       url: `/s/${s.id}`, tag: `merged-${s.id}`, project_id,
-    });
+    }, s.started_by);
   }
 
   /**
@@ -411,7 +411,7 @@ export class GitHub {
     this.upstreamToldFor.add(key);
     const why = res.output.split('\n').slice(-3).join(' ').slice(0, 300);
     this.store.addEvent(s.id, { kind: 'error', text: `Merged in Dispatch, but pushing ${repo.default_branch} to ${t.owner}/${t.repo} failed: ${why}` });
-    void this.notifier.send({ title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined });
+    void this.notifier.send({ title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
   /** A PR on the upstream was merged: bring the result into the hosted repo (fast-forward only). */
@@ -625,7 +625,7 @@ export class GitHub {
         title: pr.local ? `${s.project_key}: branch ready for review` : `${s.project_key}: PR ready`,
         body: pr.local ? `${pr.head_ref} · ${pr.title}` : `#${pr.number} ${pr.title}`,
         url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined,
-      });
+      }, s.started_by);
     }
     if (pr.state === 'closed') {
       const all = this.store.prs({ session_id: s.id });
@@ -712,7 +712,7 @@ export class GitHub {
     }
     const why = `the session's worker is not connected, so \`${repo.deploy_command}\` did not run. Deploy by hand.`;
     this.store.addEvent(s.id, { kind: 'error', text: `Deploy failed for ${name}: ${why}` });
-    void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined });
+    void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
   private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {

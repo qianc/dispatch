@@ -5,7 +5,7 @@
 //   read     read anything
 //   tracker  items, comments, sources, images
 //   sessions start, steer and merge agent work (runs code on this machine)
-//   admin    projects, repos, settings, push
+//   admin    projects, repos, settings
 // Users have every scope. Tokens have the scopes they were made with, but only `remoteTokenScopes`
 // (read + tracker by default) when the request does not come from this machine, so a leaked token
 // can never start agents from outside.
@@ -109,13 +109,14 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/repos/:id': 'admin',
   'GET /api/settings': 'admin',
   'PATCH /api/settings': 'admin',
-  'GET /api/push/devices': 'admin',
-  'POST /api/push/subscribe': 'admin',
-  'POST /api/push/unsubscribe': 'admin',
-  'POST /api/push/presence': 'admin',
-  'POST /api/push/keep-only': 'admin',
-  'POST /api/push/test': 'admin',
 
+  // notifications: a person's own devices (DISP-65), never a token's
+  'GET /api/push/devices': 'user',
+  'POST /api/push/subscribe': 'user',
+  'POST /api/push/unsubscribe': 'user',
+  'POST /api/push/presence': 'user',
+  'POST /api/push/keep-only': 'user',
+  'POST /api/push/test': 'user',
   'GET /api/tokens': 'user',
   'POST /api/tokens': 'user',
   'DELETE /api/tokens/:id': 'user',

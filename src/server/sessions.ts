@@ -1564,7 +1564,8 @@ export class Sessions {
 
   private notify(s: Session, title: string, body: string, tag: string) {
     const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
-    void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined });
+    // to whoever started it (a schedule's run: the schedule's owner); nobody: the install owner
+    void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
   isActive(s: Session) {

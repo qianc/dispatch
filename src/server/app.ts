@@ -84,7 +84,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return p ? { ...repo, local_path: p.local_path, worker_id: workerId } : repo;
   };
   const auth = new Auth(cfg, db);
-  const notifier = new Notifier(cfg, db, store, bus);
+  const notifier = new Notifier(cfg, db, store, bus, users);
   const sessions = new Sessions(store, bus, hub, notifier, workers, users);
   // as whom each session acts on GitHub (DISP-63): its starter, the owner's env accounts, or the shared one
   const identityDeps: IdentityDeps = {

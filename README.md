@@ -579,6 +579,11 @@ and kept in the database.
 You get a push when Claude asks a question, needs a plan approved, finishes a turn, proposes a
 batch, opens a PR, or fails. Mute per project in project settings.
 
+Notifications are per person: each user turns them on for their own devices in Settings, and a
+session's notices go to whoever started it (a schedule's runs: the schedule's owner). Notices about
+the install itself, or about work no user started, go to the install owner. Subscriptions from
+before users existed are the install owner's.
+
 A device that has the app open and in focus gets no system notification: the app shows the notice
 itself (it tells the server every 20 s; after 45 s without that, pushes start again). Tapping a
 notification opens its chat, in the open app window if there is one.

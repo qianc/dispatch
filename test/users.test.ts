@@ -18,6 +18,7 @@ function oldDb() {
   db.run("INSERT INTO devices (name, user, hash, expires_at) VALUES ('iPhone', 'owner', 'h2', '2999-01-01')");
   db.run("INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES ('c1', 'Claude', '[]')");
   db.run("INSERT INTO oauth_grants (client_id, user, scopes, access_hash, access_expires_at, refresh_hash, refresh_expires_at) VALUES ('c1', 'owner', '[]', 'a', '2999', 'r', '2999')");
+  db.run("INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES ('https://push.example/1', 'p', 'a')");
   db.setSetting('default_worker_id', String(db.get<{ id: number }>('SELECT id FROM workers')!.id));
   return { db, dir };
 }
@@ -29,8 +30,9 @@ const owners = (db: Db) => ({
   session: db.get<{ v: string | null }>('SELECT started_by AS v FROM sessions')!.v,
   device: db.get<{ v: string }>('SELECT user AS v FROM devices')!.v,
   grant: db.get<{ v: string }>('SELECT user AS v FROM oauth_grants')!.v,
+  push: db.get<{ v: string | null }>('SELECT user AS v FROM push_subscriptions')!.v,
 });
-const all = (name: string) => ({ worker: name, token: name, schedule: name, session: name, device: name, grant: name });
+const all = (name: string) => ({ worker: name, token: name, schedule: name, session: name, device: name, grant: name, push: name });
 
 describe('Users.claim', () => {
   const dirs: string[] = [];
