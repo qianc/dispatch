@@ -55,13 +55,15 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="px-6 py-12 text-center text-muted text-sm">{children}</div>;
 }
 
-export function Section({ title, action, children, id }: { title: string; action?: ReactNode; children: ReactNode; id?: string }) {
+/** `intro`: a line under the heading that says what the section is for. */
+export function Section({ title, action, children, id, intro }: { title: string; action?: ReactNode; children: ReactNode; id?: string; intro?: string }) {
   return (
     <section id={id} className="pt-5 break-inside-avoid scroll-mt-4">
       <div className="flex items-center justify-between px-4 mb-1.5">
         <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {action}
       </div>
+      {intro && <p className="px-4 mb-2 text-[13px] text-muted">{intro}</p>}
       {children}
     </section>
   );
