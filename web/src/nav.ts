@@ -73,23 +73,10 @@ export function savedScroll(key: string): number {
   return scroll[key] ?? 0;
 }
 
-// Recently opened projects (for the desktop sidebar), newest first. Kept on this device.
-const RECENT = 'dispatch:recent-projects';
-
-export function recentProjects(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(RECENT) ?? '[]');
-  } catch {
-    return [];
-  }
-}
-
-export function noteProject(key: string) {
-  const next = [key, ...recentProjects().filter((k) => k !== key)].slice(0, 8);
-  try {
-    localStorage.setItem(RECENT, JSON.stringify(next));
-  } catch {
-    // storage blocked: no recents
-  }
-  window.dispatchEvent(new Event('dispatch:recent'));
+// The desktop menu used to list recently opened projects first, kept under this key. It lists them
+// by name now (DISP-79): an old value is not read, only cleared.
+try {
+  localStorage.removeItem('dispatch:recent-projects');
+} catch {
+  // storage blocked: nothing to clear
 }

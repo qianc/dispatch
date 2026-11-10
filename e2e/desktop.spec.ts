@@ -20,8 +20,8 @@ test('desktop: left menu, checkboxes always on, items open in a drawer', async (
   await menu.getByRole('link', { name: 'Projects' }).click();
   await page.getByRole('link', { name: /Desktop/ }).first().click();
   await expect(page.getByRole('heading', { name: 'Desktop' })).toBeVisible();
-  // ...and lists the project as recent
-  await expect(menu.getByRole('link', { name: 'Desktop' })).toBeVisible();
+  // ...and lists the project, marked as the open one
+  await expect(menu.getByRole('link', { name: 'Desktop' })).toHaveAttribute('aria-current', 'page');
 
   // checkboxes without a Select button
   await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);
@@ -660,8 +660,16 @@ test('session: the prompt in the side panel, collapsed when long, each session i
   const long = Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: check the login form in every browser we support`).join('\n');
   const a = await (await page.request.post('/api/projects/PRM/batches', { data: { title: 'Long prompt', prompt: long } })).json();
   const b = await (await page.request.post('/api/projects/PRM/batches', { data: { title: 'Short prompt', prompt: 'Just fix it' } })).json();
+  // both wait for an answer and hold a worker slot; stopped at the end so later specs get the slots (DISP-78)
+  try {
+    await checkPrompts(page, a.id);
+  } finally {
+    for (const s of [a, b]) await page.request.post(`/api/sessions/${s.id}/finish`, { data: { status: 'stopped' } });
+  }
+});
 
-  await page.goto(`/s/${a.id}`);
+async function checkPrompts(page: Page, id: number) {
+  await page.goto(`/s/${id}`);
   const panel = page.getByRole('complementary').filter({ hasText: 'Details' });
   const prompt = panel.getByRole('heading', { name: 'Prompt' });
   await expect(prompt).toBeVisible();
@@ -681,7 +689,7 @@ test('session: the prompt in the side panel, collapsed when long, each session i
   await menu.getByRole('link', { name: /Long prompt/ }).click();
   await expect(panel.getByText(/Step 12:/)).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Show less' })).toBeVisible();
-});
+}
 
 test('desktop menu: no name and no Log out when sign-in is off (DISP-64)', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });

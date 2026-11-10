@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE } from '../../../src/shared/types.ts';
 import { api, type Project, type ProjectSummary } from '../api.ts';
+import { byName } from '../projectOrder.ts';
 import { Page } from '../components/Layout.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Field, Sheet, inputCls } from '../components/ui.tsx';
 
@@ -40,7 +41,7 @@ export function Projects() {
       {data && !data.length && <Empty>No projects yet. Create one to start.</Empty>}
       {/* phone: one list; desktop: a grid of cards */}
       <Card className="mt-3 lg:mt-5 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3 lg:border-0 lg:bg-transparent">
-        {data?.map((p) => (
+        {data && byName(data).map((p) => (
           <Link key={p.id} to={`/p/${p.key}`} className="flex items-center gap-3 px-3 py-3 border-b border-line last:border-b-0 active:bg-raised lg:rounded-xl lg:border lg:last:border-b lg:bg-panel lg:px-4 lg:py-4 hover:border-faint">
             <ProjectBadge project={p} size={36} />
             <div className="flex-1 min-w-0">
