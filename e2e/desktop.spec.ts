@@ -20,8 +20,8 @@ test('desktop: left menu, checkboxes always on, items open in a drawer', async (
   await menu.getByRole('link', { name: 'Projects' }).click();
   await page.getByRole('link', { name: /Desktop/ }).first().click();
   await expect(page.getByRole('heading', { name: 'Desktop' })).toBeVisible();
-  // ...and lists the project as recent
-  await expect(menu.getByRole('link', { name: 'Desktop' })).toBeVisible();
+  // ...and lists the project, marked as the open one
+  await expect(menu.getByRole('link', { name: 'Desktop' })).toHaveAttribute('aria-current', 'page');
 
   // checkboxes without a Select button
   await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveCount(0);

@@ -1,8 +1,8 @@
 import { ProjectBadge, ProjectKey } from './ProjectBadge.tsx';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { recentProjects, savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type AssistantChat, type Inbox, type Me, type ProjectSummary, type Session } from '../api.ts';
 import { useVeryWide, useWide } from '../wide.ts';
@@ -10,6 +10,7 @@ import { Icon, icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 import { Notices } from './Notices.tsx';
 import { liveGroups, waitingCount } from '../activity.ts';
+import { byName } from '../projectOrder.ts';
 
 
 const BADGE = {
@@ -87,24 +88,18 @@ export function Layout() {
   );
 }
 
-/** Desktop: the tabs as a left menu, with what waits on you, what runs, and recent projects. */
+/** Desktop: the tabs as a left menu, with what waits on you, what runs, and every project. */
 function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: ReactNode }) {
   const loc = useLocation();
   const wide = useWide();
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects'), enabled: wide });
-  const [recent, setRecent] = useState(recentProjects);
-  useEffect(() => {
-    const on = () => setRecent(recentProjects());
-    window.addEventListener('dispatch:recent', on);
-    return () => window.removeEventListener('dispatch:recent', on);
-  }, []);
   if (!wide) return null;
   const { needs, running: runningNow, queued: queuedNow } = liveGroups(live, inbox);
-  const byKey = new Map(projects.map((p) => [p.key, p]));
-  const recentList = [...recent.filter((k) => byKey.has(k)), ...projects.map((p) => p.key).filter((k) => !recent.includes(k))].slice(0, 6).map((k) => byKey.get(k)!);
+  // every project, in the projects page's order; the open one is marked, not moved (DISP-79)
+  const projectList = byName(projects);
   const here = loc.pathname;
   const row = (to: string, children: ReactNode, key: string | number) => (
-    <Link key={key} to={to} className={cx('flex items-center gap-2 h-8 px-2 rounded-md text-[13px] hover:bg-raised', here === to ? 'bg-raised text-fg' : 'text-muted')}>{children}</Link>
+    <Link key={key} to={to} aria-current={here === to ? 'page' : undefined} className={cx('flex items-center gap-2 h-8 px-2 rounded-md text-[13px] hover:bg-raised', here === to ? 'bg-raised text-fg' : 'text-muted')}>{children}</Link>
   );
   return (
     <aside className="sidebar" aria-label="Menu">
@@ -138,9 +133,9 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
             </>, `q-${s.id}`))}
           </SideGroup>
         )}
-        {recentList.length > 0 && (
+        {projectList.length > 0 && (
           <SideGroup title="Projects">
-            {recentList.map((p) => row(`/p/${p.key}`, <>
+            {projectList.map((p) => row(`/p/${p.key}`, <>
               <ProjectBadge project={p} size={20} />
               <span className="truncate flex-1">{p.name}</span>
               {p.disabled && <span title="Disabled (read-only)" aria-label="read-only" className="text-wait"><Icon name="lock" size={13} /></span>}

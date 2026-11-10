@@ -14,7 +14,6 @@ import { Schedules } from '../components/schedules.tsx';
 import { GithubAccessPanel, GithubConnectBanner } from '../components/githubAccess.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
-import { noteProject } from '../nav.ts';
 import { DEFAULT_ITEM_SORT, ITEM_SORT_GROUPS, itemSortOption, sortItems, type ItemSort } from '../itemSort.ts';
 import { toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
@@ -53,7 +52,6 @@ export function Project() {
     next.set('new', '1');
     setParams(next, { replace: true });
   };
-  useEffect(() => noteProject(key), [key]);
   const { data: project } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
   const { data: items = [] } = useQuery({
     queryKey: ['items', project?.id],
