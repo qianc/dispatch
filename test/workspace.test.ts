@@ -116,6 +116,48 @@ describe('Workspaces (git)', () => {
     expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('other');
   });
 
+  it('does not run the check again at merge when the session check passed on the merged tree', async () => {
+    const r = { ...repo, check_command: 'echo ran >> ../check-runs; test -f b.txt' };
+    const cwd = await ws.prepare(spec('feat'));
+    writeFileSync(join(cwd, 'b.txt'), 'two\n');
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-m', 'add b');
+    expect((await ws.sessionCheck(r, 1)).code).toBe(0);
+    await ws.pushBranch(r, 1, 'feat');
+    const res = await ws.mergeLocal(r, 'feat', 'Merge #1');
+    expect(res).toMatchObject({ ok: true, check_reused: true });
+    expect(res.check).toBeUndefined();
+    expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('Merge #1');
+  });
+
+  it('runs the check at merge when main moved on, or the session check ran on uncommitted changes', async () => {
+    const r = { ...repo, check_command: 'test -f b.txt' };
+    const cwd = await ws.prepare(spec('feat'));
+    writeFileSync(join(cwd, 'b.txt'), 'two\n');
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-m', 'add b');
+    writeFileSync(join(cwd, 'scratch.txt'), 'not committed\n');
+    expect((await ws.sessionCheck(r, 1)).code).toBe(0); // dirty: not remembered
+    await ws.pushBranch(r, 1, 'feat');
+    expect(await ws.mergeLocal(r, 'feat', 'Merge #1')).toMatchObject({ ok: true, check: { ok: true } });
+    // a clean pass on the branch, then main moves on: the merged tree is new, so it is checked
+    const cwd2 = await ws.prepare(spec('feat2', 2));
+    writeFileSync(join(cwd2, 'd.txt'), 'four\n');
+    git(cwd2, 'add', '.');
+    git(cwd2, 'commit', '-m', 'add d');
+    expect((await ws.sessionCheck(r, 2)).code).toBe(0);
+    await ws.pushBranch(r, 2, 'feat2');
+    const other = mkdtempSync(join(tmpdir(), 'dsp-other-'));
+    git(other, 'clone', '-q', join(remoteRoot, 'me', 'hc.git'), '.');
+    writeFileSync(join(other, 'c.txt'), 'three\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'other');
+    git(other, 'push', '-q', 'origin', 'main');
+    const res = await ws.mergeLocal(r, 'feat2', 'Merge #2');
+    expect(res).toMatchObject({ ok: true, check: { ok: true } });
+    expect(res.check_reused).toBeUndefined();
+  });
+
   it('reports a failing check without pushing', async () => {
     const cwd = await ws.prepare(spec('feat'));
     writeFileSync(join(cwd, 'b.txt'), 'two\n');
