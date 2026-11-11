@@ -260,8 +260,11 @@ export function assistantPrompt(readDirs: string[]): string {
 export function discussPrompt(spec: StartSpec, context: { label: string; text: string }[]): string {
   const item = spec.items[0];
   const lines = [
-    '# Dispatch: discuss an item',
-    `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`,
+    item ? '# Dispatch: discuss an item' : '# Dispatch: discuss a failed session',
+    item
+      ? `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`
+      // DISP-81: "What would fix the issue?" on a failed session; its error and last messages are the first message
+      : `An agent session in project ${spec.project_name} (${spec.project_key}) failed. The owner wants to know what went wrong and what they must fix (a login, a setting, the worker machine, the repo) before they retry it. The first message has the error and the session's last messages.`,
     '',
     'Rules:',
     '- You are read-only. Never change files, run commands or claim to have done work. You can read files in the project folders with Read, Glob and Grep, and read tracker items with get_item / list_items.',

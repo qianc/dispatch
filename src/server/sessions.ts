@@ -1,4 +1,5 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
+import { failureReason } from '../shared/attention.ts';
 import type { GithubCred, StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
@@ -659,6 +660,103 @@ export class Sessions {
     }
     this.setStatus(s.id, 'running', { ended_at: null, waiting_reason: null, login_needed: null, pending_prompt: s.sdk_session_id ? s.pending_prompt : null });
     return { resumed: true, account, session: this.store.session(s.id)! };
+  }
+
+  // ---------- failed sessions (DISP-81) ----------
+
+  private mustBeFailed(sessionId: number) {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'failed') throw new SessionError('This session has not failed.', 409);
+    if (CHAT_KINDS.includes(s.kind)) throw new SessionError('Only agent sessions can be retried or discussed this way.');
+    return s;
+  }
+
+  /**
+   * Mark a failed session as ignored: it stays failed in history but leaves Needs you, and its
+   * items stay as they are. `ignored` false shows it in Needs you again.
+   */
+  ignoreFailed(sessionId: number, ignored = true): Session {
+    const s = this.mustBeFailed(sessionId);
+    if (s.closed_reason === 'retried') throw new SessionError(`This session was retried${this.store.retryOf(s.id) ? ` in #${this.store.retryOf(s.id)!.id}` : ''}.`, 409);
+    if (ignored === (s.closed_reason === 'ignored')) return s;
+    const updated = this.store.updateSession(s.id, ignored ? { closed_at: new Date().toISOString(), closed_reason: 'ignored' } : { closed_at: null, closed_reason: null });
+    this.emitSession(updated);
+    return updated;
+  }
+
+  /**
+   * "What would fix the issue?": a read-only discussion of the failed session, seeded with its
+   * error and last messages. The failed session itself does not run again. One open discussion per
+   * failed session and user: asking again returns it.
+   */
+  discussFailure(sessionId: number, startedBy: string | null): Session {
+    const s = this.mustBeFailed(sessionId);
+    const open = this.store.discussionsAbout(s.id).find((d) => d.started_by === startedBy && !FINAL_STATUSES.includes(d.status));
+    if (open) return open;
+    const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
+    assertWritable(this.store, project);
+    return this.chatSend(undefined, (prompt) => {
+      const workerId = this.workerFor(project, null, startedBy);
+      this.preflight(startedBy, project, workerId);
+      return this.store.createSession({
+        project_id: s.project_id, kind: 'discuss', title: `Why #${s.id} failed`, status: 'queued', force_plan: false, branch: null,
+        initial_prompt: prompt, source_id: s.source_id, item_ids: [], about_session: s.id,
+        claude_account: this.claudeAccountFor(project, null, undefined, workerId), worker_id: workerId, started_by: startedBy,
+      });
+    }, this.failurePrompt(s), []);
+  }
+
+  /** The first message of a failure discussion: what the session was, its error, and its last messages. */
+  private failurePrompt(s: Session): string {
+    const cut = (t: string, max: number) => (t.length > max ? `${t.slice(0, max)}…` : t);
+    const worker = this.workers.get(s.worker_id ?? -1)?.name;
+    const items = this.store.itemsByIds(s.item_ids).map((i) => `${i.key} ${i.title}`);
+    const who = { user: 'Owner', assistant: 'Claude', error: 'Error', system: 'Dispatch' } as const;
+    const last = this.store.events(s.id)
+      .flatMap((e) => (e.body.kind in who ? [`**${who[e.body.kind as keyof typeof who]}:** ${cut((e.body as { text: string }).text.trim(), 800)}`] : []))
+      .slice(-8);
+    const error = this.store.lastError(s.id) ?? (s.login_needed ? failureReason(s, null) : null);
+    return [
+      `Session #${s.id} "${s.title}" (${s.kind}${s.project_key ? `, project ${s.project_key}` : ''}${worker ? `, worker ${worker}` : ''}) failed. It is not running and will not restart from this chat.`,
+      'What went wrong, and what should I fix before I retry it? Give short, concrete steps. Say what you are unsure of.',
+      '',
+      ...(items.length ? ['Its items:', ...items.map((i) => `- ${i}`), ''] : []),
+      ...(error ? ['The error:', '```', cut(error.trim(), 3000), '```', ''] : []),
+      ...(s.initial_prompt.trim() ? ['Its first prompt:', '', cut(s.initial_prompt.trim(), 1500), ''] : []),
+      ...(last.length ? ['Its last messages:', '', ...last.flatMap((m) => [m, ''])] : []),
+    ].join('\n').trim();
+  }
+
+  /**
+   * "I've fixed it, please retry": a new session with the same prompt, options, items, worker and
+   * Claude account, linked to the failed one (`retry_of`). The failed session is closed as retried.
+   */
+  retryFailed(sessionId: number): Session {
+    const s = this.mustBeFailed(sessionId);
+    if (s.closed_reason === 'retried') throw new SessionError(`This session was already retried${this.store.retryOf(s.id) ? ` in #${this.store.retryOf(s.id)!.id}` : ''}.`, 409);
+    const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
+    assertWritable(this.store, project);
+    const workerId = this.workerFor(project, s.worker_id, s.started_by);
+    const identity = this.preflight(s.started_by, project, workerId);
+    this.checkAccounts(workerId, s.claude_account, project, identity);
+    let next = this.store.createSession({
+      project_id: s.project_id, kind: s.kind, title: s.title, status: 'queued', force_plan: s.force_plan, branch: null,
+      initial_prompt: s.initial_prompt, source_id: s.source_id, item_ids: s.item_ids, options: { ...s.options, worker_id: workerId },
+      claude_account: s.claude_account, worker_id: workerId, release: s.release, schedule_id: s.schedule_id, started_by: s.started_by, retry_of: s.id,
+    });
+    // a fresh branch: the failed one may hold half-done work
+    if (s.kind === 'work' && project) next = this.store.updateSession(next.id, { branch: branchName(project.key, next.id, s.title) });
+    if (s.kind === 'work') {
+      for (const it of this.store.itemsByIds(s.item_ids)) {
+        if (['triage', 'backlog', 'todo', 'hold'].includes(it.status)) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress' }) });
+      }
+    }
+    this.addEvent(next.id, { kind: 'system', text: `Retry of session #${s.id}, which failed.` });
+    this.addEvent(s.id, { kind: 'system', text: `Retried in session #${next.id}.` });
+    this.emitSession(this.store.updateSession(s.id, { closed_at: new Date().toISOString(), closed_reason: 'retried' }));
+    this.emitSession(next);
+    this.dispatch();
+    return this.store.session(next.id)!;
   }
 
   /** Check whether a worker's Claude account is signed in now, and keep the answer (DISP-60). */
@@ -1520,6 +1618,8 @@ export class Sessions {
   }
 
   private setStatus(id: number, status: SessionStatus, patch: Partial<Session> = {}) {
+    // a closed failure that runs again is open again: if it fails again, it needs the owner again (DISP-81)
+    if (!FINAL_STATUSES.includes(status) && this.store.session(id)?.closed_at) patch = { ...patch, closed_at: null, closed_reason: null };
     this.emitSession(this.store.updateSession(id, { ...patch, status }));
   }
 
@@ -1578,7 +1678,7 @@ export class Sessions {
   }
 
   private notify(s: Session, title: string, body: string, tag: string) {
-    const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
+    const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' && s.item_ids.length ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
     // to whoever started it (a schedule's run: the schedule's owner); nobody: the install owner
     void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined }, s.started_by);
   }

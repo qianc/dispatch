@@ -128,5 +128,5 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   | 'cross_project' | AssistantMethod;
 
 export type AssistantMethod =
-  | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'add_repo' | 'remove_repo'
+  | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'set_project_state' | 'add_repo' | 'remove_repo'
   | 'list_items' | 'create_items' | 'update_item' | 'create_source' | 'list_sessions' | 'propose_session' | 'import_sections';

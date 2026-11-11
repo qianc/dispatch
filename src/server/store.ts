@@ -477,6 +477,10 @@ export class Store {
       login_needed: json(r.login_needed, null),
       started_by: (r.started_by as string | null) ?? null,
       github_login: (r.github_login as string | null) ?? null,
+      closed_at: (r.closed_at as string | null) ?? null,
+      closed_reason: (r.closed_reason as Session['closed_reason']) ?? null,
+      retry_of: numOrNull(r.retry_of),
+      about_session: numOrNull(r.about_session),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
@@ -546,18 +550,18 @@ export class Store {
       .map((r) => this.toSession(r));
   }
   /** `started_by`: the user who started it (null: no user); `worker_id`: the worker it runs on. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null; retry_of?: number | null; about_session?: number | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by, retry_of, about_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
-        s.worker_id, s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null, s.started_by,
+        s.worker_id, s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null, s.started_by, s.retry_of ?? null, s.about_session ?? null,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -566,6 +570,25 @@ export class Store {
     }
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
+  }
+  /** Failed agent sessions the owner has not closed (DISP-81), newest first. */
+  failedOpen(limit = 50): Session[] {
+    return this.db
+      .all(`${SESSION_SELECT} WHERE s.status = 'failed' AND s.closed_at IS NULL AND s.kind NOT IN ('assistant', 'discuss') ORDER BY s.updated_at DESC LIMIT ?`, limit)
+      .map((r) => this.toSession(r));
+  }
+  /** The session that retries `id` (DISP-81), if any. */
+  retryOf(id: number): Session | undefined {
+    const r = this.db.get(`${SESSION_SELECT} WHERE s.retry_of = ? ORDER BY s.id DESC LIMIT 1`, id);
+    return r && this.toSession(r);
+  }
+  /** Discussions of why session `id` failed (DISP-81), newest first. */
+  discussionsAbout(id: number): Session[] {
+    return this.db.all(`${SESSION_SELECT} WHERE s.about_session = ? ORDER BY s.id DESC`, id).map((r) => this.toSession(r));
+  }
+  /** The text of a session's last error in its chat. */
+  lastError(sessionId: number): string | null {
+    return this.db.get<{ text: string | null }>("SELECT json_extract(body, '$.text') AS text FROM session_events WHERE session_id = ? AND json_extract(body, '$.kind') = 'error' ORDER BY seq DESC LIMIT 1", sessionId)?.text ?? null;
   }
   /** Everything waiting to start, chats included (they wait for their worker too). */
   queued(): Session[] {
