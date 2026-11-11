@@ -61,3 +61,18 @@ export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 
   }
   return { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
 }
+
+/** The first line of a text, cut to `max` characters. */
+const firstLine = (text: string, max: number) => {
+  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+};
+
+/**
+ * Why a session failed, in one short line for a list (DISP-81): a signed-out Claude account, else
+ * its last error in the chat, else Claude's last message.
+ */
+export function failureReason(s: Pick<Session, 'login_needed' | 'last_text'>, lastError: string | null): string {
+  if (s.login_needed) return `${s.login_needed.label} account needs sign-in on ${s.login_needed.worker ?? s.login_needed.host}.`;
+  return firstLine(lastError ?? '', 140) || firstLine(s.last_text ?? '', 140) || 'The session failed.';
+}

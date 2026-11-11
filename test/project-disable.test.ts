@@ -195,4 +195,35 @@ describe('disabling a project', () => {
     expect(started).toEqual([queued.id]);
     expect(s.ctx.store.session(queued.id)!.status).toBe('running');
   });
+
+  // DISP-77: the Assistant locks and unlocks a project with the same switch as Settings
+  it('the Assistant locks and unlocks a project, as Settings does', async () => {
+    const sched = (await s.call('POST', '/projects/LK/schedules', { name: 'Nightly', at_time: '02:00' })).data;
+    const queued = (await s.call('POST', '/projects/LK/planner', { prompt: 'plan', source_id: null })).data;
+    const assistant = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const ask = (method: string, params: object) => s.ctx.sessions.rpc(assistant.id, method, params);
+
+    const locked = await ask('set_project_state', { key: 'LK', disabled: true });
+    expect(locked).toMatchObject({ key: 'LK', disabled: true, disabled_by: `${OWNER} (Assistant)` });
+    expect((await s.call('GET', '/projects/LK')).data).toMatchObject({ disabled: true, disabled_by: `${OWNER} (Assistant)` });
+    expect(Date.parse((await s.call('GET', '/projects/LK')).data.disabled_at)).toBeGreaterThan(Date.now() - 60_000);
+    expect((await s.call('GET', '/projects/LK/schedules')).data[0]).toMatchObject({ id: sched.id, enabled: false });
+    await expect(ask('update_project', { key: 'LK', name: 'Renamed' })).rejects.toThrow(LOCKED);
+
+    // allowed while disabled: unlocking is the point
+    const started: number[] = [];
+    s.ctx.hub.link = () => ({ facts: null }) as unknown as WorkerLink;
+    s.ctx.hub.send = (_w, m) => (m.t === 'start' && started.push(m.spec.session_id), true);
+    const open = await ask('set_project_state', { key: 'LK', disabled: false });
+    expect(open).toMatchObject({ key: 'LK', disabled: false, disabled_by: null, disabled_at: null });
+    expect((await s.call('GET', '/projects/LK/schedules')).data[0]).toMatchObject({ id: sched.id, enabled: true });
+    expect(started).toEqual([queued.id]);
+    await expect(ask('update_project', { key: 'LK', name: 'Renamed' })).resolves.toMatchObject({ name: 'Renamed' });
+  });
+
+  it('only the install owner\'s Assistant locks a project', async () => {
+    const chat = s.ctx.store.createSession({ started_by: 'someone-else', worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'Assistant', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    await expect(s.ctx.sessions.rpc(chat.id, 'set_project_state', { key: 'LK', disabled: true })).rejects.toThrow(/install owner/);
+    expect(s.ctx.store.projectByKey('LK')!.disabled).toBe(false);
+  });
 });

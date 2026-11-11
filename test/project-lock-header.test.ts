@@ -47,11 +47,12 @@ describe('the lock in the project header (DISP-76)', () => {
     expect(buttons(html).join('|')).not.toMatch(/Enable/);
   });
 
-  it('the banner says it is read-only and names Settings as the way to unlock, with no Enable action', () => {
+  it('the banner says it is read-only and names Settings and the Assistant as the ways to unlock, with no Enable action', () => {
     const { html } = render(true);
     const banner = html.slice(html.indexOf('Read-only'));
-    expect(textOf(banner)).toMatch(/To unlock it, set its state to Active in Settings ?\./);
+    expect(textOf(banner)).toMatch(/To unlock it, set its state to Active in Settings ?, or ask the Assistant ?to unlock it\./);
     expect(banner).toContain('href="/p/LK?tab=settings"');
+    expect(banner).toContain('href="/assistant"');
     expect(buttons(html).join('|')).not.toMatch(/Enable/);
   });
 

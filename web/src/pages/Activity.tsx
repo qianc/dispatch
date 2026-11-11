@@ -3,11 +3,13 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@t
 import { searchTerms } from '../../../src/shared/search.ts';
 import type { SessionSearch } from '../../../src/shared/types.ts';
 import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchQuery, type SessionFilter } from '../activity.ts';
-import { api, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { Link } from 'react-router';
+import { api, type FailedSession, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
 import { SwipeToClose } from '../components/swipe.tsx';
-import { Button, Card, Empty, ErrorText, Section, cx, inputCls } from '../components/ui.tsx';
+import { Button, Card, Empty, ErrorText, Section, SessionStatusChip, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 const KINDS = [
   { value: 'work', label: 'Work' },
@@ -28,6 +30,10 @@ export function Activity() {
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
   const attention = new Map((inbox?.idle ?? []).map((s) => [s.id, s.attention]));
   const { data: recent = [] } = useQuery({ queryKey: ['sessions', 'recent'], queryFn: () => api.get<Session[]>('/sessions?status=completed,failed,stopped') });
+  // failed sessions not yet ignored or retried (DISP-81): their own section, not also in Recently finished
+  const failed = inbox?.failed ?? [];
+  const failedIds = new Set(failed.map((s) => s.id));
+  const finished = recent.filter((s) => !failedIds.has(s.id));
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
   const searching = filtering(filter);
   return (
@@ -46,13 +52,35 @@ export function Activity() {
           <Card className="overflow-hidden">{discussions.map((s) => <DiscussionRow key={s.id} s={s} />)}</Card>
         </Section>
       )}
-      {!searching && recent.length > 0 && (
+      {!searching && failed.length > 0 && (
+        <Section title={`Failed (${failed.length})`}>
+          <Card>{failed.map((s) => <FailedRow key={s.id} s={s} />)}</Card>
+        </Section>
+      )}
+      {!searching && finished.length > 0 && (
         <Section title="Recently finished">
-          <Card>{recent.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card>
+          <Card>{finished.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card>
         </Section>
       )}
       </div>
     </Page>
+  );
+}
+
+/** A failed session and why it failed (DISP-81); its page has the actions. */
+function FailedRow({ s }: { s: FailedSession }) {
+  return (
+    <Link to={`/s/${s.id}`} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
+      <div className="flex items-center gap-2">
+        <ProjectKey k={s.project_key} badge />
+        <span className="flex-1 min-w-0 truncate font-medium">{s.title}</span>
+        <SessionStatusChip status={s.status} />
+      </div>
+      <div className="flex items-start gap-2 mt-0.5 text-[13px]">
+        <span className="flex-1 min-w-0 line-clamp-2 break-words text-bad">{s.reason}</span>
+        <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
+      </div>
+    </Link>
   );
 }
 

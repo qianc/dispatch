@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { SESSION_KINDS, answerInput, batchInput, plannerInput, proposedItemSchema } from '../../shared/types.ts';
-import { attentionOf } from '../../shared/attention.ts';
+import { attentionOf, failureReason } from '../../shared/attention.ts';
 import type { Principal } from '../access.ts';
 import { assertCanDrive, canDrive, canStop } from '../sessionGuard.ts';
 import type { Session } from '../../shared/types.ts';
@@ -39,15 +39,17 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const inputs = store.openInputs().filter((i) => mine(store.session(i.session_id)));
     // a planning chat's open proposal cards decide what it offers
     const idle = store.sessions({ statuses: ['idle'] }).filter(mine).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow) }));
+    // failed sessions not yet ignored or retried (DISP-81), each with a short reason
+    const failed = store.failedOpen().filter(mine).map((s) => ({ ...s, reason: failureReason(s, store.lastError(s.id)) }));
     const idleIds = new Set(idle.map((s) => s.id));
     // PRs of idle sessions are shown on their session's card
     const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id) && mine(store.session(p.session_id)));
     const sessionIds = new Set([...inputs.map((i) => i.session_id), ...prs.map((p) => p.session_id)]);
     const related = [...sessionIds].map((id) => store.session(id)).filter((s) => !!s);
     // leftovers of finished sessions (the install owner's to clean up); re-checked in the background when the last check is old
-    if (!ownsInstall(req)) return { inputs, idle, prs, sessions: related, cleanup: null };
+    if (!ownsInstall(req)) return { inputs, idle, failed, prs, sessions: related, cleanup: null };
     if (!janitor.offer || Date.now() - Date.parse(janitor.offer.checked_at) > 10 * 60_000) void janitor.check().catch(() => undefined);
-    return { inputs, idle, prs, sessions: related, cleanup: janitor.offer };
+    return { inputs, idle, failed, prs, sessions: related, cleanup: janitor.offer };
   });
 
   app.get('/api/sessions', async (req) => {
@@ -145,6 +147,12 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,
       checks: github.checks.of(s.id),
+      // a failed session (DISP-81): why, the session that retries it, and the open discussion of it
+      failure: s.status === 'failed' ? {
+        reason: failureReason(s, store.lastError(s.id)),
+        retried_as: store.retryOf(s.id)?.id ?? null,
+        discussion: store.discussionsAbout(s.id).find((d) => d.started_by === who(req).user && d.status !== 'completed' && d.status !== 'stopped')?.id ?? null,
+      } : null,
       // what the caller may do with it (DISP-63)
       access: { drive: canDrive(who(req), s, users.installOwner), stop: canStop(who(req), s, users.installOwner) },
     };
@@ -176,6 +184,14 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   // the session stopped on a signed-out Claude account: check it on the worker, and resume if signed in (DISP-60)
   app.post('/api/sessions/:id/retry-login', async (req) => sessions.retryLogin(session((req.params as { id: string }).id).id));
+
+  // a failed session (DISP-81): set it aside (or back), ask what would fix it, or retry it
+  app.post('/api/sessions/:id/ignore', async (req) => {
+    const { ignored } = z.object({ ignored: z.boolean().default(true) }).parse(req.body ?? {});
+    return sessions.ignoreFailed(session((req.params as { id: string }).id).id, ignored);
+  });
+  app.post('/api/sessions/:id/discuss-failure', async (req) => sessions.discussFailure(session((req.params as { id: string }).id).id, who(req).user));
+  app.post('/api/sessions/:id/retry', async (req) => sessions.retryFailed(session((req.params as { id: string }).id).id));
 
   app.post('/api/sessions/:id/move', async (req) => {
     const { worker_id } = z.object({ worker_id: z.number().int() }).parse(req.body);

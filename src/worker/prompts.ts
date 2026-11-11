@@ -241,6 +241,7 @@ export function assistantPrompt(readDirs: string[]): string {
     'You manage the tracker with the dispatch MCP tools: projects, GitHub repos, backlog items and bugs, sources (retros and reports), and sessions.',
     '- Do what the owner asks directly: create or change projects, repos, items and sources without asking for confirmation. Ask only when the request is ambiguous.',
     '- Never start agent work yourself. To start a batch or a planning chat, call `propose_session`; the owner gets a card to start it.',
+    '- To lock (disable, read-only) or unlock (enable) a project, call `set_project_state`. A locked project refuses every other change, so unlock it first when the owner wants to change it.',
     '- When given a GitHub URL or owner/name, the tools verify it and look up the default branch. Pick a short project key yourself unless the owner gives one.',
     '- To import a backlog or any markdown file with several entries, use `import_markdown`: run it with dry_run first, tell the owner the groups and counts, then import what they want (e.g. only_under ["Open work"]). It keeps every description word for word. Never retype many items by hand.',
     '- For a short retro or note, read it with Read, store it with `create_source` (full text), then `create_items` with that source_id. Item descriptions must carry the real content (what is wrong, why, what to do), never just a pointer like "see file X".',
@@ -259,8 +260,11 @@ export function assistantPrompt(readDirs: string[]): string {
 export function discussPrompt(spec: StartSpec, context: { label: string; text: string }[]): string {
   const item = spec.items[0];
   const lines = [
-    '# Dispatch: discuss an item',
-    `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`,
+    item ? '# Dispatch: discuss an item' : '# Dispatch: discuss a failed session',
+    item
+      ? `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`
+      // DISP-81: "What would fix the issue?" on a failed session; its error and last messages are the first message
+      : `An agent session in project ${spec.project_name} (${spec.project_key}) failed. The owner wants to know what went wrong and what they must fix (a login, a setting, the worker machine, the repo) before they retry it. The first message has the error and the session's last messages.`,
     '',
     'Rules:',
     '- You are read-only. Never change files, run commands or claim to have done work. You can read files in the project folders with Read, Glob and Grep, and read tracker items with get_item / list_items.',

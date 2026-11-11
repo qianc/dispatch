@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useNavigationType, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FINAL_STATUSES } from '../../../src/shared/types.ts';
+import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
@@ -12,6 +12,7 @@ import { useItemPeek } from '../components/itemPeek.tsx';
 import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
+import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { attentionOf } from '../../../src/shared/attention.ts';
@@ -150,6 +151,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const drive = canAct(data.access, 'drive');
   const stop = canAct(data.access, 'stop');
   const starter = startedBy(s);
+  // a failed agent session: why, and Mark as ignored / What would fix the issue? / Retry (DISP-81).
+  // From xl they sit in the side panel; a login problem keeps them next to the sign-in steps.
+  const failed = s.status === 'failed' && !CHAT_KINDS.includes(s.kind) && !!data.failure;
+  const failedInChat = failed && (!sidePanel || !!chat || attention.kind === 'login');
 
   const peekPanel = peek && <ItemDetail key={peek} itemId={peek} onClose={closePeek} />;
   // one tree whether or not the item shows, so opening it does not rebuild the chat and lose its place
@@ -159,6 +164,13 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     <Page
       aside={chat || peek ? undefined : (
         <div className="px-4 pt-4 space-y-5 text-[13px]">
+          {failed && !failedInChat && (
+            <div role="status" aria-label="Session failed">
+              <h2 className="text-[12px] font-semibold uppercase tracking-wide text-bad mb-1.5">Failed</h2>
+              <p className="text-bad">{data.failure!.reason}</p>
+              {drive && <div className="mt-2"><FailedActions s={s} failure={data.failure} compact /></div>}
+            </div>
+          )}
           {s.initial_prompt && <SessionPrompt key={s.id} sessionId={s.id} text={s.initial_prompt} />}
           <div>
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
@@ -171,6 +183,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
               {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
               {s.moved_from && <><dt className="text-muted">Moved from</dt><dd><Link className="text-accent" to={`/s/${s.moved_from}`}>#{s.moved_from}</Link></dd></>}
+              {s.retry_of && <><dt className="text-muted">Retry of</dt><dd><Link className="text-accent" to={`/s/${s.retry_of}`}>#{s.retry_of}</Link></dd></>}
+              {s.about_session && <><dt className="text-muted">About</dt><dd><Link className="text-accent" to={`/s/${s.about_session}`}>#{s.about_session}</Link> (failed)</dd></>}
               {s.usage?.cost_usd !== undefined && <><dt className="text-muted">Usage</dt><dd>${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} turns</dd></>}
             </dl>
           </div>
@@ -231,6 +245,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <div className="px-4 pt-3 text-[12px] text-muted flex flex-wrap gap-x-2">
           {workers.length > 1 && <span>Worker: {workerName(workers, s.worker_id)}</span>}
           {s.moved_from && <Link className="text-accent" to={`/s/${s.moved_from}`}>moved from #{s.moved_from}</Link>}
+          {s.retry_of && <Link className="text-accent" to={`/s/${s.retry_of}`}>retry of #{s.retry_of}</Link>}
           {(accounts?.claude.length ?? 0) > 1 && <span>Claude: {claudeLabel(accounts, s.claude_account)}</span>}
           {(accounts?.github.length ?? 0) > 1 && project?.github_account && <span>GitHub: {project.github_account}</span>}
           {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
@@ -293,6 +308,12 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <div className="px-4 pt-2 pb-1">
           {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
+        </div>
+      )}
+      {failedInChat && (
+        <div role="status" aria-label="Session failed" className="mx-4 my-2 rounded-xl border border-bad/40 bg-bad/5 px-3 py-2.5 text-[14px]">
+          <p className="font-medium text-bad">Failed: {data.failure!.reason}</p>
+          {drive && <FailedActions s={s} failure={data.failure} />}
         </div>
       )}
       <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />

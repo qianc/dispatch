@@ -10,7 +10,7 @@ import type { Users } from './users.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import { addLocalRepo, looksLikePath, mergeNote } from './repos.ts';
-import { assertWritable } from './projectLock.ts';
+import { assertWritable, setDisabled } from './projectLock.ts';
 import { isRefusal } from './identity.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
@@ -31,7 +31,7 @@ export function suggestKey(name: string, taken: (k: string) => boolean): string 
 }
 
 /** The assistant's tools that create or change projects and their repos. */
-const PROJECT_TOOLS = ['create_project', 'update_project', 'add_repo', 'remove_repo'];
+const PROJECT_TOOLS = ['create_project', 'update_project', 'set_project_state', 'add_repo', 'remove_repo'];
 
 export class AssistantTools {
   private store: Store;
@@ -186,6 +186,15 @@ export class AssistantTools {
         const updated = this.store.updateProject(project.id, patch);
         this.bus.emit({ t: 'project', key: updated.key });
         return this.projectSummary(updated);
+      }
+
+      // lock or unlock (DISP-77): the same switch as Settings, so it works while the project is disabled
+      case 'set_project_state': {
+        const project = this.project(p.key);
+        const { disabled } = z.object({ disabled: z.boolean() }).parse(p);
+        const by = s.started_by ? `${s.started_by} (Assistant)` : 'Assistant';
+        const updated = project.disabled === disabled ? project : setDisabled({ store: this.store, bus: this.bus, sessions: this.sessions }, project, disabled ? by : null);
+        return { key: updated.key, disabled: updated.disabled, disabled_by: updated.disabled_by, disabled_at: updated.disabled_at, link: `/p/${updated.key}` };
       }
 
       case 'add_repo':

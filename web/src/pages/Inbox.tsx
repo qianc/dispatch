@@ -2,12 +2,13 @@ import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api, type Inbox as InboxData } from '../api.ts';
+import { api, type FailedSession, type Inbox as InboxData } from '../api.ts';
 import { cleanupReport, type CleanupAnswer, type CleanupReport } from '../cleanup.ts';
 import { waitsOnOwner } from '../../../src/shared/attention.ts';
 import { crossProjectSummary } from '../../../src/shared/types.ts';
 import { Page } from '../components/Layout.tsx';
 import { NextSteps } from '../components/nextSteps.tsx';
+import { FailedActions } from '../components/failedActions.tsx';
 import { PrOpenedBy } from '../components/PrState.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
@@ -49,6 +50,24 @@ function TurnCard({ s }: { s: Idle }) {
   );
 }
 
+/** A failed session (DISP-81): why it failed, and its actions (ignore, ask what would fix it, retry). */
+function FailedCard({ s }: { s: FailedSession }) {
+  return (
+    <div className={cx('mx-3 rounded-xl bg-panel border border-line border-l-[3px] px-3 py-2.5', TONE_EDGE.bad)}>
+      <Link to={`/s/${s.id}`} className="block">
+        <div className="flex items-center gap-2">
+          <ProjectKey k={s.project_key} badge />
+          <span className="flex-1 min-w-0 truncate font-medium">{s.title}</span>
+          <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
+        </div>
+        <p className="mt-1.5 text-[14px] font-medium text-bad"><span className="sr-only">Failed: </span>{s.reason}</p>
+      </Link>
+      {s.login_needed && <p className="text-[13px] text-muted mt-1">Open the session for the sign-in steps.</p>}
+      <FailedActions s={s} />
+    </div>
+  );
+}
+
 export function Inbox() {
   const { data } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<InboxData>('/inbox') });
   const { data: worker } = useQuery({ queryKey: ['worker'], queryFn: () => api.get<{ connected: boolean }>('/worker'), refetchInterval: 15_000 });
@@ -56,7 +75,8 @@ export function Inbox() {
   const sessionById = new Map(data.sessions.map((s) => [s.id, s]));
   const checking = data.idle.filter((s) => !waitsOnOwner(s.attention));
   const yours = data.idle.filter((s) => waitsOnOwner(s.attention));
-  const nothing = !data.inputs.length && !data.idle.length && !data.prs.length && !data.cleanup;
+  const failed = data.failed ?? [];
+  const nothing = !data.inputs.length && !data.idle.length && !failed.length && !data.prs.length && !data.cleanup;
   return (
     <Page title="Inbox" subtitle="Everything waiting on you" wide>
       {worker && !worker.connected && (
@@ -91,6 +111,13 @@ export function Inbox() {
         <Section title="Your turn">
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
             {yours.sort((a, b) => ORDER[a.attention.kind] - ORDER[b.attention.kind]).map((s) => <TurnCard key={s.id} s={s} />)}
+          </div>
+        </Section>
+      )}
+      {failed.length > 0 && (
+        <Section title="Failed">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-x-0 lg:items-start">
+            {failed.map((s) => <FailedCard key={s.id} s={s} />)}
           </div>
         </Section>
       )}

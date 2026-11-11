@@ -213,10 +213,23 @@ export interface Session {
   started_by: string | null;
   /** the GitHub login it acts as: the starter's own account (null: the env accounts) */
   github_login: string | null;
+  /** a failed session the owner closed (DISP-81): it stays failed in history, but no longer needs them */
+  closed_at: string | null;
+  closed_reason: SessionClosedReason | null;
+  /** the failed session this one retries (DISP-81) */
+  retry_of: number | null;
+  /** a discussion of why this session failed (DISP-81) */
+  about_session: number | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
 }
+
+/** Why a failed session left Needs you: the owner set it aside, or a new session retries it (DISP-81). */
+export type SessionClosedReason = 'ignored' | 'retried';
+
+/** A failed session that still needs its owner (DISP-81), with a short reason. */
+export type FailedSession = Session & { reason: string };
 
 /** A chat found by Activity's search (DISP-54): the session, and a piece of the message that matched. */
 export type SessionHit = Session & { snippet: string | null };
