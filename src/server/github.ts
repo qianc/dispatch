@@ -745,7 +745,7 @@ export class GitHub {
    * The worker limits the check's run time (CHECK_TIMEOUT_MIN); here it only has to keep reporting.
    */
   private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
-    type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number } };
+    type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean };
     // a GitHub repo's merge is pushed to GitHub: as the starter only. Elsewhere their name goes on the commit.
     const s = this.store.session(pr.session_id);
     const github = this.target(repo) && repo.kind !== 'hosted' ? this.as(s, repo, 'write').cred : this.credOf(s);
@@ -753,6 +753,7 @@ export class GitHub {
     try {
       res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github }, 15 * 60_000,
         (p) => this.checks.progress(pr, repo, p as CheckProgress));
+      if (res.ok && res.check_reused && s) this.store.addEvent(s.id, { kind: 'system', text: `Check of ${repo.github_name} not run again for the merge: it already passed on exactly this tree (${repo.check_command}).` });
       return res;
     } finally {
       this.checks.finish(pr, repo, res?.check);
