@@ -98,8 +98,8 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
   // every project, in the projects page's order; the open one is marked, not moved (DISP-79)
   const projectList = byName(projects);
   const here = loc.pathname;
-  const row = (to: string, children: ReactNode, key: string | number) => (
-    <Link key={key} to={to} aria-current={here === to ? 'page' : undefined} className={cx('flex items-center gap-2 h-8 px-2 rounded-md text-[13px] hover:bg-raised', here === to ? 'bg-raised text-fg' : 'text-muted')}>{children}</Link>
+  const row = (to: string, children: ReactNode, key: string | number, size = 'h-8') => (
+    <Link key={key} to={to} aria-current={here === to ? 'page' : undefined} className={cx('flex items-center gap-2 px-2 rounded-md text-[13px] hover:bg-raised', size, here === to ? 'bg-raised text-fg' : 'text-muted')}>{children}</Link>
   );
   return (
     <aside className="sidebar" aria-label="Menu">
@@ -111,8 +111,11 @@ function Sidebar({ inbox, live, tabs }: { inbox?: Inbox; live: Session[]; tabs: 
             {needs.slice(0, 10).map((n) => row(`/s/${n.id}`, <>
               <span className={cx('size-1.5 rounded-full shrink-0', n.tone === 'bad' ? 'bg-bad' : n.tone === 'ok' ? 'bg-ok' : 'bg-wait')} />
               <ProjectKey k={n.key} className="text-[11px]" />
-              <span className="truncate">{n.title}</span>
-            </>, `n-${n.id}`))}
+              {n.reason
+                // a failed session: its title, and why it failed below (DISP-81)
+                ? <span className="min-w-0 flex flex-col leading-tight"><span className="truncate">{n.title}</span><span className="truncate text-[11px] text-bad" title={n.reason}>{n.reason}</span></span>
+                : <span className="truncate">{n.title}</span>}
+            </>, `n-${n.id}`, n.reason ? 'h-auto min-h-8 py-1' : undefined))}
           </SideGroup>
         )}
         {runningNow.length > 0 && (

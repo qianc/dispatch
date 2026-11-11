@@ -78,6 +78,7 @@ export class FakeRunner implements AgentRunner {
     await sleep(this.delay);
     if (this.closed) return;
     if (text.includes('[fake:signed-out]')) return this.signedOutTurn();
+    if (text.includes('[fake:fail]') && this.spec.kind !== 'discuss') return this.failedTurn();
     if (text.includes('[fake:env]')) return this.envTurn();
     if (imageMarkers(text).length) return this.pastedImagesTurn(text);
     if (this.spec.kind === 'planner') return this.plannerTurn();
@@ -94,7 +95,8 @@ export class FakeRunner implements AgentRunner {
       this.say('(fake) I suggest a design note and the High importance. Apply it if it looks right.');
       return this.finishTurn();
     } else if (this.spec.kind === 'discuss') {
-      this.say(`(fake) About ${this.spec.items[0]?.key}: ${this.spec.items[0]?.title}. You asked: ${text}`);
+      const about = this.spec.items[0] ? `${this.spec.items[0].key}: ${this.spec.items[0].title}` : 'the failed session';
+      this.say(`(fake) About ${about}. You asked: ${text.split('\n')[0]}`);
       return this.finishTurn();
     }
     if (this.turn > 1) {
@@ -137,6 +139,12 @@ export class FakeRunner implements AgentRunner {
     if (help) this.deps.emit({ t: 'notice', session_id: this.sessionId, ...loginNotice(help) });
     this.say(detail);
     this.finishTurn();
+  }
+
+  /** Like a worker whose GitHub login lapsed (DISP-81): the session fails at once. */
+  private failedTurn() {
+    this.say('(fake) Pushing the branch.');
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'failed', error: 'GitHub is not signed in on this worker\ngit push: Authentication failed. Run `gh auth login` on the worker.' });
   }
 
   /**

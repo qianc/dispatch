@@ -103,6 +103,8 @@ function apply(qc: QueryClient, e: LiveEvent) {
     }
     case 'session':
       qc.setQueryData<SessionDetail>(['session', e.session.id], (d) => (d ? { ...d, session: e.session } : d));
+      // a failed session's reason and retry come with the detail (DISP-81)
+      if (e.session.status === 'failed') qc.invalidateQueries({ queryKey: ['session', e.session.id] });
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['projects'] });

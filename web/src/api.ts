@@ -1,10 +1,10 @@
 import type {
-  Attention, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
+  Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 import type { SessionAccess } from './access.ts';
 import type { CheckRun } from '../../src/shared/checkProgress.ts';
 
-export type { Attention, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
+export type { Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
 
 export class ApiError extends Error {
   status: number;
@@ -95,7 +95,11 @@ export interface SessionDetail {
   checks?: CheckRun[];
   /** what you may do with it (DISP-63; missing from older servers) */
   access?: SessionAccess;
+  /** a failed session (DISP-81): why, the session that retries it, your open discussion of it */
+  failure?: SessionFailure | null;
 }
+
+export interface SessionFailure { reason: string; retried_as: number | null; discussion: number | null }
 
 /** The open assistant thread (or null), with Claude's replies since the owner last read it. */
 export interface AssistantChat {
@@ -107,6 +111,8 @@ export interface AssistantChat {
 export interface Inbox {
   inputs: PendingInput[];
   idle: (Session & { attention: Attention })[];
+  /** failed sessions not yet ignored or retried, with a short reason (DISP-81; missing from older servers) */
+  failed?: FailedSession[];
   prs: PullRequest[];
   sessions: Session[];
   /** leftovers of finished sessions on disk, if any */
