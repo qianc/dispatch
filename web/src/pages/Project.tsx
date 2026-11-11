@@ -725,7 +725,7 @@ function DisabledBanner({ project }: { project: ProjectSummary }) {
         <Icon name="lock" size={16} className="shrink-0 text-wait" />
         <div className="flex-1 min-w-0">
           <div className="text-[14px] font-medium">Read-only</div>
-          <div className="text-[12px] text-muted">{disabledLine(project)} Nothing changes, schedules are paused and queued sessions wait until it is unlocked. To unlock it, set its state to Active in <Link to={`/p/${project.key}?tab=settings`} className="text-accent underline underline-offset-2">Settings</Link>.</div>
+          <div className="text-[12px] text-muted">{disabledLine(project)} Nothing changes, schedules are paused and queued sessions wait until it is unlocked. To unlock it, set its state to Active in <Link to={`/p/${project.key}?tab=settings`} className="text-accent underline underline-offset-2">Settings</Link>, or ask the <Link to="/assistant" className="text-accent underline underline-offset-2">Assistant</Link> to unlock it.</div>
         </div>
       </div>
     </div>

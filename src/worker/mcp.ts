@@ -152,6 +152,10 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       effort_scale: z.array(z.string()).optional(),
       default_force_plan: z.boolean().optional(),
     }, call(rpc, 'update_project')),
+    tool('set_project_state', 'Lock (disable) or unlock (enable) a project, as the switch in its Settings does. A disabled project is read-only: its items cannot change, its schedules pause and its queued sessions wait. Enabling restores its schedules and starts its queued sessions.', {
+      key: z.string().describe('Project key'),
+      disabled: z.boolean().describe('true = lock (read-only), false = unlock'),
+    }, call(rpc, 'set_project_state')),
     tool('list_folder', 'List the folders and files directly in a folder (one level, not recursive), e.g. ~/projects. Folders that are git repos are marked git_repo. Use it to find a project folder by name: Glob matches only files, never folders.', {
       path: z.string().describe('Folder path, e.g. ~/projects'),
       name: z.string().optional().describe('Only entries whose name contains this text (any case), e.g. "dispatch"'),
