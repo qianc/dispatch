@@ -78,6 +78,12 @@ export function Project() {
   const drawer = wide && listTab && openItem && !creating;
   // item | chat side by side in the drawer when there is room; the list gets narrower
   const discussing = veryWide && params.get('discuss') === '1';
+  // a new Assistant chat with this project tagged (DISP-84); on a phone the icon only
+  const ask = (
+    <Button small variant="ghost" onClick={() => nav(`/assistant?project=${encodeURIComponent(project.key)}`)} aria-label={`Ask the Assistant about ${project.key}`}>
+      <Icon name="assistant" size={16} />{wide && ' Ask'}
+    </Button>
+  );
 
   return (
     <div className="flex-1 min-h-0 flex">
@@ -88,13 +94,18 @@ export function Project() {
       title={project.name}
       subtitle={<span style={{ color: lookColor(project) }} className="font-semibold">{project.key}</span>}
       back="/projects"
-      // locking is deliberate (DISP-76): only in Settings; the header only shows that it is locked
+      // locking is deliberate (DISP-76): only in Settings; the header only shows that it is locked.
+      // Ask opens a new Assistant chat with this project tagged (DISP-84), locked or not: the Assistant can unlock it.
       actions={project.disabled ? (
+        <>
+        {ask}
         <span role="status" aria-label="Project locked" title="Locked: read-only, schedules paused" className="flex items-center gap-1 px-2 text-[13px] font-medium text-wait"><Icon name="lock" size={16} /> Locked</span>
+        </>
       ) : (
         <>
           {releases.length > 0 && <Button small variant="ghost" onClick={() => setSheet('release')} aria-label="Create release">Release</Button>}
           <Button small variant="ghost" onClick={() => setSheet('planner')} aria-label="Plan with Claude"><Icon name="discuss" size={16} /> Plan</Button>
+          {ask}
           {listTab && (wide ? (
             <Button small variant="primary" className="ml-1 pl-2" onClick={openNew}><Icon name="plus" size={18} strokeWidth={2} /> {tab === 'bugs' ? 'New bug' : 'New item'}</Button>
           ) : (
