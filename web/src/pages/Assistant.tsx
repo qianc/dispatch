@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type AssistantChat, type Session } from '../api.ts';
+import { api, type AssistantChat, type ProjectSummary, type Session } from '../api.ts';
+import { taggedKeys } from '../mentions.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { useChatImages } from '../components/chatImages.tsx';
 import { PendingMessages } from '../components/PendingMessages.tsx';
@@ -30,6 +31,8 @@ function useVisible() {
 export function Assistant() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['assistant'], queryFn: () => api.get<AssistantChat>('/assistant') });
+  // for @ tags (DISP-82): the same list as the menu's
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
   const newChat = useMutation({
     mutationFn: () => api.post('/assistant/new'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assistant'] }),
@@ -43,22 +46,23 @@ export function Assistant() {
   }, [visible, unreadSeq, data?.session_id, qc]);
   if (!data) return <Page title="Assistant">{null}</Page>;
   if (data.session_id) {
-    return <SessionView key={data.session_id} chat={{ id: data.session_id, title: 'Assistant', subtitle: 'Ask me to set up projects, repos and items', onNew: () => newChat.mutate() }} />;
+    return <SessionView key={data.session_id} chat={{ id: data.session_id, title: 'Assistant', subtitle: 'Ask me to set up projects, repos and items', onNew: () => newChat.mutate(), projects }} />;
   }
-  return <EmptyChat />;
+  return <EmptyChat projects={projects} />;
 }
 
 /** Pending messages of an Assistant chat that does not exist yet: they move to it once it does. */
 export const NEW_ASSISTANT = 'assistant:new';
 
-function EmptyChat() {
+function EmptyChat({ projects }: { projects: ProjectSummary[] }) {
   const qc = useQueryClient();
   const images = useChatImages();
   const [text, setText] = useState('');
   const pending = usePending(NEW_ASSISTANT);
   // the first message shows at once; the chat opens when the server has it (DISP-83)
   const send = () => {
-    sendPending(NEW_ASSISTANT, { text, images: images.take() }, async (b) => {
+    const project_keys = taggedKeys(text, new Set(projects.map((p) => p.key)));
+    sendPending(NEW_ASSISTANT, { text, images: images.take(), project_keys }, async (b) => {
       const s = await api.post<Session>('/assistant/messages', b);
       void qc.invalidateQueries({ queryKey: ['assistant'] });
       return { chat: `session:${s.id}` };
@@ -74,7 +78,7 @@ function EmptyChat() {
       title="Assistant"
       subtitle="Ask me to set up projects, repos and items"
       footer={
-        <ChatInput value={text} onChange={setText} onSubmit={send} canSubmit={!images.uploading} placeholder="Tell me what to do — or paste a screenshot of an error to log a bug" {...images.input} />
+        <ChatInput value={text} onChange={setText} onSubmit={send} canSubmit={!images.uploading} projects={projects} placeholder="Tell me what to do — @ tags a project; paste a screenshot of an error to log a bug" {...images.input} />
       }
     >
       {pending.length ? <div className="pt-3"><PendingMessages pending={pending} onEdit={editAgain} /></div> : (

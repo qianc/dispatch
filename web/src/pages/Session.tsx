@@ -7,6 +7,7 @@ import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { PendingMessages } from '../components/PendingMessages.tsx';
 import { reconcile, sendPending, usePending, type Pending } from '../pendingSends.ts';
+import { taggedKeys, type MentionProject } from '../mentions.ts';
 import { useChatImages } from '../components/chatImages.tsx';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
@@ -38,6 +39,8 @@ export interface ChatMode {
   onClose?: () => void;
   /** shown above the conversation (Discuss on a phone: the item itself) */
   intro?: ReactNode;
+  /** @ tags these projects in a message (the Assistant, DISP-82) */
+  projects?: MentionProject[];
 }
 
 /** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
@@ -65,7 +68,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const pendingKey = `session:${id}`;
   const pending = usePending(pendingKey);
   const send = () => {
-    sendPending(pendingKey, { text, images: images.take() }, (b) => api.post(`/sessions/${id}/messages`, b));
+    const project_keys = chat?.projects ? taggedKeys(text, new Set(chat.projects.map((p) => p.key))) : [];
+    sendPending(pendingKey, { text, images: images.take(), project_keys }, (b) => api.post(`/sessions/${id}/messages`, b));
     setText('');
   };
   const editAgain = (p: Pending) => {
@@ -243,6 +247,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           onChange={setText}
           onSubmit={send}
           canSubmit={canSend && !images.uploading}
+          projects={chat?.projects}
           disabled={!canSend}
           placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
           {...images.input}
