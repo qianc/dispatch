@@ -55,7 +55,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
 - **Deploy after merge**: a repo's deploy command (repo settings) runs on the session's worker
   each time Dispatch merges into its default branch, by auto-merge or by you. A local repo deploys
   from its folder, other repos from a fresh checkout of the merged branch; `DISPATCH_DEPLOY_SHA`
-  holds the merged commit. Deploys of one repo run one at a time. The result goes into the session,
+  holds the merged commit. A deploy script that builds from some other checkout must bring it to
+  that commit first (fetch and fast-forward) and build `DISPATCH_DEPLOY_SHA`, not that checkout's
+  `HEAD`: nothing else updates it after a merge. Deploys of one repo run one at a time. The result goes into the session,
   and the push says "merged and deployed" or that the deploy failed, with the end of its output.
   The deploy may restart the server itself: the worker keeps the result and reports it when the
   server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
