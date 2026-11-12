@@ -9,7 +9,11 @@ import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 
 /** A chat message: text, images pasted into it (POST /api/chat-images first, DISP-34), or both. */
-const message = z.object({ text: z.string().default(''), images: z.array(z.string()).max(10).default([]) })
+// client_id: the web app's id for the message, so a retry is stored once (DISP-83); project_keys: tagged with @ (DISP-82)
+const message = z.object({
+  text: z.string().default(''), images: z.array(z.string()).max(10).default([]),
+  client_id: z.string().min(1).max(64).optional(), project_keys: z.array(z.string().max(20)).max(20).default([]),
+})
   .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.');
 export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, users, github, bus, janitor }: Ctx) {
   const project = (key: unknown) => {
@@ -110,8 +114,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   });
 
   app.post('/api/assistant/messages', async (req) => {
-    const { text, images } = message.parse(req.body);
-    return sessions.assistantSend(who(req).user, text, images);
+    const { text, images, ...opts } = message.parse(req.body);
+    return sessions.assistantSend(who(req).user, text, images, opts);
   });
 
   app.post('/api/assistant/new', async (req) => {
@@ -123,8 +127,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   app.get('/api/items/:id/discuss', async (req) => ({ session_id: sessions.currentDiscuss(intParam((req.params as { id: string }).id), who(req).user)?.id ?? null }));
 
   app.post('/api/items/:id/discuss', async (req) => {
-    const { text, images } = message.parse(req.body);
-    return sessions.discussSend(intParam((req.params as { id: string }).id), who(req).user, text, images);
+    const { text, images, ...opts } = message.parse(req.body);
+    return sessions.discussSend(intParam((req.params as { id: string }).id), who(req).user, text, images, opts);
   });
 
   app.post('/api/items/:id/discuss/new', async (req) => {
@@ -160,8 +164,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/sessions/:id/messages', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { text, images } = message.parse(req.body);
-    sessions.send(s.id, text, images);
+    const { text, images, ...opts } = message.parse(req.body);
+    sessions.send(s.id, text, images, opts);
     return { ok: true };
   });
 

@@ -142,6 +142,9 @@ function checkoutImageData(path: string, data: unknown): { data: Buffer } {
   return { data: buf };
 }
 
+/** With a message from the web app: its id, so a retry is stored once (DISP-83), and the projects tagged with @ (DISP-82). */
+export interface SendOpts { client_id?: string; project_keys?: string[] }
+
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
 export class Sessions {
@@ -443,34 +446,48 @@ export class Sessions {
    * The owner's message in the transcript, with the images pasted into it, and the text for the
    * agent: the same, with a marker per image (its worker fetches them, get_chat_image).
    */
-  private userMessage(sessionId: number, text: string, images: string[]): string {
+  private userMessage(sessionId: number, text: string, images: string[], opts: SendOpts = {}): string {
     this.checkImages(sessionId, images);
+    const tags = this.tagged(opts.project_keys);
+    const extra = { ...(opts.client_id ? { client_id: opts.client_id } : {}), ...(tags.keys.length ? { project_keys: tags.keys } : {}) };
     if (!images.length) {
-      this.addEvent(sessionId, { kind: 'user', text });
-      return text;
+      this.addEvent(sessionId, { kind: 'user', text, ...extra });
+      return text + tags.line;
     }
     this.attachments!.claim(sessionId, images);
-    this.addEvent(sessionId, { kind: 'user', text, images: images.map((f) => ({ url: `/api/sessions/${sessionId}/attachments/${f}`, media_type: chatImageType(f) })) });
-    return withImageMarkers(text, images);
+    this.addEvent(sessionId, { kind: 'user', text, images: images.map((f) => ({ url: `/api/sessions/${sessionId}/attachments/${f}`, media_type: chatImageType(f) })), ...extra });
+    return withImageMarkers(text, images) + tags.line;
+  }
+
+  /**
+   * The projects tagged with @ in a message (DISP-82): the known ones, and the line that tells the
+   * agent about them ("Tagged projects: HC (Home cache)"). Unknown keys are left out.
+   */
+  private tagged(keys: string[] = []): { keys: string[]; line: string } {
+    const known = [...new Set(keys)].flatMap((k) => {
+      const p = this.store.projectByKey(k);
+      return p ? [p] : [];
+    });
+    return { keys: known.map((p) => p.key), line: known.length ? `\n\nTagged projects: ${known.map((p) => `${p.key} (${p.name})`).join(', ')}` : '' };
   }
 
   /** A chat (assistant or discuss): continue the open thread, or start one on the first message. */
-  private chatSend(open: Session | undefined, create: (prompt: string) => Session, text: string, images: string[]): Session {
+  private chatSend(open: Session | undefined, create: (prompt: string) => Session, text: string, images: string[], opts: SendOpts = {}): Session {
     if (open) {
-      this.send(open.id, text, images);
+      this.send(open.id, text, images, opts);
       return this.store.session(open.id)!;
     }
     this.checkImages(null, images);
     // a new chat starts at once, or waits in the queue for its worker
-    const s = create(withImageMarkers(text, images));
-    this.userMessage(s.id, text, images);
+    const s = create(withImageMarkers(text, images) + this.tagged(opts.project_keys).line);
+    this.userMessage(s.id, text, images, opts);
     this.emitSession(s);
     this.dispatch();
     return this.store.session(s.id)!;
   }
 
   /** The assistant chat: one open thread at a time per user. */
-  assistantSend(startedBy: string | null, text: string, images: string[] = []): Session {
+  assistantSend(startedBy: string | null, text: string, images: string[] = [], opts: SendOpts = {}): Session {
     return this.chatSend(this.currentAssistant(startedBy), (prompt) => {
       const workerId = this.workerFor(null, null, startedBy);
       return this.store.createSession({
@@ -478,7 +495,7 @@ export class Sessions {
         initial_prompt: prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(null, null, 'assistant', workerId),
         worker_id: workerId, started_by: startedBy,
       });
-    }, text, images);
+    }, text, images, opts);
   }
 
   /** `user`'s open assistant thread. */
@@ -487,7 +504,7 @@ export class Sessions {
   }
 
   /** "Discuss this" on an item: a read-only chat about it, one open thread per item and user. */
-  discussSend(itemId: number, startedBy: string | null, text: string, images: string[] = []): Session {
+  discussSend(itemId: number, startedBy: string | null, text: string, images: string[] = [], opts: SendOpts = {}): Session {
     const item = this.store.item(itemId);
     if (!item) throw new SessionError('Unknown item', 404);
     assertWritable(this.store, item.project_id);
@@ -500,7 +517,7 @@ export class Sessions {
         initial_prompt: prompt, source_id: item.source_id, item_ids: [item.id],
         claude_account: this.claudeAccountFor(project, null, undefined, workerId), worker_id: workerId, started_by: startedBy,
       });
-    }, text, images);
+    }, text, images, opts);
   }
 
   /** `user`'s open discussion of the item. */
@@ -619,14 +636,23 @@ export class Sessions {
   // ---------- user actions ----------
 
   /** `images`: files pasted into the chat (from POST /api/chat-images), sent along (DISP-34) */
-  send(sessionId: number, ownText: string, images: string[] = []) {
+  send(sessionId: number, ownText: string, images: string[] = [], opts: SendOpts = {}) {
     const s = this.mustGet(sessionId);
+    // a retry of a message that was stored (its answer was lost on the way): nothing to do (DISP-83)
+    if (opts.client_id && this.store.hasUserMessage(s.id, opts.client_id)) return;
+    if (s.status === 'queued' && CHAT_KINDS.includes(s.kind)) {
+      // a chat that has not started yet: the message goes with its first turn (sent quickly one after another)
+      const text = this.userMessage(sessionId, ownText, images, opts);
+      const before = s.pending_prompt ?? (s.sdk_session_id ? null : s.initial_prompt);
+      this.emitSession(this.store.updateSession(s.id, { pending_prompt: before ? `${before}\n\n${text}` : text }));
+      return;
+    }
     if (s.status === 'queued') throw new SessionError('Session has not started yet.');
     if (s.status === 'waiting_input') throw new SessionError('Answer the open question first.');
     // before the message is kept: a session that may not act on GitHub now does not go on
     const identity = this.identityOf(s);
     if (isRefusal(identity)) throw refusalError(identity);
-    const text = this.userMessage(sessionId, ownText, images);
+    const text = this.userMessage(sessionId, ownText, images, opts);
     const reopen = FINAL_STATUSES.includes(s.status);
     if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       // its worker is away: the reply waits, and the session resumes with it when the worker is back

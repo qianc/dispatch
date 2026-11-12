@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type ItemDetail } from '../api.ts';
+import { api, type ItemDetail, type Session } from '../api.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
+import { PendingMessages } from '../components/PendingMessages.tsx';
+import { sendPending, usePending, type Pending } from '../pendingSends.ts';
 import { useChatImages } from '../components/chatImages.tsx';
 import { Page } from '../components/Layout.tsx';
 import { CloseButton, ErrorText, ITEM_STATUS_LABEL, ItemStatusIcon, cx } from '../components/ui.tsx';
@@ -65,10 +67,21 @@ function EmptyDiscuss({ id, title, subtitle, onClose, intro }: { id: number; tit
   const qc = useQueryClient();
   const images = useChatImages();
   const [text, setText] = useState('');
-  const send = useMutation({
-    mutationFn: (t: string) => api.post(`/items/${id}/discuss`, { text: t, images: images.files }),
-    onSuccess: () => { images.clear(); qc.invalidateQueries({ queryKey: ['discuss', id] }); },
-  });
+  const pendingKey = `discuss:new:${id}`;
+  const pending = usePending(pendingKey);
+  // the first message shows at once; the chat opens when the server has it (DISP-83)
+  const send = (t: string) => {
+    sendPending(pendingKey, { text: t, images: images.take() }, async (b) => {
+      const s = await api.post<Session>(`/items/${id}/discuss`, b);
+      void qc.invalidateQueries({ queryKey: ['discuss', id] });
+      return { chat: `session:${s.id}` };
+    });
+    setText('');
+  };
+  const editAgain = (p: Pending) => {
+    setText((v) => (v ? `${v}\n${p.text}` : p.text));
+    images.restore(p.images);
+  };
   return (
     <Page
       title={title}
@@ -77,18 +90,18 @@ function EmptyDiscuss({ id, title, subtitle, onClose, intro }: { id: number; tit
       keepScroll={!onClose}
       actions={onClose && <CloseButton onClick={onClose} label="Close chat" />}
       footer={
-        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending && !images.uploading} placeholder="Ask about this item" {...images.input} />
+        <ChatInput value={text} onChange={setText} onSubmit={() => send(text)} canSubmit={!images.uploading} placeholder="Ask about this item" {...images.input} />
       }
     >
       {intro}
       <div className="px-4 pt-5 space-y-2">
         <p className="text-sm text-muted mb-3">A quick, read-only chat about this item. It knows the item and the repo's CLAUDE.md and can look at the code, but it never changes anything.</p>
-        {STARTERS.map((s) => (
-          <button key={s} onClick={() => send.mutate(s)} disabled={send.isPending} className="block w-full text-left rounded-lg border border-line bg-panel px-3 py-2 text-[14px] active:bg-raised">
+        {pending.length ? <PendingMessages pending={pending} onEdit={editAgain} /> : STARTERS.map((s) => (
+          <button key={s} onClick={() => send(s)} className="block w-full text-left rounded-lg border border-line bg-panel px-3 py-2 text-[14px] active:bg-raised">
             {s}
           </button>
         ))}
-        <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
+        <ErrorText error={(images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
       </div>
     </Page>
   );
