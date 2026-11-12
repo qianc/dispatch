@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api.ts';
+import type { PendingImage } from '../pendingSends.ts';
 
 interface Pasted { id: number; preview: string; file: string | null; error: string | null }
 
@@ -70,6 +71,16 @@ export function useChatImages() {
     l.forEach((p) => URL.revokeObjectURL(p.preview));
     return [];
   });
+  /** The uploaded images, to go with a message that is shown at once (DISP-83): the box is empty after. */
+  const take = (): PendingImage[] => {
+    const l = live.current;
+    l.filter((p) => !p.file).forEach((p) => URL.revokeObjectURL(p.preview));
+    setList([]);
+    live.current = [];
+    return l.flatMap((p) => (p.file ? [{ file: p.file, preview: p.preview }] : []));
+  };
+  /** Images of a message that was not sent, back in the box to edit it. */
+  const restore = (imgs: PendingImage[]) => setList((l) => [...l, ...imgs.map((i) => ({ id: next.current++, preview: i.preview, file: i.file, error: null }))]);
   const uploading = list.some((p) => !p.file && !p.error);
   const files = list.flatMap((p) => (p.file ? [p.file] : []));
 
@@ -86,5 +97,5 @@ export function useChatImages() {
   ) : null;
 
   const error = list.find((p) => p.error)?.error ?? null;
-  return { add, clear, files, uploading, error, input: { onImages: add, attachments: view, hasImages: files.length > 0 } };
+  return { add, clear, take, restore, files, uploading, error, input: { onImages: add, attachments: view, hasImages: files.length > 0 } };
 }

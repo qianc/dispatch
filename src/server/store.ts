@@ -668,6 +668,11 @@ export class Store {
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
   }
 
+  /** The owner's message with this client id in the session, if it was stored (DISP-83). */
+  hasUserMessage(sessionId: number, clientId: string): boolean {
+    return !!this.db.get("SELECT 1 FROM session_events WHERE session_id = ? AND json_extract(body, '$.kind') = 'user' AND json_extract(body, '$.client_id') = ?", sessionId, clientId);
+  }
+
   /** Claude's messages (replies, proposal cards) in a chat after the point the owner has read to. */
   unread(sessionId: number): { unread: number; last_seq: number } {
     const r = this.db.get<{ unread: number; last_seq: number }>(

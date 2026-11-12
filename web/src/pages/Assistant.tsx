@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type AssistantChat, type Session } from '../api.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { useChatImages } from '../components/chatImages.tsx';
+import { PendingMessages } from '../components/PendingMessages.tsx';
+import { sendPending, usePending, type Pending } from '../pendingSends.ts';
 import { Page } from '../components/Layout.tsx';
 import { ErrorText } from '../components/ui.tsx';
 import { SessionView } from './Session.tsx';
@@ -46,31 +48,46 @@ export function Assistant() {
   return <EmptyChat />;
 }
 
+/** Pending messages of an Assistant chat that does not exist yet: they move to it once it does. */
+export const NEW_ASSISTANT = 'assistant:new';
+
 function EmptyChat() {
   const qc = useQueryClient();
   const images = useChatImages();
   const [text, setText] = useState('');
-  const send = useMutation({
-    mutationFn: (t: string) => api.post<Session>('/assistant/messages', { text: t, images: images.files }),
-    onSuccess: () => { images.clear(); qc.invalidateQueries({ queryKey: ['assistant'] }); },
-  });
+  const pending = usePending(NEW_ASSISTANT);
+  // the first message shows at once; the chat opens when the server has it (DISP-83)
+  const send = () => {
+    sendPending(NEW_ASSISTANT, { text, images: images.take() }, async (b) => {
+      const s = await api.post<Session>('/assistant/messages', b);
+      void qc.invalidateQueries({ queryKey: ['assistant'] });
+      return { chat: `session:${s.id}` };
+    });
+    setText('');
+  };
+  const editAgain = (p: Pending) => {
+    setText((t) => (t ? `${t}\n${p.text}` : p.text));
+    images.restore(p.images);
+  };
   return (
     <Page
       title="Assistant"
       subtitle="Ask me to set up projects, repos and items"
       footer={
-        <ChatInput value={text} onChange={setText} onSubmit={() => send.mutate(text)} canSubmit={!send.isPending && !images.uploading} placeholder="Tell me what to do — or paste a screenshot of an error to log a bug" {...images.input} />
+        <ChatInput value={text} onChange={setText} onSubmit={send} canSubmit={!images.uploading} placeholder="Tell me what to do — or paste a screenshot of an error to log a bug" {...images.input} />
       }
     >
-      <div className="px-4 pt-6 space-y-2">
-        <p className="text-sm text-muted mb-3">For example:</p>
-        {EXAMPLES.map((ex) => (
-          <button key={ex} onClick={() => setText(ex)} className="block w-full text-left rounded-lg border border-line bg-panel px-3 py-2 text-[14px] active:bg-raised">
-            {ex}
-          </button>
-        ))}
-        <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
-      </div>
+      {pending.length ? <div className="pt-3"><PendingMessages pending={pending} onEdit={editAgain} /></div> : (
+        <div className="px-4 pt-6 space-y-2">
+          <p className="text-sm text-muted mb-3">For example:</p>
+          {EXAMPLES.map((ex) => (
+            <button key={ex} onClick={() => setText(ex)} className="block w-full text-left rounded-lg border border-line bg-panel px-3 py-2 text-[14px] active:bg-raised">
+              {ex}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="px-4"><ErrorText error={images.error ? new Error(`An image could not be added: ${images.error}`) : null} /></div>
     </Page>
   );
 }

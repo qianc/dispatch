@@ -5,6 +5,8 @@ import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
+import { PendingMessages } from '../components/PendingMessages.tsx';
+import { reconcile, sendPending, usePending, type Pending } from '../pendingSends.ts';
 import { useChatImages } from '../components/chatImages.tsx';
 import { Page } from '../components/Layout.tsx';
 import { Transcript } from '../components/transcript.tsx';
@@ -59,10 +61,18 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
   const images = useChatImages();
-  const send = useMutation({
-    mutationFn: () => api.post(`/sessions/${id}/messages`, { text, images: images.files }),
-    onSuccess: () => { setText(''); images.clear(); },
-  });
+  // the message shows at once and the box is free again; the server's copy replaces it (DISP-83)
+  const pendingKey = `session:${id}`;
+  const pending = usePending(pendingKey);
+  const send = () => {
+    sendPending(pendingKey, { text, images: images.take() }, (b) => api.post(`/sessions/${id}/messages`, b));
+    setText('');
+  };
+  const editAgain = (p: Pending) => {
+    setText((t) => (t ? `${t}\n${p.text}` : p.text));
+    images.restore(p.images);
+  };
+  useEffect(() => { if (data) reconcile(pendingKey, data.events); }, [data?.events, pendingKey]);
   const interrupt = useMutation({ mutationFn: () => api.post(`/sessions/${id}/interrupt`) });
   const finish = useMutation({
     mutationFn: (b: { status: 'completed' | 'stopped'; cleanup: boolean }) => api.post(`/sessions/${id}/finish`, b),
@@ -137,7 +147,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     }
     if (pinned.current) el.scrollTop = el.scrollHeight;
     else setUnseen(true); // something new arrived below while you read further up
-  }, [data?.events.length, data?.inputs.length]);
+  }, [data?.events.length, data?.inputs.length, pending.length]);
   // desktop: an item opened from a card shows beside the chat; in a narrow side panel, over it
   const { peek, close: closePeek } = useItemPeek();
 
@@ -146,7 +156,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const attention = attentionOf(s, data.prs, data.events);
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
-  const canSend = s.status !== 'queued' && s.status !== 'waiting_input';
+  // a chat that has not started yet takes more messages: they go with its first turn (DISP-83)
+  const canSend = s.status !== 'waiting_input' && (s.status !== 'queued' || CHAT_KINDS.includes(s.kind));
   // someone else's session: read it, but no replies, answers or proposals (DISP-63)
   const drive = canAct(data.access, 'drive');
   const stop = canAct(data.access, 'stop');
@@ -230,8 +241,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <ChatInput
           value={text}
           onChange={setText}
-          onSubmit={() => send.mutate()}
-          canSubmit={canSend && !send.isPending && !images.uploading}
+          onSubmit={send}
+          canSubmit={canSend && !images.uploading}
           disabled={!canSend}
           placeholder={s.status === 'waiting_input' ? 'Answer the question above first' : final ? 'Message to reopen the session' : 'Message Claude'}
           {...images.input}
@@ -279,6 +290,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         <div role="status" className="mx-4 mt-3 rounded-xl border border-wait/40 bg-wait/5 px-3 py-2.5 text-[14px]">{readOnlyText(s)}</div>
       )}
       <Transcript session={s} events={data.events} inputs={data.inputs} project={project} readOnly={!drive} />
+      <PendingMessages pending={pending} onEdit={editAgain} />
       {s.status === 'queued' && (
         <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
           <p>{s.waiting_reason ?? 'Waiting for a free worker slot…'}</p>
@@ -316,7 +328,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {drive && <FailedActions s={s} failure={data.failure} />}
         </div>
       )}
-      <ErrorText error={send.error ?? (images.error ? new Error(`An image could not be added: ${images.error}`) : null)} />
+      <ErrorText error={images.error ? new Error(`An image could not be added: ${images.error}`) : null} />
       <div ref={endRef} />
       {awayFromBottom && (
         // sticky at the bottom of the chat area: stays in view while you read further up

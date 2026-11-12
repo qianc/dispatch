@@ -22,7 +22,7 @@ const AssistantText = memo(function AssistantText({ text, projectId, projectKey,
 type ToolUse = Extract<SessionEventBody, { kind: 'tool_use' }>;
 type ToolResult = Extract<SessionEventBody, { kind: 'tool_result' }>;
 
-function Thumbs({ images, className = 'ml-3.5 mb-1' }: { images: { url: string }[]; className?: string }) {
+export function Thumbs({ images, className = 'ml-3.5 mb-1' }: { images: { url: string }[]; className?: string }) {
   const [full, setFull] = useState<string | null>(null);
   return (
     <div className={cx('flex flex-wrap gap-2', className)}>
