@@ -19,6 +19,11 @@ export type SourceKind = (typeof SOURCE_KINDS)[number];
 export type SessionKind = (typeof SESSION_KINDS)[number];
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
+/** A session's status in plain words, for a line of text ("Waiting for #12 (needs you)"). */
+export function sessionStatusWords(status: SessionStatus): string {
+  return { queued: 'queued', running: 'working', waiting_input: 'needs you', idle: 'turn ended', completed: 'done', failed: 'failed', stopped: 'stopped' }[status];
+}
+
 /** Sessions in these states hold a worker slot. */
 export const ACTIVE_STATUSES: SessionStatus[] = ['running', 'waiting_input'];
 /** Sessions in these states are finished for good. */
@@ -517,7 +522,7 @@ export type Attention =
   /** a planning chat with a batch or items card you have not acted on yet */
   | { kind: 'proposal'; text: string; proposals: OpenProposal[] }
   | { kind: 'turn'; text: string }
-  /** an orchestrator whose plan waits for your approval */
+  /** an orchestrator that plans and needs you: its plan waits for your approval, or it asked you something */
   | { kind: 'plan'; text: string }
   /** an orchestrator with a failed step: retry or skip it there */
   | { kind: 'step_failed'; text: string; step_id: number }

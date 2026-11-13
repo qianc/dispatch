@@ -24,7 +24,7 @@ const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | '
   proposal: { tone: 'wait', label: 'Proposal to act on', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
   turn: { tone: 'wait', label: 'Your reply', icon: 'M4 5h16v11H9l-5 4z' },
   // an orchestrator: its plan waits for a yes, or one of its steps failed
-  plan: { tone: 'wait', label: 'Plan to approve', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
+  plan: { tone: 'wait', label: 'Orchestrator needs you', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
   step_failed: { tone: 'bad', label: 'Step failed', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
   merged: { tone: 'ok', label: 'Done and merged', icon: 'M5 12.5l4.5 4.5L19 7.5' },
 };

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { crossProjectSummary, type Proposal, type ProposedItem, type Question, type SessionEventBody } from '../../../src/shared/types.ts';
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
+import { dispatchEvents } from '../orchestration.ts';
 import { Button, Chip, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
@@ -126,8 +127,19 @@ export function Transcript({ session, events, inputs, project, readOnly = false 
             <div className="h-px flex-1 bg-line" />
           </div>
         );
-      case 'system':
+      case 'system': {
+        // what Dispatch told an orchestrator: its events, with the whole message (the plan as it stood) behind them
+        const events = dispatchEvents(b.text);
+        if (events) {
+          return (
+            <details key={e.seq} className="text-[12px] text-faint">
+              <summary className="cursor-pointer text-center list-none">Dispatch: {events.join(' ') || 'the plan as it stands'}</summary>
+              <pre className="mt-1.5 whitespace-pre-wrap font-sans text-left rounded-lg bg-panel border border-line px-3 py-2">{b.text}</pre>
+            </details>
+          );
+        }
         return <div key={e.seq} className="text-[12px] text-faint text-center">{b.text}</div>;
+      }
       case 'error':
         return <div key={e.seq} className="text-[13px] text-bad rounded-lg bg-bad/10 border border-bad/20 px-3 py-2 whitespace-pre-wrap">{b.text}</div>;
       case 'input_request': {

@@ -117,7 +117,7 @@ describe('orchestrator: API', () => {
     const b = await t.item('AA', 'Two');
     const id = t.start().session_id;
     turn(id);
-    expect((await inbox())[0].attention.kind).toBe('turn'); // it asked something in its chat
+    expect((await inbox())[0].attention).toEqual({ kind: 'plan', text: 'It waits for your reply before it can plan.' }); // it asked something in its chat
     await t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'First', project_key: 'AA', item_keys: [a.key] }, { title: 'Then', project_key: 'AA', item_keys: [b.key], after: [1] }] });
     expect((await inbox())[0].attention).toMatchObject({ kind: 'plan', text: 'The plan is ready: read it and approve it.' });
     await post(`/orchestrations/${id}/approve`);

@@ -135,6 +135,32 @@ scope says so. The run shows in the session list, and its last message is the re
 the server's time zone: `TZ`, default `UTC` in Docker (see [Configuration](#configuration)). A run missed while the server was down
 starts when the server is back, if that is less than 6 hours after its time.
 
+**Orchestrator.** For a goal that takes several batches, also over several projects: **Activity →
+New orchestration**. You give the goal, the projects it may work in, how many batches may run at
+once, and the run options of its batches. It is a session of its own, with a plan on its page.
+
+- *Plan.* It reads the trackers and the code of those projects, asks you what is unclear, files
+  missing items, and proposes a plan of steps. One step is one batch in one project; a step can
+  wait for other steps, also in another project. Nothing starts before you press **Approve plan**.
+- *Run.* It starts each step as a normal batch, when the steps before it are merged (and deployed,
+  where the repo deploys). Dispatch wakes it when a step is done, fails or waits for your review;
+  between those it uses no worker time. When every step is finished it writes the result and
+  closes. Write to it at any time; a change of the plan needs your approval again.
+- *Rules the server keeps*, whatever the orchestrator does: only the projects you gave it, and none
+  that is disabled; only steps of the approved plan, each started once; the limit of batches at
+  once; no item that is on hold, closed, in review or in another open batch; it never merges, and it
+  edits no files itself. Its batches run as you.
+- *A failed step* holds the steps that wait for it, and you get a push. On the step's menu:
+  **Retry** (a new batch) or **Skip** (the steps after it go on). **Pause** starts no new steps and
+  keeps what happens meanwhile for it; **Stop** ends it, and can stop its running batches too.
+- The Inbox shows an orchestrator only when it needs you: a plan to approve or a question, or a
+  failed step.
+
+Not there yet: a batch's own questions and plan approvals still come to you, not to the
+orchestrator; there is no cost limit; the scope and limits cannot change after the start; its own
+read-only checkouts use the GitHub account of the first project in its list; and a local repo is
+read only if it is on the orchestrator's worker.
+
 The **phone app** and **push notifications** need HTTPS: put a reverse proxy in front and set
 `PUBLIC_URL` to the https address ([Caddy example](docs/examples/Caddyfile)). Then open the address
 on the phone and add it to the home screen. Data is in the Docker volumes (`dispatch-data` for the

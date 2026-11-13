@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, planInput, proposedItemSchema, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -92,11 +92,10 @@ export class Orchestrator {
   /** What an idle orchestrator needs from its owner, or null while it only waits for its steps. */
   attention(sessionId: number): Attention | null {
     const o = this.store.orchestration(sessionId);
-    if (!o) return { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
+    if (!o) return null;
+    // while it plans, its turn end is a question to the owner or a plan to approve
     if (o.phase === 'plan') {
-      return o.steps.length && !o.plan_approved
-        ? { kind: 'plan', text: 'The plan is ready: read it and approve it.' }
-        : { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
+      return { kind: 'plan', text: o.steps.length && !o.plan_approved ? 'The plan is ready: read it and approve it.' : 'It waits for your reply before it can plan.' };
     }
     const failed = o.phase === 'run' ? o.steps.find((s) => s.state === 'failed') : undefined;
     if (!failed) return null;
@@ -121,7 +120,7 @@ export class Orchestrator {
     const running = o.steps.find((s) => s.state === 'running');
     if (running) {
       const child = running.child_session_id ? this.store.session(running.child_session_id) : undefined;
-      return `Waiting for #${running.child_session_id} (${running.note ?? child?.status ?? 'running'}) in ${running.project_key}`;
+      return `Waiting for #${running.child_session_id} (${running.note ?? (child ? sessionStatusWords(child.status) : 'working')}) in ${running.project_key}`;
     }
     return null;
   }

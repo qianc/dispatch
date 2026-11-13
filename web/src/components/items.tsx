@@ -4,7 +4,8 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TokenInput } from './TokenInput.tsx';
-import { ITEM_STATUSES, type ItemStatus, type ItemType, type ProposedItem } from '../../../src/shared/types.ts';
+import { ITEM_STATUSES, type ItemStatus, type ItemType, type Orchestration, type ProposedItem } from '../../../src/shared/types.ts';
+import { doneCount, orchBusyLabel } from '../orchestration.ts';
 import { api, type Attention, type Item, type Project, type Session } from '../api.ts';
 import { busyStatus, sessionLink } from '../activity.ts';
 import { useWide } from '../wide.ts';
@@ -117,20 +118,28 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
 }
 
 /** `snippet`: a piece of the message a search found (DISP-54), with the `terms` marked. */
-export function SessionRow({ s, showProject, attention, snippet, terms = [] }: { s: Session; showProject?: boolean; attention?: Attention; snippet?: string | null; terms?: string[] }) {
-  const busy = busyStatus(s, attention);
+/**
+ * `orch`: the orchestration an orchestrator session holds (its steps and what it waits for).
+ * `partOf`: for a step's batch, the orchestration and step it belongs to.
+ */
+export function SessionRow({ s, showProject, attention, snippet, terms = [], orch, partOf }: { s: Session; showProject?: boolean; attention?: Attention; snippet?: string | null; terms?: string[]; orch?: Orchestration; partOf?: string }) {
+  // an idle orchestrator that needs nothing from you is at work: it waits for its steps
+  const orchLabel = orch && !attention ? orchBusyLabel(orch, s.status) : undefined;
+  const waitsForSteps = orch && orchLabel ? { label: orchLabel, text: orch.waiting ?? 'Waiting for its steps' } : null;
+  const busy = waitsForSteps ?? busyStatus(s, attention);
   const wide = useWide();
   return (
     <Link to={sessionLink(s, wide)} className="block px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised">
       <div className="flex items-center gap-2">
         {showProject && <ProjectKey k={s.project_key} badge />}
         <span className="flex-1 min-w-0 truncate font-medium">{s.schedule_id ? <Icon name="schedule" size={15} className="inline -mt-0.5 mr-1 text-muted" /> : (s.kind === 'planner' || s.kind === 'discuss') && <Icon name="discuss" size={15} className="inline -mt-0.5 mr-1 text-muted" />}{s.title}</span>
+        {orch && orch.steps.length > 0 && <span className="shrink-0 text-[12px] text-muted tabular-nums" aria-label={`${doneCount(orch)} of ${orch.steps.length} steps done`}>{doneCount(orch)}/{orch.steps.length}</span>}
         <SessionStatusChip status={s.status} busy={busy?.label} />
       </div>
       <div className="flex items-start gap-2 mt-0.5 text-[13px] text-muted">
         {snippet
           ? <span className="flex-1 min-w-0 line-clamp-2 break-words">{markTerms(snippet, terms).map((p, i) => (p.hit ? <mark key={i} className="bg-accent/25 text-fg rounded-sm">{p.text}</mark> : p.text))}</span>
-          : <span className="flex-1 min-w-0 truncate">{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : s.last_text ?? s.initial_prompt}</span>}
+          : <span className="flex-1 min-w-0 truncate">{partOf && <span className="text-accent">{partOf} · </span>}{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : orch?.waiting ?? s.last_text ?? s.initial_prompt}</span>}
         <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
       </div>
     </Link>

@@ -19,6 +19,7 @@ import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { OrchestrationPanel } from '../components/orchestration.tsx';
+import { orchBusyLabel } from '../orchestration.ts';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -175,6 +176,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const failed = s.status === 'failed' && !CHAT_KINDS.includes(s.kind) && !!data.failure;
   const failedInChat = failed && (!sidePanel || !!chat || attention.kind === 'login');
 
+  // an orchestrator that only waits for its steps is at work, not "your turn"
+  const orchBusy = data.orchestration ? orchBusyLabel(data.orchestration, s.status) : undefined;
+
   const peekPanel = peek && <ItemDetail key={peek} itemId={peek} onClose={closePeek} />;
   // one tree whether or not the item shows, so opening it does not rebuild the chat and lose its place
   return (
@@ -195,7 +199,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           <div>
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-              <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} /></dd>
+              <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} busy={orchBusy} /></dd>
               {s.started_by && <><dt className="text-muted">Started by</dt><dd className="truncate">{s.started_by}{s.github_login && <span className="text-muted"> as @{s.github_login}</span>}</dd></>}
               {workers.length > 0 && <><dt className="text-muted">Worker</dt><dd className="truncate">{workerName(workers, s.worker_id)}</dd></>}
               {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
@@ -241,7 +245,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       keepScroll={false}
       actions={
         <>
-          {!isAssistant && <SessionStatusChip status={s.status} />}
+          {!isAssistant && <SessionStatusChip status={s.status} busy={orchBusy} />}
           {chat && <Button small variant="ghost" onClick={chat.onNew}>New chat</Button>}
           {chat?.onClose && <CloseButton onClick={chat.onClose} label="Close chat" />}
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
