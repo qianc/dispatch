@@ -1,5 +1,5 @@
 import type {
-  Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
+  Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, Orchestration, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 import type { SessionAccess } from './access.ts';
 import type { CheckRun } from '../../src/shared/checkProgress.ts';
@@ -97,7 +97,13 @@ export interface SessionDetail {
   access?: SessionAccess;
   /** a failed session (DISP-81): why, the session that retries it, your open discussion of it */
   failure?: SessionFailure | null;
+  /** an orchestrator session: its plan and steps */
+  orchestration?: Orchestration | null;
+  /** a step's batch: the orchestration and step it is part of */
+  part_of?: PartOf | null;
 }
+
+export interface PartOf { orchestrator_id: number; title: string; step_position: number | null; step_count: number }
 
 export interface SessionFailure { reason: string; retried_as: number | null; discussion: number | null }
 
