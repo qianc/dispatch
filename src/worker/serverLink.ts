@@ -309,7 +309,7 @@ export class ServerLink {
         const created: { repo: StartSpec['repos'][number]; wt: string }[] = [];
         cwd = await this.workspaces.prepare(spec, created);
         // a planner files items: it gets the project's own rules for them (CLAUDE.md of every repo, not only the cwd's)
-        if (spec.kind === 'planner') extra = { context: await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r))) };
+        if (spec.kind === 'planner' || spec.kind === 'orchestrator') extra = { context: await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r))) };
         // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
         spec = { ...spec, repos: spec.repos.map((r) => ({ ...r, attached: Workspaces.isAttached(this.workspaces.repoDir(spec.session_id, r), r) })) };
         // per-repo setup for new worktrees, before the agent starts: this machine's env files

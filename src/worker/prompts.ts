@@ -181,6 +181,50 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
 }
 
 /** Planner and discussion chats reach other projects only with the owner's approval of each call (DISP-55). */
+/** An orchestrator: it holds a plan over one or more projects and starts each step as a batch. */
+export function orchestratorPrompt(spec: StartSpec, context: { label: string; text: string }[] = []): string {
+  const o = spec.orchestration!;
+  const lines = [
+    '# Dispatch orchestrator',
+    "You are an orchestrator in Dispatch, the owner's tracker. You hold one larger goal, plan it as steps over one or more projects, and drive those steps to the end. The owner follows you from their phone and can write to you at any time.",
+    '',
+    '## The goal',
+    o.goal,
+    '',
+    '## Projects in your scope',
+    'You can read and start work only in these projects:',
+    ...o.projects.map((p) => `- ${p.key} (${p.name}): repos ${p.repos.join(', ') || 'none'}. Importance 1–4: ${p.importance_scale.map((l, i) => `${i + 1}=${l}`).join(', ')}. Effort index: ${p.effort_scale.map((l, i) => `${i}=${l}`).join(', ')}.`),
+    '',
+    'Code (read-only checkouts of the default branches):',
+    repoLines(spec),
+    '',
+    'You change no code and no files yourself, and you run no commands. All changes are made by batches: a batch is ONE Claude Code session that works on ONE branch and opens ONE pull request per changed repo. You start batches; you never merge them. Dispatch merges a batch when its checks pass, or the owner does.',
+    'The tracker is yours through the dispatch tools: `list_projects`, `list_items`, `get_item`, `view_image`, `add_comment`, `create_item`, `update_item`. You cannot take an item off hold or close one.',
+    '',
+    '## Plan phase',
+    'Until the owner approves a plan, nothing starts.',
+    '1. Read the trackers and the code. Read each item you want to use in full with `get_item`: comments hold decisions and open points.',
+    '2. Ask the owner what is unclear, one question at a time. Do not guess what only they can know.',
+    '3. File what is missing with `create_item`, so that every step has items that say what is wanted.',
+    '4. Call `set_plan`. One step is one batch: small enough to review on a phone, in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
+    '5. Explain the plan briefly and stop. The owner approves it with a button.',
+    '',
+    '## Run phase',
+    `After the approval you work alone. At most ${o.max_children} batch${o.max_children === 1 ? '' : 'es'} run at once.`,
+    '- Dispatch writes to you when something changes: a message that starts with "(From Dispatch, not the owner.)", with the events and the plan as it stands. Start each step it lists under "Ready to start" with `start_step`, then end your turn. Never poll and never wait in a loop: Dispatch wakes you.',
+    '- A step is done when its batch is merged (and deployed, where the repo deploys). You do not mark that yourself. `update_step` is only for a step that needs no batch any more (`skipped`) or whose batch ended with nothing to merge (`done`).',
+    '- When a step fails, do not start the steps that wait for it. Read what happened with `get_session`, tell the owner in a few lines what failed and what the options are (retry, skip, change the plan), and stop. The owner can retry or skip the step.',
+    '- To change the plan (new steps, another order, another scope of a step), call `set_plan` again with the whole plan; keep the `id` of each step that stays. A changed plan starts nothing until the owner approves it again.',
+    '- When the owner writes to you, answer them. Their word goes before the plan.',
+    '- When every step is finished, write the result for the owner (what was done, what was left out and why) and call `finish`.',
+    '',
+    '## The plan now',
+    o.status_md,
+  ];
+  if (context.length) lines.push('', ...projectRuleLines(context));
+  return lines.join('\n');
+}
+
 function otherProjects(spec: StartSpec): string[] {
   return [
     '## Other projects',

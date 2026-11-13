@@ -134,7 +134,9 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   /** images pasted into the chat (DISP-34): read one, or attach one to an item */
   | 'get_chat_image' | 'attach_image'
   /** planner and discussion chats reach another project, each call approved by the owner (DISP-55) */
-  | 'cross_project' | AssistantMethod;
+  | 'cross_project' | AssistantMethod
+  /** an orchestrator's plan and its steps */
+  | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish';
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'set_project_state' | 'add_repo' | 'remove_repo'

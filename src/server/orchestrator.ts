@@ -570,18 +570,14 @@ export class Orchestrator {
   }
 
   /**
-   * The orchestrator's own session: closed by hand on its page, the orchestration is stopped; a
-   * message that reopens a closed one puts it back where its plan stands.
+   * The orchestrator's own session, closed by hand on its page: the orchestration is stopped. A
+   * closed orchestration stays closed: a later message to its session is a chat, it starts nothing.
    */
   private ownSession(s: Session) {
     const o = this.store.orchestration(s.id);
-    if (!o) return;
-    const closed = o.phase === 'done' || o.phase === 'stopped';
-    if (!closed && (s.status === 'completed' || s.status === 'stopped')) {
+    if (!o || o.phase === 'done' || o.phase === 'stopped') return;
+    if (s.status === 'completed' || s.status === 'stopped') {
       this.store.updateOrchestration(s.id, { phase: 'stopped', paused_from: null });
-      this.emit(s.id);
-    } else if (closed && (s.status === 'running' || s.status === 'queued')) {
-      this.store.updateOrchestration(s.id, { phase: o.plan_approved ? 'run' : 'plan' });
       this.emit(s.id);
     }
   }

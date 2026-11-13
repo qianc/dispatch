@@ -197,8 +197,11 @@ describe('orchestrator: children', () => {
     t.status(p.id, 'running');
     await t.rpc(p.id, 'finish', { result: 'All in.' });
     expect(t.store.session(p.id)!.status).toBe('running');
+    // its last words arrive while it still runs: it stays finished
+    t.s.ctx.bus.emit({ t: 'session', session: t.store.session(p.id)! });
     t.status(p.id, 'idle');
     expect(t.store.session(p.id)!.status).toBe('completed');
     expect(t.pushes.map((x) => x.title)).toContain('Rework auth: finished');
+    expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('done');
   });
 });

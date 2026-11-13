@@ -288,6 +288,57 @@ export function crossProjectTools(rpc: Rpc, ownKey: string, ask: AskCrossProject
   ];
 }
 
+/** An orchestrator: the tracker of the projects in its scope, its plan, and the batches of its steps. */
+function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
+  const project_key = z.string().describe('Key of a project in your scope, e.g. HC');
+  const step_id = z.number().int().describe('The step_id from "The plan now" (not its place in the list)');
+  return [
+    tool('list_projects', 'The projects in your scope, with repos and scales.', {}, call(rpc, 'list_projects')),
+    tool('list_items', 'List open tracker items of a project in your scope (key, title, type, status, importance, effort).', {
+      project_key,
+      status: z.array(z.string()).optional().describe('Filter by status; default: all open statuses (not hold, done or canceled)'),
+      type: z.enum(['backlog', 'bug']).optional(),
+    }, call(rpc, 'list_items')),
+    tool('get_item', 'Read one item with its description, comments, source and image list.', { key: z.string().describe('Item key with its project, e.g. HC-42') }, call(rpc, 'get_item')),
+    viewImage(rpc),
+    tool('add_comment', 'Add a comment (markdown) to an item.', { key: z.string(), body: z.string() }, call(rpc, 'add_comment')),
+    tool('create_item', 'File a new backlog item or bug in a project in your scope. It starts only as part of a step.', { project_key, ...itemShape }, call(rpc, 'create_item')),
+    tool('update_item', 'Change an item: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.', {
+      key: z.string().describe('Item key, e.g. HC-42'),
+      item_type: z.enum(['backlog', 'bug']).optional(),
+      status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled']).optional(),
+      importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
+      effort: z.union([z.number(), z.string()]).nullable().optional().describe('A label of the project effort scale, or null'),
+      tags: z.array(z.string()).optional().describe('The full new tag list; reuse existing tags'),
+      modules: z.array(z.string()).optional().describe('The full new module list'),
+      comment: z.string().optional().describe('A comment to add (markdown): why you changed it'),
+    }, call(rpc, 'update_item')),
+    tool('set_plan', 'Propose the plan, or a changed plan: the whole list of steps, in order. The owner sees it and approves it with a button; nothing starts before that. One step = one batch (one session, one branch, one PR per changed repo) in one project.', {
+      plan_md: z.string().describe('The reasoning the owner should read: why these steps, in this order (markdown)'),
+      steps: z.array(z.object({
+        id: z.number().int().optional().describe('The step_id of a step that stays from the plan before; leave out for a new step'),
+        title: z.string().describe('Short name of the step'),
+        project_key,
+        prompt: z.string().default('').describe("Everything the batch's agent needs beyond its items"),
+        item_keys: z.array(z.string()).default([]).describe('Keys of the items this step works on, all in its project'),
+        after: z.array(z.number().int().min(1)).default([]).describe('Places in this list (from 1) of the steps that must be merged first'),
+      })).min(1),
+    }, call(rpc, 'set_plan')),
+    tool('start_step', 'Start a step as a batch now. Dispatch refuses it when the plan is not approved, a step before it is not finished, or too many run at once; the answer says why. After it, end your turn.', { step_id }, call(rpc, 'start_step')),
+    tool('update_step', 'Skip a step that has not started, or close a step whose batch ended with nothing to merge. A merged batch closes its step by itself.', {
+      step_id,
+      state: z.enum(['done', 'skipped']),
+      note: z.string().optional().describe('Why, in one line'),
+    }, call(rpc, 'update_step')),
+    tool('get_session', "Read the state of one of your steps' batches: status, what it waits for, its last message and its pull requests.", {
+      session_id: z.number().int().describe('The session number from "The plan now"'),
+    }, call(rpc, 'get_session')),
+    tool('finish', 'End the orchestration when every step is done, failed or skipped. Give the result for the owner.', {
+      result: z.string().describe('What was done, what was left out and why (a few lines)'),
+    }, call(rpc, 'finish')),
+  ];
+}
+
 const noFiles = async () => {
   throw new Error('File reading is not available here');
 };
@@ -300,6 +351,7 @@ const noFiles = async () => {
 export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd) });
+  if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
       name: 'dispatch',

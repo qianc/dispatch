@@ -5,7 +5,7 @@ import type { StartSpec, WorkerToServer } from '../shared/protocol.ts';
 import type { CrossProjectRequest, InputAnswer, PendingInputPayload, Question, SessionEventBody } from '../shared/types.ts';
 import { dispatchMcp, listFolder, type Rpc } from './mcp.ts';
 import { imageMarkers } from '../shared/chatImages.ts';
-import { assistantPrompt, discussPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
+import { assistantPrompt, discussPrompt, orchestratorPrompt, plannerPrompt, releasePrompt, workPrompt } from './prompts.ts';
 import { loginNotice } from './login.ts';
 import type { LoginHelp } from '../shared/accounts.ts';
 import { existsSync, globSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
@@ -333,7 +333,9 @@ export class ClaudeRunner implements AgentRunner {
     const assistant = this.spec.kind === 'assistant';
     const discuss = this.spec.kind === 'discuss';
     const chat = assistant || discuss;
-    const append = assistant ? assistantPrompt(this.opts.assistantReadDirs)
+    const orchestrator = this.spec.kind === 'orchestrator';
+    const append = orchestrator ? orchestratorPrompt(this.spec, this.deps.context ?? [])
+      : assistant ? assistantPrompt(this.opts.assistantReadDirs)
       : discuss ? discussPrompt(this.spec, this.deps.context ?? [])
       : planner ? plannerPrompt(this.spec, this.deps.context ?? [])
       : this.spec.kind === 'release' ? releasePrompt(this.spec, this.deps.context ?? []) : workPrompt(this.spec);
@@ -353,7 +355,8 @@ export class ClaudeRunner implements AgentRunner {
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         permissionMode: this.spec.force_plan && !this.spec.resume ? 'plan' : 'default',
         // a scheduled run has nobody to answer a question
-        disallowedTools: planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
+        // an orchestrator reads and plans, as a planner does: it changes no files and runs no commands
+        disallowedTools: orchestrator ? PLANNER_TOOLS_DENIED : planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }, this.deps.cwd) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
