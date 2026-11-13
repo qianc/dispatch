@@ -8,7 +8,7 @@ import { z } from 'zod';
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
 export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled'] as const;
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
-export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss', 'release'] as const;
+export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss', 'release', 'orchestrator'] as const;
 /** Light read-only chats: no worker slot, not listed as agent work, no push when a reply is ready. */
 export const CHAT_KINDS: SessionKind[] = ['assistant', 'discuss'];
 export const SESSION_STATUSES = ['queued', 'running', 'waiting_input', 'idle', 'completed', 'failed', 'stopped'] as const;
@@ -18,6 +18,11 @@ export type ItemStatus = (typeof ITEM_STATUSES)[number];
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 export type SessionKind = (typeof SESSION_KINDS)[number];
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
+
+/** A session's status in plain words, for a line of text ("Waiting for #12 (needs you)"). */
+export function sessionStatusWords(status: SessionStatus): string {
+  return { queued: 'queued', running: 'working', waiting_input: 'needs you', idle: 'turn ended', completed: 'done', failed: 'failed', stopped: 'stopped' }[status];
+}
 
 /** Sessions in these states hold a worker slot. */
 export const ACTIVE_STATUSES: SessionStatus[] = ['running', 'waiting_input'];
@@ -220,6 +225,8 @@ export interface Session {
   retry_of: number | null;
   /** a discussion of why this session failed (DISP-81) */
   about_session: number | null;
+  /** the orchestrator session this work session is a step of */
+  orchestrator_id: number | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -515,6 +522,10 @@ export type Attention =
   /** a planning chat with a batch or items card you have not acted on yet */
   | { kind: 'proposal'; text: string; proposals: OpenProposal[] }
   | { kind: 'turn'; text: string }
+  /** an orchestrator that plans and needs you: its plan waits for your approval, or it asked you something */
+  | { kind: 'plan'; text: string }
+  /** an orchestrator with a failed step: retry or skip it there */
+  | { kind: 'step_failed'; text: string; step_id: number }
   /** its Claude account must be signed in again on the worker, then Retry (DISP-60) */
   | { kind: 'login'; text: string; login: LoginHelp };
 
@@ -682,6 +693,92 @@ export const mergeInput = z.object({
 
 // ---------- live events (server → browser over SSE) ----------
 
+// ---------- orchestrations ----------
+
+export const ORCH_PHASES = ['plan', 'run', 'paused', 'done', 'stopped'] as const;
+export const STEP_STATES = ['pending', 'running', 'review', 'done', 'failed', 'skipped'] as const;
+export type OrchPhase = (typeof ORCH_PHASES)[number];
+export type StepState = (typeof STEP_STATES)[number];
+export type DeployState = 'running' | 'ok' | 'failed';
+
+/** One step of an orchestration's plan: one batch (one work session, one branch, one PR per changed repo). */
+export interface OrchestrationStep {
+  id: number;
+  orchestration_id: number;
+  /** its place in the plan, from 1 */
+  position: number;
+  title: string;
+  project_id: number;
+  project_key: string;
+  /** what the batch's agent is told, beyond its items */
+  prompt_md: string;
+  item_ids: number[];
+  item_keys: string[];
+  /** ids of the steps that must be done or skipped first */
+  depends_on: number[];
+  state: StepState;
+  note: string | null;
+  child_session_id: number | null;
+  /** the child's last seen "status|state|note", to tell a change from a repeat */
+  seen: string | null;
+  /** deploys after its merges, by repo id */
+  deploys: Record<string, DeployState>;
+  /** the batch it runs as (API views) */
+  child?: { id: number; status: SessionStatus; title: string; waiting_reason: string | null } | null;
+}
+
+/** A long-running plan over one or more projects, held by an orchestrator session. */
+export interface Orchestration {
+  /** the orchestrator session: also the orchestration's id */
+  session_id: number;
+  title: string;
+  goal: string;
+  /** the only projects it may read and start work in */
+  project_ids: number[];
+  project_keys: string[];
+  phase: OrchPhase;
+  paused_from: 'plan' | 'run' | null;
+  plan_md: string;
+  /** the stored plan has the owner's yes */
+  plan_approved: boolean;
+  /** counts the plans proposed: an approval names the one the owner read */
+  plan_version: number;
+  max_children: number;
+  /** run options of the batches it starts */
+  options: RunOptions;
+  steps: OrchestrationStep[];
+  /** one line for lists: what it waits for now */
+  waiting: string | null;
+  /** the user who started it */
+  started_by: string | null;
+  status: SessionStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export const orchestrationInput = z.object({
+  goal: z.string().trim().min(1, 'Say what it should reach.'),
+  title: z.string().trim().max(80).optional(),
+  project_keys: z.array(z.string()).min(1, 'Pick at least one project.'),
+  max_children: z.number().int().min(1).max(5).default(2),
+  options: runOptions.default(DEFAULT_RUN_OPTIONS),
+});
+
+export const planInput = z.object({
+  plan_md: z.string().default(''),
+  steps: z.array(z.object({
+    /** an existing step that stays (its id from the plan status) */
+    id: z.number().int().optional(),
+    title: z.string().trim().min(1),
+    project_key: z.string(),
+    prompt: z.string().default(''),
+    item_keys: z.array(z.string()).default([]),
+    /** places in this list (from 1) of the steps that must finish first */
+    after: z.array(z.number().int().min(1)).default([]),
+  })).min(1, 'A plan needs at least one step.'),
+});
+export type PlanInput = z.infer<typeof planInput>;
+
 export type LiveEvent =
   | { t: 'hello' }
   | { t: 'session'; session: Session }
@@ -697,7 +794,9 @@ export type LiveEvent =
   /** `to`: the users it is for (DISP-65); the server's stream sends it to their tabs only and leaves `to` out */
   | { t: 'notice'; notice: { title: string; body: string; url: string; tag?: string }; to?: string[] }
   /** the check commands running now for a session's merges, with their progress (empty: none, DISP-5) */
-  | { t: 'check'; session_id: number; checks: CheckRun[] };
+  | { t: 'check'; session_id: number; checks: CheckRun[] }
+  /** an orchestration, its plan or one of its steps changed */
+  | { t: 'orchestration'; orchestration: Orchestration };
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;

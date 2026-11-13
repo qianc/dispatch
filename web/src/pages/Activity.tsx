@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { searchTerms } from '../../../src/shared/search.ts';
-import type { SessionSearch } from '../../../src/shared/types.ts';
+import type { Orchestration, SessionSearch } from '../../../src/shared/types.ts';
+import { partOfIndex } from '../orchestration.ts';
 import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchQuery, type SessionFilter } from '../activity.ts';
 import { Link } from 'react-router';
 import { api, type FailedSession, type Inbox, type ProjectSummary, type Session } from '../api.ts';
@@ -9,6 +10,7 @@ import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
 import { SwipeToClose } from '../components/swipe.tsx';
+import { NewOrchestration } from '../components/orchestration.tsx';
 import { Button, Card, Empty, ErrorText, Section, SessionStatusChip, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 const KINDS = [
@@ -17,6 +19,7 @@ const KINDS = [
   { value: 'discuss', label: 'Discuss' },
   { value: 'assistant', label: 'Assistant' },
   { value: 'release', label: 'Release' },
+  { value: 'orchestrator', label: 'Orchestration' },
 ];
 const PAGE = 30;
 
@@ -34,6 +37,10 @@ export function Activity() {
   const failed = inbox?.failed ?? [];
   const failedIds = new Set(failed.map((s) => s.id));
   const finished = recent.filter((s) => !failedIds.has(s.id));
+  // orchestrations: an orchestrator's row shows its steps, and a step's batch says what it is part of
+  const { data: orchestrations = [] } = useQuery({ queryKey: ['orchestrations'], queryFn: () => api.get<Orchestration[]>('/orchestrations') });
+  const orchOf = new Map(orchestrations.map((o) => [o.session_id, o]));
+  const partOf = partOfIndex(orchestrations);
   const [filter, setFilter] = useState<SessionFilter>(NO_FILTER);
   const searching = filtering(filter);
   return (
@@ -43,8 +50,8 @@ export function Activity() {
       {/* while searching, the results come first and an empty Live list steps aside */}
       {searching && <Results filter={filter} />}
       {(!searching || live.length > 0) && (
-        <Section title={`Live (${live.length})`}>
-          {live.length ? <Card>{live.map((s) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} />)}</Card> : <Empty>No sessions running.</Empty>}
+        <Section title={`Live (${live.length})`} action={<NewOrchestration />}>
+          {live.length ? <Card>{live.map((s) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />)}</Card> : <Empty>No sessions running.</Empty>}
         </Section>
       )}
       {!searching && discussions.length > 0 && (
@@ -59,7 +66,7 @@ export function Activity() {
       )}
       {!searching && finished.length > 0 && (
         <Section title="Recently finished">
-          <Card>{finished.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject />)}</Card>
+          <Card>{finished.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />)}</Card>
         </Section>
       )}
       </div>

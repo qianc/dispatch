@@ -14,7 +14,7 @@ export function liveGroups(live: Session[], inbox?: Inbox): { needs: NeedsEntry[
   const idle = inbox?.idle ?? [];
   const needs: NeedsEntry[] = [
     ...(inbox?.inputs ?? []).map((i) => ({ id: i.session_id, key: sessions.get(i.session_id)?.project_key ?? null, title: sessions.get(i.session_id)?.title ?? 'Question', tone: 'wait' as const })),
-    ...idle.filter((s) => waitsOnOwner(s.attention)).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: s.attention.kind === 'merge_blocked' || s.attention.kind === 'login' ? 'bad' as const : s.attention.kind === 'merged' ? 'ok' as const : 'wait' as const })),
+    ...idle.filter((s) => waitsOnOwner(s.attention)).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: s.attention.kind === 'merge_blocked' || s.attention.kind === 'login' || s.attention.kind === 'step_failed' ? 'bad' as const : s.attention.kind === 'merged' ? 'ok' as const : 'wait' as const })),
     ...(inbox?.failed ?? []).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: 'bad' as const, reason: s.reason })),
   ];
   const running: RunningEntry[] = [

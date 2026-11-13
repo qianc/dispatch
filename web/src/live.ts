@@ -138,6 +138,11 @@ function apply(qc: QueryClient, e: LiveEvent) {
     case 'check':
       qc.setQueryData<SessionDetail>(['session', e.session_id], (d) => (d ? { ...d, checks: e.checks } : d));
       return;
+    case 'orchestration':
+      qc.setQueryData<SessionDetail>(['session', e.orchestration.session_id], (d) => (d ? { ...d, orchestration: e.orchestration } : d));
+      qc.invalidateQueries({ queryKey: ['orchestrations'] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      return;
     case 'pr':
       qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
       qc.invalidateQueries({ queryKey: ['inbox'] });

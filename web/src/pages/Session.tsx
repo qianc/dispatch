@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { Link, useNavigate, useNavigationType, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
-import { api, type SessionDetail } from '../api.ts';
+import { api, type PartOf, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { PendingMessages } from '../components/PendingMessages.tsx';
@@ -18,6 +18,8 @@ import { NextSteps } from '../components/nextSteps.tsx';
 import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
+import { OrchestrationPanel } from '../components/orchestration.tsx';
+import { orchBusyLabel } from '../orchestration.ts';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -25,6 +27,9 @@ import { useWorkers, workerName } from '../workers.ts';
 import { useVeryWide } from '../wide.ts';
 import { canAct, readOnlyText, startedBy } from '../access.ts';
 import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
+
+/** "Part of Auth rework (step 2 of 6)": the orchestration a step's batch belongs to. */
+export const partOfText = (p: PartOf) => `Part of ${p.title}${p.step_position ? ` (step ${p.step_position} of ${p.step_count})` : ''}`;
 
 /** Where each chat was scrolled to (null: at the newest message), for coming back to it. This app run only. */
 const chatScroll = new Map<number, number | null>();
@@ -171,6 +176,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const failed = s.status === 'failed' && !CHAT_KINDS.includes(s.kind) && !!data.failure;
   const failedInChat = failed && (!sidePanel || !!chat || attention.kind === 'login');
 
+  // an orchestrator that only waits for its steps is at work, not "your turn"
+  const orchBusy = data.orchestration ? orchBusyLabel(data.orchestration, s.status) : undefined;
+
   const peekPanel = peek && <ItemDetail key={peek} itemId={peek} onClose={closePeek} />;
   // one tree whether or not the item shows, so opening it does not rebuild the chat and lose its place
   return (
@@ -186,17 +194,19 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {drive && <div className="mt-2"><FailedActions s={s} failure={data.failure} compact /></div>}
             </div>
           )}
+          {data.orchestration && <OrchestrationPanel o={data.orchestration} mine={drive} />}
           {s.initial_prompt && <SessionPrompt key={s.id} sessionId={s.id} text={s.initial_prompt} />}
           <div>
             <h2 className="text-[12px] font-semibold uppercase tracking-wide text-muted mb-1.5">Details</h2>
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-              <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} /></dd>
+              <dt className="text-muted">Status</dt><dd><SessionStatusChip status={s.status} busy={orchBusy} /></dd>
               {s.started_by && <><dt className="text-muted">Started by</dt><dd className="truncate">{s.started_by}{s.github_login && <span className="text-muted"> as @{s.github_login}</span>}</dd></>}
               {workers.length > 0 && <><dt className="text-muted">Worker</dt><dd className="truncate">{workerName(workers, s.worker_id)}</dd></>}
               {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
               {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
               {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
               {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
+              {data.part_of && <><dt className="text-muted">Orchestration</dt><dd><Link className="text-accent" to={`/s/${data.part_of.orchestrator_id}`}>{partOfText(data.part_of)}</Link></dd></>}
               {s.moved_from && <><dt className="text-muted">Moved from</dt><dd><Link className="text-accent" to={`/s/${s.moved_from}`}>#{s.moved_from}</Link></dd></>}
               {s.retry_of && <><dt className="text-muted">Retry of</dt><dd><Link className="text-accent" to={`/s/${s.retry_of}`}>#{s.retry_of}</Link></dd></>}
               {s.about_session && <><dt className="text-muted">About</dt><dd><Link className="text-accent" to={`/s/${s.about_session}`}>#{s.about_session}</Link> (failed)</dd></>}
@@ -230,12 +240,12 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         </div>
       )}
       title={chat ? chat.title : s.title}
-      subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span className="truncate">{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.release ? `release ${s.release.version}` : s.branch}{starter && ` · ${starter}`}</span></span>}
+      subtitle={chat ? chat.subtitle : <span className="flex items-center gap-1.5"><span className="truncate">{data.orchestration ? `${data.orchestration.project_keys.join(' · ')} · orchestration` : <>{project?.key} · {s.kind === 'planner' ? 'planning chat' : s.release ? `release ${s.release.version}` : s.branch}</>}{starter && ` · ${starter}`}</span></span>}
       back={chat ? chat.back : true}
       keepScroll={false}
       actions={
         <>
-          {!isAssistant && <SessionStatusChip status={s.status} />}
+          {!isAssistant && <SessionStatusChip status={s.status} busy={orchBusy} />}
           {chat && <Button small variant="ghost" onClick={chat.onNew}>New chat</Button>}
           {chat?.onClose && <CloseButton onClick={chat.onClose} label="Close chat" />}
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
@@ -270,6 +280,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       </div>)}
       {chat?.intro}
       {(chat || !sidePanel) && (<div>
+      {data.orchestration && <div className="px-3 pt-3"><OrchestrationPanel o={data.orchestration} mine={drive} /></div>}
+      {data.part_of && <Link to={`/s/${data.part_of.orchestrator_id}`} className="block px-4 pt-3 text-[13px] text-accent">{partOfText(data.part_of)}</Link>}
       {!chat?.intro && (data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">
           {data.items.map((i) => (
@@ -374,8 +386,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {workers.filter((w) => w.id !== s.worker_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
             </select>
           )}
-          {stop && !final && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
-          {stop && !final && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
+          {/* an orchestrator is paused and stopped from its plan, which also asks about its running sessions */}
+          {data.orchestration && !final && <p className="text-[13px] text-muted">Pause or stop it from the plan on its page.</p>}
+          {stop && !final && !data.orchestration && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
+          {stop && !final && !data.orchestration && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
           {stop && final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
           <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error ?? move.error ?? interrupt.error} />
           {s.usage?.cost_usd !== undefined && <p className="text-[12px] text-faint text-center pt-2">Estimated usage ${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} model turns</p>}

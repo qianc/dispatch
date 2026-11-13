@@ -82,6 +82,7 @@ export class FakeRunner implements AgentRunner {
     if (text.includes('[fake:env]')) return this.envTurn();
     if (imageMarkers(text).length) return this.pastedImagesTurn(text);
     if (this.spec.kind === 'planner') return this.plannerTurn();
+    if (this.spec.kind === 'orchestrator') return this.orchestratorTurn(text);
     if (this.spec.kind === 'release' && this.turn === 1) return this.releaseTurn();
     if (this.spec.kind === 'assistant') return this.assistantTurn(text);
     if (this.spec.kind === 'discuss' && /which folders/i.test(text)) {
@@ -189,6 +190,35 @@ export class FakeRunner implements AgentRunner {
     this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'tool_result', tool_use_id: 'rel1', is_error: false, text: 'released' } });
     const res = (await this.deps.rpc('release_items', { keys: this.spec.items.map((i) => i.key) })) as { released: string[]; label: string };
     this.say(`(fake) Released ${r.version}; labelled ${res.released.join(', ')} with ${res.label}.`);
+    this.finishTurn();
+  }
+
+  /**
+   * An orchestrator, as Claude would act: the first turn plans one step per project that has open
+   * items, each after the one before; a message from Dispatch starts what it names as ready, and
+   * ends the orchestration when all steps are finished.
+   */
+  private async orchestratorTurn(text: string) {
+    const ready = text.match(/^Ready to start: ([\d, ]+)$/m)?.[1].split(',').map((n) => Number(n.trim())).filter(Boolean) ?? [];
+    if (/All steps are finished/.test(text)) {
+      await this.deps.rpc('finish', { result: '(fake) All done.' });
+      this.say('(fake) All done.');
+    } else if (ready.length) {
+      const said: string[] = [];
+      for (const step_id of ready) said.push(String(await this.deps.rpc('start_step', { step_id }).catch((e: Error) => e.message)));
+      this.say(`(fake) ${said.join(' ')}`);
+    } else if (this.turn === 1) {
+      const projects = (await this.deps.rpc('list_projects', {})) as { key: string }[];
+      const steps: { title: string; project_key: string; prompt: string; item_keys: string[]; after: number[] }[] = [];
+      for (const p of projects) {
+        const items = (await this.deps.rpc('list_items', { project_key: p.key, status: ['triage', 'backlog', 'todo'] })) as { key: string }[];
+        if (items.length) steps.push({ title: `(fake) ${p.key} work`, project_key: p.key, prompt: '', item_keys: items.map((i) => i.key), after: steps.length ? [steps.length] : [] });
+      }
+      if (steps.length) await this.deps.rpc('set_plan', { plan_md: '(fake) One step per project, in order.', steps });
+      this.say(steps.length ? '(fake) Plan ready.' : '(fake) Nothing to plan: no open items.');
+    } else {
+      this.say(`(fake) You said: ${text.split('\n')[0]}`);
+    }
     this.finishTurn();
   }
 

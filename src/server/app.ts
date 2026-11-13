@@ -48,7 +48,9 @@ import type { Session } from '../shared/types.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
+import { orchestrationRoutes } from './routes/orchestrations.ts';
 import { Scheduler } from './scheduler.ts';
+import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
 
@@ -154,10 +156,18 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
   const scheduler = new Scheduler(store, sessions, bus);
-  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler };
+  const orchestrator = new Orchestrator({ store, bus, sessions, notifier, merging: () => github.mergingNow });
+  sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
+  sessions.onDeployed = (s, repo, ok) => orchestrator.onDeploy(s, repo, ok ? 'ok' : 'failed');
+  github.onDeployStarted = (s, repo) => orchestrator.onDeploy(s, repo, 'running');
+  github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
+  sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
+  sessions.orchestrationOf = (s) => orchestrator.spans(s);
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
+    orchestrator.resume();
   }
 
   // forceCloseConnections: live streams (/api/stream) never end on their own, so close() would wait
@@ -283,6 +293,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   gitRoutes(app, ctx);
   imageRoutes(app, ctx);
   scheduleRoutes(app, ctx);
+  orchestrationRoutes(app, ctx);
   githubRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
@@ -312,6 +323,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     closing = true;
     janitor.stop();
     scheduler.stop();
+    orchestrator.stop();
     github.stop();
     ctx.sessions.stop();
     db.raw.close();

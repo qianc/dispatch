@@ -31,6 +31,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/me': 'public',
 
   'GET /api/inbox': 'read',
+  'GET /api/orchestrations': 'read',
+  'GET /api/orchestrations/:id': 'read',
   'GET /api/stream': 'read',
   'GET /api/worker': 'read',
   'GET /api/accounts': 'read',
@@ -73,6 +75,14 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'PATCH /api/schedules/:id': 'sessions',
   'DELETE /api/schedules/:id': 'sessions',
   'POST /api/schedules/:id/run': 'sessions',
+  // an orchestration starts agent work on its own, as its plan says
+  'POST /api/orchestrations': 'sessions',
+  'POST /api/orchestrations/:id/approve': 'sessions',
+  'POST /api/orchestrations/:id/pause': 'sessions',
+  'POST /api/orchestrations/:id/resume': 'sessions',
+  'POST /api/orchestrations/:id/stop': 'sessions',
+  'POST /api/orchestration-steps/:id/skip': 'sessions',
+  'POST /api/orchestration-steps/:id/retry': 'sessions',
   'POST /api/projects/:key/releases': 'sessions',
   'POST /api/assistant/messages': 'sessions',
   'POST /api/assistant/new': 'sessions',

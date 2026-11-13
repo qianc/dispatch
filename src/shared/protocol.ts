@@ -2,7 +2,7 @@
 import type { ClaudeAccountInfo, LoginHelp } from './accounts.ts';
 import type { CheckProgress } from './checkProgress.ts';
 import type { GeneratorItem } from './generatorItems.ts';
-import type { ReleaseInfo, WorkerFacts } from './types.ts';
+import type { OrchPhase, ReleaseInfo, WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
@@ -36,6 +36,15 @@ export interface StartSpec {
   schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
   release?: ReleaseInfo;
+  /** orchestrator sessions: the goal, the projects it spans, and the plan as it stands */
+  orchestration?: {
+    goal: string;
+    phase: OrchPhase;
+    projects: { key: string; name: string; importance_scale: string[]; effort_scale: string[]; repos: string[] }[];
+    max_children: number;
+    /** the plan with each step's state, and which steps can start now */
+    status_md: string;
+  };
 }
 
 /** A user's own GitHub credential, sent for the sessions they started (DISP-63). */
@@ -125,7 +134,9 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   /** images pasted into the chat (DISP-34): read one, or attach one to an item */
   | 'get_chat_image' | 'attach_image'
   /** planner and discussion chats reach another project, each call approved by the owner (DISP-55) */
-  | 'cross_project' | AssistantMethod;
+  | 'cross_project' | AssistantMethod
+  /** an orchestrator's plan and its steps */
+  | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish';
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'set_project_state' | 'add_repo' | 'remove_repo'

@@ -59,6 +59,14 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   'PATCH /api/schedules/:id': null,
   'DELETE /api/schedules/:id': null,
   'POST /api/schedules/:id/run': null,
+  // orchestrations check their starter in the route (routes/orchestrations.ts)
+  'POST /api/orchestrations': null,
+  'POST /api/orchestrations/:id/approve': null,
+  'POST /api/orchestrations/:id/pause': null,
+  'POST /api/orchestrations/:id/resume': null,
+  'POST /api/orchestrations/:id/stop': null,
+  'POST /api/orchestration-steps/:id/skip': null,
+  'POST /api/orchestration-steps/:id/retry': null,
   'POST /api/cleanup': null,
   'POST /api/cleanup/check': null,
 };

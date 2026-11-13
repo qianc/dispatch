@@ -24,6 +24,8 @@ import {
   type SessionSearch,
   type ReleaseInfo,
   type Schedule,
+  type Orchestration,
+  type OrchestrationStep,
   type SessionKind,
   type SessionStatus,
   type Source,
@@ -154,6 +156,8 @@ const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
   FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
+const ORCH_SELECT = `SELECT o.*, s.title, s.started_by, s.status FROM orchestrations o JOIN sessions s ON s.id = o.session_id`;
+const STEP_SELECT = `SELECT st.*, p.key AS project_key FROM orchestration_steps st JOIN projects p ON p.id = st.project_id`;
 const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
   FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
 
@@ -481,6 +485,7 @@ export class Store {
       closed_reason: (r.closed_reason as Session['closed_reason']) ?? null,
       retry_of: numOrNull(r.retry_of),
       about_session: numOrNull(r.about_session),
+      orchestrator_id: numOrNull(r.orchestrator_id),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       ended_at: (r.ended_at as string | null) ?? null,
@@ -652,6 +657,137 @@ export class Store {
   }
   deleteSchedule(id: number) {
     this.db.run('DELETE FROM schedules WHERE id = ?', id);
+  }
+
+  // ---------- orchestrations ----------
+  private toStep(r: Row): OrchestrationStep {
+    const itemIds = json<number[]>(r.item_ids, []);
+    return {
+      id: Number(r.id),
+      orchestration_id: Number(r.orchestration_id),
+      position: Number(r.position),
+      title: String(r.title),
+      project_id: Number(r.project_id),
+      project_key: String(r.project_key),
+      prompt_md: String(r.prompt_md),
+      item_ids: itemIds,
+      item_keys: this.itemsByIds(itemIds).map((i) => i.key),
+      depends_on: json<number[]>(r.depends_on, []),
+      state: r.state as OrchestrationStep['state'],
+      note: (r.note as string | null) ?? null,
+      child_session_id: numOrNull(r.child_session_id),
+      seen: (r.seen as string | null) ?? null,
+      deploys: json(r.deploys, {}),
+    };
+  }
+  private toOrchestration(r: Row): Orchestration {
+    const projectIds = json<number[]>(r.project_ids, []);
+    const id = Number(r.session_id);
+    return {
+      session_id: id,
+      title: String(r.title),
+      goal: String(r.goal),
+      project_ids: projectIds,
+      project_keys: projectIds.flatMap((p) => this.project(p)?.key ?? []),
+      phase: r.phase as Orchestration['phase'],
+      paused_from: (r.paused_from as Orchestration['paused_from']) ?? null,
+      plan_md: String(r.plan_md),
+      plan_approved: bool(r.plan_approved),
+      plan_version: Number(r.plan_version),
+      max_children: Number(r.max_children),
+      options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
+      steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
+      waiting: null,
+      started_by: (r.started_by as string | null) ?? null,
+      status: r.status as SessionStatus,
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+    };
+  }
+  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions }) {
+    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options) VALUES (?, ?, ?, ?, ?)',
+      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options));
+  }
+  /** The orchestration an orchestrator session holds, with its steps in plan order. */
+  orchestration(sessionId: number): Orchestration | undefined {
+    const r = this.db.get(`${ORCH_SELECT} WHERE o.session_id = ?`, sessionId);
+    return r && this.toOrchestration(r);
+  }
+  /** Newest first. */
+  orchestrations(): Orchestration[] {
+    return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
+  }
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids'>>) {
+    const sets: string[] = ['updated_at = ?'];
+    const params: (string | number | null)[] = [now()];
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      sets.push(`${k} = ?`);
+      params.push(k === 'project_ids' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
+    }
+    this.db.run(`UPDATE orchestrations SET ${sets.join(', ')} WHERE session_id = ?`, ...params, sessionId);
+  }
+  /**
+   * The plan's steps, in this order. A step given by `id` keeps its row (state, child session);
+   * the others are new. Rows left out are removed. `after`: places in this list, from 1.
+   */
+  replaceSteps(sessionId: number, steps: { id?: number; title: string; project_id: number; prompt_md: string; item_ids: number[]; after: number[] }[]) {
+    this.db.tx(() => {
+      const kept = new Set(steps.flatMap((s) => (s.id ? [s.id] : [])));
+      for (const old of this.db.all<{ id: number }>('SELECT id FROM orchestration_steps WHERE orchestration_id = ?', sessionId)) {
+        if (!kept.has(Number(old.id))) this.db.run('DELETE FROM orchestration_steps WHERE id = ?', Number(old.id));
+      }
+      const ids = steps.map((s, i) => {
+        if (s.id) {
+          this.db.run('UPDATE orchestration_steps SET position = ?, title = ?, project_id = ?, prompt_md = ?, item_ids = ? WHERE id = ? AND orchestration_id = ?',
+            i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.id, sessionId);
+          return s.id;
+        }
+        return Number(this.db.run('INSERT INTO orchestration_steps (orchestration_id, position, title, project_id, prompt_md, item_ids) VALUES (?, ?, ?, ?, ?, ?)',
+          sessionId, i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids)).lastId);
+      });
+      steps.forEach((s, i) => this.db.run('UPDATE orchestration_steps SET depends_on = ? WHERE id = ?', JSON.stringify(s.after.map((n) => ids[n - 1])), ids[i]));
+      this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = ?', now(), sessionId);
+    });
+  }
+  step(id: number): OrchestrationStep | undefined {
+    const r = this.db.get(`${STEP_SELECT} WHERE st.id = ?`, id);
+    return r && this.toStep(r);
+  }
+  /** The step a work session runs. */
+  stepOfChild(sessionId: number): OrchestrationStep | undefined {
+    const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
+    return r && this.toStep(r);
+  }
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys'>>): OrchestrationStep {
+    const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
+    if (entries.length) {
+      this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
+        ...entries.map(([k, v]) => (k === 'deploys' ? JSON.stringify(v) : (v as string | number | null))), id);
+      this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = (SELECT orchestration_id FROM orchestration_steps WHERE id = ?)', now(), id);
+    }
+    return this.step(id)!;
+  }
+  /** A wake-up for the orchestrator, kept until its session can take it. */
+  addOrchEvent(sessionId: number, text: string) {
+    this.db.run('INSERT INTO orchestration_events (orchestration_id, text) VALUES (?, ?)', sessionId, text);
+  }
+  pendingOrchEvents(sessionId: number): { id: number; text: string }[] {
+    return this.db.all<{ id: number; text: string }>('SELECT id, text FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL ORDER BY id', sessionId)
+      .map((r) => ({ id: Number(r.id), text: String(r.text) }));
+  }
+  /** `delivered` false puts them back in the queue (the delivery failed). */
+  markOrchEventsDelivered(ids: number[], delivered = true) {
+    for (const id of ids) this.db.run('UPDATE orchestration_events SET delivered_at = ? WHERE id = ?', delivered ? now() : null, id);
+  }
+  /** Make a work session a step's batch of this orchestrator. */
+  setOrchestrator(childSessionId: number, orchestratorId: number) {
+    this.db.run('UPDATE sessions SET orchestrator_id = ? WHERE id = ?', orchestratorId, childSessionId);
+  }
+  /** The session that took over from `sessionId` when it was moved to another worker. */
+  movedTo(sessionId: number): Session | undefined {
+    const r = this.db.get(`${SESSION_SELECT} WHERE s.moved_from = ? ORDER BY s.id DESC LIMIT 1`, sessionId);
+    return r && this.toSession(r);
   }
 
   // ---------- events ----------

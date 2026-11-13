@@ -110,6 +110,10 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
       {attention.kind === 'proposal' && (
         <Link to={`/s/${sessionId}`} className="inline-flex items-center h-8 px-2.5 rounded-lg text-[13px] font-medium bg-raised border border-line active:bg-line">Open to edit</Link>
       )}
+      {/* an orchestrator: its page has the plan with Approve, and Retry and Skip on a failed step */}
+      {(attention.kind === 'plan' || attention.kind === 'step_failed') && (
+        <Link to={`/s/${sessionId}`} className="inline-flex items-center h-8 px-2.5 rounded-lg text-[13px] font-medium bg-raised border border-line active:bg-line">Open the plan</Link>
+      )}
       {asks.map((a) => (
         <Button key={a.label} small disabled={busy} onClick={() => send.mutate(a.text)}>{a.label}</Button>
       ))}
