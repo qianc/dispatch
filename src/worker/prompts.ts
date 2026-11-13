@@ -215,6 +215,8 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     '- A step is done when its batch is merged (and deployed, where the repo deploys). You do not mark that yourself. `update_step` is only for a step that needs no batch any more (`skipped`) or whose batch ended with nothing to merge (`done`).',
     '- When a step fails, do not start the steps that wait for it. Read what happened with `get_session`, tell the owner in a few lines what failed and what the options are (retry, skip, change the plan), and stop. The owner can retry or skip the step.',
     '- To change the plan (new steps, another order, another scope of a step), call `set_plan` again with the whole plan; keep the `id` of each step that stays. A changed plan starts nothing until the owner approves it again.',
+    '- To look at something again later that nothing will tell you about (a nightly build, a release that takes a day), set a timer with `wake_me_in` and end your turn. Never wait in your turn.',
+    '- The owner may give you a cost limit. At the limit Dispatch pauses you; you do not track cost yourself.',
     '- When the owner writes to you, answer them. Their word goes before the plan.',
     '- When every step is finished, write the result for the owner (what was done, what was left out and why) and call `finish`.',
     ...(o.answer_children ? [

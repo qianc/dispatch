@@ -757,6 +757,14 @@ export interface Orchestration {
   steps: OrchestrationStep[];
   /** one line for lists: what it waits for now */
   waiting: string | null;
+  /** what it and its batches cost so far */
+  cost_usd: number;
+  /** at this cost it is paused; null: no limit */
+  cost_limit_usd: number | null;
+  /** why Dispatch paused it (the cost limit) */
+  paused_reason: string | null;
+  /** when its next own timer wakes it (ISO time) */
+  next_wake: string | null;
   /** the user who started it */
   started_by: string | null;
   status: SessionStatus;
@@ -770,8 +778,18 @@ export const orchestrationInput = z.object({
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.'),
   max_children: z.number().int().min(1).max(5).default(2),
   answer_children: z.boolean().default(true),
+  cost_limit_usd: z.number().positive().max(10_000).nullable().default(null),
   options: runOptions.default(DEFAULT_RUN_OPTIONS),
 });
+
+/** What the owner can change on an orchestration while it runs. */
+export const orchestrationPatch = z.object({
+  max_children: z.number().int().min(1).max(5).optional(),
+  cost_limit_usd: z.number().positive().max(10_000).nullable().optional(),
+  answer_children: z.boolean().optional(),
+  project_keys: z.array(z.string()).min(1, 'Pick at least one project.').optional(),
+});
+export type OrchestrationPatch = z.infer<typeof orchestrationPatch>;
 
 export const planInput = z.object({
   plan_md: z.string().default(''),

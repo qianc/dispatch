@@ -348,6 +348,10 @@ function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
       session_id: z.number().int().describe('The session number of the batch'),
       text: z.string().describe('What it should do, complete enough to act on'),
     }, call(rpc, 'send_to_session')),
+    tool('wake_me_in', 'Set a timer: Dispatch wakes you again after that time, with your reason. For something that takes a while and that nothing else will tell you about (a nightly build, a release, a date). Not for your steps: Dispatch wakes you for those. At most 3 timers at once.', {
+      minutes: z.number().describe('From 5 to 10080 (7 days)'),
+      reason: z.string().describe('What to look at when the timer wakes you'),
+    }, call(rpc, 'wake_me_in')),
     tool('finish', 'End the orchestration when every step is done, failed or skipped. Give the result for the owner.', {
       result: z.string().describe('What was done, what was left out and why (a few lines)'),
     }, call(rpc, 'finish')),

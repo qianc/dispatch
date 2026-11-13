@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -13,6 +13,8 @@ import { SessionError, type Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
 
 const ITEM_KEY = /^([A-Z][A-Z0-9]*)-(\d+)$/;
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
 
 /** Text a batch wrote, as lines the orchestrator can tell from Dispatch's own: each one indented behind a bar. */
 const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`);
@@ -39,7 +41,7 @@ export class Orchestrator {
     this.notifier = deps.notifier;
     this.merging = deps.merging ?? (() => new Set());
     this.off = this.bus.on((e) => this.onBus(e));
-    this.timer = setInterval(() => this.safely(() => this.checkDelegated()), 60_000);
+    this.timer = setInterval(() => this.safely(() => this.tick()), 60_000);
     this.timer.unref();
   }
 
@@ -51,6 +53,19 @@ export class Orchestrator {
   }
 
   private timer: NodeJS.Timeout;
+
+  /** The time (tests replace it). */
+  now: () => Date = () => new Date();
+
+  private dueEvents(sessionId: number) {
+    return this.store.pendingOrchEvents(sessionId, this.now().toISOString());
+  }
+
+  /** Every minute: questions that waited for an orchestrator too long, and timers that came due. */
+  tick() {
+    this.checkDelegated();
+    for (const id of this.store.dueOrchestrations(this.now().toISOString())) this.safely(() => this.flush(id));
+  }
 
   /**
    * After a server start: catch up with what the batches did meanwhile, and deliver the events
@@ -98,7 +113,7 @@ export class Orchestrator {
       const c = s.child_session_id ? this.store.session(s.child_session_id) : undefined;
       return { ...s, child: c ? { id: c.id, status: c.status, title: c.title, waiting_reason: c.waiting_reason } : null };
     });
-    return { ...o, steps, waiting: this.waitingOf(o) };
+    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: this.timersOf(o)[0]?.due_at ?? null };
   }
 
   /** What an idle orchestrator needs from its owner, or null while it only waits for its steps. */
@@ -107,13 +122,15 @@ export class Orchestrator {
     if (!o) return null;
     // while it plans, its turn end is a question to the owner or a plan to approve
     if (o.phase === 'plan') {
-      return { kind: 'plan', text: o.steps.length && !o.plan_approved ? 'The plan is ready: read it and approve it.' : 'It waits for your reply before it can plan.' };
+      if (o.steps.length && !o.plan_approved) return { kind: 'plan', text: 'The plan is ready: read it and approve it.' };
+      // it set itself a timer: it waits for that, not for you
+      return this.timersOf(o).length ? null : { kind: 'plan', text: 'It waits for your reply before it can plan.' };
     }
     if (o.phase !== 'run') return null;
     const failed = o.steps.find((s) => s.state === 'failed');
     if (failed) return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
     // no step at work: it stopped to ask or to tell the owner something, or a step waits for their review
-    return this.waitsForSteps(o) ? null : { kind: 'plan', text: this.waitingOf(o) ?? 'It waits for your reply.' };
+    return this.waitsQuietly(o) ? null : { kind: 'plan', text: this.waitingOf(o) ?? 'It waits for your reply.' };
   }
 
   /** For a step's batch: which orchestration and step it is part of. */
@@ -125,8 +142,9 @@ export class Orchestrator {
 
   private waitingOf(o: Orchestration): string | null {
     if (o.phase === 'done' || o.phase === 'stopped') return null;
-    if (o.phase === 'paused') return 'Paused';
-    if (o.phase === 'plan') return o.steps.length && !o.plan_approved ? 'Plan ready to approve' : null;
+    if (o.phase === 'paused') return o.paused_reason ?? 'Paused';
+    const timer = () => (this.timersOf(o).length ? 'Waits for its own timer' : null);
+    if (o.phase === 'plan') return o.steps.length && !o.plan_approved ? 'Plan ready to approve' : timer();
     const failed = o.steps.find((s) => s.state === 'failed');
     if (failed) return `Step ${failed.position} failed`;
     const review = o.steps.find((s) => s.state === 'review');
@@ -136,7 +154,12 @@ export class Orchestrator {
       const child = running.child_session_id ? this.store.session(running.child_session_id) : undefined;
       return `Waiting for #${running.child_session_id} (${running.note ?? (child ? sessionStatusWords(child.status) : 'working')}) in ${running.project_key}`;
     }
-    return null;
+    return timer();
+  }
+
+  /** Its own timers that have not come due. */
+  private timersOf(o: Pick<Orchestration, 'session_id'>) {
+    return this.store.waitingTimers(o.session_id, this.now().toISOString());
   }
 
   private projectsOf(o: Orchestration): Project[] {
@@ -207,7 +230,7 @@ export class Orchestrator {
     const title = input.title?.trim() || input.goal.split('\n')[0].slice(0, 60);
     const prompt = `${input.goal}\n\nRead the trackers and the code of the projects in your instructions, ask me what is unclear, and then propose the plan with set_plan.`;
     const session = this.sessions.startOrchestrator({ title, prompt, first: projects[0] }, startedBy, (s) =>
-      this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options, answer_children: input.answer_children }));
+      this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options, answer_children: input.answer_children, cost_limit_usd: input.cost_limit_usd }));
     this.emit(session.id);
     return this.view(session.id);
   }
@@ -286,6 +309,8 @@ export class Orchestrator {
       }
       case 'send_to_session':
         return this.sendToSession(s, o, p);
+      case 'wake_me_in':
+        return this.wakeMeIn(s, o, p);
       default:
         throw new Error(`Unknown method ${method}`);
     }
@@ -467,12 +492,12 @@ export class Orchestrator {
   }
 
   /** No new steps start and the orchestrator gets no events; running batches go on. */
-  pause(sessionId: number): Orchestration {
+  pause(sessionId: number, reason: string | null = null): Orchestration {
     const o = this.must(sessionId);
     if (o.phase !== 'plan' && o.phase !== 'run') throw new SessionError(o.phase === 'paused' ? 'It is already paused.' : 'This orchestration is closed.', 409);
-    this.store.updateOrchestration(sessionId, { phase: 'paused', paused_from: o.phase });
+    this.store.updateOrchestration(sessionId, { phase: 'paused', paused_from: o.phase, paused_reason: reason });
     this.handOverAll(sessionId, 'The orchestrator is paused: this is yours.');
-    this.sessions.systemNote(sessionId, 'Paused by the owner.');
+    this.sessions.systemNote(sessionId, reason ? `Paused by Dispatch. ${reason}` : 'Paused by the owner.');
     this.emit(sessionId);
     return this.view(sessionId);
   }
@@ -481,7 +506,9 @@ export class Orchestrator {
   resumeOne(sessionId: number): Orchestration {
     const o = this.must(sessionId);
     if (o.phase !== 'paused') throw new SessionError('This orchestration is not paused.', 409);
-    this.store.updateOrchestration(sessionId, { phase: o.paused_from ?? 'plan', paused_from: null });
+    const cost = this.store.orchestrationCost(sessionId);
+    if (o.cost_limit_usd !== null && cost >= o.cost_limit_usd) throw new SessionError(`It has used ${usd(cost)} of its ${usd(o.cost_limit_usd)} limit: raise the limit first.`, 409);
+    this.store.updateOrchestration(sessionId, { phase: o.paused_from ?? 'plan', paused_from: null, paused_reason: null });
     this.sessions.systemNote(sessionId, 'Resumed by the owner.');
     this.emit(sessionId);
     this.flush(sessionId);
@@ -583,7 +610,7 @@ export class Orchestrator {
     const o = this.store.orchestration(sessionId);
     if (!o || (o.phase !== 'plan' && o.phase !== 'run')) return;
     if (this.store.session(sessionId)?.status !== 'idle') return;
-    const pending = this.store.pendingOrchEvents(sessionId);
+    const pending = this.dueEvents(sessionId);
     if (!pending.length) return;
     const ids = pending.map((e) => e.id);
     this.store.markOrchEventsDelivered(ids);
@@ -606,7 +633,7 @@ export class Orchestrator {
     if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
     this.emit(s.id);
     // a question it was told about and left open in the turn that just ended is the owner's
-    const waiting = this.store.pendingOrchEvents(s.id);
+    const waiting = this.dueEvents(s.id);
     for (const input of this.store.delegatedInputs(s.id)) {
       if (!waiting.some((e) => e.text.includes(`(input_id ${input.id})`))) this.handOver(input.id, 'The orchestrator did not answer this: it is yours.');
     }
@@ -623,7 +650,7 @@ export class Orchestrator {
     // question, or what went wrong): they are told, unless its next events start it again at once
     const o = this.store.orchestration(s.id);
     const open = !!o && (o.phase === 'plan' || o.phase === 'run');
-    if (open && !planned && !acted && !this.waitsForSteps(o) && !this.store.pendingOrchEvents(s.id).length) {
+    if (open && !planned && !acted && !this.waitsQuietly(o) && !this.dueEvents(s.id).length) {
       void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}` }, s.started_by);
     }
     this.flush(s.id);
@@ -640,6 +667,95 @@ export class Orchestrator {
   /** Its plan runs, a step is at work and none has failed: it needs nothing from the owner now. */
   private waitsForSteps(o: Orchestration): boolean {
     return o.phase === 'run' && o.steps.some((s) => s.state === 'running') && !o.steps.some((s) => s.state === 'failed');
+  }
+
+  /** It waits for its steps, or for a timer it set itself, and no step has failed: nothing for the owner now. */
+  private waitsQuietly(o: Orchestration): boolean {
+    return this.waitsForSteps(o) || (!o.steps.some((s) => s.state === 'failed') && this.timersOf(o).length > 0);
+  }
+
+  // ---------- its own timers ----------
+
+  static readonly MAX_TIMERS = 3;
+
+  /** The orchestrator asks to be woken later: a queued event with a due time. */
+  private wakeMeIn(s: Session, o: Orchestration, p: Record<string, unknown>): string {
+    if (o.phase !== 'plan' && o.phase !== 'run') throw new Error(`The orchestration is ${o.phase}.`);
+    const minutes = Number(p.minutes);
+    if (!Number.isFinite(minutes) || minutes < 5 || minutes > 10_080) throw new Error('A timer is between 5 minutes and 7 days (10080 minutes).');
+    const reason = String(p.reason ?? '').trim();
+    if (!reason) throw new Error('Say what the timer is for.');
+    if (this.timersOf(o).length >= Orchestrator.MAX_TIMERS) throw new Error(`${Orchestrator.MAX_TIMERS} timers wait already: that is the most.`);
+    const at = new Date(this.now().getTime() + Math.round(minutes) * 60_000).toISOString();
+    this.store.addOrchEvent(o.session_id, `Your timer: ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, at);
+    this.acted.add(s.id);
+    this.emit(o.session_id);
+    return `Dispatch wakes you in ${Math.round(minutes)} minutes (at ${at}). End your turn.`;
+  }
+
+  // ---------- cost ----------
+
+  /** At its cost limit an orchestration is paused: nothing new starts, what runs goes on, and the owner is told once. */
+  private checkCost(sessionId: number) {
+    const o = this.store.orchestration(sessionId);
+    if (!o || o.cost_limit_usd === null || (o.phase !== 'plan' && o.phase !== 'run')) return;
+    const cost = this.store.orchestrationCost(sessionId);
+    if (cost < o.cost_limit_usd) return;
+    const used = `${usd(cost)} of ${usd(o.cost_limit_usd)} used.`;
+    this.pause(sessionId, `Cost limit reached: ${used}`);
+    void this.notifier.send({ title: `${o.title}: cost limit reached`, body: `${used} Running sessions go on; no new step starts. Raise the limit to go on.`, url: `/s/${sessionId}`, tag: `orch-cost-${sessionId}` }, o.started_by);
+  }
+
+  // ---------- settings ----------
+
+  /** The owner changes its limits or its scope while it runs. The orchestrator is told what changed. */
+  update(sessionId: number, patch: OrchestrationPatch): Orchestration {
+    const o = this.must(sessionId);
+    if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is closed.', 409);
+    const changed: string[] = [];
+    let tell = false;
+    const next: Parameters<Store['updateOrchestration']>[1] = {};
+    if (patch.project_keys) {
+      const keys = [...new Set(patch.project_keys.map((k) => k.trim().toUpperCase()))];
+      const projects = keys.map((k) => {
+        const pr = this.store.projectByKey(k);
+        if (!pr) throw new SessionError(`Unknown project ${k}`);
+        // a project already in scope may be disabled meanwhile: it stays; a new one must be usable
+        if (!o.project_ids.includes(pr.id)) assertWritable(this.store, pr);
+        return pr;
+      });
+      const ids = projects.map((pr) => pr.id);
+      const used = o.steps.find((st) => !ids.includes(st.project_id));
+      if (used) throw new SessionError(`Step ${used.position} works in ${used.project_key}: it stays in the scope.`);
+      if (ids.join() !== o.project_ids.join()) {
+        next.project_ids = ids;
+        changed.push(`scope ${keys.join(', ')}`);
+        tell = true;
+      }
+    }
+    if (patch.max_children !== undefined && patch.max_children !== o.max_children) {
+      next.max_children = patch.max_children;
+      changed.push(`at most ${patch.max_children} batch${patch.max_children === 1 ? '' : 'es'} at once`);
+      tell = true;
+    }
+    if (patch.cost_limit_usd !== undefined && patch.cost_limit_usd !== o.cost_limit_usd) {
+      next.cost_limit_usd = patch.cost_limit_usd;
+      changed.push(patch.cost_limit_usd === null ? 'no cost limit' : `cost limit ${usd(patch.cost_limit_usd)}`);
+    }
+    if (patch.answer_children !== undefined && patch.answer_children !== o.answer_children) {
+      next.answer_children = patch.answer_children;
+      changed.push(patch.answer_children ? "it answers its batches' questions" : "its batches' questions come to the owner");
+      tell = true;
+    }
+    if (!changed.length) return this.view(sessionId);
+    this.store.updateOrchestration(sessionId, next);
+    if (next.answer_children === false) this.handOverAll(sessionId, 'The orchestrator no longer answers its batches: this is yours.');
+    const what = `${changed.join('; ')}.`;
+    this.sessions.systemNote(sessionId, `Settings changed by the owner: ${what}`);
+    this.emit(sessionId);
+    if (tell) this.wake(sessionId, `The owner changed your settings: ${what}`);
+    this.checkCost(sessionId);
+    return this.view(sessionId);
   }
 
   // ---------- its batches' questions ----------
@@ -809,7 +925,11 @@ export class Orchestrator {
   // ---------- following the batches ----------
 
   private onBus(e: LiveEvent) {
-    if (e.t === 'session' && e.session.kind === 'orchestrator') return this.safely(() => this.ownSession(e.session));
+    if (e.t === 'session' && e.session.kind === 'orchestrator') {
+      this.safely(() => this.ownSession(e.session));
+      return this.safely(() => this.checkCost(e.session.id));
+    }
+    if (e.t === 'session' && e.session.orchestrator_id) this.safely(() => this.checkCost(e.session.orchestrator_id!));
     const child = e.t === 'session' && e.session.orchestrator_id ? e.session.id : e.t === 'pr' ? e.pr.session_id : null;
     if (child === null) return;
     const step = this.store.stepOfChild(child);

@@ -105,6 +105,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/assistant/read': null,
   // an orchestration spans projects: each start and each step is checked against its own project (orchestrator.ts)
   'POST /api/orchestrations': null,
+  'PATCH /api/orchestrations/:id': null,
   'POST /api/orchestrations/:id/approve': null,
   'POST /api/orchestrations/:id/pause': null,
   'POST /api/orchestrations/:id/resume': null,

@@ -26,7 +26,7 @@ const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationS
 });
 const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1, 2], project_keys: ['AA', 'BB'], phase: 'run', paused_from: null,
-  plan_md: 'Store first.', plan_approved: true, plan_version: 1, answer_children: true, max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (checking, then auto-merge) in AA',
+  plan_md: 'Store first.', plan_approved: true, plan_version: 1, answer_children: true, cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (checking, then auto-merge) in AA',
   started_by: null, status: 'idle', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   steps: [
     step(1, { title: 'Token store', state: 'done', child_session_id: 11, child: { id: 11, status: 'completed', title: 'Token store', waiting_reason: null } }),

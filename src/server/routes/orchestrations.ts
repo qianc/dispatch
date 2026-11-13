@@ -3,7 +3,7 @@
 // and starts work as them; everyone can read it.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { orchestrationInput } from '../../shared/types.ts';
+import { orchestrationInput, orchestrationPatch } from '../../shared/types.ts';
 import { assertCanDrive } from '../sessionGuard.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
@@ -37,6 +37,9 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
     if (!store.orchestration(id)) throw notFound('Orchestration');
     return orchestrator.view(id);
   });
+
+  // its limits and scope, while it runs
+  app.patch('/api/orchestrations/:id', async (req) => orchestrator.update(mine(req, (req.params as { id: string }).id), orchestrationPatch.parse(req.body)));
 
   // `plan_version`: the plan the owner read; a plan proposed since then is not approved by this
   app.post('/api/orchestrations/:id/approve', async (req) => {

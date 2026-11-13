@@ -21,7 +21,7 @@ export async function setup(env: Record<string, string> = {}) {
   const item = async (project: string, title: string, status = 'backlog') =>
     (await s.call('POST', `/projects/${project}/items`, { title, status })).data as { id: number; key: string };
   const start = (extra: Record<string, unknown> = {}) =>
-    s.ctx.orchestrator.start({ goal: 'Rework auth', project_keys: ['AA', 'BB'], max_children: 2, answer_children: true, options: DEFAULT_RUN_OPTIONS, ...extra }, OWNER);
+    s.ctx.orchestrator.start({ goal: 'Rework auth', project_keys: ['AA', 'BB'], max_children: 2, answer_children: true, cost_limit_usd: null, options: DEFAULT_RUN_OPTIONS, ...extra }, OWNER);
   const rpc = (id: number, method: string, params: unknown = {}) => s.ctx.sessions.rpc(id, method, params);
   /** the worker's status report for a session */
   const status = (id: number, st: 'idle' | 'failed' | 'running') =>

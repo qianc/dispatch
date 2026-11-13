@@ -700,15 +700,19 @@ export class Store {
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
       waiting: null,
+      cost_usd: 0,
+      cost_limit_usd: r.cost_limit_usd === null || r.cost_limit_usd === undefined ? null : Number(r.cost_limit_usd),
+      paused_reason: (r.paused_reason as string | null) ?? null,
+      next_wake: null,
       started_by: (r.started_by as string | null) ?? null,
       status: r.status as SessionStatus,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
     };
   }
-  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions; answer_children?: boolean }) {
-    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options, answer_children) VALUES (?, ?, ?, ?, ?, ?)',
-      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options), o.answer_children === false ? 0 : 1);
+  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions; answer_children?: boolean; cost_limit_usd?: number | null }) {
+    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options, answer_children, cost_limit_usd) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options), o.answer_children === false ? 0 : 1, o.cost_limit_usd ?? null);
   }
   /** The orchestration an orchestrator session holds, with its steps in plan order. */
   orchestration(sessionId: number): Orchestration | undefined {
@@ -719,7 +723,7 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -771,12 +775,27 @@ export class Store {
     return this.step(id)!;
   }
   /** A wake-up for the orchestrator, kept until its session can take it. */
-  addOrchEvent(sessionId: number, text: string) {
-    this.db.run('INSERT INTO orchestration_events (orchestration_id, text) VALUES (?, ?)', sessionId, text);
+  /** `dueAt` (ISO time): a timer, held back until then. */
+  addOrchEvent(sessionId: number, text: string, dueAt: string | null = null) {
+    this.db.run('INSERT INTO orchestration_events (orchestration_id, text, due_at) VALUES (?, ?, ?)', sessionId, text, dueAt);
   }
-  pendingOrchEvents(sessionId: number): { id: number; text: string }[] {
-    return this.db.all<{ id: number; text: string }>('SELECT id, text FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL ORDER BY id', sessionId)
+  /** The events it can take now: not delivered yet, and due (a timer: from its time on). */
+  pendingOrchEvents(sessionId: number, nowIso = now()): { id: number; text: string }[] {
+    return this.db.all<{ id: number; text: string }>('SELECT id, text FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND (due_at IS NULL OR due_at <= ?) ORDER BY id', sessionId, nowIso)
       .map((r) => ({ id: Number(r.id), text: String(r.text) }));
+  }
+  /** Its own timers that have not come due, soonest first. */
+  waitingTimers(sessionId: number, nowIso = now()): { id: number; due_at: string }[] {
+    return this.db.all<{ id: number; due_at: string }>('SELECT id, due_at FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND due_at > ? ORDER BY due_at', sessionId, nowIso)
+      .map((r) => ({ id: Number(r.id), due_at: String(r.due_at) }));
+  }
+  /** Orchestrations with a timer that has come due and is not delivered. */
+  dueOrchestrations(nowIso = now()): number[] {
+    return this.db.all<{ id: number }>('SELECT DISTINCT orchestration_id AS id FROM orchestration_events WHERE delivered_at IS NULL AND due_at IS NOT NULL AND due_at <= ?', nowIso).map((r) => Number(r.id));
+  }
+  /** What an orchestration cost so far: its own session and every session that is or was a batch of its steps. */
+  orchestrationCost(sessionId: number): number {
+    return Number(this.db.get<{ c: number }>("SELECT coalesce(sum(json_extract(usage, '$.cost_usd')), 0) AS c FROM sessions WHERE id = ? OR orchestrator_id = ?", sessionId, sessionId)?.c ?? 0);
   }
   /** `delivered` false puts them back in the queue (the delivery failed). */
   markOrchEventsDelivered(ids: number[], delivered = true) {
