@@ -191,6 +191,14 @@ export class Orchestrator {
       }
       case 'set_plan':
         return this.setPlan(s, o, p);
+      case 'start_step':
+        return this.startStep(s, o, this.stepOf(o, p.step_id));
+      case 'update_step':
+        return this.updateStep(o, this.stepOf(o, p.step_id), p);
+      case 'get_session':
+        return this.childView(o, Number(p.session_id));
+      case 'finish':
+        return this.finish(s, o, String(p.result ?? '').trim());
       default:
         throw new Error(`Unknown method ${method}`);
     }
@@ -252,6 +260,99 @@ export class Orchestrator {
     this.planNotice.add(s.id);
     this.emit(o.session_id);
     return 'The plan is shown to the owner with an Approve button. Nothing starts before they approve. Explain the plan briefly, then stop and wait.';
+  }
+
+  private stepOf(o: Orchestration, id: unknown): OrchestrationStep {
+    const step = o.steps.find((x) => x.id === Number(id));
+    if (!step) throw new Error(`No step ${String(id)} in this plan.`);
+    return step;
+  }
+
+  /**
+   * Start a step as a batch, if the rules allow it now: an approved running plan, a pending step,
+   * every step before it settled, a free place under the limit, a writable project, and items that
+   * may start (never one on hold, closed, in review or in another open batch).
+   */
+  private startStep(s: Session, o: Orchestration, step: OrchestrationStep): string {
+    if (o.phase === 'plan') throw new Error('The owner has not approved the plan yet.');
+    if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase}.`);
+    if (step.state !== 'pending') throw new Error(`Step ${step.position} is already ${step.state}.`);
+    const blocker = step.depends_on.map((d) => o.steps.find((x) => x.id === d)).find((d) => d && !SETTLED.includes(d.state));
+    if (blocker) throw new Error(`Step ${step.position} waits for step ${blocker.position} ("${blocker.title}"), which is ${blocker.state}.`);
+    const running = o.steps.filter((x) => x.state === 'running').length;
+    if (running >= o.max_children) throw new Error(`${running} step${running === 1 ? ' is' : 's are'} running, which is the limit. Wait for one to finish.`);
+    const project = this.store.project(step.project_id)!;
+    assertWritable(this.store, project);
+    const items = this.store.itemsByIds(step.item_ids);
+    const why = (st: string, held: boolean) => (st === 'hold' ? 'is on hold' : held ? 'is in another batch' : `is ${st.replace('_', ' ')}`);
+    const out = items.flatMap((it) => {
+      const closed = ['hold', 'done', 'canceled', 'in_review'].includes(it.status);
+      const held = this.sessions.movedOn(it);
+      return closed || held ? [`${it.key} ${why(it.status, held)}`] : [];
+    });
+    const ok = items.filter((it) => !out.some((line) => line.startsWith(`${it.key} `)));
+    if (items.length && !ok.length) throw new Error(`Nothing left to start: ${out.join(', ')}.`);
+    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
+    this.store.setOrchestrator(child.id, o.session_id);
+    this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
+    this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
+    this.emit(o.session_id);
+    return `Started session #${child.id} for step ${step.position}.${out.length ? ` Left out: ${out.join(', ')}.` : ''} End your turn: Dispatch wakes you when it changes.`;
+  }
+
+  /** The orchestrator's own word on a step: skip one that has not started, or close one whose batch needs no merge. */
+  private updateStep(o: Orchestration, step: OrchestrationStep, p: Record<string, unknown>) {
+    const note = p.note === undefined ? step.note : String(p.note).trim() || null;
+    if (p.state === 'skipped') {
+      if (step.state !== 'pending') throw new Error(`Step ${step.position} is ${step.state}: only a pending step can be skipped.`);
+    } else if (p.state === 'done') {
+      if (step.state !== 'running' && step.state !== 'review') throw new Error(`Step ${step.position} is ${step.state}: only a step that ran can be done.`);
+      const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+      if (child && ['queued', 'running', 'waiting_input'].includes(child.status)) throw new Error(`Step ${step.position} is still working in session #${child.id}.`);
+      if (child && this.store.prs({ session_id: child.id }).some((pr) => pr.state === 'open')) throw new Error(`Step ${step.position} has an open PR: it is done when that merges.`);
+    } else {
+      throw new Error('state must be "done" or "skipped".');
+    }
+    const updated = this.store.updateStep(step.id, { state: p.state, note });
+    this.emit(o.session_id);
+    return { step_id: updated.id, state: updated.state, note: updated.note };
+  }
+
+  /** One of this orchestration's batches, as its orchestrator may see it. */
+  private childView(o: Orchestration, sessionId: number) {
+    const child = this.store.session(sessionId);
+    const step = child ? this.store.stepOfChild(child.id) : undefined;
+    if (!child || child.orchestrator_id !== o.session_id) throw new Error(`Session #${sessionId} is not a step of this orchestration.`);
+    return {
+      id: child.id, title: child.title, status: child.status, waiting_reason: child.waiting_reason, last_text: child.last_text,
+      prs: this.store.prs({ session_id: child.id }).map((pr) => ({ repo: pr.repo_full_name, number: pr.number, state: pr.state, blocked: pr.blocked, mergeable: pr.mergeable })),
+      step_id: step?.id ?? null, step_state: step?.state ?? null,
+    };
+  }
+
+  /** orchestrator sessions that called finish during a turn: closed when that turn ends */
+  private finishWhenIdle = new Set<number>();
+
+  /** The orchestrator is done: the result is its last word, and the session completes. */
+  private finish(s: Session, o: Orchestration, result: string): string {
+    if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
+    const busy = o.steps.find((x) => x.state === 'running' || x.state === 'review');
+    if (busy) throw new Error(`Step ${busy.position} is still ${busy.state === 'review' ? 'in review' : 'running'}: finish when every step is done, failed or skipped.`);
+    this.store.updateOrchestration(o.session_id, { phase: 'done' });
+    if (result) this.store.updateSession(s.id, { last_text: result.slice(0, 300) });
+    if (this.store.session(s.id)!.status === 'idle') this.close(s.id);
+    else this.finishWhenIdle.add(s.id);
+    this.emit(o.session_id);
+    return 'Finished. End your turn now.';
+  }
+
+  /** Complete a finished orchestration's session and tell the owner. */
+  private close(sessionId: number) {
+    this.finishWhenIdle.delete(sessionId);
+    const s = this.store.session(sessionId)!;
+    this.sessions.finish(sessionId, 'completed');
+    void this.notifier.send({ title: `${s.title}: finished`, body: (s.last_text ?? 'All steps are settled.').slice(0, 180), url: `/s/${sessionId}`, tag: `orch-done-${sessionId}` }, s.started_by);
+    this.emit(sessionId);
   }
 
   // ---------- the owner's actions ----------
