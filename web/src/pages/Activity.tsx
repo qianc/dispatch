@@ -17,6 +17,7 @@ const KINDS = [
   { value: 'discuss', label: 'Discuss' },
   { value: 'assistant', label: 'Assistant' },
   { value: 'release', label: 'Release' },
+  { value: 'orchestrator', label: 'Orchestration' },
 ];
 const PAGE = 30;
 

@@ -26,7 +26,7 @@ const LONG = LINES.join('\n');
 const session = (over: Partial<Session> = {}): Session => ({
   id: 7, project_id: 1, project_key: 'P', kind: 'work', title: 'Fix login', status: 'running', force_plan: false, branch: 'dispatch/p-7-fix', sdk_session_id: null,
   initial_prompt: 'Fix the login bug', source_id: null, waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1,
-  paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, started_by: null, github_login: null, closed_at: null, closed_reason: null, retry_of: null, about_session: null,
+  paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, started_by: null, github_login: null, closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null, ...over,
 });
 const detail = (s: Session): SessionDetail => ({ session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null });
