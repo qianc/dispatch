@@ -40,7 +40,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   /** Everything waiting on you, across projects: only sessions you can act on (DISP-63). */
   app.get('/api/inbox', async (req) => {
     const mine = drives(req);
-    const inputs = store.openInputs().filter((i) => mine(store.session(i.session_id)));
+    // a question its orchestrator has is not yours yet: it comes here if the orchestrator hands it over
+    const inputs = store.openInputs().filter((i) => !i.delegated_to && mine(store.session(i.session_id)));
     // a planning chat's open proposal cards decide what it offers
     // an orchestrator that only waits for its steps needs nothing from you: it is left out
     const idle = store.sessions({ statuses: ['idle'] }).filter(mine).flatMap((s) => {

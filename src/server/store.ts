@@ -678,6 +678,7 @@ export class Store {
       child_session_id: numOrNull(r.child_session_id),
       seen: (r.seen as string | null) ?? null,
       deploys: json(r.deploys, {}),
+      messages_sent: Number(r.messages_sent ?? 0),
     };
   }
   private toOrchestration(r: Row): Orchestration {
@@ -695,6 +696,7 @@ export class Store {
       plan_approved: bool(r.plan_approved),
       plan_version: Number(r.plan_version),
       max_children: Number(r.max_children),
+      answer_children: bool(r.answer_children),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
       waiting: null,
@@ -704,9 +706,9 @@ export class Store {
       updated_at: String(r.updated_at),
     };
   }
-  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions }) {
-    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options) VALUES (?, ?, ?, ?, ?)',
-      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options));
+  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions; answer_children?: boolean }) {
+    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options, answer_children) VALUES (?, ?, ?, ?, ?, ?)',
+      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options), o.answer_children === false ? 0 : 1);
   }
   /** The orchestration an orchestrator session holds, with its steps in plan order. */
   orchestration(sessionId: number): Orchestration | undefined {
@@ -759,7 +761,7 @@ export class Store {
     const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
     return r && this.toStep(r);
   }
-  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys'>>): OrchestrationStep {
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'messages_sent'>>): OrchestrationStep {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
@@ -835,7 +837,23 @@ export class Store {
       answered_at: (r.answered_at as string | null) ?? null,
       expired: bool(r.expired),
       created_at: String(r.created_at),
+      delegated_to: numOrNull(r.delegated_to),
+      answered_by: (r.answered_by as PendingInput['answered_by']) ?? null,
     };
+  }
+  /** Give a question to an orchestration (the owner is not told meanwhile), or back to the owner (null). */
+  setInputDelegated(id: number, orchestrationId: number | null) {
+    this.db.run('UPDATE pending_inputs SET delegated_to = ? WHERE id = ?', orchestrationId, id);
+    return this.input(id)!;
+  }
+  setInputAnsweredBy(id: number, by: NonNullable<PendingInput['answered_by']>) {
+    this.db.run('UPDATE pending_inputs SET answered_by = ? WHERE id = ?', by, id);
+    return this.input(id)!;
+  }
+  /** Open questions an orchestration has (all orchestrations: no id), oldest first. */
+  delegatedInputs(orchestrationId?: number) {
+    return this.db.all(`SELECT * FROM pending_inputs WHERE delegated_to IS NOT NULL AND answered_at IS NULL AND expired = 0${orchestrationId ? ' AND delegated_to = ?' : ''} ORDER BY id`, ...(orchestrationId ? [orchestrationId] : []))
+      .map((r) => this.toInput(r));
   }
   createInput(sessionId: number, localId: string, payload: PendingInputPayload) {
     const { lastId } = this.db.run('INSERT INTO pending_inputs (session_id, local_id, payload) VALUES (?, ?, ?)', sessionId, localId, JSON.stringify(payload));
@@ -852,7 +870,8 @@ export class Store {
     return this.db.all('SELECT * FROM pending_inputs WHERE answered_at IS NULL AND expired = 0 ORDER BY id DESC').map((r) => this.toInput(r));
   }
   answerInput(id: number, answer: InputAnswer) {
-    this.db.run('UPDATE pending_inputs SET answer = ?, answered_at = ? WHERE id = ?', JSON.stringify(answer), now(), id);
+    // answered: whoever had it (an orchestrator) has it no longer
+    this.db.run('UPDATE pending_inputs SET answer = ?, answered_at = ?, delegated_to = NULL WHERE id = ?', JSON.stringify(answer), now(), id);
     return this.input(id)!;
   }
   expireInputs(sessionId: number) {

@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -36,11 +36,16 @@ export class Orchestrator {
     this.notifier = deps.notifier;
     this.merging = deps.merging ?? (() => new Set());
     this.off = this.bus.on((e) => this.onBus(e));
+    this.timer = setInterval(() => this.safely(() => this.checkDelegated()), 60_000);
+    this.timer.unref();
   }
 
   stop() {
     this.off();
+    clearInterval(this.timer);
   }
+
+  private timer: NodeJS.Timeout;
 
   /**
    * After a server start: catch up with what the batches did meanwhile, and deliver the events
@@ -52,6 +57,8 @@ export class Orchestrator {
       for (const step of o.steps) this.safely(() => this.sync(step.id));
       this.safely(() => this.flush(o.session_id));
     }
+    // questions that waited for an orchestrator too long while the server was down
+    this.safely(() => this.checkDelegated());
   }
 
   /** The bus calls listeners inside whoever emitted: an error here must not break them. */
@@ -194,7 +201,7 @@ export class Orchestrator {
     const title = input.title?.trim() || input.goal.split('\n')[0].slice(0, 60);
     const prompt = `${input.goal}\n\nRead the trackers and the code of the projects in your instructions, ask me what is unclear, and then propose the plan with set_plan.`;
     const session = this.sessions.startOrchestrator({ title, prompt, first: projects[0] }, startedBy, (s) =>
-      this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options }));
+      this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options, answer_children: input.answer_children }));
     this.emit(session.id);
     return this.view(session.id);
   }
@@ -445,6 +452,7 @@ export class Orchestrator {
     const o = this.must(sessionId);
     if (o.phase !== 'plan' && o.phase !== 'run') throw new SessionError(o.phase === 'paused' ? 'It is already paused.' : 'This orchestration is closed.', 409);
     this.store.updateOrchestration(sessionId, { phase: 'paused', paused_from: o.phase });
+    this.handOverAll(sessionId, 'The orchestrator is paused: this is yours.');
     this.sessions.systemNote(sessionId, 'Paused by the owner.');
     this.emit(sessionId);
     return this.view(sessionId);
@@ -467,6 +475,7 @@ export class Orchestrator {
     if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is already closed.', 409);
     // closed first: what happens to its batches from here on is no longer a failed step
     this.store.updateOrchestration(sessionId, { phase: 'stopped', paused_from: null });
+    this.handOverAll(sessionId, 'The orchestrator is stopped: this is yours.');
     if (stopChildren) {
       for (const step of o.steps) {
         const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
@@ -576,6 +585,11 @@ export class Orchestrator {
     }
     if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
     this.emit(s.id);
+    // a question it was told about and left open in the turn that just ended is the owner's
+    const waiting = this.store.pendingOrchEvents(s.id);
+    for (const input of this.store.delegatedInputs(s.id)) {
+      if (!waiting.some((e) => e.text.includes(`(input_id ${input.id})`))) this.handOver(input.id, 'The orchestrator did not answer this: it is yours.');
+    }
     // a turn that started nothing and leaves nothing running ended with words for the owner (a
     // question, or what went wrong): they are told, unless its next events start it again at once
     const o = this.store.orchestration(s.id);
@@ -589,6 +603,55 @@ export class Orchestrator {
   /** Its plan runs, a step is at work and none has failed: it needs nothing from the owner now. */
   private waitsForSteps(o: Orchestration): boolean {
     return o.phase === 'run' && o.steps.some((s) => s.state === 'running') && !o.steps.some((s) => s.state === 'failed');
+  }
+
+  // ---------- its batches' questions ----------
+
+  /** How long a batch's question may wait for the orchestrator before it goes to the owner. */
+  delegateTimeoutMs = 600_000;
+
+  /**
+   * A step's batch asks a question or wants its plan approved. While the plan runs and the owner
+   * left this on, the orchestrator gets it first. True: it has it, and the owner is not told now.
+   */
+  delegate(s: Session, input: PendingInput): boolean {
+    if (!s.orchestrator_id || (input.payload.kind !== 'question' && input.payload.kind !== 'plan_approval')) return false;
+    const o = this.store.orchestration(s.orchestrator_id);
+    const own = this.store.session(s.orchestrator_id);
+    const step = this.store.stepOfChild(s.id);
+    if (!o || !own || !step || o.phase !== 'run' || !o.answer_children || FINAL_STATUSES.includes(own.status)) return false;
+    const name = `Step ${step.position} "${step.title}" (${step.project_key}, session #${s.id})`;
+    const p = input.payload;
+    const text = p.kind === 'plan_approval'
+      ? [`${name} wants its plan approved (input_id ${input.id}):`, p.plan.slice(0, 3000), 'Approve it with answer_session (approve: true) if it does what the step asks, or send it back (approve: false, feedback). If only the owner can judge it, hand it to them with hand_to_owner.']
+      : [
+        `${name} asks you (input_id ${input.id}):`,
+        ...p.questions.map((q) => `Q: ${q.question}${q.options?.length ? ` Options: ${q.options.map((op) => `${op.label}${op.description ? ` (${op.description})` : ''}`).join(' | ')}` : ''}`),
+        'Answer it with answer_session if the plan, the items or what the owner told you settle it. If not, hand it to the owner with hand_to_owner.',
+      ];
+    this.store.setInputDelegated(input.id, o.session_id);
+    this.wake(o.session_id, text.join('\n'));
+    return true;
+  }
+
+  /** A question the orchestrator had goes to the owner: said in the batch's chat, and they are told. */
+  handOver(inputId: number, why: string) {
+    const input = this.store.input(inputId);
+    if (!input?.delegated_to || input.answered_at || input.expired) return;
+    this.store.setInputDelegated(inputId, null);
+    this.sessions.systemNote(input.session_id, why);
+    this.sessions.inputBackToOwner(inputId);
+  }
+
+  private handOverAll(orchestrationId: number, why: string) {
+    for (const input of this.store.delegatedInputs(orchestrationId)) this.handOver(input.id, why);
+  }
+
+  /** Questions that waited for their orchestrator too long (it works, or its worker is away) go to the owner. */
+  checkDelegated() {
+    for (const input of this.store.delegatedInputs()) {
+      if (Date.now() - Date.parse(input.created_at) >= this.delegateTimeoutMs) this.handOver(input.id, 'No answer from the orchestrator in time: this is yours.');
+    }
   }
 
   // ---------- following the batches ----------
@@ -606,6 +669,8 @@ export class Orchestrator {
    * closed orchestration stays closed: a later message to its session is a chat, it starts nothing.
    */
   private ownSession(s: Session) {
+    // it cannot answer any more: what its batches asked it is the owner's
+    if (s.status === 'failed' || s.status === 'completed' || s.status === 'stopped') this.handOverAll(s.id, 'The orchestrator stopped: this is yours.');
     const o = this.store.orchestration(s.id);
     if (!o || o.phase === 'done' || o.phase === 'stopped') return;
     if (s.status === 'completed' || s.status === 'stopped') {

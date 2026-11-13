@@ -395,6 +395,10 @@ export interface PendingInput {
   answered_at: string | null;
   expired: boolean;
   created_at: string;
+  /** the orchestration that has this question of its step's batch; the owner is not told while it is set */
+  delegated_to: number | null;
+  /** who answered, when not the owner: the orchestrator, or the orchestrator and then overruled by the owner */
+  answered_by: 'orchestrator' | 'overruled' | null;
 }
 
 /** Tags/modules: trimmed, no empties, no case-insensitive duplicates. */
@@ -723,6 +727,8 @@ export interface OrchestrationStep {
   seen: string | null;
   /** deploys after its merges, by repo id */
   deploys: Record<string, DeployState>;
+  /** messages the orchestrator sent to this step's batch */
+  messages_sent: number;
   /** the batch it runs as (API views) */
   child?: { id: number; status: SessionStatus; title: string; waiting_reason: string | null } | null;
 }
@@ -744,6 +750,8 @@ export interface Orchestration {
   /** counts the plans proposed: an approval names the one the owner read */
   plan_version: number;
   max_children: number;
+  /** it answers its batches' questions and plan approvals when it can; off: they all come to the owner */
+  answer_children: boolean;
   /** run options of the batches it starts */
   options: RunOptions;
   steps: OrchestrationStep[];
@@ -761,6 +769,7 @@ export const orchestrationInput = z.object({
   title: z.string().trim().max(80).optional(),
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.'),
   max_children: z.number().int().min(1).max(5).default(2),
+  answer_children: z.boolean().default(true),
   options: runOptions.default(DEFAULT_RUN_OPTIONS),
 });
 
