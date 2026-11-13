@@ -27,7 +27,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null, ...over,
 });
 const orch: Orchestration = {
-  session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true,
+  session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1,
   max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (running) in AA', started_by: null, status: 'idle', created_at: '', updated_at: '',
   steps: [1, 2, 3].map((n) => ({
     id: n, orchestration_id: 5, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],

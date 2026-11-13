@@ -741,6 +741,8 @@ export interface Orchestration {
   plan_md: string;
   /** the stored plan has the owner's yes */
   plan_approved: boolean;
+  /** counts the plans proposed: an approval names the one the owner read */
+  plan_version: number;
   max_children: number;
   /** run options of the batches it starts */
   options: RunOptions;

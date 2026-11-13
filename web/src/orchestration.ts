@@ -83,7 +83,7 @@ export function partOfIndex(list: Pick<Orchestration, 'title' | 'steps'>[]): Map
 export function orchBusyLabel(o: Pick<Orchestration, 'phase' | 'steps'>, status: SessionStatus): string | undefined {
   if (status !== 'idle') return undefined;
   if (o.phase === 'paused') return 'Paused';
-  return o.phase === 'run' && !o.steps.some((s) => s.state === 'failed') ? 'Running' : undefined;
+  return o.phase === 'run' && o.steps.some((s) => s.state === 'running') && !o.steps.some((s) => s.state === 'failed') ? 'Running' : undefined;
 }
 
 /** The events in a message Dispatch sent to the orchestrator, or null for any other text. */

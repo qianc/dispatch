@@ -693,6 +693,7 @@ export class Store {
       paused_from: (r.paused_from as Orchestration['paused_from']) ?? null,
       plan_md: String(r.plan_md),
       plan_approved: bool(r.plan_approved),
+      plan_version: Number(r.plan_version),
       max_children: Number(r.max_children),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
@@ -716,7 +717,7 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'max_children' | 'project_ids'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {

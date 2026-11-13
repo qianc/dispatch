@@ -151,7 +151,8 @@ once, and the run options of its batches. It is a session of its own, with a pla
   once; no item that is on hold, closed, in review or in another open batch; it never merges, and it
   edits no files itself. Its batches run as you.
 - *A failed step* holds the steps that wait for it, and you get a push. On the step's menu:
-  **Retry** (a new batch) or **Skip** (the steps after it go on). **Pause** starts no new steps and
+  **Retry** (a new batch) or **Skip** (the steps after it go on). A failed batch that already has a
+  pull request is retried from its own page, and stays the step's batch. **Pause** starts no new steps and
   keeps what happens meanwhile for it; **Stop** ends it, and can stop its running batches too.
 - The Inbox shows an orchestrator only when it needs you: a plan to approve or a question, or a
   failed step.

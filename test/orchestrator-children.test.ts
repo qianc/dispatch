@@ -176,19 +176,14 @@ describe('orchestrator: children', () => {
     expect(t.store.step(p.first.id)!.state).toBe('done');
   });
 
-  it("the orchestrator's own turn end sends no push, except plan ready", async () => {
+  it("a turn that proposes a plan says so once: plan ready, not also waiting for you", async () => {
     const a = await t.item('AA', 'One');
     const id = t.start().session_id;
-    t.status(id, 'running');
-    t.status(id, 'idle');
-    expect(t.pushes).toEqual([]);
     t.status(id, 'running');
     await t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'In AA', project_key: 'AA', item_keys: [a.key] }] });
     expect(t.pushes).toEqual([]);
     t.status(id, 'idle');
     expect(t.pushes.map((x) => x.title)).toEqual(['Rework auth: plan ready to approve']);
-    turn(id);
-    expect(t.pushes).toHaveLength(1);
   });
 
   it('finish during a turn completes the session when the turn ends', async () => {

@@ -121,10 +121,10 @@ describe('orchestrator: API', () => {
     await t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'First', project_key: 'AA', item_keys: [a.key] }, { title: 'Then', project_key: 'AA', item_keys: [b.key], after: [1] }] });
     expect((await inbox())[0].attention).toMatchObject({ kind: 'plan', text: 'The plan is ready: read it and approve it.' });
     await post(`/orchestrations/${id}/approve`);
-    turn(id);
-    expect(await inbox()).toEqual([]);
     const [first] = t.s.ctx.orchestrator.view(id).steps;
     const child = await t.startStep(id, first.id);
+    turn(id);
+    expect(await inbox()).toEqual([]); // it waits for step 1: nothing for you
     t.status(child, 'running');
     t.status(child, 'failed');
     turn(id);

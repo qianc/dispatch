@@ -60,7 +60,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
           {mine && open && <Button small variant="danger" disabled={act.isPending} onClick={() => setStopping(true)}>Stop</Button>}
         </div>
         {o.waiting && <p className={cx('mt-1 text-[13px]', /failed/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
-        {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve` })}>Approve plan</Button>}
+        {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
         {planWaits && <p className="mt-1.5 text-[12px] text-muted">Nothing starts before you approve. To change the plan, write to the orchestrator below.</p>}
         <ErrorText error={act.error} />
       </div>

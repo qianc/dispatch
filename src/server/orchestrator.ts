@@ -97,9 +97,11 @@ export class Orchestrator {
     if (o.phase === 'plan') {
       return { kind: 'plan', text: o.steps.length && !o.plan_approved ? 'The plan is ready: read it and approve it.' : 'It waits for your reply before it can plan.' };
     }
-    const failed = o.phase === 'run' ? o.steps.find((s) => s.state === 'failed') : undefined;
-    if (!failed) return null;
-    return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
+    if (o.phase !== 'run') return null;
+    const failed = o.steps.find((s) => s.state === 'failed');
+    if (failed) return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
+    // no step at work: it stopped to ask or to tell the owner something, or a step waits for their review
+    return this.waitsForSteps(o) ? null : { kind: 'plan', text: this.waitingOf(o) ?? 'It waits for your reply.' };
   }
 
   /** For a step's batch: which orchestration and step it is part of. */
@@ -243,7 +245,12 @@ export class Orchestrator {
       case 'update_item': {
         const project = this.projectOfKey(o, p.key);
         assertWritable(this.store, project);
-        return this.sessions.scheduledItemUpdate(s, project, this.itemOf(project, p.key), p);
+        const it = this.itemOf(project, p.key);
+        // otherwise it could reopen a closed item and then start it as a step
+        if (p.status !== undefined && p.status !== it.status && ['done', 'canceled', 'in_review', 'in_progress'].includes(it.status)) {
+          throw new Error(`${it.key} is ${it.status.replace('_', ' ')}: an orchestrator does not change the status of an item that is closed or being worked on.`);
+        }
+        return this.sessions.scheduledItemUpdate(s, project, it, p);
       }
       case 'set_plan':
         return this.setPlan(s, o, p);
@@ -311,7 +318,8 @@ export class Orchestrator {
     const dropped = o.steps.find((x) => x.child_session_id && !seen.has(x.id));
     if (dropped) throw new Error(`Step "${dropped.title}" already ran as session #${dropped.child_session_id}: keep it in the plan.`);
     this.store.replaceSteps(o.session_id, steps);
-    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan' });
+    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan', plan_version: o.plan_version + 1 });
+    this.acted.add(s.id);
     this.sessions.systemNote(s.id, `Plan proposed: ${steps.length} step${steps.length === 1 ? '' : 's'}`);
     this.planNotice.add(s.id);
     this.emit(o.session_id);
@@ -350,6 +358,7 @@ export class Orchestrator {
     if (items.length && !ok.length) throw new Error(`Nothing left to start: ${out.join(', ')}.`);
     const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
+    this.acted.add(s.id);
     this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
     this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
     this.emit(o.session_id);
@@ -386,6 +395,9 @@ export class Orchestrator {
     };
   }
 
+  /** orchestrator sessions that proposed a plan or started a step this turn: that turn's end needs no "waiting for you" */
+  private acted = new Set<number>();
+
   /** orchestrator sessions that called finish during a turn: closed when that turn ends */
   private finishWhenIdle = new Set<number>();
 
@@ -413,8 +425,10 @@ export class Orchestrator {
 
   // ---------- the owner's actions ----------
 
-  approve(sessionId: number): Orchestration {
+  /** `planVersion`: the plan the owner read. A plan proposed after that is not the one they approve. */
+  approve(sessionId: number, planVersion?: number): Orchestration {
     const o = this.must(sessionId);
+    if (planVersion !== undefined && planVersion !== o.plan_version) throw new SessionError('The plan changed since you opened it. Read it again, then approve.', 409);
     if (o.phase === 'paused') throw new SessionError('Resume the orchestration first.', 409);
     if (o.phase !== 'plan') throw new SessionError(o.phase === 'run' ? 'The plan is already approved.' : 'This orchestration is closed.', 409);
     if (!o.steps.length) throw new SessionError('There is no plan to approve yet.', 409);
@@ -498,6 +512,11 @@ export class Orchestrator {
     if (step.state !== 'failed') throw new SessionError(`Step ${step.position} is ${step.state}: only a failed step can be retried.`, 409);
     const busy = this.childWorks(step);
     if (busy) throw new SessionError(`Session #${busy.id} of step ${step.position} runs again: wait for it, or stop it first.`, 409);
+    // a new batch could not start on items that are merged or in review, and the old change would belong to no step
+    if (Object.values(step.deploys).includes('failed')) throw new SessionError(`The change of step ${step.position} is merged; only its deploy failed. Deploy it by hand, then skip the step to go on.`, 409);
+    if (step.child_session_id && this.store.prs({ session_id: step.child_session_id }).some((pr) => pr.state !== 'closed')) {
+      throw new SessionError(`Session #${step.child_session_id} of step ${step.position} has a pull request: retry that session from its page, or skip the step.`, 409);
+    }
     this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
     this.sessions.systemNote(o.session_id, `Step ${step.position}: retry asked by the owner.`);
     this.emit(o.session_id);
@@ -550,12 +569,26 @@ export class Orchestrator {
 
   /** The orchestrator session's turn ended: tell the owner what needs them, close it if it finished, else give it its events. */
   onIdle(s: Session) {
-    if (this.planNotice.delete(s.id)) {
+    const planned = this.planNotice.delete(s.id);
+    const acted = this.acted.delete(s.id);
+    if (planned) {
       void this.notifier.send({ title: `${s.title}: plan ready to approve`, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
     }
     if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
     this.emit(s.id);
+    // a turn that started nothing and leaves nothing running ended with words for the owner (a
+    // question, or what went wrong): they are told, unless its next events start it again at once
+    const o = this.store.orchestration(s.id);
+    const open = !!o && (o.phase === 'plan' || o.phase === 'run');
+    if (open && !planned && !acted && !this.waitsForSteps(o) && !this.store.pendingOrchEvents(s.id).length) {
+      void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}` }, s.started_by);
+    }
     this.flush(s.id);
+  }
+
+  /** Its plan runs, a step is at work and none has failed: it needs nothing from the owner now. */
+  private waitsForSteps(o: Orchestration): boolean {
+    return o.phase === 'run' && o.steps.some((s) => s.state === 'running') && !o.steps.some((s) => s.state === 'failed');
   }
 
   // ---------- following the batches ----------
@@ -627,6 +660,16 @@ export class Orchestrator {
         return this.sync(step.id);
       }
     }
+    if (child.status === 'failed' && child.closed_reason === 'retried') {
+      // retried from its own page: the session that retries it is the step's batch now
+      const next = this.store.retryOf(child.id);
+      if (next) {
+        this.store.setOrchestrator(next.id, orchId);
+        this.store.updateStep(step.id, { child_session_id: next.id, seen: null });
+        this.emit(orchId);
+        return this.sync(step.id);
+      }
+    }
     const prs = this.store.prs({ session_id: child.id });
     const open = prs.filter((p) => p.state === 'open');
     const merged = prs.some((p) => p.state === 'merged');
@@ -639,12 +682,13 @@ export class Orchestrator {
     else if (child.status === 'stopped') [state, note] = ['failed', 'stopped'];
     else if (deploys.includes('failed')) [state, note] = ['failed', 'deploy failed'];
     else if (prs.length && !open.length && merged) [state, note] = deploys.includes('running') || deployComing ? ['running', 'deploying'] : ['done', null];
-    else if (child.status === 'completed') [state, note] = ['done', 'closed by the owner'];
+    else if (child.status === 'completed') [state, note] = open.length ? ['review', 'its session is closed, but its pull request is still open'] : ['done', 'closed by the owner'];
     else if (child.status === 'idle') {
       const stuck = open.find((p) => p.blocked || p.mergeable === false);
       if (stuck) [state, note] = ['review', stuck.blocked ?? 'it has merge conflicts'];
       else if (open.length && open.every((p) => autoMergePending(child.options.auto_merge, p))) note = 'checking, then auto-merge';
       else if (open.length) [state, note] = ['review', "waits for the owner's review"];
+      else if (prs.length && !merged) [state, note] = ['review', 'its pull request was closed without a merge'];
       else note = 'turn ended, no PR yet';
     }
     const seen = `${child.status}|${state}|${note ?? ''}`;
@@ -664,9 +708,9 @@ export class Orchestrator {
       events.push(`${name}: ${merged ? 'merged' : `done (${note})`}.`);
     } else if (state === 'review' && (step.state !== 'review' || note !== step.note)) {
       events.push(`${name}: ${note}.`);
-      if (note === "waits for the owner's review") {
-        void this.notifier.send({ title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
-      }
+      const ownReview = note === "waits for the owner's review";
+      const body = ownReview ? step.title : `${(note ?? '').charAt(0).toUpperCase()}${(note ?? '').slice(1)}.`;
+      void this.notifier.send({ title: `${title}: step ${step.position} ${ownReview ? 'waits for your review' : 'needs you'}`, body: body.slice(0, 180), url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
     }
     if (state === 'done') events.push(...this.allFinished(o));
     this.emit(orchId);

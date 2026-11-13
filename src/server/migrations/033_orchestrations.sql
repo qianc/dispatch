@@ -13,6 +13,8 @@ CREATE TABLE orchestrations (
   plan_md TEXT NOT NULL DEFAULT '',
   -- the stored plan has the owner's yes; a changed plan needs it again
   plan_approved INTEGER NOT NULL DEFAULT 0,
+  -- counts the plans proposed: the owner approves the one they read, not a later one
+  plan_version INTEGER NOT NULL DEFAULT 0,
   max_children INTEGER NOT NULL DEFAULT 2,
   -- JSON RunOptions for the batches it starts
   options TEXT NOT NULL DEFAULT '{}',

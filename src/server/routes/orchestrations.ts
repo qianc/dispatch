@@ -38,7 +38,11 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
     return orchestrator.view(id);
   });
 
-  app.post('/api/orchestrations/:id/approve', async (req) => orchestrator.approve(mine(req, (req.params as { id: string }).id)));
+  // `plan_version`: the plan the owner read; a plan proposed since then is not approved by this
+  app.post('/api/orchestrations/:id/approve', async (req) => {
+    const { plan_version } = z.object({ plan_version: z.number().int().optional() }).parse(req.body ?? {});
+    return orchestrator.approve(mine(req, (req.params as { id: string }).id), plan_version);
+  });
   app.post('/api/orchestrations/:id/pause', async (req) => orchestrator.pause(mine(req, (req.params as { id: string }).id)));
   app.post('/api/orchestrations/:id/resume', async (req) => orchestrator.resumeOne(mine(req, (req.params as { id: string }).id)));
   app.post('/api/orchestrations/:id/stop', async (req) => {
