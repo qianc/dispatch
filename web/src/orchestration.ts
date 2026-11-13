@@ -1,5 +1,6 @@
 // What the orchestration panel shows for a plan and its steps (no React here, so tests can call it).
-import { sessionStatusWords, type PendingInput, type Orchestration, type OrchestrationStep, type SessionStatus, type StepState } from '../../src/shared/types.ts';
+import { waitsOnOwner } from '../../src/shared/attention.ts';
+import { sessionStatusWords, type Attention, type PendingInput, type Orchestration, type Session, type OrchestrationStep, type SessionStatus, type StepState } from '../../src/shared/types.ts';
 
 export const STEP_MARK: Record<StepState, string> = { done: '✓', running: '●', review: '◐', failed: '✕', skipped: '–', pending: '○' };
 export const STEP_LABEL: Record<StepState, string> = { done: 'Done', running: 'Running', review: 'In review', failed: 'Failed', skipped: 'Skipped', pending: 'Not started' };
@@ -80,10 +81,12 @@ export function partOfIndex(list: Pick<Orchestration, 'title' | 'steps'>[]): Map
  * The status to show for an idle orchestrator that needs nothing from its owner: it waits for its
  * steps, so it is at work (or paused), not "your turn". Undefined: its own status says it.
  */
-export function orchBusyLabel(o: Pick<Orchestration, 'phase' | 'steps'>, status: SessionStatus): string | undefined {
+export function orchBusyLabel(o: Pick<Orchestration, 'phase' | 'steps'> & Partial<Pick<Orchestration, 'next_wake'>>, status: SessionStatus): string | undefined {
   if (status !== 'idle') return undefined;
   if (o.phase === 'paused') return 'Paused';
-  return o.phase === 'run' && o.steps.some((s) => s.state === 'running') && !o.steps.some((s) => s.state === 'failed') ? 'Running' : undefined;
+  // at work: a step runs, or it set itself a timer; and no step has failed
+  const waits = o.steps.some((s) => s.state === 'running') || !!o.next_wake;
+  return o.phase === 'run' && waits && !o.steps.some((s) => s.state === 'failed') ? 'Running' : undefined;
 }
 
 /** The events in a message Dispatch sent to the orchestrator, or null for any other text. */
@@ -109,4 +112,38 @@ export function shownAnswer(input: Pick<PendingInput, 'answer' | 'answered_at' |
   const open = !input.answered_at && !input.expired;
   if (!open && input.answer?.kind === 'question') return input.answer.answers[question] ?? '';
   return picked[question] ?? '';
+}
+
+/** What an orchestration cost so far, with its limit when it has one ("$4.10 of $20.00"); empty before any cost. */
+export function costText(o: Pick<Orchestration, 'cost_usd' | 'cost_limit_usd'>): string {
+  if (!o.cost_usd && o.cost_limit_usd === null) return '';
+  if (!o.cost_usd && o.cost_limit_usd !== null) return `$0.00 of $${o.cost_limit_usd.toFixed(2)}`;
+  return `$${o.cost_usd.toFixed(2)}${o.cost_limit_usd !== null ? ` of $${o.cost_limit_usd.toFixed(2)}` : ''}`;
+}
+
+export interface LiveRow { s: Session; /** its batches that need the owner himself: always shown */ needs: Session[]; /** its other batches: folded */ children: Session[] }
+
+/**
+ * Activity's Live list with each orchestrator's batches under it. A batch whose orchestrator is in
+ * the list is no row of its own. One that needs the owner (it asks them, or its turn waits on them)
+ * shows without unfolding; one that asked its orchestrator does not.
+ */
+export function foldLive(live: Session[], attention: ReadonlyMap<number, Attention>): LiveRow[] {
+  const here = new Set(live.filter((s) => s.kind === 'orchestrator').map((s) => s.id));
+  const rows = new Map<number, LiveRow>();
+  const out: LiveRow[] = [];
+  for (const s of live) {
+    if (s.orchestrator_id && here.has(s.orchestrator_id)) continue;
+    const row = { s, needs: [], children: [] };
+    rows.set(s.id, row);
+    out.push(row);
+  }
+  for (const s of live) {
+    const parent = s.orchestrator_id ? rows.get(s.orchestrator_id) : undefined;
+    if (!parent || !here.has(s.orchestrator_id!)) continue;
+    const a = attention.get(s.id);
+    const asksOwner = s.status === 'waiting_input' && !s.waiting_reason?.startsWith('Asked the orchestrator');
+    (asksOwner || (a && waitsOnOwner(a)) ? parent.needs : parent.children).push(s);
+  }
+  return out;
 }

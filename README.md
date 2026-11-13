@@ -163,11 +163,20 @@ once, and the run options of its batches. It is a session of its own, with a pla
   still answer it in the batch.
 - *A stopped merge* (a failed check, conflicts) or a batch that ends with no pull request: it may
   write to that batch, at most 3 times per step, before the step is yours.
+- *Cost limit* (optional): what it and its batches may cost together. At the limit it is paused and
+  you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
+  then Resume.
+- *Settings* on its page change while it runs: batches at once, the cost limit, whether it answers
+  its batches, and the projects (one that a step works in stays). It is told what changed.
+- *Timers*: it can ask Dispatch to wake it later (5 minutes to 7 days, 3 at once) for something
+  nothing else reports, such as a nightly build. Its page shows when.
+- The **Assistant** can propose an orchestration as a card ("plan the auth rework over HC and
+  DISP"); you start it from the card.
+- In **Activity** its batches are folded under its row. A batch that needs you shows at once.
 - The Inbox shows an orchestrator only when it needs you: a plan to approve or a question, or a
   failed step.
 
-Not there yet: there is no cost limit; the scope and limits cannot change after the start; its own
-read-only checkouts use the GitHub account of the first project in its list; and a local repo is
+Not there yet: its own read-only checkouts use the GitHub account of the first project in its list; and a local repo is
 read only if it is on the orchestrator's worker.
 
 The **phone app** and **push notifications** need HTTPS: put a reverse proxy in front and set

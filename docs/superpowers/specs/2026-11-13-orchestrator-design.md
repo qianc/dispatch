@@ -239,10 +239,14 @@ Each phase is useful alone and is its own plan.
 3. **Comfort.** Timer wake-ups, the cost limit, the settings icon for scope and limits while it
    runs, the Assistant's proposal card, folding children in Activity.
 
-## As built (parts 1 and 2)
+## As built (parts 1 to 3)
 
-- Part 1 (core) and part 2 (answering its batches) are built; see the plans
-  `2026-11-13-orchestrator-core.md` and `2026-11-13-orchestrator-answering.md`.
+- All three parts are built; see the plans `2026-11-13-orchestrator-core.md`,
+  `2026-11-13-orchestrator-answering.md` and `2026-11-14-orchestrator-comfort.md`.
+- Settings change the limits, the scope and whether it answers its batches; the run options of
+  its batches stay as set at the start.
+- The cost limit pauses the orchestration; it does not ask in its chat. Resume needs a higher
+  limit.
 - When the orchestrator cannot answer a batch's question it hands that question to the owner, who
   answers it in the batch as before. It does not ask the owner itself and pass the answer on:
   one hop less, and nothing to get lost on the way.
