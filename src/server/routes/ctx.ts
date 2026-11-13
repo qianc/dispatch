@@ -15,6 +15,7 @@ import type { Users } from '../users.ts';
 import type { Identities } from '../identities.ts';
 import type { HostedGit } from '../hosted.ts';
 import type { Scheduler } from '../scheduler.ts';
+import type { Orchestrator } from '../orchestrator.ts';
 
 export interface Ctx {
   cfg: Config;
@@ -37,6 +38,7 @@ export interface Ctx {
   attachments: Attachments;
   janitor: Janitor;
   scheduler: Scheduler;
+  orchestrator: Orchestrator;
 }
 
 export class HttpError extends Error {

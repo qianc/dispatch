@@ -158,6 +158,13 @@ export class Sessions {
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
+  /** The orchestrator's tools (set by app.ts). */
+  orchestratorRpc: ((s: Session, method: string, p: Record<string, unknown>) => Promise<unknown>) | null = null;
+  /**
+   * What an orchestrator session spans (set by app.ts): the repos of its projects, the project it
+   * acts as on GitHub for its own read-only checkouts, and its part of the start spec.
+   */
+  orchestrationOf: ((s: Session) => { repos: Repo[]; first: Project | undefined; spec: NonNullable<StartSpec['orchestration']> } | null) | null = null;
   /** As whom sessions act on GitHub (set by app.ts; without it, the env accounts as before users). */
   identity: IdentityResolver | null = null;
   /** Secrets a session's worker messages must not carry: its starter's token, the env accounts' (set by app.ts; DISP-63). */
@@ -293,6 +300,8 @@ export class Sessions {
 
   /** As whom an existing session acts on GitHub now (null: no GitHub needed, or an assistant chat). */
   private identityOf(s: Session) {
+    // an orchestrator's own checkouts: as for its first project
+    if (s.kind === 'orchestrator') return this.identityFor(s.started_by, this.orchestrationOf?.(s)?.first, s.worker_id);
     if (s.kind === 'assistant' || !s.project_id) return null;
     return this.identityFor(s.started_by, this.store.project(s.project_id), s.worker_id);
   }
@@ -366,7 +375,7 @@ export class Sessions {
   }
 
   /** Done, canceled, or held by a work session that is not finished. */
-  private movedOn(item: Item): boolean {
+  movedOn(item: Item): boolean {
     return item.status === 'done' || item.status === 'canceled'
       || this.store.sessionsForItem(item.id, 'work').some((s) => !FINAL_STATUSES.includes(s.status));
   }
@@ -570,6 +579,50 @@ export class Sessions {
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;
+  }
+
+  /**
+   * An orchestrator session: it belongs to no project (its orchestration names the projects it
+   * spans) and runs on the worker of `first`, as the planner of that project would. `init` runs
+   * before the session can start, so the orchestration exists when the worker gets its spec.
+   */
+  startOrchestrator(input: { title: string; prompt: string; first: Project }, startedBy: string | null, init: (s: Session) => void): Session {
+    const workerId = this.workerFor(input.first, null, startedBy);
+    this.preflight(startedBy, input.first, workerId);
+    const session = this.store.createSession({
+      project_id: null, kind: 'orchestrator', title: input.title, status: 'queued', force_plan: false, branch: null,
+      initial_prompt: input.prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(input.first, null, undefined, workerId),
+      worker_id: workerId, started_by: startedBy,
+    });
+    init(session);
+    this.emitSession(session);
+    this.dispatch();
+    return this.store.session(session.id)!;
+  }
+
+  /** A line from Dispatch itself in a session's chat (not the owner's, not Claude's). */
+  systemNote(sessionId: number, text: string) {
+    this.addEvent(sessionId, { kind: 'system', text });
+  }
+
+  /**
+   * A message to an idle session from Dispatch itself: its next turn. The chat shows it as a
+   * system line, not as the owner's words. A session that works, waits for an answer or is closed
+   * is not interrupted: the caller keeps the message and sends it later.
+   */
+  sendFromDispatch(sessionId: number, text: string) {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'idle') throw new SessionError(`Session #${s.id} is ${s.status}: it takes a message from Dispatch only when idle.`, 409);
+    const identity = this.identityOf(s);
+    if (isRefusal(identity)) throw refusalError(identity);
+    this.addEvent(s.id, { kind: 'system', text });
+    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+      // its worker is away: the message waits, and the session resumes with it when the worker is back
+      this.setStatus(s.id, 'queued', { pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
+      this.dispatch();
+      return;
+    }
+    this.setStatus(s.id, 'running', { waiting_reason: null });
   }
 
   /**
@@ -1048,6 +1101,11 @@ export class Sessions {
       if (!img) throw new Error(`No pasted image ${file} in this chat`);
       return { mime: img.type, data: img.data.toString('base64') };
     }
+    // an orchestrator spans projects: its own tools, each checked against its scope
+    if (s.kind === 'orchestrator') {
+      if (!this.orchestratorRpc) throw new Error('Orchestrator tools are not available');
+      return this.orchestratorRpc(s, method, p);
+    }
     // a disabled project (DISP-59): the agent reads, but writes nothing (the assistant: checked per project)
     if (s.kind !== 'assistant' && RPC_WRITES.includes(method)) assertWritable(this.store, s.project_id);
     if (method === 'attach_image') return this.attachChatImage(s, p);
@@ -1070,15 +1128,8 @@ export class Sessions {
       return it;
     };
     switch (method) {
-      case 'list_items': {
-        const status = Array.isArray(p.status) ? (p.status as string[]) : ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
-        return this.store.items(project.id, { type: p.type as string | undefined, status }).map((i) => ({
-          key: i.key, id: i.id, type: i.type, title: i.title, status: i.status,
-          importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
-          // comments hold decisions and open points: read the item with get_item when it has any
-          comments: this.store.comments(i.id).length,
-        }));
-      }
+      case 'list_items':
+        return this.listItems(project, p);
       case 'get_item':
       case 'get_image':
       case 'add_comment':
@@ -1131,6 +1182,17 @@ export class Sessions {
       default:
         throw new Error(`Unknown method ${method}`);
     }
+  }
+
+  /** A project's open items, one line each (the agents' list_items). */
+  listItems(project: Project, p: Record<string, unknown>) {
+    const status = Array.isArray(p.status) ? (p.status as string[]) : ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
+    return this.store.items(project.id, { type: p.type as string | undefined, status }).map((i) => ({
+      key: i.key, id: i.id, type: i.type, title: i.title, status: i.status,
+      importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
+      // comments hold decisions and open points: read the item with get_item when it has any
+      comments: this.store.comments(i.id).length,
+    }));
   }
 
   /**
@@ -1204,7 +1266,7 @@ export class Sessions {
   }
 
   /** Reading items, their images, and commenting: for agents in their project, the assistant in any. */
-  private async itemRpc(s: Session, method: 'get_item' | 'get_image' | 'add_comment', p: Record<string, unknown>, project: Project | null) {
+  async itemRpc(s: Session, method: 'get_item' | 'get_image' | 'add_comment', p: Record<string, unknown>, project: Project | null) {
     switch (method) {
       case 'get_item': {
         const it = this.itemByKey(p.key, project);
@@ -1290,8 +1352,8 @@ export class Sessions {
    * A scheduled run changes items itself (e.g. the scope says to triage them). It cannot take an
    * item off hold, nor close one: SCHEDULED_SET.
    */
-  private scheduledItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
-    if (s.kind !== 'planner' || !s.schedule_id) throw new Error('Only a scheduled planner run changes items directly.');
+  scheduledItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
+    if (!((s.kind === 'planner' && s.schedule_id) || s.kind === 'orchestrator')) throw new Error('Only a scheduled planner run changes items directly.');
     const p = proposalSchema.parse({ ...raw, type: 'item_update', key: it.key }) as ItemUpdateProposal;
     const { changes, comment } = this.itemChanges(project, it, { ...p, title: undefined, body_md: undefined });
     if (changes.status !== undefined) {
@@ -1358,6 +1420,11 @@ export class Sessions {
   // ---------- internals ----------
 
   private reposOf(s: Session) {
+    if (s.kind === 'orchestrator') {
+      // read-only checkouts of every project it spans; a local repo only where this worker has an ok copy
+      const all = this.orchestrationOf?.(s)?.repos ?? [];
+      return all.filter((r) => r.kind !== 'local' || (s.worker_id != null && !placementProblem(this.store, [r], s.worker_id)));
+    }
     const repos = s.project_id ? this.store.repos(s.project_id) : [];
     // a release works on its one repo
     return s.release ? repos.filter((r) => r.id === s.release!.repo_id) : repos;
@@ -1518,6 +1585,7 @@ export class Sessions {
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null, identity: GithubIdentity | IdentityRefusal | null = this.identityOf(s)): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;
     const schedule = s.kind === 'planner' && s.schedule_id ? this.store.schedule(s.schedule_id) : undefined;
+    const orchestration = s.kind === 'orchestrator' ? this.orchestrationOf?.(s) ?? null : null;
     if (isRefusal(identity)) throw refusalError(identity);
     const user = identity?.source === 'user' ? identity : null;
     // the PR views say whose account it acted as (Phase 6)
@@ -1543,13 +1611,14 @@ export class Sessions {
       force_plan: s.force_plan,
       options: s.options,
       claude_account: s.claude_account,
-      github_account: user ? null : project?.github_account ?? null,
+      github_account: user ? null : (project ?? orchestration?.first)?.github_account ?? null,
       ...(user ? { github: { token: user.token, login: user.login, git_name: user.git_name, git_email: user.git_email } } : {}),
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(s.started_by), placement_md: project?.placement_md ?? '' } : {}),
       ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
+      ...(orchestration ? { orchestration: orchestration.spec } : {}),
     };
   }
 
@@ -1628,8 +1697,7 @@ export class Sessions {
     return this.store.session(next.id)!;
   }
 
-  private agentSource(s: Session) {
-    const projectId = s.project_id!;
+  agentSource(s: Session, projectId = s.project_id!) {
     const existing = this.store.sources(projectId).find((src) => src.kind === 'agent_session' && src.session_id === s.id);
     return existing ?? this.store.createSource(projectId, {
       kind: 'agent_session', title: `Found during session #${s.id}: ${s.title}`, body_md: '', reporter: 'claude',

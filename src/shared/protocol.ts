@@ -2,7 +2,7 @@
 import type { ClaudeAccountInfo, LoginHelp } from './accounts.ts';
 import type { CheckProgress } from './checkProgress.ts';
 import type { GeneratorItem } from './generatorItems.ts';
-import type { ReleaseInfo, WorkerFacts } from './types.ts';
+import type { OrchPhase, ReleaseInfo, WorkerFacts } from './types.ts';
 import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
@@ -36,6 +36,15 @@ export interface StartSpec {
   schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
   release?: ReleaseInfo;
+  /** orchestrator sessions: the goal, the projects it spans, and the plan as it stands */
+  orchestration?: {
+    goal: string;
+    phase: OrchPhase;
+    projects: { key: string; name: string; importance_scale: string[]; effort_scale: string[]; repos: string[] }[];
+    max_children: number;
+    /** the plan with each step's state, and which steps can start now */
+    status_md: string;
+  };
 }
 
 /** A user's own GitHub credential, sent for the sessions they started (DISP-63). */
