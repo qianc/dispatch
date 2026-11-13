@@ -341,10 +341,39 @@ function ProposedItemRow({ item, project, on, toggle }: { item: ProposedItem; pr
 }
 
 /** Assistant proposals name their project; others belong to the session's project. */
+/** The Assistant proposes an orchestration: the goal (which the owner may edit) and the projects it may work in. */
+export function OrchestrationProposalCard({ eventId, done, proposal, session, readOnly }: { eventId: number; done: string | null; proposal: Extract<Proposal, { type: 'orchestration' }>; session: Pick<Session, 'id'>; readOnly: boolean }) {
+  const nav = useNavigate();
+  const [goal, setGoal] = useState(proposal.goal);
+  const start = useMutation({
+    mutationFn: () => api.post<{ session_id: number }>('/orchestrations', { goal, title: proposal.title, project_keys: proposal.project_keys, proposal: { session_id: session.id, event_id: eventId } }),
+    onSuccess: (o) => nav(`/s/${o.session_id}`),
+  });
+  return (
+    <div className="rounded-xl border border-accent/50 bg-panel shadow-sm p-3">
+      <div className="text-[12px] font-semibold uppercase tracking-wide text-accent mb-2">Orchestration · {proposal.project_keys.join(' · ')}</div>
+      {done ? (
+        <p className={cx('text-[13px]', /^(Replaced|Not used)/.test(done) ? 'text-faint' : 'text-ok')}>{done}</p>
+      ) : readOnly ? (
+        <p className="text-[14px] whitespace-pre-wrap">{proposal.goal}</p>
+      ) : (
+        <>
+          <textarea className={cx(inputCls, 'min-h-20 text-[14px]')} value={goal} onChange={(e) => setGoal(e.target.value)} aria-label="Goal" />
+          <p className="mt-1.5 text-[12px] text-muted">It plans this as steps and asks you what is unclear. Nothing starts before you approve its plan. Limits can be set on its page.</p>
+          <Button variant="primary" className="w-full mt-3" disabled={start.isPending || !goal.trim()} onClick={() => start.mutate()}>Start orchestration</Button>
+        </>
+      )}
+      <ErrorText error={start.error} />
+    </div>
+  );
+}
+
 function ProposalLoader(props: { eventId: number; done: string | null; proposal: Proposal; session: Session; project: Project | null; readOnly: boolean }) {
   const key = 'project_key' in props.proposal ? props.proposal.project_key : undefined;
   const { data: loaded } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<Project>(`/projects/${key}`), enabled: !!key });
   const project = key ? loaded : props.project;
+  // an orchestration spans projects: it needs none loaded
+  if (props.proposal.type === 'orchestration') return <OrchestrationProposalCard {...props} proposal={props.proposal} />;
   if (!project) return null;
   if (props.proposal.type === 'planner') return <PlannerProposalCard {...props} proposal={props.proposal} project={project} />;
   if (props.proposal.type === 'item_update') return <ItemUpdateCard {...props} proposal={props.proposal} project={project} />;
@@ -438,7 +467,7 @@ function PlannerProposalCard({ eventId, done, proposal, session, project, readOn
   );
 }
 
-function ProposalCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' }>; session: Session; project: Project; readOnly: boolean }) {
+function ProposalCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' } | { type: 'orchestration' }>; session: Session; project: Project; readOnly: boolean }) {
   const { data: items = [] } = useQuery({
     queryKey: ['items', project.id],
     queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),

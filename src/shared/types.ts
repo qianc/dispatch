@@ -422,6 +422,8 @@ export type Proposal =
   /** project_key is set when the proposal comes from the assistant (not tied to one project) */
   | { type: 'batch'; project_key?: string; title: string; item_ids: number[]; new_items: ProposedItem[]; prompt: string; force_plan: boolean; worker?: string; worker_reason?: string }
   | { type: 'planner'; project_key: string; prompt: string }
+  /** from the Assistant: an orchestration over these projects, which the owner starts */
+  | { type: 'orchestration'; title: string; goal: string; project_keys: string[] }
   | { type: 'items'; source_id: number | null; items: ProposedItem[] }
   /** Discuss: a change to one item that the owner applies (or not). `before` holds the old values. */
   | { type: 'item_update'; item_id: number; item_key: string; changes: ItemChanges; before: ItemChanges; comment: string | null; reason: string };

@@ -100,6 +100,7 @@ const proposalSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('items'), source_id: z.number().int().nullable().default(null), items: z.array(proposedItemSchema).min(1) }),
   z.object({ type: z.literal('planner'), project_key: z.string(), prompt: z.string().default('') }),
+  z.object({ type: z.literal('orchestration'), title: z.string().min(1), goal: z.string().min(1), project_keys: z.array(z.string()).min(1) }),
   z.object({
     type: z.literal('item_update'),
     key: z.string(),
