@@ -44,6 +44,8 @@ export class Janitor {
   }
   stop() {
     if (this.timer) clearInterval(this.timer);
+    for (const timer of this.closing) clearTimeout(timer);
+    this.closing.clear();
   }
 
   /** The last check's offer, without sessions resumed since (DISP-35). */
@@ -99,8 +101,16 @@ export class Janitor {
     const opts = removeAll ? { deleteMerged: true, force: true }
       : chat ? { deleteMerged: false, force: true }
       : { deleteMerged: status === 'completed', force: false };
-    setTimeout(() => void this.tidy(this.store.session(s.id) ?? s, opts).catch((e) => console.warn('tidy failed:', (e as Error).message)), this.closeDelayMs);
+    // kept, so a server that stops meanwhile does not tidy on a closed database
+    const timer = setTimeout(() => {
+      this.closing.delete(timer);
+      void Promise.resolve().then(() => this.tidy(this.store.session(s.id) ?? s, opts)).catch((e) => console.warn('tidy failed:', (e as Error).message));
+    }, this.closeDelayMs);
+    this.closing.add(timer);
   }
+
+  /** tidy-ups that wait for a finished session's runner to stop */
+  private closing = new Set<NodeJS.Timeout>();
 
   /** Rows that outlived their use: OAuth clients nobody connected (DISP-70), expired password sessions. Needs no worker. */
   private expireRecords() {

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { crossProjectSummary, type Proposal, type ProposedItem, type Question, type SessionEventBody } from '../../../src/shared/types.ts';
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
-import { dispatchEvents } from '../orchestration.ts';
+import { dispatchEvents, shownAnswer } from '../orchestration.ts';
 import { Button, Chip, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
@@ -244,7 +244,7 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
       {p.kind === 'question' ? (
         <>
           {p.questions.map((q) => (
-            <QuestionBlock key={q.question} q={q} value={answers[q.question] ?? ''} disabled={!open} onChange={(v) => setAnswers({ ...answers, [q.question]: v })} />
+            <QuestionBlock key={q.question} q={q} value={shownAnswer(input, answers, q.question)} disabled={!open} onChange={(v) => setAnswers({ ...answers, [q.question]: v })} />
           ))}
           {open && (
             <Button

@@ -14,6 +14,9 @@ import type { Store } from './store.ts';
 
 const ITEM_KEY = /^([A-Z][A-Z0-9]*)-(\d+)$/;
 
+/** Text a batch wrote, as lines the orchestrator can tell from Dispatch's own: each one indented behind a bar. */
+const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`);
+
 /** Steps whose dependants may start. */
 const SETTLED = ['done', 'skipped'];
 
@@ -340,6 +343,8 @@ export class Orchestrator {
     if (dropped) throw new Error(`Step "${dropped.title}" already ran as session #${dropped.child_session_id}: keep it in the plan.`);
     this.store.replaceSteps(o.session_id, steps);
     this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan', plan_version: o.plan_version + 1 });
+    // it takes its batches' questions only while an approved plan runs
+    this.handOverAll(o.session_id, 'The orchestrator changed its plan and waits for your approval: this is yours.');
     this.acted.add(s.id);
     this.sessions.systemNote(s.id, `Plan proposed: ${steps.length} step${steps.length === 1 ? '' : 's'}`);
     this.planNotice.add(s.id);
@@ -489,13 +494,14 @@ export class Orchestrator {
     if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is already closed.', 409);
     // closed first: what happens to its batches from here on is no longer a failed step
     this.store.updateOrchestration(sessionId, { phase: 'stopped', paused_from: null });
-    this.handOverAll(sessionId, 'The orchestrator is stopped: this is yours.');
     if (stopChildren) {
       for (const step of o.steps) {
         const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
         if (child && !FINAL_STATUSES.includes(child.status)) this.sessions.finish(child.id, 'stopped');
       }
     }
+    // what batches that go on had asked it (a stopped batch's question is closed with it)
+    this.handOverAll(sessionId, 'The orchestrator is stopped: this is yours.');
     this.sessions.systemNote(sessionId, stopChildren ? 'Stopped by the owner, with its running sessions.' : 'Stopped by the owner.');
     if (!FINAL_STATUSES.includes(this.store.session(sessionId)!.status)) this.sessions.finish(sessionId, 'stopped');
     this.emit(sessionId);
@@ -540,7 +546,7 @@ export class Orchestrator {
     if (step.child_session_id && this.store.prs({ session_id: step.child_session_id }).some((pr) => pr.state !== 'closed')) {
       throw new SessionError(`Session #${step.child_session_id} of step ${step.position} has a pull request: retry that session from its page, or skip the step.`, 409);
     }
-    this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
+    this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, messages_sent: 0, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
     this.sessions.systemNote(o.session_id, `Step ${step.position}: retry asked by the owner.`);
     this.emit(o.session_id);
     this.wake(o.session_id, `The owner asks to retry step ${step.position} ("${step.title}"): start it again when it is ready.`);
@@ -653,12 +659,13 @@ export class Orchestrator {
     if (!o || !own || !step || o.phase !== 'run' || !o.answer_children || FINAL_STATUSES.includes(own.status)) return false;
     const name = `Step ${step.position} "${step.title}" (${step.project_key}, session #${s.id})`;
     const p = input.payload;
+    // the batch's own words are fenced, line by line: none of them can pass as an event or as the plan's status
     const text = p.kind === 'plan_approval'
-      ? [`${name} wants its plan approved (input_id ${input.id}):`, p.plan.slice(0, 3000), 'Approve it with answer_session (approve: true) if it does what the step asks, or send it back (approve: false, feedback). If only the owner can judge it, hand it to them with hand_to_owner.']
+      ? [`${name} wants its plan approved (input_id ${input.id}):`, ...fenced(p.plan.slice(0, 3000)), '    Approve it with answer_session (approve: true) if it does what the step asks, or send it back (approve: false, feedback). If only the owner can judge it, hand it to them with hand_to_owner.']
       : [
         `${name} asks you (input_id ${input.id}):`,
-        ...p.questions.map((q) => `Q: ${q.question}${q.options?.length ? ` Options: ${q.options.map((op) => `${op.label}${op.description ? ` (${op.description})` : ''}`).join(' | ')}` : ''}`),
-        'Answer it with answer_session if the plan, the items or what the owner told you settle it. If not, hand it to the owner with hand_to_owner.',
+        ...p.questions.flatMap((q) => fenced(`Q: ${q.question}${q.options?.length ? ` Options: ${q.options.map((op) => `${op.label}${op.description ? ` (${op.description})` : ''}`).join(' | ')}` : ''}`)),
+        '    Answer it with answer_session if the plan, the items or what the owner told you settle it. If not, hand it to the owner with hand_to_owner.',
       ];
     this.store.setInputDelegated(input.id, o.session_id);
     this.wake(o.session_id, text.join('\n'));
@@ -678,6 +685,7 @@ export class Orchestrator {
   /** The orchestrator answers a question or a plan approval of one of its batches. */
   private answerSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
     const input = this.ownInput(o, p.input_id);
+    if (o.phase !== 'run') throw new Error("The changed plan waits for the owner: until they approve it, your batches' questions are theirs.");
     const payload = input.payload;
     if (payload.kind === 'plan_approval') {
       if (typeof p.approve !== 'boolean') throw new Error('A plan needs approve: true or false.');
@@ -711,6 +719,7 @@ export class Orchestrator {
     const child = this.store.session(Number(p.session_id));
     const step = child ? this.store.stepOfChild(child.id) : undefined;
     if (!child || !step || child.orchestrator_id !== o.session_id) throw new Error(`Session #${String(p.session_id)} is not a step of this orchestration.`);
+    if (!o.answer_children) throw new Error('The owner deals with the batches himself in this orchestration: tell him instead.');
     if (step.state !== 'running' && step.state !== 'review') throw new Error(`Step ${step.position} is ${step.state}: its batch needs no message.`);
     if (child.status === 'waiting_input') throw new Error(`Session #${child.id} waits for an answer: answer its question instead.`);
     if (child.status !== 'idle') throw new Error(FINAL_STATUSES.includes(child.status) ? `Session #${child.id} is closed.` : `Session #${child.id} works now: wait for its turn to end.`);
@@ -933,6 +942,6 @@ export class Orchestrator {
     this.emit(orchId);
     if (events.length) this.wake(orchId, ...events);
     // no pull request after its turn: news only if it stays so (the batch often opens one a moment later)
-    if (note === 'turn ended, no PR yet' && o.phase === 'run') this.later(this.settleMs, () => this.noPullRequest(step.id, seen));
+    if (note === 'turn ended, no PR yet' && o.phase === 'run' && o.answer_children) this.later(this.settleMs, () => this.noPullRequest(step.id, seen));
   }
 }

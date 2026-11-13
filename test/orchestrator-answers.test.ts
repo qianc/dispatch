@@ -58,7 +58,7 @@ describe('orchestrator: its batches ask', () => {
       const p = await running();
       const input = ask(p.child, PLAN);
       expect(t.store.input(input.id)!.delegated_to).toBe(p.id);
-      expect(told(p.id).at(-1)).toContain(`wants its plan approved (input_id ${input.id}):\n## Plan\n\n1. Add the store`);
+      expect(told(p.id).at(-1)).toContain(`wants its plan approved (input_id ${input.id}):\n    | ## Plan\n    | \n    | 1. Add the store`);
       expect(t.pushes.filter((x) => /approve plan/.test(x.title))).toEqual([]);
     });
 
