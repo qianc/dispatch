@@ -239,6 +239,17 @@ Each phase is useful alone and is its own plan.
 3. **Comfort.** Timer wake-ups, the cost limit, the settings icon for scope and limits while it
    runs, the Assistant's proposal card, folding children in Activity.
 
+## As built (parts 1 and 2)
+
+- Part 1 (core) and part 2 (answering its batches) are built; see the plans
+  `2026-11-13-orchestrator-core.md` and `2026-11-13-orchestrator-answering.md`.
+- When the orchestrator cannot answer a batch's question it hands that question to the owner, who
+  answers it in the batch as before. It does not ask the owner itself and pass the answer on:
+  one hop less, and nothing to get lost on the way.
+- It is woken when a step is done, in review or failed, when a batch asks it something, and when a
+  batch's turn ended and no pull request followed within 30 seconds. Not on every turn end.
+- A closed orchestration stays closed. In the Inbox it is a card under "Your turn".
+
 ## Calls made without the owner (change any of them)
 
 1. It never merges itself; merging stays with auto-merge or the owner.

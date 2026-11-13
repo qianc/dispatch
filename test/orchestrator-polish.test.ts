@@ -7,7 +7,7 @@ import { setup } from './orchestrator-helpers.ts';
 describe('orchestration wording', () => {
   const step = (over: Partial<OrchestrationStep>): OrchestrationStep => ({
     id: 1, orchestration_id: 5, position: 1, title: 'x', project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-    state: 'running', note: null, child_session_id: 12, seen: null, deploys: {}, child: null, ...over,
+    state: 'running', note: null, child_session_id: 12, seen: null, deploys: {}, messages_sent: 0, child: null, ...over,
   });
 
   it('a batch that asks its owner something "needs you", in the step line and in what the orchestration waits for', async () => {

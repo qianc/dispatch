@@ -13,6 +13,8 @@ import {
   type InputAnswer,
   type Item,
   type ItemChanges,
+  type PendingInput,
+  type PendingInputPayload,
   type Proposal,
   DEFAULT_RUN_OPTIONS,
   type Project,
@@ -143,6 +145,11 @@ function checkoutImageData(path: string, data: unknown): { data: Buffer } {
 }
 
 /** With a message from the web app: its id, so a retry is stored once (DISP-83), and the projects tagged with @ (DISP-82). */
+/** What a question or approval asks, in one line. */
+export function inputReason(p: PendingInputPayload): string {
+  return p.kind === 'plan_approval' ? 'Plan ready for approval' : p.kind === 'cross_project' ? crossProjectSummary(p) : p.questions[0]?.question ?? 'Question';
+}
+
 export interface SendOpts { client_id?: string; project_keys?: string[] }
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -1055,14 +1062,15 @@ export class Sessions {
         return;
       }
       case 'input_request': {
-        const input = this.store.createInput(s.id, msg.local_id, msg.payload);
-        this.addEvent(s.id, { kind: 'input_request', input_id: input.id });
+        const created = this.store.createInput(s.id, msg.local_id, msg.payload);
+        this.addEvent(s.id, { kind: 'input_request', input_id: created.id });
+        // a step's batch: its orchestrator may take the question first; the owner is told only if it does not
+        const delegated = s.kind === 'work' && !!s.orchestrator_id && (this.delegateInput?.(s, created) ?? false);
+        const input = this.store.input(created.id)!;
         this.bus.emit({ t: 'input', input });
-        const p = msg.payload;
-        const reason = p.kind === 'plan_approval' ? 'Plan ready for approval' : p.kind === 'cross_project' ? crossProjectSummary(p) : p.questions[0]?.question ?? 'Question';
-        const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
-        this.setStatus(s.id, 'waiting_input', { waiting_reason: reason });
-        this.notify(s, `${s.project_key ?? 'Assistant'}: ${what}`, reason, `input-${input.id}`);
+        const reason = inputReason(input.payload);
+        this.setStatus(s.id, 'waiting_input', { waiting_reason: delegated ? `Asked the orchestrator: ${reason}` : reason });
+        if (!delegated) this.tellOwnerInput(s, input);
         return;
       }
     }
@@ -1582,6 +1590,29 @@ export class Sessions {
    * if the owner was already told something about this turn (auto-merge result).
    */
   onWorkIdle: ((s: Session) => Promise<boolean>) | null = null;
+
+  /**
+   * A step's batch asks something (app.ts wires it to the orchestration). True: its orchestrator
+   * has the question now, and the owner is not told unless it comes back to them.
+   */
+  delegateInput: ((s: Session, input: PendingInput) => boolean) | null = null;
+
+  /** The push that says a session asks its owner something. */
+  tellOwnerInput(s: Session, input: PendingInput) {
+    const p = input.payload;
+    const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
+    this.notify(s, `${s.project_key ?? 'Assistant'}: ${what}`, inputReason(p), `input-${input.id}`);
+  }
+
+  /** A question its orchestrator had is the owner's now: the session says what it waits for, and they are told. */
+  inputBackToOwner(inputId: number) {
+    const input = this.store.input(inputId);
+    const s = input && this.store.session(input.session_id);
+    if (!input || !s) return;
+    this.bus.emit({ t: 'input', input });
+    if (s.status === 'waiting_input') this.emitSession(this.store.updateSession(s.id, { waiting_reason: inputReason(input.payload) }));
+    this.tellOwnerInput(s, input);
+  }
 
   /** An orchestrator session's turn ended (app.ts wires it to the orchestration). */
   onOrchestratorIdle: ((s: Session) => void) | null = null;

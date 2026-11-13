@@ -1,5 +1,5 @@
 // What the orchestration panel shows for a plan and its steps (no React here, so tests can call it).
-import { sessionStatusWords, type Orchestration, type OrchestrationStep, type SessionStatus, type StepState } from '../../src/shared/types.ts';
+import { sessionStatusWords, type PendingInput, type Orchestration, type OrchestrationStep, type SessionStatus, type StepState } from '../../src/shared/types.ts';
 
 export const STEP_MARK: Record<StepState, string> = { done: '✓', running: '●', review: '◐', failed: '✕', skipped: '–', pending: '○' };
 export const STEP_LABEL: Record<StepState, string> = { done: 'Done', running: 'Running', review: 'In review', failed: 'Failed', skipped: 'Skipped', pending: 'Not started' };
@@ -98,4 +98,15 @@ export function dispatchEvents(text: string): string[] | null {
     events.push(line.slice(2));
   }
   return events;
+}
+
+/**
+ * What a question card shows as the answer to one of its questions: while it is open, what the
+ * owner picks; once answered, the answer that was given (it may arrive while the card is on screen,
+ * e.g. from the orchestrator).
+ */
+export function shownAnswer(input: Pick<PendingInput, 'answer' | 'answered_at' | 'expired'>, picked: Record<string, string>, question: string): string {
+  const open = !input.answered_at && !input.expired;
+  if (!open && input.answer?.kind === 'question') return input.answer.answers[question] ?? '';
+  return picked[question] ?? '';
 }

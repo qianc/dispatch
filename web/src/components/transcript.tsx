@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { crossProjectSummary, type Proposal, type ProposedItem, type Question, type SessionEventBody } from '../../../src/shared/types.ts';
 import { api, type Item, type PendingInput, type Project, type Session, type SessionEvent } from '../api.ts';
-import { dispatchEvents } from '../orchestration.ts';
+import { dispatchEvents, shownAnswer } from '../orchestration.ts';
 import { Button, Chip, ErrorText, ITEM_STATUS_LABEL, ImportanceIcon, Md, cx, inputCls } from './ui.tsx';
 import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
@@ -222,16 +222,29 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
     mutationFn: (body: unknown) => api.post(`/inputs/${input.id}/answer`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['session', input.session_id] }),
   });
+  // a step's batch: its orchestrator answered, and the owner can put his own answer in its place
+  const [own, setOwn] = useState<string | null>(null);
+  const overrule = useMutation({
+    mutationFn: (text: string) => api.post(`/inputs/${input.id}/overrule`, { text }),
+    onSuccess: () => {
+      setOwn(null);
+      return qc.invalidateQueries({ queryKey: ['session', input.session_id] });
+    },
+  });
+  const byOrchestrator = input.answered_by === 'orchestrator';
   const p = input.payload;
   return (
     <div className={cx('rounded-xl border p-3', waiting ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
       {!open && (
-        <div className="text-[12px] text-faint mb-2">{waiting ? 'Waiting for an answer' : input.expired ? 'Closed without an answer' : 'Answered'}</div>
+        <div className="text-[12px] text-faint mb-2">{waiting ? 'Waiting for an answer' : input.expired ? 'Closed without an answer' : byOrchestrator ? 'Answered by the orchestrator' : input.answered_by === 'overruled' ? 'Answered by the orchestrator, overruled by you' : 'Answered'}</div>
+      )}
+      {open && input.delegated_to && (
+        <div className="text-[12px] text-muted mb-2">The orchestrator answers this, or passes it to you. You can answer it yourself.</div>
       )}
       {p.kind === 'question' ? (
         <>
           {p.questions.map((q) => (
-            <QuestionBlock key={q.question} q={q} value={answers[q.question] ?? ''} disabled={!open} onChange={(v) => setAnswers({ ...answers, [q.question]: v })} />
+            <QuestionBlock key={q.question} q={q} value={shownAnswer(input, answers, q.question)} disabled={!open} onChange={(v) => setAnswers({ ...answers, [q.question]: v })} />
           ))}
           {open && (
             <Button
@@ -283,7 +296,18 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
           )}
         </>
       )}
-      <ErrorText error={send.error} />
+      {byOrchestrator && !readOnly && (own === null ? (
+        <Button small className="mt-3" onClick={() => setOwn('')}>Overrule</Button>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <textarea className={cx(inputCls, 'min-h-16')} placeholder="Your own answer. The batch gets it as your message." value={own} onChange={(e) => setOwn(e.target.value)} aria-label="Your own answer" />
+          <div className="flex gap-2">
+            <Button className="flex-1" onClick={() => setOwn(null)}>Cancel</Button>
+            <Button variant="primary" className="flex-1" disabled={overrule.isPending || !own.trim()} onClick={() => overrule.mutate(own)}>Send my answer</Button>
+          </div>
+        </div>
+      ))}
+      <ErrorText error={send.error ?? overrule.error} />
     </div>
   );
 }

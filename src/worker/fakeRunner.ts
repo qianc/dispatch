@@ -200,11 +200,15 @@ export class FakeRunner implements AgentRunner {
    */
   private async orchestratorTurn(text: string) {
     const ready = text.match(/^Ready to start: ([\d, ]+)$/m)?.[1].split(',').map((n) => Number(n.trim())).filter(Boolean) ?? [];
+    // what its batches asked it: the first option, and a yes to a plan
+    const asked = [...text.matchAll(/asks you \(input_id (\d+)\)/g)].map((m) => ({ input_id: Number(m[1]), answer: 'Small fix' }));
+    const plans = [...text.matchAll(/wants its plan approved \(input_id (\d+)\)/g)].map((m) => ({ input_id: Number(m[1]), approve: true }));
     if (/All steps are finished/.test(text)) {
       await this.deps.rpc('finish', { result: '(fake) All done.' });
       this.say('(fake) All done.');
-    } else if (ready.length) {
+    } else if (ready.length || asked.length || plans.length) {
       const said: string[] = [];
+      for (const a of [...asked, ...plans]) said.push(String(await this.deps.rpc('answer_session', a).catch((e: Error) => e.message)));
       for (const step_id of ready) said.push(String(await this.deps.rpc('start_step', { step_id }).catch((e: Error) => e.message)));
       this.say(`(fake) ${said.join(' ')}`);
     } else if (this.turn === 1) {

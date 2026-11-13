@@ -38,6 +38,7 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   'POST /api/sessions/:id/interrupt': { find: bySessionParam, need: 'stop' },
   'POST /api/sessions/:id/finish': { find: bySessionParam, need: 'stop' },
   'POST /api/inputs/:id/answer': { find: byInput, need: 'drive' },
+  'POST /api/inputs/:id/overrule': { find: byInput, need: 'drive' },
   'POST /api/prs/:id/merge': { find: byPr, need: 'drive' },
   'POST /api/prs/:id/github-pr': { find: byPr, need: 'drive' },
   'POST /api/prs/:id/resolve-conflicts': { find: byPr, need: 'drive' },

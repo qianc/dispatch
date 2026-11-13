@@ -44,11 +44,11 @@ describe('orchestrator: the worker', () => {
     expect(view()).toMatchObject({ phase: 'plan', plan_approved: false });
     expect(view().steps.map((x) => x.project_key)).toEqual(['AA', 'BB']);
     await t.s.call('POST', `/orchestrations/${id}/approve`);
-    /** the step's batch runs its (fake) turn, which asks a question; answer it, then its PR merges */
+    /** the step's batch runs its (fake) turn, which asks a question; the orchestrator answers it; then its PR merges */
     const runStep = async (n: number) => {
       const child = await waitFor(() => view().steps[n].child_session_id, `step ${n + 1} to start`);
-      const input = await waitFor(() => t.store.openInputs().find((i) => i.session_id === child), `question of step ${n + 1}`);
-      await t.s.call('POST', `/inputs/${input.id}/answer`, { kind: 'question', answers: { 'Which approach should I take?': 'Small fix' } });
+      const input = await waitFor(() => t.store.inputs(child).find((i) => i.answered_at), `the answer for step ${n + 1}`);
+      expect(input).toMatchObject({ answered_by: 'orchestrator', answer: { kind: 'question', answers: { 'Which approach should I take?': 'Small fix' } } });
       await waitFor(() => t.store.session(child)!.status === 'idle', `step ${n + 1} to end its turn`);
       t.pr(child, 'merged');
       return child;
@@ -60,5 +60,7 @@ describe('orchestrator: the worker', () => {
     expect(view().steps.map((x) => x.state)).toEqual(['done', 'done']);
     expect(t.store.session(id)!.last_text).toBe('(fake) All done.');
     expect(t.pushes.map((x) => x.title)).toEqual(expect.arrayContaining(['Rework auth: plan ready to approve', 'Rework auth: finished']));
+    // the batches' questions never came to the owner
+    expect(t.pushes.filter((x) => /question/.test(x.title))).toEqual([]);
   }, 40_000);
 });

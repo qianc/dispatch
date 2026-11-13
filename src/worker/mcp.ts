@@ -333,6 +333,21 @@ function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
     tool('get_session', "Read the state of one of your steps' batches: status, what it waits for, its last message and its pull requests.", {
       session_id: z.number().int().describe('The session number from "The plan now"'),
     }, call(rpc, 'get_session')),
+    tool('answer_session', "Answer a question or a plan approval that one of your batches asked you (Dispatch gives you its input_id). Only when the plan, the items or what the owner told you settle it. The owner sees your answer in the batch's chat and can overrule it.", {
+      input_id: z.number().int().describe('The input_id from the message that told you about it'),
+      answer: z.string().optional().describe('Your answer, when there is one question: an option label, or your own words'),
+      answers: z.record(z.string(), z.string()).optional().describe('For several questions: each question text with its answer'),
+      approve: z.boolean().optional().describe("For a plan approval: true approves the batch's plan, false sends it back"),
+      feedback: z.string().optional().describe('With approve false: what to change in the plan'),
+    }, call(rpc, 'answer_session')),
+    tool('hand_to_owner', 'Give a question one of your batches asked you to the owner, when only they can answer it. They get a notice and answer it in the batch.', {
+      input_id: z.number().int(),
+      reason: z.string().optional().describe('One line for the owner: why this is theirs'),
+    }, call(rpc, 'hand_to_owner')),
+    tool('send_to_session', 'Write to one of your batches whose turn ended: how to fix a stopped merge, or what is missing. At most 3 messages per step. Not for a batch that works or waits for an answer.', {
+      session_id: z.number().int().describe('The session number of the batch'),
+      text: z.string().describe('What it should do, complete enough to act on'),
+    }, call(rpc, 'send_to_session')),
     tool('finish', 'End the orchestration when every step is done, failed or skipped. Give the result for the owner.', {
       result: z.string().describe('What was done, what was left out and why (a few lines)'),
     }, call(rpc, 'finish')),
