@@ -15,7 +15,7 @@ const message = z.object({
   client_id: z.string().min(1).max(64).optional(), project_keys: z.array(z.string().max(20)).max(20).default([]),
 })
   .refine((b) => b.text.trim() || b.images.length, 'Write a message or paste an image.');
-export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, users, github, bus, janitor }: Ctx) {
+export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, workers, users, github, bus, janitor, orchestrator }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -42,7 +42,12 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const mine = drives(req);
     const inputs = store.openInputs().filter((i) => mine(store.session(i.session_id)));
     // a planning chat's open proposal cards decide what it offers
-    const idle = store.sessions({ statuses: ['idle'] }).filter(mine).map((s) => ({ ...s, attention: attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow) }));
+    // an orchestrator that only waits for its steps needs nothing from you: it is left out
+    const idle = store.sessions({ statuses: ['idle'] }).filter(mine).flatMap((s) => {
+      const attention = s.kind === 'orchestrator' ? orchestrator.attention(s.id)
+        : attentionOf(s, store.prs({ session_id: s.id }), s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow);
+      return attention ? [{ ...s, attention }] : [];
+    });
     // failed sessions not yet ignored or retried (DISP-81), each with a short reason
     const failed = store.failedOpen().filter(mine).map((s) => ({ ...s, reason: failureReason(s, store.lastError(s.id)) }));
     const idleIds = new Set(idle.map((s) => s.id));
@@ -151,6 +156,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,
       checks: github.checks.of(s.id),
+      // an orchestrator's plan and steps; for a step's batch, which orchestration and step it is
+      orchestration: s.kind === 'orchestrator' && store.orchestration(s.id) ? orchestrator.view(s.id) : null,
+      part_of: orchestrator.partOf(s),
       // a failed session (DISP-81): why, the session that retries it, and the open discussion of it
       failure: s.status === 'failed' ? {
         reason: failureReason(s, store.lastError(s.id)),

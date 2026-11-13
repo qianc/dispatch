@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { planInput, proposedItemSchema, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, planInput, proposedItemSchema, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -73,12 +73,41 @@ export class Orchestrator {
 
   /** An orchestration with the one line that says what it waits for. */
   view(sessionId: number): Orchestration {
-    const o = this.must(sessionId);
-    return { ...o, waiting: this.waitingOf(o) };
+    return this.shown(this.must(sessionId));
   }
 
   list(): Orchestration[] {
-    return this.store.orchestrations().map((o) => ({ ...o, waiting: this.waitingOf(o) }));
+    return this.store.orchestrations().map((o) => this.shown(o));
+  }
+
+  /** With what it waits for, and each step's batch. */
+  private shown(o: Orchestration): Orchestration {
+    const steps = o.steps.map((s) => {
+      const c = s.child_session_id ? this.store.session(s.child_session_id) : undefined;
+      return { ...s, child: c ? { id: c.id, status: c.status, title: c.title, waiting_reason: c.waiting_reason } : null };
+    });
+    return { ...o, steps, waiting: this.waitingOf(o) };
+  }
+
+  /** What an idle orchestrator needs from its owner, or null while it only waits for its steps. */
+  attention(sessionId: number): Attention | null {
+    const o = this.store.orchestration(sessionId);
+    if (!o) return { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
+    if (o.phase === 'plan') {
+      return o.steps.length && !o.plan_approved
+        ? { kind: 'plan', text: 'The plan is ready: read it and approve it.' }
+        : { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
+    }
+    const failed = o.phase === 'run' ? o.steps.find((s) => s.state === 'failed') : undefined;
+    if (!failed) return null;
+    return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
+  }
+
+  /** For a step's batch: which orchestration and step it is part of. */
+  partOf(s: Session): { orchestrator_id: number; title: string; step_position: number | null; step_count: number } | null {
+    const o = s.orchestrator_id ? this.store.orchestration(s.orchestrator_id) : undefined;
+    if (!o) return null;
+    return { orchestrator_id: o.session_id, title: o.title, step_position: this.store.stepOfChild(s.id)?.position ?? null, step_count: o.steps.length };
   }
 
   private waitingOf(o: Orchestration): string | null {
@@ -398,6 +427,97 @@ export class Orchestrator {
     return this.view(sessionId);
   }
 
+  /** No new steps start and the orchestrator gets no events; running batches go on. */
+  pause(sessionId: number): Orchestration {
+    const o = this.must(sessionId);
+    if (o.phase !== 'plan' && o.phase !== 'run') throw new SessionError(o.phase === 'paused' ? 'It is already paused.' : 'This orchestration is closed.', 409);
+    this.store.updateOrchestration(sessionId, { phase: 'paused', paused_from: o.phase });
+    this.sessions.systemNote(sessionId, 'Paused by the owner.');
+    this.emit(sessionId);
+    return this.view(sessionId);
+  }
+
+  /** Back to where it was paused, with the events that waited. */
+  resumeOne(sessionId: number): Orchestration {
+    const o = this.must(sessionId);
+    if (o.phase !== 'paused') throw new SessionError('This orchestration is not paused.', 409);
+    this.store.updateOrchestration(sessionId, { phase: o.paused_from ?? 'plan', paused_from: null });
+    this.sessions.systemNote(sessionId, 'Resumed by the owner.');
+    this.emit(sessionId);
+    this.flush(sessionId);
+    return this.view(sessionId);
+  }
+
+  /** End it: nothing more starts. `stopChildren`: also stop the batches that still run. */
+  stopAll(sessionId: number, stopChildren: boolean): Orchestration {
+    const o = this.must(sessionId);
+    if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is already closed.', 409);
+    // closed first: what happens to its batches from here on is no longer a failed step
+    this.store.updateOrchestration(sessionId, { phase: 'stopped', paused_from: null });
+    if (stopChildren) {
+      for (const step of o.steps) {
+        const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+        if (child && !FINAL_STATUSES.includes(child.status)) this.sessions.finish(child.id, 'stopped');
+      }
+    }
+    this.sessions.systemNote(sessionId, stopChildren ? 'Stopped by the owner, with its running sessions.' : 'Stopped by the owner.');
+    if (!FINAL_STATUSES.includes(this.store.session(sessionId)!.status)) this.sessions.finish(sessionId, 'stopped');
+    this.emit(sessionId);
+    return this.view(sessionId);
+  }
+
+  private openStep(stepId: number): { o: Orchestration; step: OrchestrationStep } {
+    const step = this.store.step(stepId);
+    if (!step) throw new SessionError('Unknown step', 404);
+    const o = this.must(step.orchestration_id);
+    if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is closed.', 409);
+    return { o, step };
+  }
+
+  private childWorks(step: OrchestrationStep) {
+    const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+    return child && ['queued', 'running', 'waiting_input'].includes(child.status) ? child : null;
+  }
+
+  /** Go on without a step: the steps after it may start. */
+  skipStep(stepId: number): Orchestration {
+    const { o, step } = this.openStep(stepId);
+    if (!['pending', 'failed', 'review'].includes(step.state)) throw new SessionError(step.state === 'running' ? `Step ${step.position} is running: stop its session first.` : `Step ${step.position} is already ${step.state}.`, 409);
+    const busy = this.childWorks(step);
+    if (busy) throw new SessionError(`Session #${busy.id} of step ${step.position} still works: stop it first.`, 409);
+    this.store.updateStep(step.id, { state: 'skipped', note: 'skipped by the owner' });
+    this.sessions.systemNote(o.session_id, `Step ${step.position} skipped by the owner.`);
+    this.emit(o.session_id);
+    const after = this.must(o.session_id);
+    this.wake(o.session_id, `The owner skipped step ${step.position} ("${step.title}"). Go on without it.`, ...this.allFinished(after));
+    return this.view(o.session_id);
+  }
+
+  /** Run a failed step again as a new batch: it is pending again, and the orchestrator starts it. */
+  retryStep(stepId: number): Orchestration {
+    const { o, step } = this.openStep(stepId);
+    if (step.state !== 'failed') throw new SessionError(`Step ${step.position} is ${step.state}: only a failed step can be retried.`, 409);
+    const busy = this.childWorks(step);
+    if (busy) throw new SessionError(`Session #${busy.id} of step ${step.position} runs again: wait for it, or stop it first.`, 409);
+    this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
+    this.sessions.systemNote(o.session_id, `Step ${step.position}: retry asked by the owner.`);
+    this.emit(o.session_id);
+    this.wake(o.session_id, `The owner asks to retry step ${step.position} ("${step.title}"): start it again when it is ready.`);
+    return this.view(o.session_id);
+  }
+
+  /** The event that tells the orchestrator to wrap up, when every step is done or skipped. */
+  private allFinished(o: Orchestration): string[] {
+    return o.phase === 'run' && o.steps.length && o.steps.every((s) => SETTLED.includes(s.state))
+      ? ['All steps are finished. Write the result for the owner and call finish.'] : [];
+  }
+
+  private heldText(o: Orchestration, failed: OrchestrationStep): string {
+    const held = this.heldBy(o, failed).map((s) => s.position);
+    if (!held.length) return '';
+    return ` Step${held.length === 1 ? '' : 's'} ${held.length > 1 ? `${held.slice(0, -1).join(', ')} and ${held.at(-1)}` : held[0]} ${held.length === 1 ? 'is' : 'are'} held.`;
+  }
+
   // ---------- wake-ups ----------
 
   /** Something the orchestrator must know: kept until its session can take it. */
@@ -442,10 +562,28 @@ export class Orchestrator {
   // ---------- following the batches ----------
 
   private onBus(e: LiveEvent) {
+    if (e.t === 'session' && e.session.kind === 'orchestrator') return this.safely(() => this.ownSession(e.session));
     const child = e.t === 'session' && e.session.orchestrator_id ? e.session.id : e.t === 'pr' ? e.pr.session_id : null;
     if (child === null) return;
     const step = this.store.stepOfChild(child);
     if (step) this.safely(() => this.sync(step.id));
+  }
+
+  /**
+   * The orchestrator's own session: closed by hand on its page, the orchestration is stopped; a
+   * message that reopens a closed one puts it back where its plan stands.
+   */
+  private ownSession(s: Session) {
+    const o = this.store.orchestration(s.id);
+    if (!o) return;
+    const closed = o.phase === 'done' || o.phase === 'stopped';
+    if (!closed && (s.status === 'completed' || s.status === 'stopped')) {
+      this.store.updateOrchestration(s.id, { phase: 'stopped', paused_from: null });
+      this.emit(s.id);
+    } else if (closed && (s.status === 'running' || s.status === 'queued')) {
+      this.store.updateOrchestration(s.id, { phase: o.plan_approved ? 'run' : 'plan' });
+      this.emit(s.id);
+    }
   }
 
   /** A deploy after one of a step's merges started or ended. */
@@ -482,6 +620,8 @@ export class Orchestrator {
     const child = this.store.session(step.child_session_id);
     if (!child) return;
     const orchId = step.orchestration_id;
+    const phase = this.store.orchestration(orchId)?.phase;
+    if (phase === 'done' || phase === 'stopped') return;
     if (child.status === 'stopped') {
       // moved to another worker: the session that took over is the step's batch now
       const next = this.store.movedTo(child.id);
@@ -522,7 +662,7 @@ export class Orchestrator {
     const events: string[] = [];
     if (state === 'failed' && step.state !== 'failed') {
       const held = this.heldBy(o, step).map((s) => s.position);
-      const heldText = held.length ? ` Step${held.length === 1 ? '' : 's'} ${held.length > 1 ? `${held.slice(0, -1).join(', ')} and ${held.at(-1)}` : held[0]} ${held.length === 1 ? 'is' : 'are'} held.` : '';
+      const heldText = this.heldText(o, step);
       events.push(`${name}: failed: ${note}${held.length ? ` Do not start the steps that wait for it (${held.join(', ')}).` : ''}`);
       void this.notifier.send({ title: `${title}: step ${step.position} failed`, body: `${note}${/[.!?]$/.test(note ?? '') ? '' : '.'}${heldText}`.slice(0, 180), url: `/s/${orchId}`, tag: `orch-failed-${step.id}` }, who);
     } else if (state === 'done' && step.state !== 'done') {
@@ -533,9 +673,7 @@ export class Orchestrator {
         void this.notifier.send({ title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
       }
     }
-    if (o.phase === 'run' && o.steps.length && o.steps.every((s) => SETTLED.includes(s.state)) && state === 'done') {
-      events.push('All steps are finished. Write the result for the owner and call finish.');
-    }
+    if (state === 'done') events.push(...this.allFinished(o));
     this.emit(orchId);
     if (events.length) this.wake(orchId, ...events);
   }

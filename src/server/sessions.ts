@@ -747,6 +747,8 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     if (s.status !== 'failed') throw new SessionError('This session has not failed.', 409);
     if (CHAT_KINDS.includes(s.kind)) throw new SessionError('Only agent sessions can be retried or discussed this way.');
+    // a new session would not hold its plan: the same one goes on when the owner writes to it
+    if (s.kind === 'orchestrator') throw new SessionError('Write to the orchestrator to continue it: its plan stays with this session.');
     return s;
   }
 

@@ -13,7 +13,7 @@ import { PrOpenedBy } from '../components/PrState.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
-const ORDER: Record<Idle['attention']['kind'], number> = { login: 0, merge_blocked: 1, review: 2, proposal: 3, turn: 4, merged: 5, checking: 6, merging: 7 };
+const ORDER: Record<Idle['attention']['kind'], number> = { login: 0, step_failed: 1, merge_blocked: 2, plan: 3, review: 4, proposal: 5, turn: 6, merged: 7, checking: 8, merging: 9 };
 const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string; spin?: boolean }> = {
   login: { tone: 'bad', label: 'Needs sign-in', icon: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3' },
   merge_blocked: { tone: 'bad', label: 'Merge stopped', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
@@ -23,6 +23,9 @@ const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | '
   review: { tone: 'wait', label: 'Ready to review', icon: 'M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9' },
   proposal: { tone: 'wait', label: 'Proposal to act on', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
   turn: { tone: 'wait', label: 'Your reply', icon: 'M4 5h16v11H9l-5 4z' },
+  // an orchestrator: its plan waits for a yes, or one of its steps failed
+  plan: { tone: 'wait', label: 'Plan to approve', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
+  step_failed: { tone: 'bad', label: 'Step failed', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
   merged: { tone: 'ok', label: 'Done and merged', icon: 'M5 12.5l4.5 4.5L19 7.5' },
 };
 const TONE_TEXT = { bad: 'text-bad', run: 'text-run', wait: 'text-wait', ok: 'text-ok' };

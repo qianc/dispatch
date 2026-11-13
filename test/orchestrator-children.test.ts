@@ -147,8 +147,6 @@ describe('orchestrator: children', () => {
     expect(told(p.id).at(-1)).toContain('- All steps are finished. Write the result for the owner and call finish.');
   });
 
-  it.todo('paused: events are kept, resume delivers them');
-
   it('a restart delivers queued events once', async () => {
     const p = await t.approved();
     turn(p.id);

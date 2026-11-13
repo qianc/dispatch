@@ -517,6 +517,10 @@ export type Attention =
   /** a planning chat with a batch or items card you have not acted on yet */
   | { kind: 'proposal'; text: string; proposals: OpenProposal[] }
   | { kind: 'turn'; text: string }
+  /** an orchestrator whose plan waits for your approval */
+  | { kind: 'plan'; text: string }
+  /** an orchestrator with a failed step: retry or skip it there */
+  | { kind: 'step_failed'; text: string; step_id: number }
   /** its Claude account must be signed in again on the worker, then Retry (DISP-60) */
   | { kind: 'login'; text: string; login: LoginHelp };
 

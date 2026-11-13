@@ -4,10 +4,10 @@ import { OWNER, startServer } from './helpers.ts';
 export type Server = Awaited<ReturnType<typeof startServer>>;
 
 /** Projects AA, BB (in scope in most tests) and CC, each with one GitHub repo. */
-export async function projects(s: Server) {
+export async function projects(s: Server, headers: Record<string, string> = {}) {
   for (const key of ['AA', 'BB', 'CC']) {
-    await s.call('POST', '/projects', { key, name: `Project ${key}` });
-    await s.call('POST', `/projects/${key}/repos`, { github_owner: 'me', github_name: key.toLowerCase() });
+    await s.call('POST', '/projects', { key, name: `Project ${key}` }, headers);
+    await s.call('POST', `/projects/${key}/repos`, { github_owner: 'me', github_name: key.toLowerCase() }, headers);
   }
 }
 
