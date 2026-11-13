@@ -42,6 +42,8 @@ export interface StartSpec {
     phase: OrchPhase;
     projects: { key: string; name: string; importance_scale: string[]; effort_scale: string[]; repos: string[] }[];
     max_children: number;
+    /** it gets its batches' questions first */
+    answer_children?: boolean;
     /** the plan with each step's state, and which steps can start now */
     status_md: string;
   };
@@ -136,7 +138,9 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   /** planner and discussion chats reach another project, each call approved by the owner (DISP-55) */
   | 'cross_project' | AssistantMethod
   /** an orchestrator's plan and its steps */
-  | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish';
+  | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish'
+  /** an orchestrator and its batches: answer a batch's question, hand it to the owner, write to a batch */
+  | 'answer_session' | 'hand_to_owner' | 'send_to_session';
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'set_project_state' | 'add_repo' | 'remove_repo'

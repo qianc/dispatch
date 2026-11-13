@@ -43,6 +43,8 @@ export class Orchestrator {
   stop() {
     this.off();
     clearInterval(this.timer);
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
   }
 
   private timer: NodeJS.Timeout;
@@ -154,6 +156,7 @@ export class Orchestrator {
           repos: this.store.repos(p.id).map((r) => r.github_name),
         })),
         max_children: o.max_children,
+        answer_children: o.answer_children,
         status_md: this.statusText(o),
       },
     };
@@ -269,6 +272,17 @@ export class Orchestrator {
         return this.childView(o, Number(p.session_id));
       case 'finish':
         return this.finish(s, o, String(p.result ?? '').trim());
+      case 'answer_session':
+        return this.answerSession(s, o, p);
+      case 'hand_to_owner': {
+        const input = this.ownInput(o, p.input_id);
+        const reason = String(p.reason ?? '').trim();
+        this.handOver(input.id, `The orchestrator passed this to you${reason ? `: ${reason}` : '.'}`);
+        this.acted.add(s.id);
+        return `Question ${input.id} is with the owner now. Session #${input.session_id} waits for them.`;
+      }
+      case 'send_to_session':
+        return this.sendToSession(s, o, p);
       default:
         throw new Error(`Unknown method ${method}`);
     }
@@ -590,6 +604,15 @@ export class Orchestrator {
     for (const input of this.store.delegatedInputs(s.id)) {
       if (!waiting.some((e) => e.text.includes(`(input_id ${input.id})`))) this.handOver(input.id, 'The orchestrator did not answer this: it is yours.');
     }
+    // a stopped merge it was told about and did not write to its batch about: the owner is told
+    if (!waiting.length) {
+      for (const stepId of [...this.fixOffered]) {
+        const step = this.store.step(stepId);
+        if (step && step.orchestration_id !== s.id) continue;
+        this.fixOffered.delete(stepId);
+        if (step?.state === 'review' && step.messages_sent === 0 && step.child_session_id) this.needsOwner(s, step, step.note ?? 'its merge stopped');
+      }
+    }
     // a turn that started nothing and leaves nothing running ended with words for the owner (a
     // question, or what went wrong): they are told, unless its next events start it again at once
     const o = this.store.orchestration(s.id);
@@ -598,6 +621,14 @@ export class Orchestrator {
       void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}` }, s.started_by);
     }
     this.flush(s.id);
+  }
+
+  /** The push for a step that only the owner can move on. */
+  private needsOwner(orchestrator: Pick<Session, 'id' | 'title' | 'started_by'>, step: OrchestrationStep, note: string) {
+    void this.notifier.send({
+      title: `${orchestrator.title}: step ${step.position} needs you`, body: `${note.charAt(0).toUpperCase()}${note.slice(1)}.`.slice(0, 180),
+      url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}`,
+    }, orchestrator.started_by);
   }
 
   /** Its plan runs, a step is at work and none has failed: it needs nothing from the owner now. */
@@ -632,6 +663,95 @@ export class Orchestrator {
     this.store.setInputDelegated(input.id, o.session_id);
     this.wake(o.session_id, text.join('\n'));
     return true;
+  }
+
+  /** An open question that this orchestration has. */
+  private ownInput(o: Orchestration, id: unknown) {
+    const input = this.store.input(Number(id));
+    const ours = input && this.store.session(input.session_id)?.orchestrator_id === o.session_id;
+    // one of its batches' questions that someone answered meanwhile: say so; anything else is not its business
+    if (input && ours && (input.answered_at || input.expired)) throw new Error(`Question ${input.id} is already ${input.expired ? 'closed' : 'answered'}.`);
+    if (!input || input.delegated_to !== o.session_id) throw new Error(`Question ${String(id)} is not yours to answer.`);
+    return input;
+  }
+
+  /** The orchestrator answers a question or a plan approval of one of its batches. */
+  private answerSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
+    const input = this.ownInput(o, p.input_id);
+    const payload = input.payload;
+    if (payload.kind === 'plan_approval') {
+      if (typeof p.approve !== 'boolean') throw new Error('A plan needs approve: true or false.');
+      const feedback = String(p.feedback ?? '').trim();
+      this.sessions.answer(input.id, { kind: 'plan_approval', approve: p.approve, ...(feedback ? { feedback } : {}) });
+    } else if (payload.kind === 'question') {
+      const given = (p.answers && typeof p.answers === 'object' ? p.answers : {}) as Record<string, unknown>;
+      const one = payload.questions.length === 1 && typeof p.answer === 'string' ? p.answer : undefined;
+      const answers: Record<string, string> = {};
+      for (const q of payload.questions) {
+        const a = String(given[q.question] ?? one ?? '').trim();
+        if (!a) throw new Error(`No answer for "${q.question}".`);
+        answers[q.question] = a;
+      }
+      this.sessions.answer(input.id, { kind: 'question', answers });
+    } else {
+      throw new Error(`Question ${input.id} is not yours to answer.`);
+    }
+    this.bus.emit({ t: 'input', input: this.store.setInputAnsweredBy(input.id, 'orchestrator') });
+    this.sessions.systemNote(input.session_id, `Answered by the orchestrator "${s.title}".`);
+    this.acted.add(s.id);
+    return `Answered. Session #${input.session_id} goes on.`;
+  }
+
+  /** How many messages the orchestrator may send to one step's batch. */
+  static readonly MAX_MESSAGES = 3;
+
+  /** The orchestrator writes to one of its batches whose turn ended: what is missing, or how to fix a stopped merge. */
+  private sendToSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
+    if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
+    const child = this.store.session(Number(p.session_id));
+    const step = child ? this.store.stepOfChild(child.id) : undefined;
+    if (!child || !step || child.orchestrator_id !== o.session_id) throw new Error(`Session #${String(p.session_id)} is not a step of this orchestration.`);
+    if (step.state !== 'running' && step.state !== 'review') throw new Error(`Step ${step.position} is ${step.state}: its batch needs no message.`);
+    if (child.status === 'waiting_input') throw new Error(`Session #${child.id} waits for an answer: answer its question instead.`);
+    if (child.status !== 'idle') throw new Error(FINAL_STATUSES.includes(child.status) ? `Session #${child.id} is closed.` : `Session #${child.id} works now: wait for its turn to end.`);
+    const text = String(p.text ?? '').trim();
+    if (!text) throw new Error('Write what the batch should do.');
+    if (step.messages_sent >= Orchestrator.MAX_MESSAGES) throw new Error(`You already sent ${Orchestrator.MAX_MESSAGES} messages to this step's batch: tell the owner instead.`);
+    this.sessions.sendFromDispatch(child.id, `(From the orchestrator of "${s.title}", not the owner:) ${text}`);
+    this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
+    this.acted.add(s.id);
+    this.emit(o.session_id);
+    return `Sent to session #${child.id} (message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step). End your turn: Dispatch wakes you when it changes.`;
+  }
+
+  /** steps whose stopped merge the orchestrator was offered to fix: if it does not try, the owner is told */
+  private fixOffered = new Set<number>();
+
+  /** How long a batch has to open its pull request after a turn, before "no pull request" is news. */
+  settleMs = 30_000;
+  private timers = new Set<NodeJS.Timeout>();
+
+  /** Run `fn` later (tests replace this, or set settleMs to 0 to run it at once). */
+  later = (ms: number, fn: () => void) => {
+    if (ms <= 0) return fn();
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      this.safely(fn);
+    }, ms);
+    timer.unref();
+    this.timers.add(timer);
+  };
+
+  /** A batch's turn ended and it still has no pull request: the orchestrator decides what that means. */
+  private noPullRequest(stepId: number, seen: string) {
+    const step = this.store.step(stepId);
+    const child = step?.child_session_id ? this.store.session(step.child_session_id) : undefined;
+    if (!step || !child || step.seen !== seen) return;
+    const last = (child.last_text ?? '').replace(/\s+/g, ' ').slice(0, 300);
+    this.wake(step.orchestration_id, [
+      `Step ${step.position} "${step.title}" (${step.project_key}, session #${child.id}) ended its turn with no pull request.${last ? ` Its last message: "${last}"` : ''}`,
+      'If its work needs no merge, close the step (update_step, state done). If it stopped early, tell it what is missing (send_to_session). If it waits for the owner, do nothing: they are told.',
+    ].join('\n'));
   }
 
   /** A question the orchestrator had goes to the owner: said in the batch's chat, and they are told. */
@@ -743,6 +863,7 @@ export class Orchestrator {
     const deployComing = prs.some((p) => p.state === 'merged' && merging.has(p.id) && !!this.store.repo(p.repo_id)?.deploy_command);
     let state: StepState = 'running';
     let note: string | null = null;
+    let stoppedMerge = false;
     if (child.status === 'failed') [state, note] = ['failed', failureReason(child, this.store.lastError(child.id))];
     else if (child.status === 'stopped') [state, note] = ['failed', 'stopped'];
     else if (deploys.includes('failed')) [state, note] = ['failed', 'deploy failed'];
@@ -750,6 +871,7 @@ export class Orchestrator {
     else if (child.status === 'completed') [state, note] = open.length ? ['review', 'its session is closed, but its pull request is still open'] : ['done', 'closed by the owner'];
     else if (child.status === 'idle') {
       const stuck = open.find((p) => p.blocked || p.mergeable === false);
+      stoppedMerge = !!stuck;
       if (stuck) [state, note] = ['review', stuck.blocked ?? 'it has merge conflicts'];
       else if (open.length && open.every((p) => autoMergePending(child.options.auto_merge, p))) note = 'checking, then auto-merge';
       else if (open.length) [state, note] = ['review', "waits for the owner's review"];
@@ -772,13 +894,22 @@ export class Orchestrator {
     } else if (state === 'done' && step.state !== 'done') {
       events.push(`${name}: ${merged ? 'merged' : `done (${note})`}.`);
     } else if (state === 'review' && (step.state !== 'review' || note !== step.note)) {
-      events.push(`${name}: ${note}.`);
-      const ownReview = note === "waits for the owner's review";
-      const body = ownReview ? step.title : `${(note ?? '').charAt(0).toUpperCase()}${(note ?? '').slice(1)}.`;
-      void this.notifier.send({ title: `${title}: step ${step.position} ${ownReview ? 'waits for your review' : 'needs you'}`, body: body.slice(0, 180), url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
+      // a stopped merge: the orchestrator may write to its batch once before the owner is asked
+      const tryFirst = stoppedMerge && o.answer_children && step.messages_sent === 0;
+      const more = tryFirst ? ' You may tell its session once how to fix it (send_to_session). If you cannot, say so to the owner.'
+        : stoppedMerge && o.answer_children ? ' Your message did not clear it: the owner is told.' : '';
+      events.push(`${name}: ${note}.${more}`);
+      if (tryFirst) this.fixOffered.add(step.id);
+      else if (note === "waits for the owner's review") {
+        void this.notifier.send({ title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
+      } else {
+        this.needsOwner({ id: orchId, title, started_by: who }, step, note ?? 'it needs you');
+      }
     }
     if (state === 'done') events.push(...this.allFinished(o));
     this.emit(orchId);
     if (events.length) this.wake(orchId, ...events);
+    // no pull request after its turn: news only if it stays so (the batch often opens one a moment later)
+    if (note === 'turn ended, no PR yet' && o.phase === 'run') this.later(this.settleMs, () => this.noPullRequest(step.id, seen));
   }
 }
