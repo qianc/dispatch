@@ -154,11 +154,19 @@ once, and the run options of its batches. It is a session of its own, with a pla
   **Retry** (a new batch) or **Skip** (the steps after it go on). A failed batch that already has a
   pull request is retried from its own page, and stays the step's batch. **Pause** starts no new steps and
   keeps what happens meanwhile for it; **Stop** ends it, and can stop its running batches too.
+- *Its batches' questions.* A batch that asks a question or wants its plan approved asks the
+  orchestrator first (switch this off in the start sheet to get them all yourself). It answers
+  from the plan and what you told it; the batch's chat shows "Answered by the orchestrator", with
+  **Overrule** to send your own answer after it. What it cannot settle it passes to you, and so
+  does Dispatch when it leaves a question open at the end of its turn, does not answer within 10
+  minutes, or is paused or stopped. Until then the question is not in your Inbox, and you can
+  still answer it in the batch.
+- *A stopped merge* (a failed check, conflicts) or a batch that ends with no pull request: it may
+  write to that batch, at most 3 times per step, before the step is yours.
 - The Inbox shows an orchestrator only when it needs you: a plan to approve or a question, or a
   failed step.
 
-Not there yet: a batch's own questions and plan approvals still come to you, not to the
-orchestrator; there is no cost limit; the scope and limits cannot change after the start; its own
+Not there yet: there is no cost limit; the scope and limits cannot change after the start; its own
 read-only checkouts use the GitHub account of the first project in its list; and a local repo is
 read only if it is on the orchestrator's worker.
 

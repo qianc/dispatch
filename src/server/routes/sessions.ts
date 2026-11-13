@@ -183,6 +183,12 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     return { ok: true };
   });
 
+  // the owner's own answer in place of the one the orchestrator gave a step's batch
+  app.post('/api/inputs/:id/overrule', async (req) => {
+    const { text } = z.object({ text: z.string().max(4000) }).parse(req.body);
+    return orchestrator.overrule(intParam((req.params as { id: string }).id), text);
+  });
+
   app.post('/api/sessions/:id/interrupt', async (req) => {
     sessions.interrupt(session((req.params as { id: string }).id).id);
     return { ok: true };

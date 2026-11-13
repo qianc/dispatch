@@ -89,6 +89,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/sessions/:id/interrupt': null,
   'POST /api/sessions/:id/finish': null,
   'POST /api/inputs/:id/answer': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
+  'POST /api/inputs/:id/overrule': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
   'POST /api/prs/:id/merge': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),
   'POST /api/prs/:id/github-pr': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),
   'POST /api/prs/:id/resolve-conflicts': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),

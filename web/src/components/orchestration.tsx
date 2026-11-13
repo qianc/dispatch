@@ -137,16 +137,17 @@ export function NewOrchestration() {
   );
 }
 
-function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
+export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
   const [goal, setGoal] = useState('');
   const [keys, setKeys] = useState<string[]>([]);
   const [max, setMax] = useState(2);
+  const [answers, setAnswers] = useState(true);
   const [options, setOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
   const start = useMutation({
-    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, options }),
+    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, options }),
     onSuccess: (o) => {
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       onDone();
@@ -174,6 +175,10 @@ function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
       <Field label="Batches at once" group hint="Steps that do not wait for each other can run at the same time.">
         <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
       </Field>
+      <label className="flex items-start gap-2 mb-3 text-[14px]">
+        <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+        <span>It answers its batches' questions<span className="block text-[12px] text-muted">From the plan and what you told it, also their plans to approve. What it cannot settle comes to you. You see each answer in the batch and can overrule it.</span></span>
+      </label>
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">Each step's batch</h3>
       <RunOptionsFields value={options} set={(p) => setOptions((o) => ({ ...o, ...p }))} />
       <ErrorText error={start.error} />

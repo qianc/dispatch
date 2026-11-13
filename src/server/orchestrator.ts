@@ -724,6 +724,29 @@ export class Orchestrator {
     return `Sent to session #${child.id} (message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step). End your turn: Dispatch wakes you when it changes.`;
   }
 
+  /**
+   * The owner puts his own answer in place of the orchestrator's: the batch gets it as his message,
+   * and the orchestrator is told. Nothing changes when the batch cannot take a message now.
+   */
+  overrule(inputId: number, ownText: string): PendingInput {
+    const input = this.store.input(inputId);
+    if (!input) throw new SessionError('Unknown question', 404);
+    if (input.answered_by === 'overruled') throw new SessionError('You already overruled this answer.', 409);
+    if (input.answered_by !== 'orchestrator') throw new SessionError('Only an answer of the orchestrator can be overruled.', 409);
+    const text = ownText.trim();
+    if (!text) throw new SessionError('Write your own answer.');
+    const child = this.store.session(input.session_id);
+    if (!child) throw new SessionError('Unknown session', 404);
+    if (FINAL_STATUSES.includes(child.status)) throw new SessionError('This session is closed: write to it to reopen it.', 409);
+    const about = input.payload.kind === 'question' ? `"${input.payload.questions[0]?.question ?? 'your question'}"` : 'your plan';
+    this.sessions.send(child.id, `I overrule the orchestrator's answer to ${about}: ${text}`);
+    const saved = this.store.setInputAnsweredBy(input.id, 'overruled');
+    this.bus.emit({ t: 'input', input: saved });
+    const step = this.store.stepOfChild(child.id);
+    if (child.orchestrator_id && step) this.wake(child.orchestrator_id, `The owner overruled your answer to step ${step.position} (input_id ${input.id}). Follow what they said: "${text}"`);
+    return saved;
+  }
+
   /** steps whose stopped merge the orchestrator was offered to fix: if it does not try, the owner is told */
   private fixOffered = new Set<number>();
 
