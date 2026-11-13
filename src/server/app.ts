@@ -155,13 +155,18 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
   const scheduler = new Scheduler(store, sessions, bus);
-  const orchestrator = new Orchestrator({ store, bus, sessions, notifier });
+  const orchestrator = new Orchestrator({ store, bus, sessions, notifier, merging: () => github.mergingNow });
+  sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
+  sessions.onDeployed = (s, repo, ok) => orchestrator.onDeploy(s, repo, ok ? 'ok' : 'failed');
+  github.onDeployStarted = (s, repo) => orchestrator.onDeploy(s, repo, 'running');
+  github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
   const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
+    orchestrator.resume();
   }
 
   // forceCloseConnections: live streams (/api/stream) never end on their own, so close() would wait

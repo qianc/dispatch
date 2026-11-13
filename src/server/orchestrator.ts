@@ -2,7 +2,8 @@
 // starts each step as a batch. Every rule is enforced here, whatever the orchestrator's prompt says:
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
-import { planInput, proposedItemSchema, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session } from '../shared/types.ts';
+import { autoMergePending, failureReason } from '../shared/attention.ts';
+import { planInput, proposedItemSchema, type DeployState, type LiveEvent, type Orchestration, type OrchestrationStep, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -24,15 +25,42 @@ export class Orchestrator {
   /** orchestrator sessions that proposed a plan this turn: the push goes out when the turn ends */
   private planNotice = new Set<number>();
 
-  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier }) {
+  /** ids of the PRs Dispatch merges at this moment (a deploy may follow such a merge) */
+  private merging: () => ReadonlySet<number>;
+  private off: () => void;
+
+  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number> }) {
     this.store = deps.store;
     this.bus = deps.bus;
     this.sessions = deps.sessions;
     this.notifier = deps.notifier;
+    this.merging = deps.merging ?? (() => new Set());
+    this.off = this.bus.on((e) => this.onBus(e));
   }
 
   stop() {
-    // nothing to release yet
+    this.off();
+  }
+
+  /**
+   * After a server start: catch up with what the batches did meanwhile, and deliver the events
+   * that were still waiting.
+   */
+  resume() {
+    for (const o of this.store.orchestrations()) {
+      if (o.phase === 'done' || o.phase === 'stopped') continue;
+      for (const step of o.steps) this.safely(() => this.sync(step.id));
+      this.safely(() => this.flush(o.session_id));
+    }
+  }
+
+  /** The bus calls listeners inside whoever emitted: an error here must not break them. */
+  private safely(fn: () => void) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn('orchestrator:', (e as Error).message);
+    }
   }
 
   // ---------- reading ----------
@@ -373,7 +401,142 @@ export class Orchestrator {
   // ---------- wake-ups ----------
 
   /** Something the orchestrator must know: kept until its session can take it. */
-  wake(sessionId: number, text: string) {
-    this.store.addOrchEvent(sessionId, text);
+  wake(sessionId: number, ...texts: string[]) {
+    for (const text of texts) this.store.addOrchEvent(sessionId, text);
+    this.flush(sessionId);
+  }
+
+  /**
+   * Give the orchestrator its waiting events as one message, with the plan as it stands. Only an
+   * idle session takes them: one that works gets them when its turn ends, a paused or closed
+   * orchestration keeps them. They are marked delivered before the send, so a crash in between
+   * never delivers them twice.
+   */
+  flush(sessionId: number) {
+    const o = this.store.orchestration(sessionId);
+    if (!o || (o.phase !== 'plan' && o.phase !== 'run')) return;
+    if (this.store.session(sessionId)?.status !== 'idle') return;
+    const pending = this.store.pendingOrchEvents(sessionId);
+    if (!pending.length) return;
+    const ids = pending.map((e) => e.id);
+    this.store.markOrchEventsDelivered(ids);
+    const text = ['(From Dispatch, not the owner.)', 'Events:', ...pending.map((e) => `- ${e.text}`), '', this.statusText(o)].join('\n');
+    try {
+      this.sessions.sendFromDispatch(sessionId, text);
+    } catch (e) {
+      this.store.markOrchEventsDelivered(ids, false);
+      console.warn(`orchestration ${sessionId}: events not delivered:`, (e as Error).message);
+    }
+  }
+
+  /** The orchestrator session's turn ended: tell the owner what needs them, close it if it finished, else give it its events. */
+  onIdle(s: Session) {
+    if (this.planNotice.delete(s.id)) {
+      void this.notifier.send({ title: `${s.title}: plan ready to approve`, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
+    }
+    if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
+    this.emit(s.id);
+    this.flush(s.id);
+  }
+
+  // ---------- following the batches ----------
+
+  private onBus(e: LiveEvent) {
+    const child = e.t === 'session' && e.session.orchestrator_id ? e.session.id : e.t === 'pr' ? e.pr.session_id : null;
+    if (child === null) return;
+    const step = this.store.stepOfChild(child);
+    if (step) this.safely(() => this.sync(step.id));
+  }
+
+  /** A deploy after one of a step's merges started or ended. */
+  onDeploy(child: Session, repo: Repo, state: DeployState) {
+    const step = this.store.stepOfChild(child.id);
+    if (!step) return;
+    this.store.updateStep(step.id, { deploys: { ...step.deploys, [repo.id]: state } });
+    this.safely(() => this.sync(step.id));
+  }
+
+  /** The pending steps that cannot start because `failed` is before them, directly or through others. */
+  private heldBy(o: Orchestration, failed: OrchestrationStep): OrchestrationStep[] {
+    const held = new Set<number>([failed.id]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const s of o.steps) {
+        if (!held.has(s.id) && s.state === 'pending' && s.depends_on.some((d) => held.has(d))) {
+          held.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    return o.steps.filter((s) => s.id !== failed.id && held.has(s.id));
+  }
+
+  /**
+   * Bring a step in line with its batch: failed, in review, done (merged, and deployed where a
+   * deploy runs), or still running. A change is stored, shown, and told once: to the orchestrator
+   * when it must act on it, and to the owner when it needs them.
+   */
+  private sync(stepId: number): void {
+    const step = this.store.step(stepId);
+    if (!step?.child_session_id || !['running', 'review', 'failed'].includes(step.state)) return;
+    const child = this.store.session(step.child_session_id);
+    if (!child) return;
+    const orchId = step.orchestration_id;
+    if (child.status === 'stopped') {
+      // moved to another worker: the session that took over is the step's batch now
+      const next = this.store.movedTo(child.id);
+      if (next) {
+        this.store.setOrchestrator(next.id, orchId);
+        this.store.updateStep(step.id, { child_session_id: next.id, seen: null });
+        this.emit(orchId);
+        return this.sync(step.id);
+      }
+    }
+    const prs = this.store.prs({ session_id: child.id });
+    const open = prs.filter((p) => p.state === 'open');
+    const merged = prs.some((p) => p.state === 'merged');
+    const deploys = Object.values(step.deploys);
+    const merging = this.merging();
+    const deployComing = prs.some((p) => p.state === 'merged' && merging.has(p.id) && !!this.store.repo(p.repo_id)?.deploy_command);
+    let state: StepState = 'running';
+    let note: string | null = null;
+    if (child.status === 'failed') [state, note] = ['failed', failureReason(child, this.store.lastError(child.id))];
+    else if (child.status === 'stopped') [state, note] = ['failed', 'stopped'];
+    else if (deploys.includes('failed')) [state, note] = ['failed', 'deploy failed'];
+    else if (prs.length && !open.length && merged) [state, note] = deploys.includes('running') || deployComing ? ['running', 'deploying'] : ['done', null];
+    else if (child.status === 'completed') [state, note] = ['done', 'closed by the owner'];
+    else if (child.status === 'idle') {
+      const stuck = open.find((p) => p.blocked || p.mergeable === false);
+      if (stuck) [state, note] = ['review', stuck.blocked ?? 'it has merge conflicts'];
+      else if (open.length && open.every((p) => autoMergePending(child.options.auto_merge, p))) note = 'checking, then auto-merge';
+      else if (open.length) [state, note] = ['review', "waits for the owner's review"];
+      else note = 'turn ended, no PR yet';
+    }
+    const seen = `${child.status}|${state}|${note ?? ''}`;
+    if (seen === step.seen) return;
+    this.store.updateStep(step.id, { state, note, seen });
+    const o = this.store.orchestration(orchId)!;
+    const title = this.store.session(orchId)?.title ?? 'Orchestration';
+    const who = this.store.session(orchId)?.started_by ?? null;
+    const name = `Step ${step.position} "${step.title}" (${step.project_key}, session #${child.id})`;
+    const events: string[] = [];
+    if (state === 'failed' && step.state !== 'failed') {
+      const held = this.heldBy(o, step).map((s) => s.position);
+      const heldText = held.length ? ` Step${held.length === 1 ? '' : 's'} ${held.length > 1 ? `${held.slice(0, -1).join(', ')} and ${held.at(-1)}` : held[0]} ${held.length === 1 ? 'is' : 'are'} held.` : '';
+      events.push(`${name}: failed: ${note}${held.length ? ` Do not start the steps that wait for it (${held.join(', ')}).` : ''}`);
+      void this.notifier.send({ title: `${title}: step ${step.position} failed`, body: `${note}${/[.!?]$/.test(note ?? '') ? '' : '.'}${heldText}`.slice(0, 180), url: `/s/${orchId}`, tag: `orch-failed-${step.id}` }, who);
+    } else if (state === 'done' && step.state !== 'done') {
+      events.push(`${name}: ${merged ? 'merged' : `done (${note})`}.`);
+    } else if (state === 'review' && (step.state !== 'review' || note !== step.note)) {
+      events.push(`${name}: ${note}.`);
+      if (note === "waits for the owner's review") {
+        void this.notifier.send({ title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` }, who);
+      }
+    }
+    if (o.phase === 'run' && o.steps.length && o.steps.every((s) => SETTLED.includes(s.state)) && state === 'done') {
+      events.push('All steps are finished. Write the result for the owner and call finish.');
+    }
+    this.emit(orchId);
+    if (events.length) this.wake(orchId, ...events);
   }
 }

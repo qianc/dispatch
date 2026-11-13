@@ -100,6 +100,9 @@ describe('orchestrator: steps', () => {
     await t.startStep(p.id, p.first.id);
     await expect(t.rpc(p.id, 'finish', { result: 'x' })).rejects.toThrow('Step 1 is still running: finish when every step is done, failed or skipped.');
     for (const st of [p.first, p.second, p.third]) t.store.updateStep(st.id, { state: 'done' });
+    // its session took the approval message and is idle again
+    t.status(p.id, 'running');
+    t.status(p.id, 'idle');
     await t.rpc(p.id, 'finish', { result: 'Tokens are in. Both projects use them.' });
     expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('done');
     expect(t.store.session(p.id)).toMatchObject({ status: 'completed', last_text: 'Tokens are in. Both projects use them.' });

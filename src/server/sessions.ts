@@ -1007,6 +1007,13 @@ export class Sessions {
           else this.dispatch();
           return;
         }
+        // an orchestrator's turn end is not "waiting for you": it waits for its steps. The orchestration
+        // says what the owner must know (a plan to approve, the result), and takes its queued events
+        if (s.kind === 'orchestrator' && msg.status === 'idle') {
+          this.onOrchestratorIdle?.(this.store.session(s.id)!);
+          this.dispatch();
+          return;
+        }
         const proposed = msg.status === 'running' ? undefined : this.proposalNotice.get(s.id);
         if (msg.status !== 'running') this.proposalNotice.delete(s.id);
         if (msg.status === 'idle' && this.closeWhenIdle.delete(s.id)) {
@@ -1036,7 +1043,7 @@ export class Sessions {
           if (mergeSpeaks && idleWork) void idleWork.then((told) => !told && waiting(), waiting);
           else waiting();
         }
-        if (msg.status === 'failed') this.notify(s, `${s.project_key}: session failed`, msg.error ?? s.title, `failed-${s.id}`);
+        if (msg.status === 'failed') this.notify(s, `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`);
         if (msg.status !== 'running') this.dispatch();
         return;
       }
@@ -1574,6 +1581,12 @@ export class Sessions {
    */
   onWorkIdle: ((s: Session) => Promise<boolean>) | null = null;
 
+  /** An orchestrator session's turn ended (app.ts wires it to the orchestration). */
+  onOrchestratorIdle: ((s: Session) => void) | null = null;
+
+  /** A repo's deploy after a session's merge finished (app.ts wires it to the orchestration). */
+  onDeployed: ((s: Session, repo: Repo, ok: boolean) => void) | null = null;
+
   /** A work session's check before its turn is reported done (app.ts wires it to the check runs, DISP-15). */
   onTurnCheck: ((s: Session, repo: Repo, msg: Extract<WorkerEvent, { t: 'session_check' }>) => void) | null = null;
 
@@ -1761,6 +1774,7 @@ export class Sessions {
   private onDeployResult(s: Session, msg: Extract<WorkerEvent, { t: 'deploy_result' }>) {
     const repo = this.store.repo(msg.repo_id);
     if (!repo || repo.project_id !== s.project_id) return;
+    this.onDeployed?.(s, repo, msg.ok);
     const at = msg.sha ? ` (${msg.sha.slice(0, 7)})` : '';
     const took = msg.duration_ms ? ` in ${Math.max(1, Math.round(msg.duration_ms / 1000))} s` : '';
     const tail = msg.output.trim().split('\n').slice(-15).join('\n');
