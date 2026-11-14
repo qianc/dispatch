@@ -789,6 +789,10 @@ export class Store {
     return this.db.all<{ id: number; due_at: string }>('SELECT id, due_at FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND due_at > ? ORDER BY due_at', sessionId, nowIso)
       .map((r) => ({ id: Number(r.id), due_at: String(r.due_at) }));
   }
+  /** A closed orchestration wakes no more: its timers that did not come due are removed. */
+  dropTimers(sessionId: number) {
+    this.db.run('DELETE FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND due_at IS NOT NULL', sessionId);
+  }
   /** Orchestrations with a timer that has come due and is not delivered. */
   dueOrchestrations(nowIso = now()): number[] {
     return this.db.all<{ id: number }>('SELECT DISTINCT orchestration_id AS id FROM orchestration_events WHERE delivered_at IS NULL AND due_at IS NOT NULL AND due_at <= ?', nowIso).map((r) => Number(r.id));

@@ -33,6 +33,11 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
     const { proposal, ...input } = orchestrationInput.extend({ proposal: z.object({ session_id: z.number().int(), event_id: z.number().int() }).optional() }).parse(req.body);
     const from = proposal && store.session(proposal.session_id);
     if (from) assertCanDrive(req.principal!, from, users.installOwner);
+    if (proposal) {
+      // the ref must be an orchestration card in that chat: nothing else is used up by this
+      const card = from && store.events(from.id).find((e) => e.id === proposal.event_id);
+      if (!card || card.body.kind !== 'proposal' || card.body.proposal.type !== 'orchestration') throw new HttpError(400, 'That is not an orchestration card of this chat.');
+    }
     sessions.assertProposalOpen(proposal);
     const made = orchestrator.start(input, starter);
     sessions.markProposalDone(proposal, `Started orchestration #${made.session_id}`);

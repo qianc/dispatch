@@ -840,6 +840,11 @@ export class Sessions {
         if (['triage', 'backlog', 'todo', 'hold'].includes(it.status)) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress' }) });
       }
     }
+    // a step's batch: its retry belongs to the same orchestration (its cost counts there, and its step follows it)
+    if (s.orchestrator_id) {
+      this.store.setOrchestrator(next.id, s.orchestrator_id);
+      next = this.store.session(next.id)!;
+    }
     this.addEvent(next.id, { kind: 'system', text: `Retry of session #${s.id}, which failed.` });
     this.addEvent(s.id, { kind: 'system', text: `Retried in session #${next.id}.` });
     this.emitSession(this.store.updateSession(s.id, { closed_at: new Date().toISOString(), closed_reason: 'retried' }));

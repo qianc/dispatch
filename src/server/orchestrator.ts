@@ -15,6 +15,8 @@ import type { Store } from './store.ts';
 const ITEM_KEY = /^([A-Z][A-Z0-9]*)-(\d+)$/;
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
+/** Money is compared as it is shown: to the cent. */
+const cents = (n: number) => Math.round(n * 100);
 
 /** Text a batch wrote, as lines the orchestrator can tell from Dispatch's own: each one indented behind a bar. */
 const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`);
@@ -113,7 +115,7 @@ export class Orchestrator {
       const c = s.child_session_id ? this.store.session(s.child_session_id) : undefined;
       return { ...s, child: c ? { id: c.id, status: c.status, title: c.title, waiting_reason: c.waiting_reason } : null };
     });
-    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: this.timersOf(o)[0]?.due_at ?? null };
+    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: o.phase === 'plan' || o.phase === 'run' ? this.timersOf(o)[0]?.due_at ?? null : null };
   }
 
   /** What an idle orchestrator needs from its owner, or null while it only waits for its steps. */
@@ -123,8 +125,7 @@ export class Orchestrator {
     // while it plans, its turn end is a question to the owner or a plan to approve
     if (o.phase === 'plan') {
       if (o.steps.length && !o.plan_approved) return { kind: 'plan', text: 'The plan is ready: read it and approve it.' };
-      // it set itself a timer: it waits for that, not for you
-      return this.timersOf(o).length ? null : { kind: 'plan', text: 'It waits for your reply before it can plan.' };
+      return { kind: 'plan', text: 'It waits for your reply before it can plan.' };
     }
     if (o.phase !== 'run') return null;
     const failed = o.steps.find((s) => s.state === 'failed');
@@ -410,6 +411,7 @@ export class Orchestrator {
     const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
+    this.timerStreak.delete(o.session_id);
     this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
     this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
     this.emit(o.session_id);
@@ -458,6 +460,7 @@ export class Orchestrator {
     const busy = o.steps.find((x) => x.state === 'running' || x.state === 'review');
     if (busy) throw new Error(`Step ${busy.position} is still ${busy.state === 'review' ? 'in review' : 'running'}: finish when every step is done, failed or skipped.`);
     this.store.updateOrchestration(o.session_id, { phase: 'done' });
+    this.store.dropTimers(o.session_id);
     if (result) this.store.updateSession(s.id, { last_text: result.slice(0, 300) });
     if (this.store.session(s.id)!.status === 'idle') this.close(s.id);
     else this.finishWhenIdle.add(s.id);
@@ -507,7 +510,7 @@ export class Orchestrator {
     const o = this.must(sessionId);
     if (o.phase !== 'paused') throw new SessionError('This orchestration is not paused.', 409);
     const cost = this.store.orchestrationCost(sessionId);
-    if (o.cost_limit_usd !== null && cost >= o.cost_limit_usd) throw new SessionError(`It has used ${usd(cost)} of its ${usd(o.cost_limit_usd)} limit: raise the limit first.`, 409);
+    if (o.cost_limit_usd !== null && cents(cost) >= cents(o.cost_limit_usd)) throw new SessionError(`It has used ${usd(cost)} of its ${usd(o.cost_limit_usd)} limit: raise the limit first.`, 409);
     this.store.updateOrchestration(sessionId, { phase: o.paused_from ?? 'plan', paused_from: null, paused_reason: null });
     this.sessions.systemNote(sessionId, 'Resumed by the owner.');
     this.emit(sessionId);
@@ -521,6 +524,7 @@ export class Orchestrator {
     if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is already closed.', 409);
     // closed first: what happens to its batches from here on is no longer a failed step
     this.store.updateOrchestration(sessionId, { phase: 'stopped', paused_from: null });
+    this.store.dropTimers(sessionId);
     if (stopChildren) {
       for (const step of o.steps) {
         const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
@@ -614,6 +618,7 @@ export class Orchestrator {
     if (!pending.length) return;
     const ids = pending.map((e) => e.id);
     this.store.markOrchEventsDelivered(ids);
+    if (pending.some((e) => !e.text.startsWith('Your timer: '))) this.timerStreak.delete(sessionId);
     const text = ['(From Dispatch, not the owner.)', 'Events:', ...pending.map((e) => `- ${e.text}`), '', this.statusText(o)].join('\n');
     try {
       this.sessions.sendFromDispatch(sessionId, text);
@@ -671,12 +676,15 @@ export class Orchestrator {
 
   /** It waits for its steps, or for a timer it set itself, and no step has failed: nothing for the owner now. */
   private waitsQuietly(o: Orchestration): boolean {
-    return this.waitsForSteps(o) || (!o.steps.some((s) => s.state === 'failed') && this.timersOf(o).length > 0);
+    return this.waitsForSteps(o) || (o.phase === 'run' && !o.steps.some((s) => s.state === 'failed' || s.state === 'review') && this.timersOf(o).length > 0);
   }
 
   // ---------- its own timers ----------
 
   static readonly MAX_TIMERS = 3;
+  /** Timers it may set one after the other while nothing else happens (no step starts, no news): then it must say what it waits for. */
+  static readonly MAX_TIMER_STREAK = 12;
+  private timerStreak = new Map<number, number>();
 
   /** The orchestrator asks to be woken later: a queued event with a due time. */
   private wakeMeIn(s: Session, o: Orchestration, p: Record<string, unknown>): string {
@@ -686,9 +694,13 @@ export class Orchestrator {
     const reason = String(p.reason ?? '').trim();
     if (!reason) throw new Error('Say what the timer is for.');
     if (this.timersOf(o).length >= Orchestrator.MAX_TIMERS) throw new Error(`${Orchestrator.MAX_TIMERS} timers wait already: that is the most.`);
+    const streak = this.timerStreak.get(o.session_id) ?? 0;
+    if (streak >= Orchestrator.MAX_TIMER_STREAK) throw new Error(`You set ${Orchestrator.MAX_TIMER_STREAK} timers in a row and nothing else happened: tell the owner what you wait for instead.`);
+    this.timerStreak.set(o.session_id, streak + 1);
     const at = new Date(this.now().getTime() + Math.round(minutes) * 60_000).toISOString();
     this.store.addOrchEvent(o.session_id, `Your timer: ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, at);
-    this.acted.add(s.id);
+    // while it plans it waits for the owner, timer or not; in a run the timer is what it waits for
+    if (o.phase === 'run') this.acted.add(s.id);
     this.emit(o.session_id);
     return `Dispatch wakes you in ${Math.round(minutes)} minutes (at ${at}). End your turn.`;
   }
@@ -700,7 +712,7 @@ export class Orchestrator {
     const o = this.store.orchestration(sessionId);
     if (!o || o.cost_limit_usd === null || (o.phase !== 'plan' && o.phase !== 'run')) return;
     const cost = this.store.orchestrationCost(sessionId);
-    if (cost < o.cost_limit_usd) return;
+    if (cents(cost) < cents(o.cost_limit_usd)) return;
     const used = `${usd(cost)} of ${usd(o.cost_limit_usd)} used.`;
     this.pause(sessionId, `Cost limit reached: ${used}`);
     void this.notifier.send({ title: `${o.title}: cost limit reached`, body: `${used} Running sessions go on; no new step starts. Raise the limit to go on.`, url: `/s/${sessionId}`, tag: `orch-cost-${sessionId}` }, o.started_by);
@@ -727,9 +739,13 @@ export class Orchestrator {
       const ids = projects.map((pr) => pr.id);
       const used = o.steps.find((st) => !ids.includes(st.project_id));
       if (used) throw new SessionError(`Step ${used.position} works in ${used.project_key}: it stays in the scope.`);
-      if (ids.join() !== o.project_ids.join()) {
-        next.project_ids = ids;
-        changed.push(`scope ${keys.join(', ')}`);
+      // the same projects in another order are no change (the first one stays: its checkouts use that project's GitHub account)
+      const same = ids.length === o.project_ids.length && ids.every((id) => o.project_ids.includes(id));
+      if (!same) {
+        const kept = o.project_ids.filter((id) => ids.includes(id));
+        const ordered = [...kept, ...ids.filter((id) => !kept.includes(id))];
+        next.project_ids = ordered;
+        changed.push(`scope ${ordered.map((id) => projects.find((pr) => pr.id === id)!.key).join(', ')}`);
         tell = true;
       }
     }
@@ -753,8 +769,15 @@ export class Orchestrator {
     const what = `${changed.join('; ')}.`;
     this.sessions.systemNote(sessionId, `Settings changed by the owner: ${what}`);
     this.emit(sessionId);
-    if (tell) this.wake(sessionId, `The owner changed your settings: ${what}`);
+    // a limit it is already over pauses it first: then it gets the news when it is resumed
     this.checkCost(sessionId);
+    const after = this.must(sessionId);
+    // paused for a limit that no longer holds: the reason goes, the pause stays until the owner resumes
+    if (after.phase === 'paused' && after.paused_reason && (after.cost_limit_usd === null || cents(this.store.orchestrationCost(sessionId)) < cents(after.cost_limit_usd))) {
+      this.store.updateOrchestration(sessionId, { paused_reason: null });
+      this.emit(sessionId);
+    }
+    if (tell) this.wake(sessionId, `The owner changed your settings: ${what}`);
     return this.view(sessionId);
   }
 
@@ -947,6 +970,7 @@ export class Orchestrator {
     if (!o || o.phase === 'done' || o.phase === 'stopped') return;
     if (s.status === 'completed' || s.status === 'stopped') {
       this.store.updateOrchestration(s.id, { phase: 'stopped', paused_from: null });
+      this.store.dropTimers(s.id);
       this.emit(s.id);
     }
   }

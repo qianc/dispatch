@@ -5,3 +5,5 @@ ALTER TABLE orchestration_events ADD COLUMN due_at TEXT;
 ALTER TABLE orchestrations ADD COLUMN cost_limit_usd REAL;
 -- why Dispatch paused it (the cost limit), shown until it is resumed
 ALTER TABLE orchestrations ADD COLUMN paused_reason TEXT;
+-- an orchestration's batches, for its cost and its lists
+CREATE INDEX sessions_orchestrator ON sessions(orchestrator_id) WHERE orchestrator_id IS NOT NULL;

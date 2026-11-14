@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type Attention, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
-import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, orchestrationProblem, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
+import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
 import { RunOptionsFields } from './batch.tsx';
 import { Button, Chip, ErrorText, Field, Md, Segmented, Sheet, cx, inputCls } from './ui.tsx';
@@ -64,7 +64,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
           {mine && open && <Button small variant="ghost" onClick={() => setSettings(true)}>Settings</Button>}
         </div>
         {o.waiting && <p className={cx('mt-1 text-[13px]', /failed|limit reached/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
-        {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
+        {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
         {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
         {planWaits && <p className="mt-1.5 text-[12px] text-muted">Nothing starts before you approve. To change the plan, write to the orchestrator below.</p>}
         <ErrorText error={act.error} />
@@ -134,13 +134,6 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
 
 /** Keys of the projects a step works in: they cannot leave the scope. */
 export const fixedProjects = (o: Pick<Orchestration, 'steps'>) => [...new Set(o.steps.map((s) => s.project_key))];
-
-/** A cost limit as the owner types it: empty for none; null when it is no amount. */
-function parseLimit(text: string): number | null | undefined {
-  if (!text.trim()) return null;
-  const n = Number(text.replace(',', '.'));
-  return Number.isFinite(n) && n > 0 && n <= 10_000 ? n : undefined;
-}
 
 /** Limits and scope of a running orchestration. The orchestrator is told what changed. */
 export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone: () => void }) {
@@ -260,7 +253,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const problem = orchestrationProblem(goal, keys);
   const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
   return (
-    <form onSubmit={(e) => { e.preventDefault(); if (!problem) start.mutate(); }}>
+    <form onSubmit={(e) => { e.preventDefault(); if (!problem && amount !== undefined) start.mutate(); }}>
       <p className="text-[13px] text-muted mb-3">An orchestrator plans a larger goal as steps, over one or more projects. You approve the plan; then it starts each step as a batch and goes on by itself when one is merged.</p>
       <Field label="Goal" hint="What should be true at the end. It asks you about the rest.">
         <textarea className={cx(inputCls, 'min-h-28')} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Move sign-in to the new tokens in the app and the admin tool" aria-label="Goal" />

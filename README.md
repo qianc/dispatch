@@ -169,7 +169,8 @@ once, and the run options of its batches. It is a session of its own, with a pla
 - *Settings* on its page change while it runs: batches at once, the cost limit, whether it answers
   its batches, and the projects (one that a step works in stays). It is told what changed.
 - *Timers*: it can ask Dispatch to wake it later (5 minutes to 7 days, 3 at once) for something
-  nothing else reports, such as a nightly build. Its page shows when.
+  nothing else reports, such as a nightly build. Its page shows when. After 12 timers in a row
+  with nothing else happening it must tell you what it waits for.
 - The **Assistant** can propose an orchestration as a card ("plan the auth rework over HC and
   DISP"); you start it from the card.
 - In **Activity** its batches are folded under its row. A batch that needs you shows at once.

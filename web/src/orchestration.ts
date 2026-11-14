@@ -147,3 +147,15 @@ export function foldLive(live: Session[], attention: ReadonlyMap<number, Attenti
   }
   return out;
 }
+
+/**
+ * A cost limit as the owner types it: null for an empty field (no limit), undefined when it is
+ * no plain amount ("12,50" and "12.5" are; "1,000" is not, so it is never read as one dollar).
+ */
+export function parseLimit(text: string): number | null | undefined {
+  const s = text.trim();
+  if (!s) return null;
+  if (!/^\d+([.,]\d{1,2})?$/.test(s)) return undefined;
+  const n = Number(s.replace(',', '.'));
+  return n > 0 && n <= 10_000 ? n : undefined;
+}
