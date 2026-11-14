@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 test('orchestration: start one, approve the plan, see the first step run', async ({ page }) => {
   await page.goto('/');

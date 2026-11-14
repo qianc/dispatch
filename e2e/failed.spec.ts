@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 
 // DISP-81: a failed session shows in Needs you with its reason, and offers Mark as ignored, What
 // would fix the issue? and Retry, on the phone and on desktop.
