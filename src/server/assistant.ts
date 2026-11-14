@@ -320,6 +320,15 @@ export class AssistantTools {
       }
 
       case 'propose_session': {
+        if (p.type === 'orchestration') {
+          // a card the owner starts: an orchestrator that plans the goal over these projects
+          const goal = String(p.goal ?? '').trim();
+          if (!goal) throw new Error('Give the goal.');
+          const keys = Array.isArray(p.project_keys) ? (p.project_keys as unknown[]) : [];
+          if (!keys.length) throw new Error('Give project_keys: the projects it may work in.');
+          const projects = keys.map((k) => this.writable(k));
+          return this.sessions.propose(s, { type: 'orchestration', title: String(p.title ?? '').trim() || goal.split('\n')[0].slice(0, 60), goal, project_keys: [...new Set(projects.map((pr) => pr.key))] });
+        }
         const project = this.writable(p.project_key);
         if (p.type === 'planner') return this.sessions.propose(s, { type: 'planner', project_key: project.key, prompt: String(p.prompt ?? '') });
         const keys = Array.isArray(p.item_keys) ? (p.item_keys as unknown[]) : [];

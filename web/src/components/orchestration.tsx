@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DEFAULT_RUN_OPTIONS, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type StepState } from '../../../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Attention, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
-import { STEP_LABEL, STEP_MARK, doneCount, isOpen, orchestrationProblem, stepActions, stepRight } from '../orchestration.ts';
+import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
+import { SessionRow } from './items.tsx';
 import { RunOptionsFields } from './batch.tsx';
 import { Button, Chip, ErrorText, Field, Md, Segmented, Sheet, cx, inputCls } from './ui.tsx';
 
@@ -38,6 +39,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
   const [menu, setMenu] = useState<OrchestrationStep | null>(null);
   const [stopping, setStopping] = useState(false);
   const [alsoChildren, setAlsoChildren] = useState(false);
+  const [settings, setSettings] = useState(false);
   const open = isOpen(o);
   const base = `/orchestrations/${o.session_id}`;
   const planWaits = o.phase === 'plan' && o.steps.length > 0 && !o.plan_approved;
@@ -53,13 +55,16 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
           <span className="text-muted truncate">{o.project_keys.join(' · ')}</span>
           {o.steps.length > 0 && <span className="text-muted shrink-0">{doneCount(o)} of {o.steps.length} steps</span>}
           <Chip tone={PHASE[o.phase].tone}>{PHASE[o.phase].label}</Chip>
+          {costText(o) && <span className="text-muted shrink-0 tabular-nums">{costText(o)}</span>}
           <span className="flex-1" />
           {mine && open && (o.phase === 'paused'
             ? <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/resume` })}>Resume</Button>
             : <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/pause` })}>Pause</Button>)}
           {mine && open && <Button small variant="danger" disabled={act.isPending} onClick={() => setStopping(true)}>Stop</Button>}
+          {mine && open && <Button small variant="ghost" onClick={() => setSettings(true)}>Settings</Button>}
         </div>
-        {o.waiting && <p className={cx('mt-1 text-[13px]', /failed/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
+        {o.waiting && <p className={cx('mt-1 text-[13px]', /failed|limit reached/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
+        {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
         {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
         {planWaits && <p className="mt-1.5 text-[12px] text-muted">Nothing starts before you approve. To change the plan, write to the orchestrator below.</p>}
         <ErrorText error={act.error} />
@@ -108,6 +113,9 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
           </div>
         )}
       </Sheet>
+      <Sheet open={settings} onClose={() => setSettings(false)} title="Orchestration settings">
+        {settings && <OrchestrationSettings o={o} onDone={() => setSettings(false)} />}
+      </Sheet>
       <Sheet open={stopping} onClose={() => setStopping(false)} title="Stop this orchestration?">
         <div className="space-y-3">
           <p className="text-[14px]">No more steps start. This cannot be undone: to go on later, start a new orchestration.</p>
@@ -121,6 +129,92 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         </div>
       </Sheet>
     </section>
+  );
+}
+
+/** Keys of the projects a step works in: they cannot leave the scope. */
+export const fixedProjects = (o: Pick<Orchestration, 'steps'>) => [...new Set(o.steps.map((s) => s.project_key))];
+
+/** Limits and scope of a running orchestration. The orchestrator is told what changed. */
+export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone: () => void }) {
+  const qc = useQueryClient();
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
+  const [max, setMax] = useState(o.max_children);
+  const [limit, setLimit] = useState(o.cost_limit_usd === null ? '' : String(o.cost_limit_usd));
+  const [answers, setAnswers] = useState(o.answer_children);
+  const [keys, setKeys] = useState(o.project_keys);
+  const fixed = fixedProjects(o);
+  const amount = parseLimit(limit);
+  const save = useMutation({
+    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys }),
+    onSuccess: (next) => {
+      qc.setQueryData<SessionDetail>(['session', next.session_id], (d) => (d ? { ...d, orchestration: next } : d));
+      void qc.invalidateQueries({ queryKey: ['orchestrations'] });
+      onDone();
+    },
+  });
+  const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
+  // a project in its scope stays listed also when it was disabled since
+  const shown = projects.filter((p) => !p.disabled || o.project_keys.includes(p.key));
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); if (amount !== undefined) save.mutate(); }}>
+      <Field label="Batches at once" group>
+        <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
+      </Field>
+      <Field label="Cost limit ($)" hint={`Empty: no limit. It has used $${o.cost_usd.toFixed(2)}. At the limit it is paused: running sessions go on, no new step starts.`}>
+        <input className={inputCls} inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="No limit" aria-label="Cost limit in dollars" />
+      </Field>
+      {amount === undefined && <p className="text-[13px] text-bad mb-3">Give an amount up to 10000, or leave it empty.</p>}
+      <label className="flex items-start gap-2 mb-3 text-[14px]">
+        <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+        <span>It answers its batches' questions<span className="block text-[12px] text-muted">Off: every question and plan of its batches comes to you.</span></span>
+      </label>
+      <Field label="Projects it may work in" group>
+        <div className="flex flex-wrap gap-1.5">
+          {shown.map((p) => {
+            const locked = fixed.includes(p.key);
+            return (
+              <button key={p.key} type="button" role="checkbox" aria-checked={keys.includes(p.key)} disabled={locked} onClick={() => toggle(p.key)}
+                className={cx('rounded-lg border px-2.5 h-8 text-[13px]', keys.includes(p.key) ? 'border-accent bg-accent/15 text-accent' : 'border-line-strong text-fg', locked && 'opacity-70')}>
+                {p.key} <span className="text-muted">{p.name}{locked && ' (a step works here)'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+      <ErrorText error={save.error} />
+      <Button type="submit" variant="primary" className="w-full" disabled={save.isPending || amount === undefined || !keys.length}>Save</Button>
+    </form>
+  );
+}
+
+/**
+ * Activity's Live list: each orchestrator with its batches under it. Those that need the owner
+ * show at once; the others are behind "N sessions".
+ */
+export function FoldedLive({ live, attention, orchestrations }: { live: Session[]; attention: ReadonlyMap<number, Attention>; orchestrations: Orchestration[] }) {
+  const orchOf = new Map(orchestrations.map((o) => [o.session_id, o]));
+  const partOf = partOfIndex(orchestrations);
+  const row = (s: Session) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />;
+  return (
+    <>
+      {foldLive(live, attention).map((r) => (
+        <div key={r.s.id} className="border-b border-line last:border-b-0">
+          {row(r.s)}
+          {(r.needs.length > 0 || r.children.length > 0) && (
+            <div className="ml-4 border-l border-line">
+              {r.needs.map(row)}
+              {r.children.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer px-3 py-1.5 text-[12px] text-muted">{r.children.length} session{r.children.length === 1 ? '' : 's'}</summary>
+                  {r.children.map(row)}
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -145,9 +239,11 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const [keys, setKeys] = useState<string[]>([]);
   const [max, setMax] = useState(2);
   const [answers, setAnswers] = useState(true);
+  const [limit, setLimit] = useState('');
+  const amount = parseLimit(limit);
   const [options, setOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
   const start = useMutation({
-    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, options }),
+    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, cost_limit_usd: amount ?? null, options }),
     onSuccess: (o) => {
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       onDone();
@@ -157,7 +253,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const problem = orchestrationProblem(goal, keys);
   const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
   return (
-    <form onSubmit={(e) => { e.preventDefault(); if (!problem) start.mutate(); }}>
+    <form onSubmit={(e) => { e.preventDefault(); if (!problem && amount !== undefined) start.mutate(); }}>
       <p className="text-[13px] text-muted mb-3">An orchestrator plans a larger goal as steps, over one or more projects. You approve the plan; then it starts each step as a batch and goes on by itself when one is merged.</p>
       <Field label="Goal" hint="What should be true at the end. It asks you about the rest.">
         <textarea className={cx(inputCls, 'min-h-28')} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Move sign-in to the new tokens in the app and the admin tool" aria-label="Goal" />
@@ -175,6 +271,10 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
       <Field label="Batches at once" group hint="Steps that do not wait for each other can run at the same time.">
         <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
       </Field>
+      <Field label="Cost limit ($)" hint="Empty: no limit. At the limit it is paused and you are told. You can change it while it runs.">
+        <input className={inputCls} inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="No limit" aria-label="Cost limit in dollars" />
+      </Field>
+      {amount === undefined && <p className="text-[13px] text-bad mb-3">Give an amount up to 10000, or leave it empty.</p>}
       <label className="flex items-start gap-2 mb-3 text-[14px]">
         <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
         <span>It answers its batches' questions<span className="block text-[12px] text-muted">From the plan and what you told it, also their plans to approve. What it cannot settle comes to you. You see each answer in the batch and can overrule it.</span></span>
@@ -182,7 +282,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">Each step's batch</h3>
       <RunOptionsFields value={options} set={(p) => setOptions((o) => ({ ...o, ...p }))} />
       <ErrorText error={start.error} />
-      <Button type="submit" variant="primary" className="w-full" disabled={!!problem || start.isPending}>{problem ?? 'Start planning'}</Button>
+      <Button type="submit" variant="primary" className="w-full" disabled={!!problem || amount === undefined || start.isPending}>{problem ?? 'Start planning'}</Button>
     </form>
   );
 }

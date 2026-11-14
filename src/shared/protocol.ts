@@ -140,7 +140,9 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   /** an orchestrator's plan and its steps */
   | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish'
   /** an orchestrator and its batches: answer a batch's question, hand it to the owner, write to a batch */
-  | 'answer_session' | 'hand_to_owner' | 'send_to_session';
+  | 'answer_session' | 'hand_to_owner' | 'send_to_session'
+  /** an orchestrator's own timer */
+  | 'wake_me_in';
 
 export type AssistantMethod =
   | 'inspect_github_repo' | 'list_projects' | 'create_project' | 'update_project' | 'set_project_state' | 'add_repo' | 'remove_repo'

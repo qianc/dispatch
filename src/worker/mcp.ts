@@ -234,9 +234,11 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       }
     }),
     tool('list_sessions', 'Show running and waiting agent sessions across projects.', {}, call(rpc, 'list_sessions')),
-    tool('propose_session', 'Propose starting an agent session. The owner sees a card and starts it. type batch = work on items (one branch, one PR); planner = a planning chat for the project.', {
-      type: z.enum(['batch', 'planner']),
-      project_key: z.string(),
+    tool('propose_session', 'Propose starting an agent session. The owner sees a card and starts it. type batch = work on items (one branch, one PR); planner = a planning chat for the project; orchestration = an orchestrator for a larger goal that takes several batches, also over several projects: it plans the goal as steps with the owner and then runs them (give goal and project_keys).', {
+      type: z.enum(['batch', 'planner', 'orchestration']),
+      project_key: z.string().optional().describe('For batch and planner: the project'),
+      goal: z.string().optional().describe('For orchestration: what should be true at the end, in the owner\'s words'),
+      project_keys: z.array(z.string()).optional().describe('For orchestration: the projects it may work in'),
       item_keys: z.array(z.string()).optional().describe('For batch: item keys like HC-3'),
       title: z.string().optional(),
       prompt: z.string().optional().describe('Extra instructions for the session'),
@@ -348,6 +350,10 @@ function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
       session_id: z.number().int().describe('The session number of the batch'),
       text: z.string().describe('What it should do, complete enough to act on'),
     }, call(rpc, 'send_to_session')),
+    tool('wake_me_in', 'Set a timer: Dispatch wakes you again after that time, with your reason. For something that takes a while and that nothing else will tell you about (a nightly build, a release, a date). Not for your steps: Dispatch wakes you for those. At most 3 timers at once.', {
+      minutes: z.number().describe('From 5 to 10080 (7 days)'),
+      reason: z.string().describe('What to look at when the timer wakes you'),
+    }, call(rpc, 'wake_me_in')),
     tool('finish', 'End the orchestration when every step is done, failed or skipped. Give the result for the owner.', {
       result: z.string().describe('What was done, what was left out and why (a few lines)'),
     }, call(rpc, 'finish')),

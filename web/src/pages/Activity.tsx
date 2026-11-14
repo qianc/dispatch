@@ -10,7 +10,7 @@ import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
 import { SwipeToClose } from '../components/swipe.tsx';
-import { NewOrchestration } from '../components/orchestration.tsx';
+import { FoldedLive, NewOrchestration } from '../components/orchestration.tsx';
 import { Button, Card, Empty, ErrorText, Section, SessionStatusChip, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 const KINDS = [
@@ -51,7 +51,7 @@ export function Activity() {
       {searching && <Results filter={filter} />}
       {(!searching || live.length > 0) && (
         <Section title={`Live (${live.length})`} action={<NewOrchestration />}>
-          {live.length ? <Card>{live.map((s) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />)}</Card> : <Empty>No sessions running.</Empty>}
+          {live.length ? <Card><FoldedLive live={live} attention={attention} orchestrations={orchestrations} /></Card> : <Empty>No sessions running.</Empty>}
         </Section>
       )}
       {!searching && discussions.length > 0 && (
