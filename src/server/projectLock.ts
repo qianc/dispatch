@@ -128,6 +128,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'DELETE /api/workers/:id': null,
   'POST /api/workers/:id/claude-accounts/:name/check': null,
   'PUT /api/settings/default-worker': null,
+  'PUT /api/settings/orchestrator': null,
   'DELETE /api/oauth/grants/:id': null,
   'POST /api/devices/pair': null,
   'POST /api/devices/approve': null,

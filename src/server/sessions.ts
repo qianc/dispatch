@@ -594,12 +594,14 @@ export class Sessions {
    * spans) and runs on the worker of `first`, as the planner of that project would. `init` runs
    * before the session can start, so the orchestration exists when the worker gets its spec.
    */
-  startOrchestrator(input: { title: string; prompt: string; first: Project }, startedBy: string | null, init: (s: Session) => void): Session {
+  startOrchestrator(input: { title: string; prompt: string; first: Project; model?: RunOptions['model']; effort?: RunOptions['effort'] }, startedBy: string | null, init: (s: Session) => void): Session {
     const workerId = this.workerFor(input.first, null, startedBy);
     this.preflight(startedBy, input.first, workerId);
     const session = this.store.createSession({
       project_id: null, kind: 'orchestrator', title: input.title, status: 'queued', force_plan: false, branch: null,
       initial_prompt: input.prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(input.first, null, undefined, workerId),
+      // its own model and effort; the run options of its batches are kept with the orchestration
+      options: { ...DEFAULT_RUN_OPTIONS, model: input.model ?? 'default', effort: input.effort ?? 'default', worker_id: workerId },
       worker_id: workerId, started_by: startedBy,
     });
     init(session);

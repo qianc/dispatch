@@ -141,6 +141,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/workers/:id': 'user',
   'POST /api/workers/:id/claude-accounts/:name/check': 'user',
   'PUT /api/settings/default-worker': 'user',
+  'GET /api/settings/orchestrator': 'user',
+  'PUT /api/settings/orchestrator': 'user',
   // a local repo's copy on a worker: the install owner, or the worker's owner (the route checks)
   'PUT /api/repos/:id/placements/:workerId': 'user',
   'DELETE /api/repos/:id/placements/:workerId': 'user',

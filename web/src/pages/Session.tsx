@@ -206,7 +206,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
               {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
               {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
-              {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
+              {(s.kind === 'work' || s.kind === 'orchestrator') && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
               {data.part_of && <><dt className="text-muted">Orchestration</dt><dd><Link className="text-accent" to={`/s/${data.part_of.orchestrator_id}`}>{partOfText(data.part_of)}</Link></dd></>}
               {s.moved_from && <><dt className="text-muted">Moved from</dt><dd><Link className="text-accent" to={`/s/${s.moved_from}`}>#{s.moved_from}</Link></dd></>}
               {s.retry_of && <><dt className="text-muted">Retry of</dt><dd><Link className="text-accent" to={`/s/${s.retry_of}`}>#{s.retry_of}</Link></dd></>}

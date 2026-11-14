@@ -14,7 +14,7 @@ const LABELS = {
   auto_merge: { off: 'Leave for review', github: 'Auto-merge (GitHub)', local: 'Auto-merge (local)' },
 } as const;
 
-const opts = <K extends keyof typeof LABELS>(k: K) =>
+export const opts = <K extends keyof typeof LABELS>(k: K) =>
   Object.entries(LABELS[k]).map(([value, label]) => ({ value: value as keyof (typeof LABELS)[K] & string, label }));
 
 /** Last used run options per project, so the sheet opens with your usual choices. */

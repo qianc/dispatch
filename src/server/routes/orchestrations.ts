@@ -3,7 +3,7 @@
 // and starts work as them; everyone can read it.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { orchestrationInput, orchestrationPatch } from '../../shared/types.ts';
+import { orchestrationInput, orchestrationPatch, orchestratorDefaults } from '../../shared/types.ts';
 import { assertCanDrive } from '../sessionGuard.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
@@ -23,6 +23,10 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
     mine(req, step.orchestration_id);
     return step;
   };
+
+  // your default model and effort for the orchestrators you start (the start sheet begins with it)
+  app.get('/api/settings/orchestrator', async (req) => orchestrator.defaults(user(req)));
+  app.put('/api/settings/orchestrator', async (req) => orchestrator.setDefaults(user(req), orchestratorDefaults.partial().parse(req.body)));
 
   app.get('/api/orchestrations', async () => orchestrator.list());
 
