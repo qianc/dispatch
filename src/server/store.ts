@@ -156,7 +156,7 @@ const ITEM_SELECT = 'SELECT i.*, p.key AS project_key FROM items i JOIN projects
 const SESSION_SELECT = `SELECT s.*, p.key AS project_key,
   (SELECT json_group_array(item_id) FROM session_items si WHERE si.session_id = s.id) AS item_ids
   FROM sessions s LEFT JOIN projects p ON p.id = s.project_id`;
-const ORCH_SELECT = `SELECT o.*, s.title, s.started_by, s.status FROM orchestrations o JOIN sessions s ON s.id = o.session_id`;
+const ORCH_SELECT = `SELECT o.*, s.title, s.started_by, s.status, s.options AS session_options FROM orchestrations o JOIN sessions s ON s.id = o.session_id`;
 const STEP_SELECT = `SELECT st.*, p.key AS project_key FROM orchestration_steps st JOIN projects p ON p.id = st.project_id`;
 const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
   FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
@@ -696,6 +696,8 @@ export class Store {
       plan_approved: bool(r.plan_approved),
       plan_version: Number(r.plan_version),
       max_children: Number(r.max_children),
+      model: json<Partial<RunOptions>>(r.session_options, {}).model ?? 'default',
+      effort: json<Partial<RunOptions>>(r.session_options, {}).effort ?? 'default',
       answer_children: bool(r.answer_children),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),

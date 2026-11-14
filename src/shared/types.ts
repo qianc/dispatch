@@ -752,6 +752,9 @@ export interface Orchestration {
   /** counts the plans proposed: an approval names the one the owner read */
   plan_version: number;
   max_children: number;
+  /** the model and effort the orchestrator itself runs on ('default': the worker's own); its batches have `options` */
+  model: (typeof MODELS)[number];
+  effort: (typeof EFFORTS)[number];
   /** it answers its batches' questions and plan approvals when it can; off: they all come to the owner */
   answer_children: boolean;
   /** run options of the batches it starts */
@@ -781,8 +784,15 @@ export const orchestrationInput = z.object({
   max_children: z.number().int().min(1).max(5).default(2),
   answer_children: z.boolean().default(true),
   cost_limit_usd: z.number().positive().max(10_000).nullable().default(null),
+  /** the orchestrator's own model and effort; left out: the starter's default (Settings) */
+  model: z.enum(MODELS).optional(),
+  effort: z.enum(EFFORTS).optional(),
   options: runOptions.default(DEFAULT_RUN_OPTIONS),
 });
+
+/** A person's default model and effort for the orchestrators they start. */
+export const orchestratorDefaults = z.object({ model: z.enum(MODELS), effort: z.enum(EFFORTS) });
+export type OrchestratorDefaults = z.infer<typeof orchestratorDefaults>;
 
 /** What the owner can change on an orchestration while it runs. */
 export const orchestrationPatch = z.object({

@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DEFAULT_RUN_OPTIONS, type Attention, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Attention, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
 import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
-import { RunOptionsFields } from './batch.tsx';
+import { RunOptionsFields, opts } from './batch.tsx';
 import { Button, Chip, ErrorText, Field, Md, Segmented, Sheet, cx, inputCls } from './ui.tsx';
 
 const PHASE: Record<OrchPhase, { label: string; tone: 'neutral' | 'wait' | 'ok' | 'run' }> = {
@@ -132,6 +132,26 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
   );
 }
 
+const useOrchestratorDefaults = () => useQuery({ queryKey: ['settings', 'orchestrator'], queryFn: () => api.get<OrchestratorDefaults>('/settings/orchestrator') });
+
+/** Settings: the model and effort your new orchestrators start with. */
+export function OrchestratorDefaults() {
+  const qc = useQueryClient();
+  const { data } = useOrchestratorDefaults();
+  const save = useMutation({
+    mutationFn: (patch: Partial<OrchestratorDefaults>) => api.put<OrchestratorDefaults>('/settings/orchestrator', patch),
+    onSuccess: (next) => qc.setQueryData(['settings', 'orchestrator'], next),
+  });
+  return (
+    <div className="mx-3">
+      <p className="text-[13px] text-muted mb-2">The model and effort of the orchestrator itself, not of its batches. New orchestrations start with this; you can still pick another one when you start one. Default: the worker's own model.</p>
+      <Field label="Model" group><Segmented value={data?.model ?? 'default'} onChange={(model) => save.mutate({ model })} options={opts('model')} /></Field>
+      <Field label="Effort" group><Segmented value={data?.effort ?? 'default'} onChange={(effort) => save.mutate({ effort })} options={opts('effort')} /></Field>
+      <ErrorText error={save.error} />
+    </div>
+  );
+}
+
 /** Keys of the projects a step works in: they cannot leave the scope. */
 export const fixedProjects = (o: Pick<Orchestration, 'steps'>) => [...new Set(o.steps.map((s) => s.project_key))];
 
@@ -241,9 +261,14 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const [answers, setAnswers] = useState(true);
   const [limit, setLimit] = useState('');
   const amount = parseLimit(limit);
+  // the orchestrator's own model and effort: your default (Settings) until you pick here
+  const { data: mine } = useOrchestratorDefaults();
+  const [own, setOwn] = useState<Partial<OrchestratorDefaults>>({});
+  const model = own.model ?? mine?.model ?? 'default';
+  const effort = own.effort ?? mine?.effort ?? 'default';
   const [options, setOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
   const start = useMutation({
-    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, cost_limit_usd: amount ?? null, options }),
+    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, cost_limit_usd: amount ?? null, model, effort, options }),
     onSuccess: (o) => {
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       onDone();
@@ -268,6 +293,11 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
           ))}
         </div>
       </Field>
+      <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">The orchestrator itself</h3>
+      <Field label="Model" group hint="It plans, starts the steps and answers its batches. Default: the worker's own model. Your usual choice is in Settings.">
+        <Segmented value={model} onChange={(v) => setOwn((o) => ({ ...o, model: v }))} options={opts('model')} />
+      </Field>
+      <Field label="Effort" group><Segmented value={effort} onChange={(v) => setOwn((o) => ({ ...o, effort: v }))} options={opts('effort')} /></Field>
       <Field label="Batches at once" group hint="Steps that do not wait for each other can run at the same time.">
         <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
       </Field>

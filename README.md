@@ -137,7 +137,8 @@ starts when the server is back, if that is less than 6 hours after its time.
 
 **Orchestrator.** For a goal that takes several batches, also over several projects: **Activity →
 New orchestration**. You give the goal, the projects it may work in, how many batches may run at
-once, and the run options of its batches. It is a session of its own, with a plan on its page.
+once, the model and effort of the orchestrator itself (your usual choice is in **Settings →
+Orchestrator**; "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page.
 
 - *Plan.* It reads the trackers and the code of those projects, asks you what is unclear, files
   missing items, and proposes a plan of steps. One step is one batch in one project; a step can

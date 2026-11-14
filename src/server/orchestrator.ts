@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, planInput, proposedItemSchema, sessionStatusWords, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, orchestratorDefaults, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -218,6 +218,23 @@ export class Orchestrator {
     this.bus.emit({ t: 'orchestration', orchestration: this.view(sessionId) });
   }
 
+  // ---------- a person's default for new orchestrators ----------
+
+  /** The model and effort `user`'s new orchestrators start with ('default': the worker's own). */
+  defaults(user: string | null): OrchestratorDefaults {
+    try {
+      return orchestratorDefaults.parse(JSON.parse(this.store.db.setting(`orchestrator_default:${user ?? ''}`) ?? '{}'));
+    } catch {
+      return { model: 'default', effort: 'default' };
+    }
+  }
+
+  setDefaults(user: string | null, patch: Partial<OrchestratorDefaults>): OrchestratorDefaults {
+    const next = { ...this.defaults(user), ...patch };
+    this.store.db.setSetting(`orchestrator_default:${user ?? ''}`, JSON.stringify(next));
+    return next;
+  }
+
   // ---------- starting ----------
 
   start(input: z.infer<typeof orchestrationInput>, startedBy: string | null): Orchestration {
@@ -230,7 +247,9 @@ export class Orchestrator {
     });
     const title = input.title?.trim() || input.goal.split('\n')[0].slice(0, 60);
     const prompt = `${input.goal}\n\nRead the trackers and the code of the projects in your instructions, ask me what is unclear, and then propose the plan with set_plan.`;
-    const session = this.sessions.startOrchestrator({ title, prompt, first: projects[0] }, startedBy, (s) =>
+    // its own model and effort: what was picked, else the starter's default
+    const mine = this.defaults(startedBy);
+    const session = this.sessions.startOrchestrator({ title, prompt, first: projects[0], model: input.model ?? mine.model, effort: input.effort ?? mine.effort }, startedBy, (s) =>
       this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options, answer_children: input.answer_children, cost_limit_usd: input.cost_limit_usd }));
     this.emit(session.id);
     return this.view(session.id);
