@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 test('phone flow: project → items → batch → answer → planner card → start', async ({ page }) => {
   await page.goto('/');
@@ -460,7 +460,13 @@ test('a long chat offers a button back to the newest message', async ({ page }) 
   const area = page.locator('main.scroll-area');
   const toBottom = page.getByRole('button', { name: 'Scroll to the newest message' });
   await expect(toBottom).toHaveCount(0); // at the bottom: no button
-  await area.evaluate((el) => (el.scrollTop = 0));
+  // scrolling up right after the visible area changed (the keyboard, a focus change) is not undone (DISP-91)
+  await area.evaluate((el) => {
+    window.dispatchEvent(new Event('dispatch:viewport'));
+    el.scrollTop = 0;
+  });
+  await expect(toBottom).toBeVisible();
+  await page.waitForTimeout(100); // the frame after the viewport change has passed
   await expect(toBottom).toBeVisible();
   await toBottom.click();
   await expect.poll(() => area.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(50);

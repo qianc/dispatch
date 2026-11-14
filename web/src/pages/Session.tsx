@@ -118,8 +118,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     // keyboard opening/closing resizes the chat area: stay at the newest message if we were there
+    // (asked again in the frame: you may have scrolled up since)
     const onViewport = () => {
-      if (pinned.current) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
+      if (pinned.current) requestAnimationFrame(() => { if (pinned.current) el.scrollTop = el.scrollHeight; });
     };
     window.addEventListener('dispatch:viewport', onViewport);
     return () => {
