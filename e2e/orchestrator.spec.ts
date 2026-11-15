@@ -42,6 +42,14 @@ test('orchestration: start one, approve the plan, see the first step run', async
   await settings.getByRole('button', { name: 'Save' }).click();
   await expect(plan.getByText('of $20.00')).toBeVisible();
   await expect(page.getByText(/Settings changed by the owner: cost limit \$20\.00\./)).toBeVisible();
+  // on a phone the header's actions wrap under the counts: every button is whole inside the card (DISP-97)
+  const card = (await plan.boundingBox())!;
+  for (const name of ['Pause', 'Stop', 'Settings']) {
+    const box = (await plan.getByRole('button', { name, exact: true }).boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(card.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   await plan.getByRole('link', { name: /\(fake\) ORC work/ }).click();
   await expect(page.getByText(/Part of Move sign-in to the new tokens \(step 1 of 1\)/)).toBeVisible();
