@@ -176,7 +176,9 @@ Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's 
   minutes, or is paused or stopped. Until then the question is not in your Inbox, and you can
   still answer it in the batch.
 - *A stopped merge* (a failed check, conflicts) or a batch that ends with no pull request: it may
-  write to that batch, at most 3 times per step, before the step is yours.
+  write to that batch, at most 3 times per step, before the step is yours. A message to a batch
+  that still works waits until its turn ends; if the batch closes or asks a question first, the
+  message is dropped and the orchestrator is told.
 - *Cost limit* (optional): what it and its batches may cost together. At the limit it is paused and
   you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
   then Resume.

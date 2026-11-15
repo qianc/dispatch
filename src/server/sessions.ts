@@ -638,7 +638,8 @@ export class Sessions {
   /**
    * A message to an idle session from Dispatch itself: its next turn. The chat shows it as a
    * system line, not as the owner's words. A session that works, waits for an answer or is closed
-   * is not interrupted: the caller keeps the message and sends it later.
+   * is not interrupted: the caller keeps the message and sends it later (the orchestrator queues its
+   * messages to a batch that works, see `Orchestrator.deliverQueued`).
    */
   sendFromDispatch(sessionId: number, text: string) {
     const s = this.mustGet(sessionId);
@@ -1036,6 +1037,12 @@ export class Sessions {
         }
         const was = s.status;
         this.setStatus(s.id, msg.status, patch);
+        // a message that waited for this turn end started the next turn (DISP-105): this one is not "waiting for you"
+        if (msg.status === 'idle' && this.store.session(s.id)?.status !== 'idle') {
+          this.proposalNotice.delete(s.id);
+          this.dispatch();
+          return;
+        }
         // a scheduled run (DISP-13) sends no push: it ends with its turn, and its last message says what it did
         if (s.schedule_id && msg.status !== 'running') {
           this.proposalNotice.delete(s.id);

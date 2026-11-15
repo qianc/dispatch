@@ -807,6 +807,20 @@ export class Store {
     }
     return this.step(id)!;
   }
+  /** A message of the orchestrator for a step's batch that works: it waits for the batch's turn end (DISP-105). */
+  queueOrchMessage(stepId: number, sessionId: number, text: string) {
+    this.db.run('INSERT INTO orchestration_messages (step_id, session_id, text) VALUES (?, ?, ?)', stepId, sessionId, text);
+  }
+  /** The messages that wait for a batch (or for any batch), oldest first. */
+  queuedOrchMessages(sessionId?: number): { id: number; step_id: number; session_id: number; text: string }[] {
+    return this.db.all<{ id: number; step_id: number; session_id: number; text: string }>(
+      `SELECT id, step_id, session_id, text FROM orchestration_messages WHERE state = 'queued'${sessionId === undefined ? '' : ' AND session_id = ?'} ORDER BY id`,
+      ...(sessionId === undefined ? [] : [sessionId]),
+    ).map((r) => ({ id: Number(r.id), step_id: Number(r.step_id), session_id: Number(r.session_id), text: String(r.text) }));
+  }
+  setOrchMessagesState(ids: number[], state: 'queued' | 'delivered' | 'dropped') {
+    for (const id of ids) this.db.run('UPDATE orchestration_messages SET state = ? WHERE id = ?', state, id);
+  }
   /** A wake-up for the orchestrator, kept until its session can take it. */
   /** `dueAt` (ISO time): a timer, held back until then. */
   addOrchEvent(sessionId: number, text: string, dueAt: string | null = null) {
