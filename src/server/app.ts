@@ -49,6 +49,7 @@ import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
 import { scheduleRoutes } from './routes/schedules.ts';
 import { orchestrationRoutes } from './routes/orchestrations.ts';
+import { costRoutes } from './routes/costs.ts';
 import { Scheduler } from './scheduler.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
@@ -317,6 +318,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   imageRoutes(app, ctx);
   scheduleRoutes(app, ctx);
   orchestrationRoutes(app, ctx);
+  costRoutes(app, ctx);
   githubRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };

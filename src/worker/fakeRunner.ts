@@ -69,7 +69,9 @@ export class FakeRunner implements AgentRunner {
   }
 
   private finishTurn() {
-    this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'result', subtype: 'success', cost_usd: 0, turns: 1, duration_ms: this.delay } });
+    // like Claude, the cost is a running total; FAKE_COST_USD is what one turn costs (tests of the cost view)
+    const cost_usd = this.turn * Number(process.env.FAKE_COST_USD ?? 0);
+    this.deps.emit({ t: 'event', session_id: this.sessionId, body: { kind: 'result', subtype: 'success', cost_usd, turns: 1, duration_ms: this.delay } });
     this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
   }
 
