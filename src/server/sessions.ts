@@ -1660,8 +1660,11 @@ export class Sessions {
   /** An orchestrator session's turn ended (app.ts wires it to the orchestration). */
   onOrchestratorIdle: ((s: Session) => void) | null = null;
 
-  /** A repo's deploy after a session's merge finished (app.ts wires it to the orchestration). */
-  onDeployed: ((s: Session, repo: Repo, ok: boolean) => void) | null = null;
+  /**
+   * A repo's deploy after a session's merge finished (app.ts wires it to the orchestration). True:
+   * the session is a step's batch and its orchestration tells the result, so no notice goes out here.
+   */
+  onDeployed: ((s: Session, repo: Repo, ok: boolean) => boolean | void) | null = null;
 
   /** A work session's check before its turn is reported done (app.ts wires it to the check runs, DISP-15). */
   onTurnCheck: ((s: Session, repo: Repo, msg: Extract<WorkerEvent, { t: 'session_check' }>) => void) | null = null;
@@ -1852,11 +1855,13 @@ export class Sessions {
   private onDeployResult(s: Session, msg: Extract<WorkerEvent, { t: 'deploy_result' }>) {
     const repo = this.store.repo(msg.repo_id);
     if (!repo || repo.project_id !== s.project_id) return;
-    this.onDeployed?.(s, repo, msg.ok);
+    const followed = this.onDeployed?.(s, repo, msg.ok) === true;
     const at = msg.sha ? ` (${msg.sha.slice(0, 7)})` : '';
     const took = msg.duration_ms ? ` in ${Math.max(1, Math.round(msg.duration_ms / 1000))} s` : '';
     const tail = msg.output.trim().split('\n').slice(-15).join('\n');
     this.addEvent(s.id, { kind: msg.ok ? 'system' : 'error', text: `${msg.ok ? 'Deployed' : 'Deploy failed for'} ${repo.github_name}${at}${took}.${tail ? `\n${tail}` : ''}` });
+    // a step's batch: its orchestration tells the owner when the result needs them (DISP-103)
+    if (followed) return;
     const key = s.project_key ?? 'Dispatch';
     // the one notice for an auto-merge with a deploy: none was sent at the merge (DISP-40)
     if (msg.ok) this.notify(s, `${key}: done, merged and deployed`, s.last_text ? `${s.last_text}\n${repo.github_name}${at}` : `${repo.github_name}${at}`, `merged-${s.id}`);
