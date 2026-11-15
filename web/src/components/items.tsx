@@ -120,7 +120,8 @@ export function ItemRow({ item, project, selectMode, onToggle, onLongPress, onOp
 /** `snippet`: a piece of the message a search found (DISP-54), with the `terms` marked. */
 /**
  * `orch`: the orchestration an orchestrator session holds (its steps and what it waits for).
- * `partOf`: for a step's batch, the orchestration and step it belongs to.
+ * `partOf`: for a step's batch, the step and orchestration it belongs to. It takes at most half
+ * of the line, so the batch's own latest text always shows (DISP-99).
  */
 export function SessionRow({ s, showProject, attention, snippet, terms = [], orch, partOf }: { s: Session; showProject?: boolean; attention?: Attention; snippet?: string | null; terms?: string[]; orch?: Orchestration; partOf?: string }) {
   // an idle orchestrator that needs nothing from you is at work: it waits for its steps
@@ -139,7 +140,13 @@ export function SessionRow({ s, showProject, attention, snippet, terms = [], orc
       <div className="flex items-start gap-2 mt-0.5 text-[13px] text-muted">
         {snippet
           ? <span className="flex-1 min-w-0 line-clamp-2 break-words">{markTerms(snippet, terms).map((p, i) => (p.hit ? <mark key={i} className="bg-accent/25 text-fg rounded-sm">{p.text}</mark> : p.text))}</span>
-          : <span className="flex-1 min-w-0 truncate">{partOf && <span className="text-accent">{partOf} · </span>}{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : orch?.waiting ?? s.last_text ?? s.initial_prompt}</span>}
+          : (
+            <span className="flex-1 min-w-0 flex">
+              {partOf && <span className="shrink-0 max-w-[50%] truncate text-accent">{partOf}</span>}
+              {partOf && <span className="shrink-0 whitespace-pre text-accent"> · </span>}
+              <span className="min-w-0 truncate">{busy ? busy.text : s.status === 'waiting_input' || (s.status === 'queued' && s.waiting_reason) ? s.waiting_reason : orch?.waiting ?? s.last_text ?? s.initial_prompt}</span>
+            </span>
+          )}
         <span className="text-faint text-[12px] shrink-0">{timeAgo(s.updated_at)}</span>
       </div>
     </Link>

@@ -221,7 +221,9 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
 export function FoldedLive({ live, attention, orchestrations }: { live: Session[]; attention: ReadonlyMap<number, Attention>; orchestrations: Orchestration[] }) {
   const orchOf = new Map(orchestrations.map((o) => [o.session_id, o]));
   const partOf = partOfIndex(orchestrations);
-  const row = (s: Session) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />;
+  // under its orchestrator's row the step alone says what a batch is part of: the rest of the line is its own latest text (DISP-99)
+  const step = partOfIndex(orchestrations, true);
+  const row = (s: Session, nested = false) => <SessionRow key={s.id} s={s} showProject attention={attention.get(s.id)} orch={orchOf.get(s.id)} partOf={(nested ? step : partOf).get(s.id)} />;
   return (
     <>
       {foldLive(live, attention).map((r) => (
@@ -229,11 +231,11 @@ export function FoldedLive({ live, attention, orchestrations }: { live: Session[
           {row(r.s)}
           {(r.needs.length > 0 || r.children.length > 0) && (
             <div className="ml-4 border-l border-line">
-              {r.needs.map(row)}
+              {r.needs.map((s) => row(s, true))}
               {r.children.length > 0 && (
                 <details>
                   <summary className="cursor-pointer px-3 py-1.5 text-[12px] text-muted">{r.children.length} session{r.children.length === 1 ? '' : 's'}</summary>
-                  {r.children.map(row)}
+                  {r.children.map((s) => row(s, true))}
                 </details>
               )}
             </div>

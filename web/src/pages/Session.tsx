@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useNavigationType, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useNavigationType, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type PartOf, type SessionDetail } from '../api.ts';
@@ -19,7 +19,7 @@ import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { OrchestrationPanel } from '../components/orchestration.tsx';
-import { orchBusyLabel } from '../orchestration.ts';
+import { orchBusyLabel, planLink } from '../orchestration.ts';
 import { attentionOf } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
@@ -158,6 +158,18 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     if (pinned.current) el.scrollTop = el.scrollHeight;
     else setUnseen(true); // something new arrived below while you read further up
   }, [data?.events.length, data?.inputs.length, pending.length]);
+  // The plan is at the top of the chat (below xl; from xl it is in the side panel). "#plan", from one
+  // of its batches, opens the page there and not at the newest message (DISP-100, DISP-101).
+  const { hash } = useLocation();
+  const toPlan = () => {
+    const el = endRef.current?.closest('.scroll-area');
+    if (!el) return;
+    pinned.current = false;
+    el.scrollTop = 0; // its own scrollTop, as above
+  };
+  useLayoutEffect(() => {
+    if (hash === '#plan' && navType !== 'POP' && !sidePanel) toPlan();
+  }, [data?.session.id, hash]);
   // desktop: an item opened from a card shows beside the chat; in a narrow side panel, over it
   const { peek, close: closePeek } = useItemPeek();
 
@@ -207,7 +219,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
               {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
               {(s.kind === 'work' || s.kind === 'orchestrator') && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
-              {data.part_of && <><dt className="text-muted">Orchestration</dt><dd><Link className="text-accent" to={`/s/${data.part_of.orchestrator_id}`}>{partOfText(data.part_of)}</Link></dd></>}
+              {data.part_of && <><dt className="text-muted">Orchestration</dt><dd><Link className="text-accent" to={planLink(data.part_of.orchestrator_id)}>{partOfText(data.part_of)}</Link></dd></>}
               {s.moved_from && <><dt className="text-muted">Moved from</dt><dd><Link className="text-accent" to={`/s/${s.moved_from}`}>#{s.moved_from}</Link></dd></>}
               {s.retry_of && <><dt className="text-muted">Retry of</dt><dd><Link className="text-accent" to={`/s/${s.retry_of}`}>#{s.retry_of}</Link></dd></>}
               {s.about_session && <><dt className="text-muted">About</dt><dd><Link className="text-accent" to={`/s/${s.about_session}`}>#{s.about_session}</Link> (failed)</dd></>}
@@ -249,6 +261,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {!isAssistant && <SessionStatusChip status={s.status} busy={orchBusy} />}
           {chat && <Button small variant="ghost" onClick={chat.onNew}>New chat</Button>}
           {chat?.onClose && <CloseButton onClick={chat.onClose} label="Close chat" />}
+          {/* one tap to the plan: up to it on the orchestrator's own page, to the orchestrator's from one of its batches */}
+          {data.orchestration && !sidePanel && <Button small onClick={toPlan}>Plan</Button>}
+          {data.part_of && <Button small onClick={() => nav(planLink(data.part_of!.orchestrator_id))}>Plan</Button>}
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }
@@ -282,7 +297,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {chat?.intro}
       {(chat || !sidePanel) && (<div>
       {data.orchestration && <div className="px-3 pt-3"><OrchestrationPanel o={data.orchestration} mine={drive} /></div>}
-      {data.part_of && <Link to={`/s/${data.part_of.orchestrator_id}`} className="block px-4 pt-3 text-[13px] text-accent">{partOfText(data.part_of)}</Link>}
+      {data.part_of && <Link to={planLink(data.part_of.orchestrator_id)} className="block px-4 pt-3 text-[13px] text-accent">{partOfText(data.part_of)}</Link>}
       {!chat?.intro && (data.items.length > 0 || data.source) && (
         <div className="px-4 pt-3 flex flex-wrap gap-1.5">
           {data.items.map((i) => (
@@ -388,7 +403,10 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
             </select>
           )}
           {/* an orchestrator is paused and stopped from its plan, which also asks about its running sessions */}
-          {data.orchestration && !final && <p className="text-[13px] text-muted">Pause or stop it from the plan on its page.</p>}
+          {data.orchestration && !sidePanel && <Button className="w-full" onClick={() => { setMenu(false); toPlan(); }}>Go to the plan</Button>}
+          {data.orchestration && !final && <p className="text-[13px] text-muted">Pause or stop it from the plan{sidePanel ? ' on its page' : ''}.</p>}
+          {data.part_of && <Button className="w-full" onClick={() => { setMenu(false); nav(planLink(data.part_of!.orchestrator_id)); }}>Open the orchestrator's plan</Button>}
+          {data.part_of && <p className="text-[13px] text-muted">{partOfText(data.part_of)}</p>}
           {stop && !final && !data.orchestration && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
           {stop && !final && !data.orchestration && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
           {stop && final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
