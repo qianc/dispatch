@@ -10,7 +10,7 @@ type Start = { authed: true } | { pair_id: string; code: string; expires_at: str
 
 async function signedIn() {
   try {
-    const r = await fetch('/api/me', { credentials: 'same-origin', redirect: 'error' });
+    const r = await fetch('/api/me', { credentials: 'same-origin', redirect: 'manual' });
     return r.ok && (await r.json()).authed === true;
   } catch {
     return false; // the proxy sent us to its sign-in: not signed in here

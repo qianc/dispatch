@@ -38,11 +38,20 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     headers: { accept: 'application/json', ...(globalThis.location ? { 'x-dispatch-path': location.pathname + location.search } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
+    // a sign-in proxy that redirects to its login all the same (Entra, …): the browser blocks that
+    // request to another origin, so do not follow it (DISP-107)
+    redirect: 'manual',
   });
+  // "ask /me again"; not for /me itself, which would ask again without end
+  const unauthorized = () => path !== '/login' && path !== '/me' && window.dispatchEvent(new Event('dispatch:unauthorized'));
+  if (res.type === 'opaqueredirect') {
+    unauthorized();
+    throw new ApiError(401, 'Signed out', true);
+  }
   const json = (res.headers.get('content-type') ?? '').includes('application/json');
   const data = json ? await res.json().catch(() => ({})) : {};
   if (!res.ok) {
-    if (res.status === 401 && path !== '/login') window.dispatchEvent(new Event('dispatch:unauthorized'));
+    if (res.status === 401) unauthorized();
     throw new ApiError(res.status, (data as ErrorBody).error ?? res.statusText, !json, extraOf(data as ErrorBody));
   }
   return data as T;

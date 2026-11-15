@@ -1,15 +1,17 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
-import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { registerRoute } from 'workbox-routing';
+import { shellNavigation } from './shell.ts';
 
 declare const self: ServiceWorkerGlobalScope;
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
 try {
-  // server pages, not the app shell: /signin must reach the network so a sign-in proxy can show its
-  // login; /authorize is the OAuth consent page for connected apps
-  registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/api\//, /^\/signin/, /^\/authorize/, /^\/\.well-known\//, /^\/mcp/] }));
+  // The app's own pages only. Server pages reach the network: /signin so a sign-in proxy can show
+  // its login, the proxy's own pages (its return address with the code), /authorize (the OAuth
+  // consent page for connected apps).
+  registerRoute(({ request, url }) => request.mode === 'navigate' && shellNavigation(url), createHandlerBoundToURL('/index.html'));
 } catch {
   // dev mode: index.html is not precached
 }
