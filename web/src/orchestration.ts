@@ -61,6 +61,24 @@ export function stepActions(step: OrchestrationStep, o: Pick<Orchestration, 'pha
   return open;
 }
 
+const MERGE_NOW: Record<Orchestration['options']['auto_merge'], string> = {
+  off: 'each change waits for your review',
+  github: 'each change is merged on GitHub when its checks pass',
+  local: 'each change is merged locally when its checks pass',
+};
+
+/**
+ * Under the merge setting of a running orchestration (DISP-109): what it uses now, when a change
+ * of it applies, and what happens to the steps that already wait for a review.
+ */
+export function mergeHint(o: Pick<Orchestration, 'options' | 'steps'>, picked: Orchestration['options']['auto_merge']): string {
+  const waiting = o.steps.filter((s) => s.state === 'review').length;
+  const now = `It uses now: ${MERGE_NOW[o.options.auto_merge]}.`;
+  if (picked === o.options.auto_merge) return `${now} You can change it while it runs.`;
+  const kept = waiting ? ` ${waiting === 1 ? '1 step already waits' : `${waiting} steps already wait`} for your review: ${waiting === 1 ? 'it keeps' : 'they keep'} waiting, merge ${waiting === 1 ? 'it' : 'them'} yourself.` : '';
+  return `${now} After Save: ${MERGE_NOW[picked]}, from the next merge on (steps that start later, and batches still at work).${kept}`;
+}
+
 /** Why a new orchestration cannot start yet, or null. */
 export function orchestrationProblem(goal: string, projectKeys: string[]): string | null {
   if (!goal.trim()) return 'Say what it should reach.';

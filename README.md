@@ -189,7 +189,10 @@ Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's 
   you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
   then Resume.
 - *Settings* on its page change while it runs: batches at once, the cost limit, whether it answers
-  its batches, and the projects (one that a step works in stays). It is told what changed.
+  its batches, the projects (one that a step works in stays), and what happens when a step's batch
+  is done (leave for review, or auto-merge). The merge setting applies from the next merge on: to
+  steps that start later and to batches still at work. A change that already waits for your review
+  keeps waiting; merge it yourself. It is told what changed.
 - *Timers*: it can ask Dispatch to wake it later (5 minutes to 7 days, 3 at once) for something
   nothing else reports, such as a nightly build. Its page shows when. After 12 timers in a row
   with nothing else happening it must tell you what it waits for.

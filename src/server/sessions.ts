@@ -660,6 +660,13 @@ export class Sessions {
     this.addEvent(sessionId, { kind: 'system', text });
   }
 
+  /** Change what happens when a live session is done (its orchestration's setting changed, DISP-109): from its next merge on. */
+  setAutoMerge(sessionId: number, autoMerge: RunOptions['auto_merge'], why: string) {
+    const s = this.mustGet(sessionId);
+    this.emitSession(this.store.updateSession(s.id, { options: { ...s.options, auto_merge: autoMerge } }));
+    this.addEvent(s.id, { kind: 'system', text: why });
+  }
+
   /**
    * A message to an idle session from Dispatch itself: its next turn. The chat shows it as a
    * system line, not as the owner's words. A session that works, waits for an answer or is closed

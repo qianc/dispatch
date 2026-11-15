@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -25,6 +25,13 @@ const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`)
 const SETTLED = ['done', 'skipped'];
 /** What an orchestrator may make of an item when its step is done: closed, or the owner's to look at (DISP-98). */
 const AFTER_STEP = ['done', 'in_review', 'hold'];
+
+/** The merge setting of an orchestration's batches, in words for the chat (DISP-109). */
+const MERGE_SETTING: Record<RunOptions['auto_merge'], string> = {
+  off: "its change waits for the owner's review",
+  github: 'it is merged by itself on GitHub when its checks pass',
+  local: 'it is merged by itself with a local merge when its checks pass',
+};
 
 export class Orchestrator {
   private store: Store;
@@ -833,8 +840,24 @@ export class Orchestrator {
       changed.push(patch.answer_children ? "it answers its batches' questions" : "its batches' questions come to the owner");
       tell = true;
     }
+    // the merge setting of its batches (DISP-109): for the steps that start later, and for the batches
+    // still at work. A change that already waits for the owner's review keeps waiting.
+    const merge = patch.auto_merge !== undefined && patch.auto_merge !== o.options.auto_merge ? patch.auto_merge : null;
+    if (merge) {
+      next.options = { ...o.options, auto_merge: merge };
+      changed.push(`when a batch is done: ${MERGE_SETTING[merge]}`);
+      tell = true;
+    }
     if (!changed.length) return this.view(sessionId);
     this.store.updateOrchestration(sessionId, next);
+    if (merge) {
+      for (const st of o.steps) {
+        const child = st.state === 'running' && st.child_session_id ? this.store.session(st.child_session_id) : undefined;
+        if (!child || FINAL_STATUSES.includes(child.status) || child.options.auto_merge === merge) continue;
+        this.sessions.setAutoMerge(child.id, merge, `The owner changed the orchestration's setting: ${MERGE_SETTING[merge]}.`);
+        this.sync(st.id);
+      }
+    }
     if (next.answer_children === false) this.handOverAll(sessionId, 'The orchestrator no longer answers its batches: this is yours.');
     const what = `${changed.join('; ')}.`;
     this.sessions.systemNote(sessionId, `Settings changed by the owner: ${what}`);
