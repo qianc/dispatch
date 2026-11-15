@@ -228,7 +228,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
       '- Answer with `answer_session` when the plan, the items or what the owner told you settle it. Say in your answer why, in a few words. The owner sees your answer in the batch and can overrule it; if they do, follow them.',
       '- When it is a choice only the owner can make (taste, money, risk, anything they did not tell you), give it to them with `hand_to_owner` and one line why. Do not guess. A question you leave open goes to the owner by itself.',
       "- Approve a batch's plan when it does what its step asks and no more. Send it back with feedback when it misses the step or reaches beyond it.",
-      '- When a merge stops (a failed check, conflicts), you may tell the batch once how to fix it with `send_to_session`. When a batch ends its turn with no pull request, read its last message: close the step if nothing needs a merge, or tell it what is missing. You have 3 messages per step; after that it is the owner\'s.',
+      '- When a merge stops (a failed check, conflicts), you may tell the batch once how to fix it with `send_to_session`. When a batch ends its turn with no pull request, read its last message: close the step if nothing needs a merge, or tell it what is missing. A message to a batch that still works is queued: it gets it when its turn ends, so do not wait or send it again. If the batch closes or asks a question first, Dispatch tells you it was not delivered. You have 3 messages per step, queued ones too; after that it is the owner\'s.',
     ] : []),
     '',
     '## The plan now',

@@ -65,9 +65,10 @@ export class Orchestrator {
     return this.store.pendingOrchEvents(sessionId, this.now().toISOString());
   }
 
-  /** Every minute: questions that waited for an orchestrator too long, and timers that came due. */
+  /** Every minute: questions that waited for an orchestrator too long, messages that still wait for a batch, and timers that came due. */
   tick() {
     this.checkDelegated();
+    this.checkQueued();
     for (const id of this.store.dueOrchestrations(this.now().toISOString())) this.safely(() => this.flush(id));
   }
 
@@ -81,6 +82,8 @@ export class Orchestrator {
       for (const step of o.steps) this.safely(() => this.sync(step.id));
       this.safely(() => this.flush(o.session_id));
     }
+    // messages for batches whose turn ended, or that closed, while the server was down
+    this.safely(() => this.checkQueued());
     // questions that waited for an orchestrator too long while the server was down
     this.safely(() => this.checkDelegated());
   }
@@ -919,7 +922,11 @@ export class Orchestrator {
   /** How many messages the orchestrator may send to one step's batch. */
   static readonly MAX_MESSAGES = 3;
 
-  /** The orchestrator writes to one of its batches whose turn ended: what is missing, or how to fix a stopped merge. */
+  /**
+   * The orchestrator writes to one of its batches: what is missing, or how to fix a stopped merge.
+   * A batch whose turn ended gets it at once. For one that works it is queued, and the batch gets
+   * it when its turn ends (DISP-105). It counts as sent when it is queued.
+   */
   private sendToSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
     const child = this.store.session(Number(p.session_id));
@@ -928,15 +935,62 @@ export class Orchestrator {
     if (!o.answer_children) throw new Error('The owner deals with the batches himself in this orchestration: tell him instead.');
     if (step.state !== 'running' && step.state !== 'review') throw new Error(`Step ${step.position} is ${step.state}: its batch needs no message.`);
     if (child.status === 'waiting_input') throw new Error(`Session #${child.id} waits for an answer: answer its question instead.`);
-    if (child.status !== 'idle') throw new Error(FINAL_STATUSES.includes(child.status) ? `Session #${child.id} is closed.` : `Session #${child.id} works now: wait for its turn to end.`);
+    if (FINAL_STATUSES.includes(child.status)) throw new Error(`Session #${child.id} is closed.`);
     const text = String(p.text ?? '').trim();
     if (!text) throw new Error('Write what the batch should do.');
     if (step.messages_sent >= Orchestrator.MAX_MESSAGES) throw new Error(`You already sent ${Orchestrator.MAX_MESSAGES} messages to this step's batch: tell the owner instead.`);
-    this.sessions.sendFromDispatch(child.id, `(From the orchestrator of "${s.title}", not the owner:) ${text}`);
+    const message = `(From the orchestrator of "${s.title}", not the owner:) ${text}`;
+    const count = `message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step`;
+    // one that works is not interrupted; an idle one with messages still waiting takes this one after them
+    const queue = child.status !== 'idle' || this.store.queuedOrchMessages(child.id).length > 0;
+    if (queue) this.store.queueOrchMessage(step.id, child.id, message);
+    else this.sessions.sendFromDispatch(child.id, message);
     this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
     this.acted.add(s.id);
     this.emit(o.session_id);
-    return `Sent to session #${child.id} (message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step). End your turn: Dispatch wakes you when it changes.`;
+    if (!queue) return `Sent to session #${child.id} (${count}). End your turn: Dispatch wakes you when it changes.`;
+    if (child.status === 'idle') this.deliverQueued(child.id);
+    return `Queued for session #${child.id} (${count}): it works now and gets this when its turn ends. End your turn: Dispatch wakes you when it changes.`;
+  }
+
+  /**
+   * The messages that wait for a batch (DISP-105). Its turn ended: it gets them now, in order, as
+   * one message, before anything else starts a turn on it. True: it works again. If it closed or
+   * began to wait for an answer first, they are dropped and the orchestrator is told: a message is
+   * never delivered late into another situation. Marked before the send, as in `flush`.
+   */
+  private deliverQueued(sessionId: number): boolean {
+    const queued = this.store.queuedOrchMessages(sessionId);
+    const child = this.store.session(sessionId);
+    if (!queued.length || !child) return false;
+    const ids = queued.map((m) => m.id);
+    const step = this.store.step(queued[0].step_id);
+    const phase = step && this.store.orchestration(step.orchestration_id)?.phase;
+    const drop = (why: string | null) => {
+      this.store.setOrchMessagesState(ids, 'dropped');
+      if (!step || !why) return false;
+      const said = queued.map((m) => `"${m.text.replace(/^\(From the orchestrator of .*?, not the owner:\) /, '').replace(/\s+/g, ' ').slice(0, 300)}"`).join(', ');
+      this.wake(step.orchestration_id, `Your message${queued.length === 1 ? '' : 's'} to step ${step.position} (session #${child.id}) ${queued.length === 1 ? 'was' : 'were'} not delivered: ${why}. ${queued.length === 1 ? 'It' : 'They'} said: ${said}`);
+      return false;
+    };
+    // a closed orchestration: nobody to tell
+    if (!step || !phase || phase === 'done' || phase === 'stopped') return drop(null);
+    if (step.child_session_id !== child.id || FINAL_STATUSES.includes(child.status)) return drop(child.status === 'failed' ? 'the session failed' : 'the session is closed');
+    if (child.status === 'waiting_input') return drop('the session waits for an answer');
+    if (step.state !== 'running' && step.state !== 'review') return drop(`step ${step.position} is ${step.state}`);
+    if (child.status !== 'idle') return false; // it still works: they wait
+    this.store.setOrchMessagesState(ids, 'delivered');
+    try {
+      this.sessions.sendFromDispatch(child.id, queued.map((m) => m.text).join('\n\n'));
+    } catch (e) {
+      return drop((e as Error).message.replace(/\.$/, ''));
+    }
+    return true;
+  }
+
+  /** Messages whose batch changed while nobody looked (a server restart): deliver or drop them now. */
+  checkQueued() {
+    for (const id of new Set(this.store.queuedOrchMessages().map((m) => m.session_id))) this.safely(() => this.deliverQueued(id));
   }
 
   /**
@@ -1025,6 +1079,10 @@ export class Orchestrator {
     if (e.t === 'session' && e.session.orchestrator_id) this.safely(() => this.checkCost(e.session.orchestrator_id!));
     const child = e.t === 'session' && e.session.orchestrator_id ? e.session.id : e.t === 'pr' ? e.pr.session_id : null;
     if (child === null) return;
+    // messages that waited for this batch's turn end go first: if it works again, there is no turn end to tell
+    let again = false;
+    if (e.t === 'session') this.safely(() => { again = this.deliverQueued(child); });
+    if (again) return;
     const step = this.store.stepOfChild(child);
     if (step) this.safely(() => this.sync(step.id));
   }

@@ -113,7 +113,6 @@ describe('orchestrator: tools for its batches', () => {
 
   it('send_to_session writes to an idle batch of its own, at most 3 times', async () => {
     const p = await running();
-    await expect(t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'x' })).rejects.toThrow(`Session #${p.child} works now: wait for its turn to end.`);
     t.status(p.child, 'idle');
     expect(String(await t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'Open the pull request.' }))).toMatch(/^Sent/);
     expect(t.events(p.child)).toContain('system: (From the orchestrator of "Rework auth", not the owner:) Open the pull request.');
