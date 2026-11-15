@@ -116,7 +116,8 @@ export interface AssistantChat {
 
 export interface Inbox {
   inputs: PendingInput[];
-  idle: (Session & { attention: Attention })[];
+  /** card_text: the last message to show on the card; null when the pull requests moved on after it (DISP-106) */
+  idle: (Session & { attention: Attention; card_text?: string | null })[];
   /** failed sessions not yet ignored or retried, with a short reason (DISP-81; missing from older servers) */
   failed?: FailedSession[];
   prs: PullRequest[];

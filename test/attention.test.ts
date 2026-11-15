@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionOf, openProposals } from '../src/shared/attention.ts';
+import { attentionOf, cardText, openProposals } from '../src/shared/attention.ts';
 import { DEFAULT_RUN_OPTIONS, type Proposal, type PullRequest, type SessionEventBody } from '../src/shared/types.ts';
 
 const batch: Proposal = { type: 'batch', title: 'Price work', item_ids: [3, 4], new_items: [], prompt: '', force_plan: false };
@@ -60,5 +60,20 @@ describe('attentionOf (DISP-21)', () => {
   it('PRs come first', () => {
     expect(attentionOf(planner, [pr({})], [ev(2, { kind: 'proposal', proposal: batch })]).kind).toBe('review');
     expect(attentionOf(planner, [pr({ state: 'merged' })], [ev(2, { kind: 'proposal', proposal: batch })]).kind).toBe('merged');
+  });
+});
+
+describe('cardText (DISP-106)', () => {
+  const said = 'DISP-16 is built and the pull request is open: https://github.com/me/r/pull/18.';
+
+  it('keeps the last message while a pull request is open, or when there is none', () => {
+    expect(cardText(said, [pr({})])).toBe(said);
+    expect(cardText(said, [pr({ state: 'merged' }), pr({ id: 2 })])).toBe(said);
+    expect(cardText('Which colour do you want?', [])).toBe('Which colour do you want?');
+  });
+
+  it('leaves it out once every pull request is merged or closed: it was written before that', () => {
+    expect(cardText(said, [pr({ state: 'merged' })])).toBeNull();
+    expect(cardText(said, [pr({ state: 'closed' })])).toBeNull();
   });
 });

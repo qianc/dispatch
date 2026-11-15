@@ -46,7 +46,7 @@ function TurnCard({ s }: { s: Idle }) {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={cx('shrink-0 mt-0.5', look.spin && 'animate-spin')}><path d={look.icon} /></svg>
           <span><span className="sr-only">{look.label}: </span>{s.attention.text}</span>
         </div>
-        {s.last_text && <p className="text-[13px] text-muted mt-1 line-clamp-2">{s.last_text}</p>}
+        {s.card_text && <p className="text-[13px] text-muted mt-1 line-clamp-2">{s.card_text}</p>}
       </Link>
       <NextSteps sessionId={s.id} projectKey={s.project_key} attention={s.attention} />
     </div>
