@@ -20,6 +20,8 @@ export const PROJECT_COLOR_NAMES = Object.keys(PROJECT_COLORS) as ProjectColor[]
 export const PROJECT_ICONS = [
   'slides', 'desktop', 'phone', 'globe', 'code', 'chart', 'database', 'layers', 'book', 'home',
   'bolt', 'flask', 'wrench', 'briefcase', 'camera', 'music', 'leaf', 'star', 'heart', 'shield',
+  'terminal', 'cpu', 'bug', 'folder', 'cloud', 'rocket', 'cart', 'tag', 'bell', 'calendar', 'mail', 'users',
+  'lock', 'key', 'map', 'compass', 'sun', 'moon', 'flag', 'gift', 'gamepad', 'image', 'pencil', 'coffee',
 ] as const;
 export type ProjectIcon = (typeof PROJECT_ICONS)[number];
 
