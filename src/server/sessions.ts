@@ -17,6 +17,8 @@ import {
   type PendingInputPayload,
   type Proposal,
   DEFAULT_RUN_OPTIONS,
+  orchestratorModel,
+  type OrchestratorModel,
   type Project,
   type ProposedItem,
   type RunOptions,
@@ -612,7 +614,7 @@ export class Sessions {
    * spans) and runs on the worker of `first`, as the planner of that project would. `init` runs
    * before the session can start, so the orchestration exists when the worker gets its spec.
    */
-  startOrchestrator(input: { title: string; prompt: string; first: Project; model?: RunOptions['model']; effort?: RunOptions['effort'] }, startedBy: string | null, init: (s: Session) => void): Session {
+  startOrchestrator(input: { title: string; prompt: string; first: Project; model?: OrchestratorModel; effort?: RunOptions['effort'] }, startedBy: string | null, init: (s: Session) => void): Session {
     const workerId = this.workerFor(input.first, null, startedBy);
     this.preflight(startedBy, input.first, workerId);
     const session = this.store.createSession({
@@ -1681,7 +1683,8 @@ export class Sessions {
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
-      options: s.options,
+      // an orchestrator stored with a model it may not run on (an old Haiku) runs on the worker's own
+      options: s.kind === 'orchestrator' ? { ...s.options, model: orchestratorModel(s.options.model) } : s.options,
       claude_account: s.claude_account,
       github_account: user ? null : (project ?? orchestration?.first)?.github_account ?? null,
       ...(user ? { github: { token: user.token, login: user.login, git_name: user.git_name, git_email: user.git_email } } : {}),
