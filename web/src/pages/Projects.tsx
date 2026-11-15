@@ -37,7 +37,7 @@ export function Projects() {
   const [adding, setAdding] = useState(false);
   const { data } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
   return (
-    <Page title="Projects" wide actions={<Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button>}>
+    <Page title="Projects" wide actions={<><Link to="/costs" className="px-2 text-[14px] font-medium text-accent">Costs</Link><Button small variant="ghost" onClick={() => setAdding(true)}>+ New</Button></>}>
       {data && !data.length && <Empty>No projects yet. Create one to start.</Empty>}
       {/* phone: one list; desktop: a grid of cards */}
       <Card className="mt-3 lg:mt-5 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3 lg:border-0 lg:bg-transparent">

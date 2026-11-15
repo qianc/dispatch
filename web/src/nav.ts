@@ -42,7 +42,7 @@ const MAX_ENTRIES = 200;
 export function trackLocation(pathname: string, search: string, opts: { key?: string; tab?: Tab } = {}): Tab {
   const here = pathname + search;
   const remembered = opts.key ? state.entries[opts.key] : undefined;
-  const tab = rootTab(pathname) ?? (pathname.startsWith('/p/') ? '/projects' : opts.tab ?? remembered ?? state.current);
+  const tab = rootTab(pathname) ?? (pathname.startsWith('/p/') || pathname === '/costs' ? '/projects' : opts.tab ?? remembered ?? state.current);
   state.current = tab;
   state.last[tab] = here;
   for (const t of TABS) if (t !== tab && state.last[t] === here) delete state.last[t];

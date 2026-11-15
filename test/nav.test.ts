@@ -33,5 +33,10 @@ describe('the highlighted menu tab (DISP-23)', () => {
     nav.trackLocation('/', '', { key: 'a' });
     expect(nav.trackLocation('/s/7', '', { key: 'b' })).toBe('/');
     expect(nav.trackLocation('/p/HC', '', { key: 'c' })).toBe('/projects');
+    // the cost and time screens are part of Projects (DISP-16)
+    nav.trackLocation('/', '', { key: 'd' });
+    expect(nav.trackLocation('/costs', '', { key: 'e' })).toBe('/projects');
+    nav.trackLocation('/', '', { key: 'f' });
+    expect(nav.trackLocation('/p/HC/costs', '', { key: 'g' })).toBe('/projects');
   });
 });

@@ -72,6 +72,14 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   write to it is refused (app, API, `/mcp` and the agents' tools) with a message that says how to
   enable it; reads still work. Its schedules pause and come back as they were when you enable it.
   Its queued sessions wait; a running session goes on until you stop it.
+- **Cost and time**: what the sessions cost and how long their agents worked, for all projects
+  (Projects → Costs) and for one project (its Sessions tab → Cost and time): per item, per item
+  type and per tag, for all time or the last 30 or 90 days, ordered by cost or by time. A session
+  that covers several items gives each an equal share; a project's total is all of its sessions,
+  and sessions with no item (planning chats) or no project (Assistant chats, orchestrators) have a
+  line of their own. Run time is the agents' working time, without queue time or time spent
+  waiting for your answer. The same numbers: `GET /api/costs` and `GET /api/projects/KEY/costs`
+  (`?days=30` for a period).
 - Links in item text open in the app: repo files (markdown rendered, images shown), and `#anchor`
   links to other items imported from the same backlog.
 

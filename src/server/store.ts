@@ -4,15 +4,19 @@ import { now } from './db.ts';
 import { Workers } from './workers.ts';
 import {
   itemKey,
+  type AllCosts,
+  type CostTotals,
   type InputAnswer,
   type Item,
   type ItemImage,
   type ItemStatus,
+  type ItemType,
   type MergeEvent,
   type PendingInput,
   type RepoPlacement,
   type PendingInputPayload,
   type Project,
+  type ProjectCosts,
   type ProposedItem,
   DEFAULT_RUN_OPTIONS,
   orchestratorModel,
@@ -163,6 +167,30 @@ const ORCH_SELECT = `SELECT o.*, s.title, s.started_by, s.status, s.options AS s
 const STEP_SELECT = `SELECT st.*, p.key AS project_key FROM orchestration_steps st JOIN projects p ON p.id = st.project_id`;
 const PR_SELECT = `SELECT pr.*, r.github_owner, r.github_name, r.local_path, s.started_by, s.github_login
   FROM pull_requests pr JOIN repos r ON r.id = pr.repo_id LEFT JOIN sessions s ON s.id = pr.session_id`;
+
+/**
+ * The sessions the cost and time view counts (DISP-16), as the CTE `s`: each with its cost, its run
+ * time (the sum of its turn results) and `n`, how many items it has. And `share`, the split rule:
+ * a session with n items gives each item 1/n of its cost and of its time, whatever the session's
+ * kind (work, retry, discuss, release). A session with no item has no share.
+ */
+const costCte = (where: string) => `WITH s AS (
+  SELECT s.id, s.project_id,
+    coalesce(json_extract(s.usage, '$.cost_usd'), 0) AS cost,
+    coalesce((SELECT sum(json_extract(e.body, '$.duration_ms')) FROM session_events e WHERE e.session_id = s.id AND json_extract(e.body, '$.kind') = 'result'), 0) AS ms,
+    (SELECT count(*) FROM session_items si WHERE si.session_id = s.id) AS n
+  FROM sessions s ${where}
+), share AS (
+  SELECT si.item_id, s.id AS session_id, s.project_id, s.cost * 1.0 / s.n AS cost, s.ms * 1.0 / s.n AS ms
+  FROM s JOIN session_items si ON si.session_id = s.id
+)`;
+const COST_SUMS = 'coalesce(sum(cost), 0) AS cost_usd, coalesce(sum(ms), 0) AS duration_ms';
+const toTotals = (r: Row | undefined): CostTotals => ({
+  cost_usd: Number(r?.cost_usd ?? 0),
+  duration_ms: Math.round(Number(r?.duration_ms ?? 0)),
+  sessions: Number(r?.sessions ?? 0),
+  items: Number(r?.items ?? 0),
+});
 
 /** A device that gets push notifications, and whose (DISP-65). */
 export interface PushSubscription {
@@ -806,6 +834,47 @@ export class Store {
   orchestrationCost(sessionId: number): number {
     return Number(this.db.get<{ c: number }>("SELECT coalesce(sum(json_extract(usage, '$.cost_usd')), 0) AS c FROM sessions WHERE id = ? OR orchestrator_id = ?", sessionId, sessionId)?.c ?? 0);
   }
+  // ---------- cost and time (DISP-16) ----------
+  /** A project's cost and time: all of it, per item, per item type and per tag. `since`: only sessions started from then on. */
+  projectCosts(projectId: number, since: string | null = null): ProjectCosts {
+    const cte = costCte(`WHERE s.project_id = ?${since ? ' AND s.created_at >= ?' : ''}`);
+    const params = since ? [projectId, since] : [projectId];
+    const all = <T = Row>(sql: string) => this.db.all<T>(`${cte} ${sql}`, ...params);
+    const group = 'count(DISTINCT sh.session_id) AS sessions, count(DISTINCT sh.item_id) AS items';
+    return {
+      total: toTotals(all(`SELECT ${COST_SUMS}, count(*) AS sessions, (SELECT count(DISTINCT item_id) FROM share) AS items FROM s`)[0]),
+      unlinked: toTotals(all(`SELECT ${COST_SUMS}, count(*) AS sessions FROM s WHERE n = 0`)[0]),
+      items: all(
+        `SELECT i.id, p.key AS project_key, i.number, i.title, i.type, i.labels, coalesce(sum(sh.cost), 0) AS cost_usd, coalesce(sum(sh.ms), 0) AS duration_ms, count(*) AS sessions, 1 AS items
+         FROM share sh JOIN items i ON i.id = sh.item_id JOIN projects p ON p.id = i.project_id GROUP BY i.id ORDER BY cost_usd DESC, i.number`,
+      ).map((r) => ({ id: Number(r.id), key: itemKey(String(r.project_key), Number(r.number)), title: String(r.title), type: r.type as ItemType, labels: json<string[]>(r.labels, []), ...toTotals(r) })),
+      by_type: all(
+        `SELECT i.type AS name, coalesce(sum(sh.cost), 0) AS cost_usd, coalesce(sum(sh.ms), 0) AS duration_ms, ${group}
+         FROM share sh JOIN items i ON i.id = sh.item_id GROUP BY i.type ORDER BY cost_usd DESC, name`,
+      ).map((r) => ({ name: String(r.name), ...toTotals(r) })),
+      // an item with no tag counts under the null tag; one with several counts in full under each
+      by_tag: all(
+        `SELECT j.value AS name, coalesce(sum(sh.cost), 0) AS cost_usd, coalesce(sum(sh.ms), 0) AS duration_ms, ${group}
+         FROM share sh JOIN items i ON i.id = sh.item_id, json_each(CASE WHEN json_array_length(i.labels) = 0 THEN '[null]' ELSE i.labels END) j
+         GROUP BY lower(j.value) ORDER BY cost_usd DESC, name IS NULL, name`,
+      ).map((r) => ({ name: r.name === null ? null : String(r.name), ...toTotals(r) })),
+    };
+  }
+  /** Cost and time per project, and of the sessions with no project. Each project's sum is unsplit. */
+  allCosts(since: string | null = null): AllCosts {
+    const rows = this.db.all(
+      `${costCte(since ? 'WHERE s.created_at >= ?' : '')}
+       SELECT p.id, p.key, p.name, p.color, p.icon, ${COST_SUMS}, count(*) AS sessions,
+         (SELECT count(DISTINCT sh.item_id) FROM share sh WHERE sh.project_id = s.project_id) AS items
+       FROM s LEFT JOIN projects p ON p.id = s.project_id GROUP BY s.project_id ORDER BY cost_usd DESC, p.name`,
+      ...(since ? [since] : []),
+    );
+    const sum = (list: CostTotals[]): CostTotals => list.reduce((a, b) => ({ cost_usd: a.cost_usd + b.cost_usd, duration_ms: a.duration_ms + b.duration_ms, sessions: a.sessions + b.sessions, items: a.items + b.items }), toTotals(undefined));
+    const projects = rows.filter((r) => r.id !== null).map((r) => ({ id: Number(r.id), key: String(r.key), name: String(r.name), color: (r.color as string | null) ?? null, icon: (r.icon as string | null) ?? null, ...toTotals(r) }));
+    const unlinked = toTotals(rows.find((r) => r.id === null));
+    return { total: sum([...projects, unlinked]), projects, unlinked };
+  }
+
   /** `delivered` false puts them back in the queue (the delivery failed). */
   markOrchEventsDelivered(ids: number[], delivered = true) {
     for (const id of ids) this.db.run('UPDATE orchestration_events SET delivered_at = ? WHERE id = ?', delivered ? now() : null, id);

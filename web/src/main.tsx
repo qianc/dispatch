@@ -24,6 +24,7 @@ import { WorkerSetup } from './pages/WorkerSetup.tsx';
 import { Assistant } from './pages/Assistant.tsx';
 import { Discuss } from './pages/Discuss.tsx';
 import { FileView } from './pages/FileView.tsx';
+import { Costs, ProjectCostsPage } from './pages/Costs.tsx';
 
 registerSW({
   immediate: true,
@@ -52,6 +53,8 @@ const router = createBrowserRouter([
       { path: '/activity', element: <Activity /> },
       { path: '/projects', element: <Projects /> },
       { path: '/p/:key', element: <Project /> },
+      { path: '/p/:key/costs', element: <ProjectCostsPage /> },
+      { path: '/costs', element: <Costs /> },
       { path: '/items/:id', element: <ItemDetail /> },
       { path: '/s/:id', element: <SessionView /> },
       { path: '/sources/:id', element: <SourceView /> },

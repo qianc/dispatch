@@ -480,7 +480,7 @@ function ProjectSessions({ project }: { project: ProjectSummary }) {
   return (
     <>
       <Schedules project={project} />
-      <Section title="Sessions">
+      <Section title="Sessions" action={<Link to={`/p/${project.key}/costs`} className="text-[13px] font-medium text-accent">Cost and time</Link>}>
         {data.length ? <Card>{data.map((s) => <SessionRow key={s.id} s={s} />)}</Card> : <Empty>No sessions yet.</Empty>}
       </Section>
     </>

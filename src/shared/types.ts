@@ -154,6 +154,45 @@ export interface Item {
   comments?: { author: string; body_md: string; created_at: string }[];
 }
 
+/** What some sessions cost and how long their agents worked (DISP-16). `items`: how many items the sum covers. */
+export interface CostTotals {
+  cost_usd: number;
+  /** agent working time: the sum of the turns, without queue time or time waiting for an answer */
+  duration_ms: number;
+  sessions: number;
+  items: number;
+}
+/** One item's share: a session with several items gives each an equal share. */
+export interface ItemCost extends CostTotals {
+  id: number;
+  key: string;
+  title: string;
+  type: ItemType;
+  labels: string[];
+}
+/** The items of one type or with one tag. `name` null: the items with no tag. */
+export interface CostGroup extends CostTotals {
+  name: string | null;
+}
+/**
+ * A project's cost and time. `total` is all its sessions, unsplit, so it is the item shares plus
+ * `unlinked` (sessions with no item, e.g. planning chats). An item with several tags counts in
+ * full under each, so `by_tag` can add up to more than the total.
+ */
+export interface ProjectCosts {
+  total: CostTotals;
+  unlinked: CostTotals;
+  items: ItemCost[];
+  by_type: CostGroup[];
+  by_tag: CostGroup[];
+}
+/** Cost and time of all projects. `unlinked`: sessions with no project (Assistant chats, orchestrators). */
+export interface AllCosts {
+  total: CostTotals;
+  projects: (CostTotals & { id: number; key: string; name: string; color: string | null; icon: string | null })[];
+  unlinked: CostTotals;
+}
+
 export const MODELS = ['default', 'opus', 'sonnet', 'haiku'] as const;
 /** what the orchestrator itself may run on, in the order the pickers show them: never Haiku */
 export const ORCHESTRATOR_MODELS = ['default', 'fable', 'opus', 'sonnet'] as const;
