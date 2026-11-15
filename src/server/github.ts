@@ -304,7 +304,8 @@ export class GitHub {
   onPrChange: (() => void) | null = null;
   /** A deploy after a merge was sent to the worker, or could not be (app.ts wires both to the orchestration). */
   onDeployStarted: ((s: Session, repo: Repo) => void) | null = null;
-  onDeployFailed: ((s: Session, repo: Repo) => void) | null = null;
+  /** True: the session is a step's batch and its orchestration tells the failure (DISP-103). */
+  onDeployFailed: ((s: Session, repo: Repo) => boolean | void) | null = null;
 
   /** Delete a merged PR's head branch on GitHub (no error if it is already gone), as the session's starter. */
   async deleteRemoteBranch(repo: Repo, branch: string, s: Session | null): Promise<boolean> {
@@ -714,9 +715,10 @@ export class GitHub {
       this.onDeployStarted?.(s, repo);
       return;
     }
-    this.onDeployFailed?.(s, repo);
+    const followed = this.onDeployFailed?.(s, repo) === true;
     const why = `the session's worker is not connected, so \`${repo.deploy_command}\` did not run. Deploy by hand.`;
     this.store.addEvent(s.id, { kind: 'error', text: `Deploy failed for ${name}: ${why}` });
+    if (followed) return;
     void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
