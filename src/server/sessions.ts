@@ -1221,7 +1221,7 @@ export class Sessions {
         return { released: released.map((i) => i.key), label };
       }
       case 'update_item':
-        return this.scheduledItemUpdate(s, project, byKey(p.key), p);
+        return this.agentItemUpdate(s, project, byKey(p.key), p);
       case 'propose':
         return this.propose(s, p);
       default:
@@ -1394,13 +1394,23 @@ export class Sessions {
   }
 
   /**
-   * A scheduled run changes items itself (e.g. the scope says to triage them). It cannot take an
-   * item off hold, nor close one: SCHEDULED_SET.
+   * An agent changes an item itself. A scheduled run and an orchestrator triage (e.g. the scope
+   * says so); they cannot take an item off hold, nor close one: SCHEDULED_SET. The title and the
+   * description change only when the project allows it (agents_edit_items, DISP-93): then also
+   * from a work session, which changes nothing else.
    */
-  scheduledItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
-    if (!((s.kind === 'planner' && s.schedule_id) || s.kind === 'orchestrator')) throw new Error('Only a scheduled planner run changes items directly.');
+  agentItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
+    const triages = (s.kind === 'planner' && !!s.schedule_id) || s.kind === 'orchestrator';
+    const off = `Project ${project.key} does not let agents change the title or description of its items: the owner switches that on in the project's settings ("Agents may edit item titles and descriptions"). Add a comment with the text you propose instead.`;
+    if (!triages) {
+      if (s.kind !== 'work') throw new Error('Only a work session, a scheduled planner run or an orchestrator changes items directly.');
+      if (!project.agents_edit_items) throw new Error(off);
+      const other = Object.keys(raw).filter((k) => raw[k] !== undefined && !['key', 'title', 'body_md', 'comment'].includes(k));
+      if (other.length) throw new Error(`A work session changes only the title and the description of an item (with a comment), not: ${other.join(', ')}.`);
+    }
     const p = proposalSchema.parse({ ...raw, type: 'item_update', key: it.key }) as ItemUpdateProposal;
-    const { changes, comment } = this.itemChanges(project, it, { ...p, title: undefined, body_md: undefined });
+    if ((p.title !== undefined || p.body_md !== undefined) && !project.agents_edit_items) throw new Error(off);
+    const { changes, comment } = this.itemChanges(project, it, p);
     if (changes.status !== undefined) {
       if (it.status === 'hold') throw new Error(`${it.key} is on hold: only the owner takes an item off hold.`);
       if (!SCHEDULED_SET.includes(changes.status)) throw new Error(`A scheduled run cannot set an item to ${changes.status} (it may set: ${SCHEDULED_SET.join(', ')}).`);
@@ -1411,7 +1421,7 @@ export class Sessions {
     this.bus.emit({ t: 'item', item: updated });
     const said = [...Object.keys(patch).map((k) => (k === 'labels' ? 'tags' : k)), comment ? 'comment' : ''].filter(Boolean);
     this.addEvent(s.id, { kind: 'system', text: `Updated ${it.key}: ${said.join(', ')}` });
-    return { key: updated.key, status: updated.status, importance: project.importance_scale[updated.importance - 1], effort: updated.effort === null ? null : project.effort_scale[updated.effort], tags: updated.labels, modules: updated.modules };
+    return { key: updated.key, title: updated.title, status: updated.status, importance: project.importance_scale[updated.importance - 1], effort: updated.effort === null ? null : project.effort_scale[updated.effort], tags: updated.labels, modules: updated.modules };
   }
 
   /** The changes an item_update asks for, checked against the project's scales. */
@@ -1691,6 +1701,7 @@ export class Sessions {
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(s.started_by), placement_md: project?.placement_md ?? '' } : {}),
+      ...(project?.agents_edit_items || orchestration?.spec.projects.some((p) => p.agents_edit_items) ? { agents_edit_items: true } : {}),
       ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
       ...(orchestration ? { orchestration: orchestration.spec } : {}),

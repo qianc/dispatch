@@ -211,6 +211,8 @@ body {
 
 /* inputs never below 16px on iOS, or Safari zooms */
 input, textarea, select { font-size: 16px; }
+/* the styled copy of a text box's text behind it (ChatInput): the box's own size, or its lines wrap elsewhere (DISP-94) */
+.input-mirror { font-size: 16px; }
 
 .md { line-height: 1.55; overflow-wrap: anywhere; }
 .md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0.5em 0; }

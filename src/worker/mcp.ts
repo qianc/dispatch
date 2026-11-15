@@ -94,6 +94,15 @@ const itemShape = {
   effort: z.number().int().min(0).nullable().describe('Index into the project effort scale, or null if unknown'),
 };
 
+/** The title and description of an item: only where the project lets agents change them (DISP-93). */
+const textFields = (edit: boolean): Record<string, z.ZodType> => (edit
+  ? {
+      title: z.string().min(1).max(200).optional().describe('A new title'),
+      body_md: z.string().optional().describe('The full new description (markdown). It replaces the whole description: start from the current text (get_item) and keep what is still true.'),
+    }
+  : {});
+const TEXT_NOTE = ' You may also change its title and description, where the project allows it.';
+
 export interface FolderEntry { name: string; path: string; type: 'folder' | 'file'; git_repo?: true }
 
 const MAX_ENTRIES = 500;
@@ -291,7 +300,7 @@ export function crossProjectTools(rpc: Rpc, ownKey: string, ask: AskCrossProject
 }
 
 /** An orchestrator: the tracker of the projects in its scope, its plan, and the batches of its steps. */
-function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
+function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<any>[] {
   const project_key = z.string().describe('Key of a project in your scope, e.g. HC');
   const step_id = z.number().int().describe('The step_id from "The plan now" (not its place in the list)');
   return [
@@ -305,8 +314,9 @@ function orchestratorTools(rpc: Rpc): SdkMcpToolDefinition<any>[] {
     viewImage(rpc),
     tool('add_comment', 'Add a comment (markdown) to an item.', { key: z.string(), body: z.string() }, call(rpc, 'add_comment')),
     tool('create_item', 'File a new backlog item or bug in a project in your scope. It starts only as part of a step.', { project_key, ...itemShape }, call(rpc, 'create_item')),
-    tool('update_item', 'Change an item: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.', {
+    tool('update_item', `Change an item: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.${editItems ? TEXT_NOTE : ''}`, {
       key: z.string().describe('Item key, e.g. HC-42'),
+      ...textFields(editItems),
       item_type: z.enum(['backlog', 'bug']).optional(),
       status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled']).optional(),
       importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
@@ -368,11 +378,12 @@ const noFiles = async () => {
  * `scheduled`: a scheduled planner run (DISP-13), which starts batches and changes items itself.
  * `cross`: planner (not scheduled: nobody is there to approve) and discussion chats get the
  * cross-project tools (DISP-55). `cwd`: the session checkout, where attach_image may take files from (DISP-74).
+ * `editItems`: the project lets agents change item titles and descriptions (DISP-93).
  */
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string) {
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd) });
-  if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc) });
+  if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc, editItems) });
   if (kind === 'discuss') {
     return createSdkMcpServer({
       name: 'dispatch',
@@ -431,6 +442,15 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       }, call(rpc, 'add_to_batch')),
       tool('create_item', 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', itemShape, call(rpc, 'create_item')),
     );
+    if (editItems) {
+      tools.push(
+        tool('update_item', 'Change the title or the description of an item in this project, when your work made them wrong or incomplete. Give only what changes. Status, importance, effort and tags are not yours to change.', {
+          key: z.string().describe('Item key, e.g. HC-42'),
+          ...textFields(true),
+          comment: z.string().optional().describe('A comment to add (markdown): why you changed it'),
+        }, call(rpc, 'update_item')),
+      );
+    }
   } else if (scheduled) {
     tools.push(
       tool('propose_batch', 'Start a batch now (this is a scheduled run: nobody approves it). A batch = one session, one branch, one PR. The answer says whether it started.', {
@@ -442,8 +462,9 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         worker: z.string().optional().describe('Name of the worker to run it on (see "Where work runs" in your instructions)'),
         worker_reason: z.string().optional().describe('One line: why that worker'),
       }, async (p) => call(rpc, 'propose')({ type: 'batch', ...p })),
-      tool('update_item', 'Change an item now, e.g. to triage it: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.', {
+      tool('update_item', `Change an item now, e.g. to triage it: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.${editItems ? TEXT_NOTE : ''}`, {
         key: z.string().describe('Item key, e.g. HC-42'),
+        ...textFields(editItems),
         item_type: z.enum(['backlog', 'bug']).optional(),
         status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled']).optional(),
         importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),

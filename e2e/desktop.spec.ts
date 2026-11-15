@@ -297,6 +297,39 @@ test('phone chat box: Enter adds a line, the button sends', async ({ page }) => 
   await expect(box).toHaveValue('one\ntwo');
 });
 
+for (const size of [{ width: 390, height: 664 }, { width: 1280, height: 800 }]) {
+  test(`chat box: the text behind the box wraps like the box's own, also with a tag (DISP-94), ${size.width}px wide`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await login(page);
+    await page.request.post('/api/projects', { data: { key: 'WRP', name: 'Wrapping' } });
+    await page.getByRole('link', { name: 'Assistant' }).click();
+    const box = page.getByLabel('Message');
+    const text = 'what i meant is that we should loosen a bit on the limitations in @WRP so that the agent actually can edit these things as well, and we do not get comments only, and this goes on until it wraps onto a third line';
+    await box.fill(text);
+    const laid = await box.evaluate((el: HTMLTextAreaElement) => {
+      const back = el.previousElementSibling as HTMLElement;
+      const chip = back.querySelector('[data-chip]') as HTMLElement;
+      const look = (e: Element) => {
+        const s = getComputedStyle(e);
+        return [s.font, s.letterSpacing, s.wordSpacing, s.whiteSpace, s.overflowWrap, s.wordBreak, s.textIndent].join(' | ');
+      };
+      const box = (e: HTMLElement) => {
+        const s = getComputedStyle(e);
+        return [e.clientWidth, e.clientHeight, s.padding, s.borderWidth, s.boxSizing].join(' | ');
+      };
+      // the box grows with its lines, so its scroll height says how many lines its own text takes
+      const lines = (e: HTMLElement) => Math.round((e.scrollHeight - 16) / parseFloat(getComputedStyle(e).lineHeight));
+      return { text: look(el), mirror: look(back), chip: look(chip), box: box(el), mirrorBox: box(back), lines: lines(el), mirrorLines: lines(back), chipText: chip.textContent };
+    });
+    expect(laid.chipText).toBe('@WRP');
+    expect(laid.mirror).toBe(laid.text);
+    expect(laid.chip).toBe(laid.text);
+    expect(laid.mirrorBox).toBe(laid.box);
+    expect(laid.lines).toBeGreaterThan(1);
+    expect(laid.mirrorLines).toBe(laid.lines);
+  });
+}
+
 test('images on an item: add, view full size, delete', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'PIC', name: 'Pictures' } });

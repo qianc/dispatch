@@ -684,6 +684,13 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
             Plan first by default
             <input type="checkbox" checked={project.default_force_plan} onChange={(e) => save.mutate({ default_force_plan: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
           </label>
+          <label className="flex items-center justify-between gap-3 text-[14px]">
+            <span>
+              Agents may edit item titles and descriptions
+              <span className="block text-[12px] text-muted">Work sessions, scheduled runs and orchestrators. Off: they only comment.</span>
+            </span>
+            <input type="checkbox" checked={project.agents_edit_items} onChange={(e) => save.mutate({ agents_edit_items: e.target.checked })} className="size-5 shrink-0 accent-[var(--color-accent-strong)]" />
+          </label>
           <label className="flex items-center justify-between text-[14px]">
             Mute push notifications
             <input type="checkbox" checked={project.muted} onChange={(e) => save.mutate({ muted: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />

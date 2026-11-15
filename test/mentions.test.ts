@@ -75,6 +75,10 @@ describe('@ tags a project in the Assistant chat (DISP-82)', () => {
       const html = renderToStaticMarkup(createElement(ChatInput, { value: 'Bug in @HC and @NOPE', onChange() {}, onSubmit() {}, projects: PROJECTS }));
       expect(html.match(/data-chip="[A-Z]+"/g)).toEqual(['data-chip="HC"']);
       expect(html).toContain('role="combobox"');
+      // the copy behind the box has the box's text size, and a chip the same weight as plain text:
+      // otherwise the lines wrap at other places and caret and selection drift (DISP-94)
+      expect(html).toMatch(/<div aria-hidden="true" class="[^"]*\binput-mirror\b/);
+      expect(html.match(/<span data-chip="HC" class="([^"]*)"/)?.[1]).not.toMatch(/font-|text-\[|tracking-|p[xy]?-|m[xy]?-/);
       // without projects (every other chat): a plain box
       const plain = renderToStaticMarkup(createElement(ChatInput, { value: 'Bug in @HC', onChange() {}, onSubmit() {} }));
       expect(plain).not.toContain('data-chip');

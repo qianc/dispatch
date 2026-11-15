@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { latestSlot, Scheduler } from '../src/server/scheduler.ts';
-import { plannerPrompt } from '../src/worker/prompts.ts';
+import { plannerPrompt, workPrompt } from '../src/worker/prompts.ts';
 import { startServer } from './helpers.ts';
 
 // DISP-13: a schedule runs a planner on its project, which starts the work it picks by itself.
@@ -94,6 +94,70 @@ describe('scheduled planner runs', () => {
     // only a scheduled planner has it
     const manual = (await s.call('POST', '/projects/SC/planner', { prompt: 'next?' })).data;
     await expect(s.ctx.sessions.rpc(manual.id, 'update_item', { key: t.key, status: 'backlog' })).rejects.toThrow(/scheduled/);
+  });
+
+  // DISP-93: the owner decides per project whether agents change the text of items themselves
+  describe('agents edit item titles and descriptions', () => {
+    const allow = (on = true) => s.call('PATCH', '/projects/SC', { agents_edit_items: on });
+    const spec = (id: number) => s.ctx.sessions.spec(s.ctx.store.session(id)!, '', null, null);
+
+    it('the setting is off by default and saved per project', async () => {
+      expect((await s.call('GET', '/projects/SC')).data.agents_edit_items).toBe(false);
+      expect((await allow()).data.agents_edit_items).toBe(true);
+      // another setting saved later leaves it alone
+      expect((await s.call('PATCH', '/projects/SC', { default_force_plan: true })).data.agents_edit_items).toBe(true);
+      expect((await allow(false)).data.agents_edit_items).toBe(false);
+    });
+
+    it('with the setting on, a scheduled run changes the title and the description itself', async () => {
+      await allow();
+      const t = await item('Old title');
+      const p = await run((await schedule()).id);
+      const out = await s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, title: 'B-12 New title', body_md: 'Still open: the export.', importance: 3, comment: 'Set the proposed ID.' });
+      expect(out).toMatchObject({ key: t.key, title: 'B-12 New title' });
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'B-12 New title', body_md: 'Still open: the export.', importance: 3, status: 'backlog' });
+      expect(s.ctx.store.comments(t.id).map((c) => c.body_md)).toEqual(['Set the proposed ID.']);
+      expect(s.ctx.store.events(p.id).at(-1)?.body).toMatchObject({ kind: 'system', text: `Updated ${t.key}: title, body_md, importance, comment` });
+      // the rules for the other fields stay: no closing, no empty title
+      await expect(s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, title: 'x', status: 'done' })).rejects.toThrow(/cannot set/);
+      await expect(s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, title: '' })).rejects.toThrow();
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'B-12 New title', status: 'backlog' });
+      // its instructions and its tool say so
+      expect(spec(p.id).agents_edit_items).toBe(true);
+      expect(plannerPrompt(spec(p.id))).toContain("This project lets you change an item's title and description too");
+    });
+
+    it('with the setting off, a scheduled run is refused the title and description, and nothing changes', async () => {
+      const t = await item('Old title');
+      const p = await run((await schedule()).id);
+      await expect(s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, title: 'New title', status: 'todo' })).rejects.toThrow(/does not let agents change the title or description.*project's settings/);
+      await expect(s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, body_md: 'New text' })).rejects.toThrow(/does not let agents/);
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'Old title', body_md: '', status: 'backlog' });
+      // triage works as before
+      await s.ctx.sessions.rpc(p.id, 'update_item', { key: t.key, status: 'todo' });
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'Old title', status: 'todo' });
+      expect(spec(p.id).agents_edit_items).toBeUndefined();
+      expect(plannerPrompt(spec(p.id))).toContain("An item's title and description are not yours to change in this project");
+    });
+
+    it('a work session changes only the title and description, and only with the setting on', async () => {
+      const t = await item('Old title');
+      const work = (await s.call('POST', '/projects/SC/batches', { item_ids: [t.id] })).data;
+      await expect(s.ctx.sessions.rpc(work.id, 'update_item', { key: t.key, title: 'New title' })).rejects.toThrow(/does not let agents/);
+      expect(workPrompt(spec(work.id))).not.toContain('update_item');
+      await allow();
+      await s.ctx.sessions.rpc(work.id, 'update_item', { key: t.key, title: 'New title', body_md: 'Done: a. Still open: b.', comment: 'After the change.' });
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'New title', body_md: 'Done: a. Still open: b.' });
+      await expect(s.ctx.sessions.rpc(work.id, 'update_item', { key: t.key, title: 'x', importance: 4 })).rejects.toThrow(/only the title and the description.*importance/);
+      await expect(s.ctx.sessions.rpc(work.id, 'update_item', { key: t.key, status: 'done' })).rejects.toThrow(/only the title and the description/);
+      expect(s.ctx.store.item(t.id)).toMatchObject({ title: 'New title', importance: 2 });
+      expect(workPrompt(spec(work.id))).toContain('`update_item`');
+      // a planning chat still proposes; a locked project takes no change
+      const manual = (await s.call('POST', '/projects/SC/planner', { prompt: 'next?' })).data;
+      await expect(s.ctx.sessions.rpc(manual.id, 'update_item', { key: t.key, title: 'y' })).rejects.toThrow(/scheduled/);
+      await s.call('POST', '/projects/SC/disable');
+      await expect(s.ctx.sessions.rpc(work.id, 'update_item', { key: t.key, title: 'z' })).rejects.toThrow(/disabled/);
+    });
   });
 
   it('ends at the end of its turn, with no push of its own', async () => {
