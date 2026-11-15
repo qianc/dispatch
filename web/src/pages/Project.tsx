@@ -1,7 +1,7 @@
 import { PROJECT_ICON_PATHS, ProjectBadge, lookColor } from '../components/ProjectBadge.tsx';
 import { PROJECT_COLORS, PROJECT_COLOR_NAMES, PROJECT_ICONS } from '../../../src/shared/projectLook.ts';
 import { Icon } from '../components/icons.tsx';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
@@ -155,7 +155,7 @@ export function Project() {
       )}
       {tab === 'sessions' && <ProjectSessions project={project} />}
       {tab === 'sources' && <Sources project={project} />}
-      {tab === 'settings' && <ProjectSettings project={project} />}
+      {tab === 'settings' && <ProjectSettings key={project.key} project={project} />}
 
       <Sheet open={sheet === 'item'} onClose={() => setSheet(null)} title={tab === 'bugs' ? 'New bug' : 'New backlog item'}>
         <NewItemForm project={project} type={type} onDone={() => setSheet(null)} />
@@ -547,9 +547,8 @@ function NewSourceForm({ project, onDone }: { project: ProjectSummary; onDone: (
 }
 
 /** Where this project's work runs: its default worker, and prose the planner reads to choose. */
-function ProjectWorkers({ project, onSave }: { project: ProjectSummary; onSave: (patch: object) => void }) {
+function ProjectWorkers({ project, onSave, text, onText, onBlur }: { project: ProjectSummary; onSave: (patch: object) => void; text: string; onText: (text: string) => void; onBlur: () => void }) {
   const { data } = useWorkers();
-  const [text, setText] = useState(project.placement_md);
   const local = project.repos.find((r) => r.kind === 'local' && r.worker_id);
   return (
     <Section title="Where work runs">
@@ -561,13 +560,30 @@ function ProjectWorkers({ project, onSave }: { project: ProjectSummary; onSave: 
           </select>
         </Field>
         <Field label="Rules for the planner" hint="When to use which worker, and what no worker can do yet. The planner reads this with each worker's description.">
-          <textarea className={cx(inputCls, 'min-h-20')} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Use the desktop only for work that runs PowerPoint. Everything else runs on linux." aria-label="Where work runs" />
+          <textarea className={cx(inputCls, 'min-h-20')} value={text} onChange={(e) => onText(e.target.value)} onBlur={onBlur} placeholder="e.g. Use the desktop only for work that runs PowerPoint. Everything else runs on linux." aria-label="Where work runs" />
         </Field>
-        <Button small variant="primary" disabled={text === project.placement_md} onClick={() => onSave({ placement_md: text })}>Save</Button>
       </Card>
     </Section>
   );
 }
+
+/** The project's own settings: each saves when it changes, and Revert restores them all (DISP-96). */
+const SETTING_KEYS = ['name', 'description', 'importance_scale', 'effort_scale', 'color', 'icon', 'worker_id', 'placement_md', 'default_force_plan', 'agents_edit_items', 'muted', 'github_account', 'claude_allowed', 'claude_account', 'disabled'] as const;
+type ProjectValues = Pick<ProjectSummary, (typeof SETTING_KEYS)[number]>;
+const valuesOf = (p: ProjectSummary) => Object.fromEntries(SETTING_KEYS.map((k) => [k, p[k]])) as ProjectValues;
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/** The text fields as typed. They save when typing stops or the field is left, not per keystroke. */
+type Drafts = { name: string; description: string; importance: string; effort: string; placement_md: string };
+const draftsOf = (p: Pick<ProjectSummary, 'name' | 'description' | 'importance_scale' | 'effort_scale' | 'placement_md'>): Drafts =>
+  ({ name: p.name, description: p.description, importance: p.importance_scale.join(', '), effort: p.effort_scale.join(', '), placement_md: p.placement_md });
+const labels = (s: string) => s.split(',').map((l) => l.trim()).filter(Boolean);
+const draftValues = (d: Drafts) => ({ name: d.name, description: d.description, importance_scale: labels(d.importance), effort_scale: labels(d.effort), placement_md: d.placement_md });
+type TextKey = keyof ReturnType<typeof draftValues>;
+/** saved while you type; the scales wait until their field is left, so a half-typed list is never saved */
+const TYPING_KEYS: TextKey[] = ['name', 'description', 'placement_md'];
+const TYPING_PAUSE_MS = 800;
+const SAVED_SHOWN_MS = 3000;
 
 function ProjectSettings({ project }: { project: ProjectSummary }) {
   const qc = useQueryClient();
@@ -575,11 +591,84 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     qc.invalidateQueries({ queryKey: ['project', project.key] });
     qc.invalidateQueries({ queryKey: ['projects'] }); // colours and icons elsewhere
   };
-  const [f, setF] = useState({ name: project.name, description: project.description, importance: project.importance_scale.join(', '), effort: project.effort_scale.join(', ') });
-  const save = useMutation({
-    mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch),
-    onSuccess: refresh,
-  });
+  const url = `/projects/${project.key}`;
+  // what the page showed when it opened: Revert goes back to this, whatever was saved or refetched since
+  const [loaded] = useState(() => valuesOf(project));
+  const [drafts, setDrafts] = useState(() => draftsOf(project));
+  const [saving, setSaving] = useState(0);
+  const [saveError, setSaveError] = useState<unknown>(null);
+  const [savedShown, setSavedShown] = useState(false);
+  const live = useRef({ project, drafts, sent: draftValues(drafts), typing: 0, saved: 0 });
+  live.current.project = project;
+  live.current.drafts = drafts;
+
+  /** One save: the page shows that it runs, that it is saved, or why it failed. */
+  const run = async (work: () => Promise<ProjectSummary>) => {
+    setSaving((n) => n + 1);
+    setSaveError(null);
+    try {
+      qc.setQueryData(['project', project.key], await work());
+      qc.invalidateQueries({ queryKey: ['projects'] }); // colours and icons elsewhere
+      setSavedShown(true);
+      clearTimeout(live.current.saved);
+      live.current.saved = window.setTimeout(() => setSavedShown(false), SAVED_SHOWN_MS);
+    } catch (e) {
+      setSaveError(e);
+    } finally {
+      setSaving((n) => n - 1);
+    }
+  };
+  const save = (patch: object) => void run(() => api.patch<ProjectSummary>(url, patch));
+  const lock = async (disabled: boolean) => {
+    const p = await api.post<ProjectSummary>(`${url}/${disabled ? 'disable' : 'enable'}`, {});
+    qc.invalidateQueries({ queryKey: ['schedules', project.key] });
+    qc.invalidateQueries({ queryKey: ['sessions'] });
+    return p;
+  };
+
+  /** Saves the text fields that differ from what was last sent. */
+  const saveText = (keys?: TextKey[]) => {
+    const now = draftValues(live.current.drafts);
+    const changed = (Object.keys(now) as TextKey[]).filter((k) => (!keys || keys.includes(k)) && !same(now[k], live.current.sent[k]));
+    if (!changed.length) return;
+    live.current.sent = { ...live.current.sent, ...Object.fromEntries(changed.map((k) => [k, now[k]])) };
+    save(Object.fromEntries(changed.map((k) => [k, now[k]])));
+  };
+  const type = (k: keyof Drafts) => (e: { target: { value: string } }) => {
+    setDrafts((d) => ({ ...d, [k]: e.target.value }));
+    clearTimeout(live.current.typing);
+    live.current.typing = window.setTimeout(() => saveText(TYPING_KEYS), TYPING_PAUSE_MS);
+  };
+  const leave = () => {
+    clearTimeout(live.current.typing);
+    saveText();
+  };
+  // leaving the page with a field still focused saves it too
+  useEffect(() => () => {
+    clearTimeout(live.current.typing);
+    clearTimeout(live.current.saved);
+    saveText();
+  }, []);
+
+  const current: ProjectValues = { ...valuesOf(project), ...draftValues(drafts) };
+  const edited = SETTING_KEYS.some((k) => !same(current[k], loaded[k]));
+  const revert = () => {
+    clearTimeout(live.current.typing);
+    setDrafts(draftsOf(loaded));
+    live.current.sent = draftValues(draftsOf(loaded));
+    const { disabled, ...values } = loaded;
+    const patch = Object.fromEntries(Object.entries(values).filter(([k, v]) => !same(v, project[k as keyof ProjectValues])));
+    const fields = Object.keys(patch).length > 0;
+    if (!fields && disabled === project.disabled) return setSaveError(null); // only a text that was never saved
+    void run(async () => {
+      let p = project;
+      // a disabled project takes no changes except mute: unlock it for them, and lock it again after
+      if (p.disabled && (!disabled || Object.keys(patch).some((k) => k !== 'muted'))) p = await lock(false);
+      if (fields) p = await api.patch<ProjectSummary>(url, patch);
+      if (disabled && !p.disabled) p = await lock(true);
+      return p;
+    });
+  };
   const [repo, setRepo] = useState({ full: '', default_branch: '', check_command: '', worker_id: '' });
   const [hostedForm, setHostedForm] = useState<{ on: boolean; name: string; import: string; upstream: string }>({ on: false, name: '', import: '', upstream: '' });
   const addHosted = useMutation({
@@ -604,6 +693,17 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
   const [editing, setEditing] = useState<Repo | null>(null);
   return (
     <>
+      <div className="sticky top-0 z-10 px-3 pt-3 pb-1 bg-bg">
+        <div className="flex items-center gap-3 rounded-xl bg-panel border border-line px-3 py-2">
+          <div className="flex-1 min-w-0 text-[13px]">
+            <div className="text-muted">Changes are saved automatically</div>
+            {saveError
+              ? <div role="alert" className="text-bad break-words">Not saved: {(saveError as Error).message}</div>
+              : <div role="status" className={cx('h-[18px] text-[12px]', saving ? 'text-muted' : 'text-ok')}>{saving ? 'Saving…' : savedShown ? 'Saved' : ''}</div>}
+          </div>
+          <Button small disabled={!edited || saving > 0} onClick={revert} title="Back to the settings as they were when you opened this page">Revert</Button>
+        </div>
+      </div>
       <Section title="Repos">
         <Card>
           {project.repos.map((r) => (
@@ -674,63 +774,40 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           />
         )}
       </Sheet>
-      <ProjectLook project={project} onSave={(patch) => save.mutate(patch)} />
-      <ProjectAccounts project={project} onSaved={refresh} />
+      <ProjectLook project={project} onSave={save} />
+      <ProjectAccounts project={project} onSave={save} />
       <GithubAccessPanel projectKey={project.key} />
-      <ProjectWorkers project={project} onSave={(patch) => save.mutate(patch)} />
+      <ProjectWorkers project={project} onSave={save} text={drafts.placement_md} onText={(placement_md) => type('placement_md')({ target: { value: placement_md } })} onBlur={leave} />
       <Section title="Agent & notifications">
         <Card className="p-3 space-y-3">
           <label className="flex items-center justify-between text-[14px]">
             Plan first by default
-            <input type="checkbox" checked={project.default_force_plan} onChange={(e) => save.mutate({ default_force_plan: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
+            <input type="checkbox" checked={project.default_force_plan} onChange={(e) => save({ default_force_plan: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
           </label>
           <label className="flex items-center justify-between gap-3 text-[14px]">
             <span>
               Agents may edit item titles and descriptions
               <span className="block text-[12px] text-muted">Work sessions, scheduled runs and orchestrators. Off: they only comment.</span>
             </span>
-            <input type="checkbox" checked={project.agents_edit_items} onChange={(e) => save.mutate({ agents_edit_items: e.target.checked })} className="size-5 shrink-0 accent-[var(--color-accent-strong)]" />
+            <input type="checkbox" checked={project.agents_edit_items} onChange={(e) => save({ agents_edit_items: e.target.checked })} className="size-5 shrink-0 accent-[var(--color-accent-strong)]" />
           </label>
           <label className="flex items-center justify-between text-[14px]">
             Mute push notifications
-            <input type="checkbox" checked={project.muted} onChange={(e) => save.mutate({ muted: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
+            <input type="checkbox" checked={project.muted} onChange={(e) => save({ muted: e.target.checked })} className="size-5 accent-[var(--color-accent-strong)]" />
           </label>
         </Card>
       </Section>
-      <ProjectState project={project} />
+      <ProjectState project={project} onChange={(disabled) => void run(() => lock(disabled))} />
       <Section title="Project">
-        <form className="mx-3" onSubmit={(e) => {
-          e.preventDefault();
-          save.mutate({
-            name: f.name, description: f.description,
-            importance_scale: f.importance.split(',').map((s) => s.trim()).filter(Boolean),
-            effort_scale: f.effort.split(',').map((s) => s.trim()).filter(Boolean),
-          });
-        }}>
-          <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <Field label="Description"><textarea className={inputCls} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
-          <Field label="Importance scale" hint="Exactly 4 labels, lowest first"><input className={inputCls} value={f.importance} onChange={(e) => setF({ ...f, importance: e.target.value })} /></Field>
-          <Field label="Effort scale" hint="Smallest first. Existing items keep their index."><input className={inputCls} value={f.effort} onChange={(e) => setF({ ...f, effort: e.target.value })} /></Field>
-          <ErrorText error={save.error} />
-          <Button variant="primary" className="w-full" disabled={save.isPending}>Save</Button>
-        </form>
+        <div className="mx-3">
+          <Field label="Name"><input className={inputCls} value={drafts.name} onChange={type('name')} onBlur={leave} /></Field>
+          <Field label="Description"><textarea className={inputCls} value={drafts.description} onChange={type('description')} onBlur={leave} /></Field>
+          <Field label="Importance scale" hint="Exactly 4 labels, lowest first"><input className={inputCls} value={drafts.importance} onChange={type('importance')} onBlur={leave} /></Field>
+          <Field label="Effort scale" hint="Smallest first. Existing items keep their index."><input className={inputCls} value={drafts.effort} onChange={type('effort')} onBlur={leave} /></Field>
+        </div>
       </Section>
     </>
   );
-}
-
-/** Disable (read-only, DISP-59) or enable a project: one click either way. */
-function useProjectLock(key: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (disabled: boolean) => api.post<ProjectSummary>(`/projects/${key}/${disabled ? 'disable' : 'enable'}`, {}),
-    onSuccess: (p) => {
-      qc.setQueryData(['project', key], p);
-      qc.invalidateQueries({ queryKey: ['projects'] });
-      qc.invalidateQueries({ queryKey: ['schedules', key] });
-      qc.invalidateQueries({ queryKey: ['sessions'] });
-    },
-  });
 }
 
 const disabledLine = (p: ProjectSummary) => `Disabled${p.disabled_by ? ` by ${p.disabled_by}` : ''}${p.disabled_at ? `, ${messageTime(p.disabled_at)}` : ''}.`;
@@ -750,21 +827,19 @@ function DisabledBanner({ project }: { project: ProjectSummary }) {
   );
 }
 
-/** Settings: the project's state, active or disabled (read-only). */
-function ProjectState({ project }: { project: ProjectSummary }) {
-  const lock = useProjectLock(project.key);
+/** Settings: the project's state, active or disabled (read-only, DISP-59): one click either way. */
+function ProjectState({ project, onChange }: { project: ProjectSummary; onChange: (disabled: boolean) => void }) {
   return (
     <Section title="State">
       <Card className="p-3 space-y-2">
         <Segmented<'active' | 'disabled'>
           value={project.disabled ? 'disabled' : 'active'}
-          onChange={(v) => { if ((v === 'disabled') !== project.disabled) lock.mutate(v === 'disabled'); }}
+          onChange={(v) => { if ((v === 'disabled') !== project.disabled) onChange(v === 'disabled'); }}
           options={[{ value: 'active', label: 'Active' }, { value: 'disabled', label: 'Disabled (read-only)' }]}
         />
         <p className="text-[12px] text-muted">
           {project.disabled ? disabledLine(project) : 'Disabled: nothing writes to the project, its schedules pause and queued sessions wait. A running session goes on until you stop it.'}
         </p>
-        <ErrorText error={lock.error} />
       </Card>
     </Section>
   );
@@ -950,23 +1025,22 @@ function RepoCopies({ repo: initial }: { repo: Repo }) {
   );
 }
 
-function ProjectAccounts({ project, onSaved }: { project: ProjectSummary; onSaved: () => void }) {
+function ProjectAccounts({ project, onSave }: { project: ProjectSummary; onSave: (patch: object) => void }) {
   const { data: accounts } = useAccounts();
-  const save = useMutation({ mutationFn: (patch: object) => api.patch(`/projects/${project.key}`, patch), onSuccess: onSaved });
   if (!accounts || (accounts.claude.length < 2 && accounts.github.length < 2)) return null;
   const allowed = project.claude_allowed ?? accounts.claude.map((a) => a.name);
   const toggle = (name: string) => {
     const next = allowed.includes(name) ? allowed.filter((n) => n !== name) : [...allowed, name];
     if (!next.length) return;
     const all = accounts.claude.every((a) => next.includes(a.name));
-    save.mutate({ claude_allowed: all ? null : next, ...(project.claude_account && !next.includes(project.claude_account) ? { claude_account: next[0] } : {}) });
+    onSave({ claude_allowed: all ? null : next, ...(project.claude_account && !next.includes(project.claude_account) ? { claude_account: next[0] } : {}) });
   };
   return (
     <Section title="Accounts">
       <Card className="p-3">
         {accounts.github.length > 1 && (
           <Field label="GitHub account" group hint="Its repos are cloned, pushed and merged with this account, and commits carry its identity.">
-            <Segmented value={project.github_account ?? accounts.github[0].name} onChange={(v) => save.mutate({ github_account: v })} options={accounts.github.map((a) => ({ value: a.name, label: a.login ? `${a.name} (@${a.login})` : a.name }))} />
+            <Segmented value={project.github_account ?? accounts.github[0].name} onChange={(v) => onSave({ github_account: v })} options={accounts.github.map((a) => ({ value: a.name, label: a.login ? `${a.name} (@${a.login})` : a.name }))} />
           </Field>
         )}
         {accounts.claude.length > 1 && (
@@ -984,13 +1058,12 @@ function ProjectAccounts({ project, onSaved }: { project: ProjectSummary; onSave
             <Field label="Default Claude account" group>
               <Segmented
                 value={project.claude_account && allowed.includes(project.claude_account) ? project.claude_account : allowed[0]}
-                onChange={(v) => save.mutate({ claude_account: v })}
+                onChange={(v) => onSave({ claude_account: v })}
                 options={accounts.claude.filter((a) => allowed.includes(a.name)).map((a) => ({ value: a.name, label: a.label }))}
               />
             </Field>
           </>
         )}
-        <ErrorText error={save.error} />
       </Card>
     </Section>
   );
