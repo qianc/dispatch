@@ -151,6 +151,11 @@ Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's 
   that is disabled; only steps of the approved plan, each started once; the limit of batches at
   once; no item that is on hold, closed, in review or in another open batch; it never merges, and it
   edits no files itself. Its batches run as you.
+- *Its items.* A merge closes a step's items. An item that is still open when its step is done
+  (nothing to merge), the orchestrator sets to done itself when the work is complete, with a
+  comment that names the step and the pull request. What needs your review or a decision it puts
+  in review or on hold. It does this only for items of its own done steps: never an item on hold,
+  a closed one, or one that a session still works on.
 - *A failed step* holds the steps that wait for it, and you get a push. On the step's menu:
   **Retry** (a new batch) or **Skip** (the steps after it go on). A failed batch that already has a
   pull request is retried from its own page, and stays the step's batch. **Pause** starts no new steps and

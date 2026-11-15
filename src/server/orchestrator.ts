@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -23,6 +23,8 @@ const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`)
 
 /** Steps whose dependants may start. */
 const SETTLED = ['done', 'skipped'];
+/** What an orchestrator may make of an item when its step is done: closed, or the owner's to look at (DISP-98). */
+const AFTER_STEP = ['done', 'in_review', 'hold'];
 
 export class Orchestrator {
   private store: Store;
@@ -305,11 +307,17 @@ export class Orchestrator {
         const project = this.projectOfKey(o, p.key);
         assertWritable(this.store, project);
         const it = this.itemOf(project, p.key);
-        // otherwise it could reopen a closed item and then start it as a step
-        if (p.status !== undefined && p.status !== it.status && ['done', 'canceled', 'in_review', 'in_progress'].includes(it.status)) {
-          throw new Error(`${it.key} is ${it.status.replace('_', ' ')}: an orchestrator does not change the status of an item that is closed or being worked on.`);
+        let afterStep: string | undefined;
+        if (p.status !== undefined && p.status !== it.status) {
+          const to = String(p.status);
+          const worked = it.status === 'in_review' || it.status === 'in_progress';
+          // otherwise it could reopen a closed item and then start it as a step
+          if (it.status === 'done' || it.status === 'canceled' || (worked && !AFTER_STEP.includes(to))) {
+            throw new Error(`${it.key} is ${it.status.replace('_', ' ')}: an orchestrator does not change the status of an item that is closed or being worked on.${worked ? ' When its step is done, you may set it to done, or to in_review or hold for the owner.' : ''}`);
+          }
+          if (worked || to === 'done' || to === 'in_review') afterStep = this.afterStep(s, o, it, to);
         }
-        return this.sessions.agentItemUpdate(s, project, it, p);
+        return this.sessions.agentItemUpdate(s, project, it, p, afterStep);
       }
       case 'set_plan':
         return this.setPlan(s, o, p);
@@ -347,6 +355,31 @@ export class Orchestrator {
     const it = this.store.itemByNumber(project.id, Number(m[2]));
     if (!it) throw new Error(`No item ${k}`);
     return it;
+  }
+
+  /**
+   * The orchestrator closes an item of its own plan, or gives it to the owner (in review, hold),
+   * when the step that worked on it is done and no session holds the item any more. The line that
+   * goes on the item as a comment: which step and pull request completed it.
+   */
+  private afterStep(s: Session, o: Orchestration, it: Item, to: string): string {
+    const steps = o.steps.filter((x) => x.item_ids.includes(it.id));
+    const word = to.replace('_', ' ');
+    if (!steps.length) throw new Error(`${it.key} is not an item of a step in your plan: you set only the items of your own steps to ${word}.`);
+    const open = steps.find((x) => !SETTLED.includes(x.state));
+    if (open) throw new Error(`Step ${open.position} ("${open.title}") with ${it.key} is ${open.state}: set the item to ${word} when that step is done.`);
+    const step = steps.findLast((x) => x.state === 'done');
+    if (!step) throw new Error(`No step with ${it.key} has run: you set an item to ${word} only after its step is done.`);
+    const own = new Set(steps.map((x) => x.child_session_id));
+    for (const w of this.store.sessionsForItem(it.id, 'work')) {
+      if (FINAL_STATUSES.includes(w.status) && !own.has(w.id)) continue;
+      if (['queued', 'running', 'waiting_input'].includes(w.status)) throw new Error(`Session #${w.id} still works on ${it.key}.`);
+      if (!own.has(w.id)) throw new Error(`${it.key} is in another batch (session #${w.id}).`);
+      if (this.store.prs({ session_id: w.id }).some((pr) => pr.state === 'open')) throw new Error(`Session #${w.id} has an open pull request with ${it.key}: the item is done when that merges.`);
+    }
+    const merged = step.child_session_id ? this.store.prs({ session_id: step.child_session_id }).filter((pr) => pr.state === 'merged') : [];
+    const facts = [step.child_session_id ? `session #${step.child_session_id}` : '', ...merged.map((pr) => (pr.local ? `branch ${pr.head_ref} merged` : `${pr.repo_full_name}#${pr.number} merged`))].filter(Boolean);
+    return `Set to ${word} by the orchestrator "${s.title}" after step ${step.position} "${step.title}"${facts.length ? ` (${facts.join(', ')})` : ''}.`;
   }
 
   /**

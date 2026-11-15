@@ -51,17 +51,23 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
   return (
     <section aria-label="Orchestration" className="rounded-xl border border-line bg-panel text-[14px]">
       <div className="px-3 py-2.5 border-b border-line">
-        <div className="flex items-center gap-2 text-[13px]">
-          <span className="text-muted truncate">{o.project_keys.join(' · ')}</span>
-          {o.steps.length > 0 && <span className="text-muted shrink-0">{doneCount(o)} of {o.steps.length} steps</span>}
-          <Chip tone={PHASE[o.phase].tone}>{PHASE[o.phase].label}</Chip>
-          {costText(o) && <span className="text-muted shrink-0 tabular-nums">{costText(o)}</span>}
-          <span className="flex-1" />
-          {mine && open && (o.phase === 'paused'
-            ? <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/resume` })}>Resume</Button>
-            : <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/pause` })}>Pause</Button>)}
-          {mine && open && <Button small variant="danger" disabled={act.isPending} onClick={() => setStopping(true)}>Stop</Button>}
-          {mine && open && <Button small variant="ghost" onClick={() => setSettings(true)}>Settings</Button>}
+        {/* a phone has no room for both in one row: the actions wrap to a row of their own */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[13px]">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-muted truncate">{o.project_keys.join(' · ')}</span>
+            {o.steps.length > 0 && <span className="text-muted shrink-0">{doneCount(o)} of {o.steps.length} steps</span>}
+            <Chip tone={PHASE[o.phase].tone}>{PHASE[o.phase].label}</Chip>
+            {costText(o) && <span className="text-muted shrink-0 tabular-nums">{costText(o)}</span>}
+          </div>
+          {mine && open && (
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              {o.phase === 'paused'
+                ? <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/resume` })}>Resume</Button>
+                : <Button small disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/pause` })}>Pause</Button>}
+              <Button small variant="danger" disabled={act.isPending} onClick={() => setStopping(true)}>Stop</Button>
+              <Button small variant="ghost" onClick={() => setSettings(true)}>Settings</Button>
+            </div>
+          )}
         </div>
         {o.waiting && <p className={cx('mt-1 text-[13px]', /failed|limit reached/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
         {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
