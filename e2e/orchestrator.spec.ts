@@ -51,8 +51,32 @@ test('orchestration: start one, approve the plan, see the first step run', async
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
+  // at the newest message the plan is out of view: the header's Plan button is one tap up to it (DISP-100)
+  const chat = page.locator('main.scroll-area');
+  await chat.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(plan.getByText('0 of 1 steps')).not.toBeInViewport();
+  await page.getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect(plan.getByText('0 of 1 steps')).toBeInViewport();
+  expect(await chat.evaluate((el) => el.scrollTop)).toBe(0);
+  // the "•••" menu opens on a phone and also leads there
+  await chat.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await page.getByRole('button', { name: 'Session actions' }).click();
+  await page.getByRole('dialog', { name: 'Session' }).getByRole('button', { name: 'Go to the plan' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(plan.getByText('0 of 1 steps')).toBeInViewport();
+
   await plan.getByRole('link', { name: /\(fake\) ORC work/ }).click();
   await expect(page.getByText(/Part of Move sign-in to the new tokens \(step 1 of 1\)/)).toBeVisible();
+  // from the batch, one tap opens the orchestrator at its plan: from the header and from the menu (DISP-101)
+  const batch = page.url();
+  await page.getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect(page).toHaveURL(/\/s\/\d+#plan$/);
+  await expect(plan.getByText('0 of 1 steps')).toBeInViewport();
+  await page.goto(batch);
+  await page.getByRole('button', { name: 'Session actions' }).click();
+  await page.getByRole('dialog', { name: 'Session' }).getByRole('button', { name: "Open the orchestrator's plan" }).click();
+  await expect(page).toHaveURL(/\/s\/\d+#plan$/);
+  await expect(plan.getByText('0 of 1 steps')).toBeInViewport();
 
   // Activity: the orchestrator's row shows its steps, and the batch says what it is part of
   await page.getByRole('link', { name: 'Activity' }).click();
@@ -60,7 +84,11 @@ test('orchestration: start one, approve the plan, see the first step run', async
   // its batch is under it: shown at once when it needs you, else behind "1 session"
   const fold = page.getByText('1 session', { exact: true });
   if (await fold.count()) await fold.click();
-  await expect(page.getByText('Move sign-in to the new tokens · step 1 of 1')).toBeVisible();
+  // under its orchestrator the row says its step and then its own latest text, not the goal again (DISP-99)
+  const row = page.getByRole('link', { name: /\(fake\) ORC work/ });
+  await expect(row.getByText('Step 1 of 1', { exact: true })).toBeVisible();
+  await expect(row).not.toContainText('Move sign-in to the new tokens');
+  await expect(row).toContainText(/Step 1 of 1 · \S/);
 
   // stop it with its batch: the other tests need the worker's session slots
   await page.evaluate(async () => {

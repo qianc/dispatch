@@ -118,8 +118,31 @@ describe('the session page of an orchestrator', () => {
     });
   }
 
+  const html = (detail: Partial<SessionDetail> & { session: Session }) => {
+    const qc = new QueryClient();
+    qc.setQueryData(['session', detail.session.id], { events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, orchestration: null, part_of: null, ...detail } satisfies SessionDetail);
+    return renderPage(createElement(SessionView), { qc, path: `/s/${detail.session.id}`, route: '/s/:id' });
+  };
+  const head = (h: string) => textOf(h.slice(h.indexOf('<header'), h.indexOf('</header>')));
+  const batch = { session: session({ id: 12, kind: 'work', project_id: 1, project_key: 'AA', title: 'Session refresh', orchestrator_id: 5 }), part_of: { orchestrator_id: 5, title: 'Auth rework', step_position: 2, step_count: 3 } };
+
   it("a step's batch links back to its orchestration and step", () => {
-    const text = page({ session: session({ id: 12, kind: 'work', project_id: 1, project_key: 'AA', title: 'Session refresh', orchestrator_id: 5 }), part_of: { orchestrator_id: 5, title: 'Auth rework', step_position: 2, step_count: 3 } });
+    const text = page(batch);
     expect(text).toContain('Part of Auth rework (step 2 of 3)');
+  });
+
+  it('the header has a Plan button: on a phone for the orchestrator, always for one of its batches (DISP-100, DISP-101)', async () => {
+    screen.wide = false;
+    expect(head(html({ session: session(), orchestration: orch() }))).toMatch(/Plan •••/);
+    expect(head(html(batch))).toMatch(/Plan •••/);
+    // the links of a batch open the orchestrator at its plan, not at its newest message
+    expect(html(batch)).toContain('href="/s/5#plan"');
+    expect((await import('../web/src/orchestration.ts')).planLink(5)).toBe('/s/5#plan');
+    // a session that is no part of an orchestration has none
+    expect(head(html({ session: session({ id: 12, kind: 'work', title: 'Plain batch' }) }))).not.toContain('Plan');
+    // from xl the orchestrator's plan is in the side panel, always in view
+    screen.wide = true;
+    expect(head(html({ session: session(), orchestration: orch() }))).not.toContain('Plan');
+    expect(head(html(batch))).toMatch(/Plan •••/);
   });
 });

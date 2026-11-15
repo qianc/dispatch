@@ -68,14 +68,21 @@ export function orchestrationProblem(goal: string, projectKeys: string[]): strin
   return null;
 }
 
-/** For lists of sessions: each step's batch (by session id) with the orchestration and step it is part of. */
-export function partOfIndex(list: Pick<Orchestration, 'title' | 'steps'>[]): Map<number, string> {
+/**
+ * For lists of sessions: each step's batch (by session id) with the step and orchestration it is part of.
+ * The step comes first: the title is often the start of a long goal, and a row cuts it (DISP-99).
+ * `nested`: the row is under its orchestrator's row, so the step alone says it.
+ */
+export function partOfIndex(list: Pick<Orchestration, 'title' | 'steps'>[], nested = false): Map<number, string> {
   const index = new Map<number, string>();
   for (const o of list) {
-    for (const s of o.steps) if (s.child_session_id) index.set(s.child_session_id, `${o.title} · step ${s.position} of ${o.steps.length}`);
+    for (const s of o.steps) if (s.child_session_id) index.set(s.child_session_id, `Step ${s.position} of ${o.steps.length}${nested ? '' : ` · ${o.title}`}`);
   }
   return index;
 }
+
+/** The page of an orchestrator, opened at its plan and not at the newest message. */
+export const planLink = (orchestratorId: number) => `/s/${orchestratorId}#plan`;
 
 /**
  * The status to show for an idle orchestrator that needs nothing from its owner: it waits for its
