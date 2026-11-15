@@ -5,7 +5,7 @@
 // on hosts where connecting to a closed port times out instead of failing.)
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { test as base } from '@playwright/test';
+import { expect, test as base } from '@playwright/test';
 import { baseEnv, E2E_REPOS, E2E_SRC, PORT } from './setup.ts';
 
 export { expect, type Page } from '@playwright/test';
@@ -42,5 +42,14 @@ export const test = base.extend<object, { server: string }>({
   }, { scope: 'worker', auto: true }],
   baseURL: async ({ server }, use) => {
     await use(server);
+  },
+  // every test: a page that breaks the Content-Security-Policy fails it (DISP-72)
+  page: async ({ page }, use) => {
+    const refused: string[] = [];
+    page.on('console', (m) => {
+      if (/Content Security Policy/i.test(m.text())) refused.push(m.text());
+    });
+    await use(page);
+    expect(refused, 'the page broke the Content-Security-Policy').toEqual([]);
   },
 });

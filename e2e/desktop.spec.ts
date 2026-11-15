@@ -604,7 +604,7 @@ test('a notification while the app is open shows in the page (DISP-12)', async (
   await expect(banner).toHaveCount(0);
 });
 
-test('project settings: inputs stand out from the page and Save is the primary action (DISP-48)', async ({ page }) => {
+test('project settings: inputs stand out from the page (DISP-48)', async ({ page }) => {
   await login(page);
   await page.request.post('/api/projects', { data: { key: 'LOK', name: 'Looks' } });
   for (const colorScheme of ['light', 'dark'] as const) {
@@ -627,10 +627,59 @@ test('project settings: inputs stand out from the page and Save is the primary a
     await name.focus();
     expect(await css(name, 'border-top-color')).toBe(await role('accent'));
     expect(await css(name, 'box-shadow')).not.toBe('none');
-
-    const form = page.locator('form').filter({ has: name });
-    expect(await css(form.getByRole('button', { name: 'Save' }), 'background-color')).toBe(await role('accent-strong'));
   }
+});
+
+test('project settings save on their own, and Revert goes back to how the page opened (DISP-96)', async ({ page }) => {
+  await login(page);
+  await page.request.post('/api/projects', { data: { key: 'AUT', name: 'Auto', description: 'as it was' } });
+  const saved = async () => (await page.request.get('/api/projects/AUT')).json();
+  await page.goto('/p/AUT?tab=settings');
+  await expect(page.getByText('Changes are saved automatically')).toBeVisible();
+  const revert = page.getByRole('button', { name: 'Revert' });
+  await expect(revert).toBeDisabled();
+  // no Save button for the project's own settings (the add-repo form keeps its own button)
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+
+  // a text field saves when typing stops, with no button
+  const status = page.getByRole('status').filter({ hasText: /Sav/ });
+  await page.getByLabel('Name', { exact: true }).fill('Auto renamed');
+  await expect(status).toHaveText('Saved');
+  expect(await saved()).toMatchObject({ name: 'Auto renamed' });
+  await expect(revert).toBeEnabled();
+  // a scale saves when its field is left
+  await page.getByLabel('Effort scale').fill('one, two, three');
+  await page.getByLabel('Effort scale').blur();
+  await expect.poll(async () => (await saved()).effort_scale).toEqual(['one', 'two', 'three']);
+  // toggles, the planner rules and the look save too
+  await page.getByLabel('Plan first by default').click(); // shows the saved value, so not .check()
+  await expect(page.getByLabel('Plan first by default')).toBeChecked();
+  await page.getByLabel('Where work runs').fill('Everything runs on linux.');
+  await page.getByLabel('Where work runs').blur();
+  await page.getByRole('radio', { name: 'teal' }).click();
+  await expect.poll(saved).toMatchObject({ default_force_plan: true, placement_md: 'Everything runs on linux.', color: 'teal' });
+
+  // a refused change says so, and nothing of it is kept
+  await page.getByLabel('Importance scale').fill('only, three, labels');
+  await page.getByLabel('Importance scale').blur();
+  await expect(page.getByRole('alert').filter({ hasText: 'Not saved' })).toBeVisible();
+  expect((await saved()).importance_scale).toHaveLength(4);
+
+  // Revert: the page and the saved project are as they were when the page opened
+  await revert.click();
+  await expect.poll(saved).toMatchObject({ name: 'Auto', description: 'as it was', default_force_plan: false, placement_md: '', color: null, effort_scale: ['XS', 'S', 'M', 'L', 'XL'] });
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Auto');
+  await expect(page.getByLabel('Importance scale')).not.toHaveValue('only, three, labels');
+  await expect(page.getByLabel('Plan first by default')).not.toBeChecked();
+  await expect(page.getByRole('alert').filter({ hasText: 'Not saved' })).toHaveCount(0);
+  await expect(revert).toBeDisabled();
+
+  // the state is a setting too: Revert unlocks a project that was active when the page opened
+  await page.getByRole('radio', { name: 'Disabled (read-only)' }).click();
+  await expect.poll(saved).toMatchObject({ disabled: true });
+  await revert.click();
+  await expect.poll(saved).toMatchObject({ disabled: false });
+  await expect(revert).toBeDisabled();
 });
 
 test('desktop menu: the signed-in user and Log out at the bottom (DISP-64)', async ({ page }) => {

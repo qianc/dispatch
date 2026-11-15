@@ -62,6 +62,26 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * What the app's page may load and do (DISP-72): scripts, styles, fonts, the manifest, the service
+ * worker and requests (the API and /api/stream) from Dispatch's own origin only, and nothing inline.
+ * Images also from any https host, data: and blob:, since item text may show an image from anywhere
+ * and a pasted image is previewed from a blob.
+ */
+export const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
   const dbFile = opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db');
   const db = new Db(dbFile);
@@ -183,10 +203,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   await app.register(websocket);
 
   // Every response: never shown in a frame (the consent page /authorize would be a clickjacking
-  // target), no MIME sniffing, no referrer to other sites. A route's own policy (e.g. sandbox) is kept.
+  // target), no MIME sniffing, no referrer to other sites. The app's page also gets the full policy.
+  // A route's own policy (e.g. sandbox, the consent page) is kept.
   app.addHook('onSend', (_req, reply, payload, done) => {
     const own = reply.getHeader('content-security-policy');
-    reply.header('content-security-policy', own ? `${String(own)}; frame-ancestors 'none'` : "frame-ancestors 'none'");
+    const html = String(reply.getHeader('content-type') ?? '').startsWith('text/html');
+    reply.header('content-security-policy', own ? `${String(own)}; frame-ancestors 'none'` : html ? APP_CSP : "frame-ancestors 'none'");
     reply.header('x-frame-options', 'DENY');
     if (!reply.hasHeader('x-content-type-options')) reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'same-origin');

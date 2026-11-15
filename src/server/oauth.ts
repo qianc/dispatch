@@ -160,6 +160,7 @@ export class OAuth {
 
     // Step 1: who is approving, and what. Shows a consent page; nothing is granted on GET.
     app.get('/authorize', async (req, reply) => {
+      reply.header('content-security-policy', pageCsp());
       const q = req.query as Record<string, string | undefined>;
       const client = q.client_id ? this.client(q.client_id) : null;
       if (!client) return reply.status(400).type('text/html').send(page('Unknown app', '<p>This app is not registered with Dispatch. Add the connector again.</p>'));
@@ -183,7 +184,7 @@ export class OAuth {
       const id = randomBytes(18).toString('base64url');
       this.pending.set(id, { client, redirect_uri: q.redirect_uri, challenge: q.code_challenge, scopes, state: q.state ?? null, user, expires: Date.now() + CODE_TTL_MS });
       const host = new URL(q.redirect_uri).host;
-      return reply.type('text/html').header('cache-control', 'no-store').send(page(`Allow ${client.name}?`, `
+      return reply.type('text/html').header('cache-control', 'no-store').header('content-security-policy', pageCsp(q.redirect_uri)).send(page(`Allow ${client.name}?`, `
         <p><b>${esc(client.name)}</b> wants to ${scopes.includes('tracker') ? '<b>read and edit</b>' : '<b>read</b>'} your Dispatch tracker: projects, items, comments, sources and images.</p>
         <p>It cannot start agent sessions, merge, or change settings. You can revoke it any time in Settings → Connected apps.</p>
         <p class="muted">Signed in as ${esc(user)}. It returns to ${esc(host)}.</p>
@@ -196,6 +197,7 @@ export class OAuth {
 
     // Step 2: the decision, from the same person (re-checked: a POST alone proves nothing).
     app.post('/authorize', async (req, reply) => {
+      reply.header('content-security-policy', pageCsp());
       const b = (req.body ?? {}) as Record<string, string>;
       const p = this.pending.get(String(b.request ?? ''));
       this.pending.delete(String(b.request ?? ''));
@@ -259,10 +261,22 @@ export class OAuth {
   }
 }
 
+const PAGE_STYLE = `body{font:16px -apple-system,system-ui,sans-serif;max-width:28rem;margin:12vh auto;padding:0 1.2rem;color:#1b1b1f;background:#f4f4f6}
+h1{font-size:1.3rem}.muted{color:#6b6b73;font-size:.9rem}button{font:inherit;padding:.6rem 1.2rem;border-radius:.6rem;border:1px solid #dedee3;background:#fff;margin-right:.5rem}
+.primary{background:#4f50e6;color:#fff;border-color:#4f50e6}@media(prefers-color-scheme:dark){body{background:#111113;color:#ededef}button{background:#222226;color:#ededef;border-color:#2c2c31}.primary{background:#6e6ff0;border-color:#6e6ff0}}`;
+
+/**
+ * The policy of these pages (DISP-72): no script, nothing loaded but the icon, and only the one
+ * style above, by its hash. The consent form posts to Dispatch, which then sends the browser on to
+ * the app's return address: browsers hold that redirect to form-action too, so it names that origin.
+ */
+const pageCsp = (returnTo?: string) =>
+  `default-src 'none'; img-src 'self'; style-src 'sha256-${createHash('sha256').update(PAGE_STYLE).digest('base64')}'; base-uri 'none'; form-action 'self'${returnTo ? ` ${formTarget(returnTo)}` : ''}`;
+/** a policy cannot name an IPv6 address: for http://[::1] it allows the scheme */
+const formTarget = (returnTo: string) => (new URL(returnTo).hostname.startsWith('[') ? new URL(returnTo).protocol : new URL(returnTo).origin);
+
 function page(title: string, body: string) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · Dispatch</title>
-<style>body{font:16px -apple-system,system-ui,sans-serif;max-width:28rem;margin:12vh auto;padding:0 1.2rem;color:#1b1b1f;background:#f4f4f6}
-h1{font-size:1.3rem}.muted{color:#6b6b73;font-size:.9rem}button{font:inherit;padding:.6rem 1.2rem;border-radius:.6rem;border:1px solid #dedee3;background:#fff;margin-right:.5rem}
-.primary{background:#4f50e6;color:#fff;border-color:#4f50e6}@media(prefers-color-scheme:dark){body{background:#111113;color:#ededef}button{background:#222226;color:#ededef;border-color:#2c2c31}.primary{background:#6e6ff0;border-color:#6e6ff0}}</style>
+<style>${PAGE_STYLE}</style>
 </head><body><h1>${esc(title)}</h1>${body}</body></html>`;
 }
