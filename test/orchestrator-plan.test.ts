@@ -52,6 +52,20 @@ describe('orchestrator: plan', () => {
     expect(await t.rpc(id, 'update_item', { key: a.key, status: 'todo', comment: 'Ready.' })).toMatchObject({ status: 'todo' });
   });
 
+  it('changes an item\'s title and description only in a project that allows it (DISP-93)', async () => {
+    const a = await t.item('AA', 'Store tokens');
+    const b = await t.item('BB', 'Other');
+    await t.s.call('PATCH', '/projects/AA', { agents_edit_items: true });
+    const id = t.start().session_id;
+    await t.rpc(id, 'update_item', { key: a.key, title: 'Store tokens safely', body_md: 'In the keychain.' });
+    expect(t.store.item(a.id)).toMatchObject({ title: 'Store tokens safely', body_md: 'In the keychain.' });
+    await expect(t.rpc(id, 'update_item', { key: b.key, title: 'Changed' })).rejects.toThrow(/Project BB does not let agents change the title or description/);
+    expect(t.store.item(b.id)).toMatchObject({ title: 'Other' });
+    const spec = t.s.ctx.sessions.spec(t.store.session(id)!, '', null, null);
+    expect(spec.agents_edit_items).toBe(true);
+    expect(spec.orchestration!.projects.map((p) => [p.key, p.agents_edit_items])).toEqual([['AA', true], ['BB', false]]);
+  });
+
   it('set_plan stores steps and waits for approval', async () => {
     const a = await t.item('AA', 'Store tokens');
     const b = await t.item('BB', 'Use tokens');

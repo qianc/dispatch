@@ -181,6 +181,7 @@ export class Orchestrator {
         projects: projects.map((p) => ({
           key: p.key, name: p.name, importance_scale: p.importance_scale, effort_scale: p.effort_scale,
           repos: this.store.repos(p.id).map((r) => r.github_name),
+          agents_edit_items: p.agents_edit_items,
         })),
         max_children: o.max_children,
         answer_children: o.answer_children,
@@ -308,7 +309,7 @@ export class Orchestrator {
         if (p.status !== undefined && p.status !== it.status && ['done', 'canceled', 'in_review', 'in_progress'].includes(it.status)) {
           throw new Error(`${it.key} is ${it.status.replace('_', ' ')}: an orchestrator does not change the status of an item that is closed or being worked on.`);
         }
-        return this.sessions.scheduledItemUpdate(s, project, it, p);
+        return this.sessions.agentItemUpdate(s, project, it, p);
       }
       case 'set_plan':
         return this.setPlan(s, o, p);

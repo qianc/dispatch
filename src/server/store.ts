@@ -55,6 +55,7 @@ function toProject(r: Row): Project {
     icon: (r.icon as string | null) ?? null,
     worker_id: numOrNull(r.worker_id),
     placement_md: String(r.placement_md ?? ''),
+    agents_edit_items: bool(r.agents_edit_items),
     disabled: bool(r.disabled),
     disabled_at: (r.disabled_at as string | null) ?? null,
     disabled_by: (r.disabled_by as string | null) ?? null,
@@ -199,7 +200,7 @@ export class Store {
     const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md' | 'agents_edit_items'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
@@ -210,9 +211,9 @@ export class Store {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(
-      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ?, worker_id = ?, placement_md = ? WHERE id = ?',
+      'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ?, worker_id = ?, placement_md = ?, agents_edit_items = ? WHERE id = ?',
       n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
-      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, id,
+      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, n.agents_edit_items ? 1 : 0, id,
     );
     return this.project(id)!;
   }

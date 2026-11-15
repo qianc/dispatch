@@ -32,6 +32,8 @@ export interface StartSpec {
   /** planner sessions: the workers it can place work on, and the project's text on where work runs */
   workers?: PlannerWorker[];
   placement_md?: string;
+  /** the project lets agents change the title and description of its items (DISP-93; an orchestrator: one of its projects does) */
+  agents_edit_items?: boolean;
   /** a scheduled planner run (DISP-13): it starts what it picks, within this scope, unwatched */
   schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
@@ -40,7 +42,7 @@ export interface StartSpec {
   orchestration?: {
     goal: string;
     phase: OrchPhase;
-    projects: { key: string; name: string; importance_scale: string[]; effort_scale: string[]; repos: string[] }[];
+    projects: { key: string; name: string; importance_scale: string[]; effort_scale: string[]; repos: string[]; agents_edit_items?: boolean }[];
     max_children: number;
     /** it gets its batches' questions first */
     answer_children?: boolean;

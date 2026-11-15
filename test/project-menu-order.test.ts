@@ -24,7 +24,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const project = (id: number, key: string, name: string): ProjectSummary => ({
   id, key, name, description: '', default_force_plan: false, importance_scale: [], effort_scale: [], github_account: null, claude_account: null, claude_allowed: null,
-  color: null, icon: null, worker_id: null, placement_md: '', disabled: false, disabled_at: null, disabled_by: null,
+  color: null, icon: null, worker_id: null, placement_md: '', agents_edit_items: false, disabled: false, disabled_at: null, disabled_by: null,
   created_at: '2026-01-01T00:00:00Z', muted: false, repos: [],
 });
 // more than the old menu's six, in an order that is not by name

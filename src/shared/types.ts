@@ -53,6 +53,8 @@ export interface Project {
   worker_id: number | null;
   /** prose for the planner: when to use which worker */
   placement_md: string;
+  /** agents may change the title and description of its items themselves (DISP-93); off: they comment */
+  agents_edit_items: boolean;
   /** read-only (DISP-59): writes are refused, schedules paused, queued sessions wait */
   disabled: boolean;
   disabled_at: string | null;
@@ -576,6 +578,7 @@ export const projectPatch = z.object({
   effort_scale: scale().optional(),
   worker_id: z.number().int().nullable().optional(),
   placement_md: z.string().max(20_000).optional(),
+  agents_edit_items: z.boolean().optional(),
 });
 
 const weekdays = z.array(z.number().int().min(0).max(6)).min(1).max(7).transform((d) => [...new Set(d)].sort());

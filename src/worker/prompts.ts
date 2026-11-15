@@ -97,7 +97,7 @@ export function workPrompt(spec: StartSpec): string {
       ? [`- Other local repos (no GitHub) get no PR: when done, push the branch (\`git push -u origin ${spec.branch}\`) and stop. Do not run \`gh\` for them. ${reviewed}`]
       : []),
     '- Your environment: change nothing outside this checkout (the owner\'s own checkout, its venv, shared caches) except through the repo\'s own tools and scripts. If a test fails because of your environment and not your change, fix the environment and re-run, so shared test records are true. Before you finish, remove any failure records you caused that way.',
-    '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.',
+    '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.' + (spec.agents_edit_items ? ' When your work makes an item\'s title or description wrong or incomplete, correct it with `update_item` (title, body_md); do not leave that as a comment for the owner to apply.' : ''),
     '- If the owner asks you to also work on another item (by key, or by its number, e.g. "also do 100" means ' + spec.project_key + '-100), call `add_to_batch` with its key before you start on it. Items in the batch are closed when the branch merges; items you only mention are not.',
   );
   const exec = {
@@ -153,7 +153,7 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
     '',
   ];
   if (spec.schedule) {
-    lines.push(...scheduledJob(spec.schedule));
+    lines.push(...scheduledJob(spec.schedule, !!spec.agents_edit_items));
   } else if (spec.source) {
     lines.push(
       '## Source document to split',
@@ -199,7 +199,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     repoLines(spec),
     '',
     'You change no code and no files yourself, and you run no commands. All changes are made by batches: a batch is ONE Claude Code session that works on ONE branch and opens ONE pull request per changed repo. You start batches; you never merge them. Dispatch merges a batch when its checks pass, or the owner does.',
-    'The tracker is yours through the dispatch tools: `list_projects`, `list_items`, `get_item`, `view_image`, `add_comment`, `create_item`, `update_item`. You cannot take an item off hold or close one.',
+    'The tracker is yours through the dispatch tools: `list_projects`, `list_items`, `get_item`, `view_image`, `add_comment`, `create_item`, `update_item`. You cannot take an item off hold or close one.' + (o.projects.some((pr) => pr.agents_edit_items) ? ` With \`update_item\` you may also change the title and description of items in: ${o.projects.filter((pr) => pr.agents_edit_items).map((pr) => pr.key).join(', ')}.` : ''),
     '',
     '## Plan phase',
     'Until the owner approves a plan, nothing starts.',
@@ -246,7 +246,7 @@ function otherProjects(spec: StartSpec): string[] {
 }
 
 /** A scheduled run (DISP-13): pick within the scope and start it, or start nothing. */
-function scheduledJob(s: NonNullable<StartSpec['schedule']>): string[] {
+function scheduledJob(s: NonNullable<StartSpec['schedule']>, editItems = false): string[] {
   const n = s.max_batches;
   return [
     '## Your job: a scheduled run',
@@ -259,7 +259,7 @@ function scheduledJob(s: NonNullable<StartSpec['schedule']>): string[] {
     'Keep to the scope. Pick work that clearly fits it and is ready to do. Do not be greedy: starting nothing is a good result when nothing fits or nothing is ready. Never start an item that is on hold, in progress, in review, or already in a batch; Dispatch refuses those anyway.',
     'Before you start a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner; an item that waits on the owner is not ready.',
     `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together and keep each batch small enough to review on a phone. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
-    'When the scope asks for it (e.g. triage), change items with `update_item` (status, importance, effort, tags, modules, with a comment that says why). You cannot take an item off hold or close it. File new items you find with `create_item`.',
+    'When the scope asks for it (e.g. triage), change items with `update_item` (status, importance, effort, tags, modules, with a comment that says why). ' + (editItems ? 'This project lets you change an item\'s title and description too (`title`, `body_md`; `body_md` replaces the whole text, so start from the current one): do that yourself when the scope asks for it, not as a comment for the owner to apply. ' : 'An item\'s title and description are not yours to change in this project: put a proposed text in a comment. ') + 'You cannot take an item off hold or close it. File new items you find with `create_item`.',
     'End with a short summary: what you started and why, or why you started nothing. It is the result of this run.',
   ];
 }
