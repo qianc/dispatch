@@ -39,6 +39,8 @@ export function connectLive(qc: QueryClient): () => void {
     es.onerror = () => {
       liveHealthy = false;
       es?.close();
+      // signed out at a sign-in proxy? Then the app stops this stream (main.tsx) before the next try
+      void qc.invalidateQueries({ queryKey: ['me'] });
       if (!stopped) retry = window.setTimeout(open, 3000);
     };
   };

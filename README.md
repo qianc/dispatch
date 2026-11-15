@@ -617,6 +617,11 @@ and runs the agents.
 6. Requests from Dispatch's own machine count as local (password login, full token scopes). Do not
    put the proxy or a tunnel there, unless Dispatch runs in a container on a bridge network, which
    sees the proxy's address and not loopback.
+7. A signed-out `/api/*` request is best answered with `401`; the app sends `Accept:
+   application/json` for that. A proxy that redirects it to its login all the same (Entra through
+   oauth2-proxy or EasyAuth, …) works too: the app does not follow the redirect and shows "Signed
+   out". The proxy's own pages (its return address with the `code`) are never answered from the
+   app's offline cache.
 
 [`docs/examples/traefik-dispatch.yml`](docs/examples/traefik-dispatch.yml) is a complete Traefik
 file-provider config that does all of this with Authelia.

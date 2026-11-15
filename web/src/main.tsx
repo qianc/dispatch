@@ -85,10 +85,13 @@ function App() {
     window.addEventListener('dispatch:unauthorized', onUnauthorized);
     return () => window.removeEventListener('dispatch:unauthorized', onUnauthorized);
   }, [client]);
-  useEffect(() => (me?.authed ? connectLive(client) : undefined), [me?.authed, client]);
-  useEffect(() => (me?.authed ? trackPresence() : undefined), [me?.authed]);
-  // a sign-in proxy turned even /api/me away: its session expired
-  if (!me && meError instanceof ApiError && meError.foreign) return <SignedOut />;
+  // a sign-in proxy turned even /api/me away: its session expired (also while the app was open)
+  // (with the app open only on a 401: a 502 while the server restarts is no sign-out)
+  const signedOut = meError instanceof ApiError && meError.foreign && (!me || meError.status === 401);
+  const authed = !!me?.authed && !signedOut;
+  useEffect(() => (authed ? connectLive(client) : undefined), [authed, client]);
+  useEffect(() => (authed ? trackPresence() : undefined), [authed]);
+  if (signedOut) return <SignedOut />;
   if (!me) return null;
   if (!me.authed) return <Login passwordLogin={me.password_login} />;
   return <RouterProvider router={router} />;

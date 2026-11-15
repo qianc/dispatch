@@ -21,6 +21,7 @@ export function trackPresence(): () => void {
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       body: JSON.stringify({ endpoint, active }),
       credentials: 'same-origin',
+      redirect: 'manual', // signed out at a sign-in proxy: do not follow it to its login
       keepalive: true,
     }).catch(() => undefined);
   };
