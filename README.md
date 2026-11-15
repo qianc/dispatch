@@ -61,6 +61,12 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   and the push says "merged and deployed" or that the deploy failed, with the end of its output.
   The deploy may restart the server itself: the worker keeps the result and reports it when the
   server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
+- **Usage limit**: a session whose turn stops on its Claude account's usage limit (the five-hour
+  or weekly limit) is not done. It shows "Waiting for limit" with the reset time, and goes on by
+  itself after the reset; a message from you makes it try at once. Until then nothing treats it as
+  finished: no auto-merge, no "waiting for you". If you start a new batch with its items instead,
+  the old session is stopped and marked as interrupted. Auto-merge runs only after a clean turn
+  end: after a turn that ended with an error, or a wait you interrupted, the merge waits for you.
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant

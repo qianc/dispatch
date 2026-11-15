@@ -71,6 +71,17 @@ export function cardText(lastText: string | null, prs: Pick<PullRequest, 'state'
   return prs.length && !prs.some((p) => p.state === 'open') ? null : lastText;
 }
 
+/** Short status of a session that waits for its Claude account's usage limit to reset (DISP-108). */
+export const LIMIT_WAIT_LABEL = 'Waiting for limit';
+
+/** What a session does that stopped on the usage limit: it waits, and goes on by itself. The time is the reader's local time. */
+export function limitWaitText(wait: NonNullable<Session['limit_wait']>): string {
+  const at = wait.resets_at ? new Date(wait.resets_at) : null;
+  return at && !Number.isNaN(at.getTime())
+    ? `Waiting for the usage limit to reset (${at.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}). It goes on by itself then.`
+    : 'Waiting for the usage limit to reset. It tries again every 15 minutes.';
+}
+
 /** The first line of a text, cut to `max` characters. */
 const firstLine = (text: string, max: number) => {
   const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';

@@ -120,7 +120,7 @@ describe('the chat screen while a message is pending (DISP-83)', () => {
     const s = {
       id: 7, project_id: null, project_key: null, kind: 'assistant', title: 'Assistant', status: 'queued', force_plan: false, branch: null, sdk_session_id: null,
       initial_prompt: 'one', source_id: null, waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1,
-      paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, started_by: null, github_login: null,
+      paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null,
       closed_at: null, closed_reason: null, retry_of: null, about_session: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null,
     };
     const qc = new QueryClient();

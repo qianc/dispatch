@@ -1210,7 +1210,7 @@ export class Orchestrator {
       else if (open.length) [state, note] = ['review', "waits for the owner's review"];
       else if (prs.length && !merged) [state, note] = ['review', 'its pull request was closed without a merge'];
       else note = 'turn ended, no PR yet';
-    }
+    } else if (child.limit_wait) note = 'waits for the usage limit to reset'; // it goes on by itself (DISP-108)
     const seen = `${child.status}|${state}|${note ?? ''}`;
     if (seen === step.seen) return;
     this.store.updateStep(step.id, { state, note, seen });

@@ -510,6 +510,8 @@ export class Store {
       release: json(r.release_info, null),
       schedule_id: numOrNull(r.schedule_id),
       login_needed: json(r.login_needed, null),
+      limit_wait: json(r.limit_wait, null),
+      unclean: (r.unclean as string | null) ?? null,
       started_by: (r.started_by as string | null) ?? null,
       github_login: (r.github_login as string | null) ?? null,
       closed_at: (r.closed_at as string | null) ?? null,
@@ -597,12 +599,12 @@ export class Store {
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'limit_wait' | 'unclean' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`);
-      params.push(k === 'usage' || k === 'options' || (k === 'login_needed' && v) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | null));
+      params.push(k === 'usage' || k === 'options' || ((k === 'login_needed' || k === 'limit_wait') && v) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | null));
     }
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
