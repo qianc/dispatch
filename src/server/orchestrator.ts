@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, orchestratorDefaults, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
@@ -223,7 +223,9 @@ export class Orchestrator {
   /** The model and effort `user`'s new orchestrators start with ('default': the worker's own). */
   defaults(user: string | null): OrchestratorDefaults {
     try {
-      return orchestratorDefaults.parse(JSON.parse(this.store.db.setting(`orchestrator_default:${user ?? ''}`) ?? '{}'));
+      // a model saved before it stopped being a choice (Haiku) is 'default'; the effort stays
+      const saved = JSON.parse(this.store.db.setting(`orchestrator_default:${user ?? ''}`) ?? '{}');
+      return orchestratorDefaults.parse({ ...saved, model: orchestratorModel(saved.model) });
     } catch {
       return { model: 'default', effort: 'default' };
     }

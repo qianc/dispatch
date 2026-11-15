@@ -15,7 +15,9 @@ import {
   type Project,
   type ProposedItem,
   DEFAULT_RUN_OPTIONS,
+  orchestratorModel,
   type RunOptions,
+  type SessionOptions,
   type PullRequest,
   type Repo,
   type Session,
@@ -469,7 +471,7 @@ export class Store {
       waiting_reason: (r.waiting_reason as string | null) ?? null,
       last_text: (r.last_text as string | null) ?? null,
       usage: json(r.usage, null),
-      options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
+      options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<SessionOptions>>(r.options, {}) },
       claude_account: (r.claude_account as string | null) ?? null,
       worker_id: numOrNull(r.worker_id),
       paused: bool(r.paused),
@@ -555,7 +557,7 @@ export class Store {
       .map((r) => this.toSession(r));
   }
   /** `started_by`: the user who started it (null: no user); `worker_id`: the worker it runs on. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: RunOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null; retry_of?: number | null; about_session?: number | null }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: SessionOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null; retry_of?: number | null; about_session?: number | null }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
         'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by, retry_of, about_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -696,7 +698,7 @@ export class Store {
       plan_approved: bool(r.plan_approved),
       plan_version: Number(r.plan_version),
       max_children: Number(r.max_children),
-      model: json<Partial<RunOptions>>(r.session_options, {}).model ?? 'default',
+      model: orchestratorModel(json<Partial<SessionOptions>>(r.session_options, {}).model),
       effort: json<Partial<RunOptions>>(r.session_options, {}).effort ?? 'default',
       answer_children: bool(r.answer_children),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },

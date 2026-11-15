@@ -153,6 +153,12 @@ export interface Item {
 }
 
 export const MODELS = ['default', 'opus', 'sonnet', 'haiku'] as const;
+/** what the orchestrator itself may run on, in the order the pickers show them: never Haiku */
+export const ORCHESTRATOR_MODELS = ['default', 'fable', 'opus', 'sonnet'] as const;
+export type OrchestratorModel = (typeof ORCHESTRATOR_MODELS)[number];
+/** A stored or sent model as one the orchestrator may run on: anything else (an old Haiku) is 'default'. */
+export const orchestratorModel = (model: unknown): OrchestratorModel =>
+  (ORCHESTRATOR_MODELS as readonly unknown[]).includes(model) ? (model as OrchestratorModel) : 'default';
 export const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const SUBAGENT_MODES = ['auto', 'prefer', 'none'] as const;
 export const START_MODES = ['now', 'after'] as const;
@@ -179,6 +185,8 @@ export const runOptions = z.object({
 });
 export type RunOptions = z.infer<typeof runOptions>;
 export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
+/** The options a session runs with: run options, where an orchestrator session has one of its own models. */
+export type SessionOptions = Omit<RunOptions, 'model'> & { model: RunOptions['model'] | OrchestratorModel };
 
 export interface Session {
   id: number;
@@ -197,7 +205,7 @@ export interface Session {
   last_text: string | null;
   /** `cost_run` and `cost_run_usd`: the Claude process that reported last, and its last total (see `countCost`) */
   usage: { cost_usd?: number; turns?: number; input_tokens?: number; output_tokens?: number; cost_run?: string; cost_run_usd?: number } | null;
-  options: RunOptions;
+  options: SessionOptions;
   /** Claude account this session runs on; fixed once started (null = legacy default) */
   claude_account: string | null;
   /** the worker it runs on, for its whole life */
@@ -755,7 +763,7 @@ export interface Orchestration {
   plan_version: number;
   max_children: number;
   /** the model and effort the orchestrator itself runs on ('default': the worker's own); its batches have `options` */
-  model: (typeof MODELS)[number];
+  model: OrchestratorModel;
   effort: (typeof EFFORTS)[number];
   /** it answers its batches' questions and plan approvals when it can; off: they all come to the owner */
   answer_children: boolean;
@@ -787,13 +795,13 @@ export const orchestrationInput = z.object({
   answer_children: z.boolean().default(true),
   cost_limit_usd: z.number().positive().max(10_000).nullable().default(null),
   /** the orchestrator's own model and effort; left out: the starter's default (Settings) */
-  model: z.enum(MODELS).optional(),
+  model: z.enum(ORCHESTRATOR_MODELS).optional(),
   effort: z.enum(EFFORTS).optional(),
   options: runOptions.default(DEFAULT_RUN_OPTIONS),
 });
 
 /** A person's default model and effort for the orchestrators they start. */
-export const orchestratorDefaults = z.object({ model: z.enum(MODELS), effort: z.enum(EFFORTS) });
+export const orchestratorDefaults = z.object({ model: z.enum(ORCHESTRATOR_MODELS), effort: z.enum(EFFORTS) });
 export type OrchestratorDefaults = z.infer<typeof orchestratorDefaults>;
 
 /** What the owner can change on an orchestration while it runs. */

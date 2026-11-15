@@ -3,7 +3,7 @@ import type { ClaudeAccountInfo, LoginHelp } from './accounts.ts';
 import type { CheckProgress } from './checkProgress.ts';
 import type { GeneratorItem } from './generatorItems.ts';
 import type { OrchPhase, ReleaseInfo, WorkerFacts } from './types.ts';
-import type { InputAnswer, Item, PendingInputPayload, Repo, RunOptions, SessionEventBody, SessionKind, SessionStatus, Source } from './types.ts';
+import type { InputAnswer, Item, PendingInputPayload, Repo, SessionEventBody, SessionOptions, SessionKind, SessionStatus, Source } from './types.ts';
 
 export interface StartSpec {
   session_id: number;
@@ -19,7 +19,7 @@ export interface StartSpec {
   source: Source | null;
   prompt: string; // first user message
   force_plan: boolean;
-  options: RunOptions;
+  options: SessionOptions;
   /** Claude account to run on (null = legacy default); the worker holds the credentials */
   claude_account: string | null;
   /** the project's GitHub account: token for git/gh and the commit identity */

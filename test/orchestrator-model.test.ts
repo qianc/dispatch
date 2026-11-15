@@ -40,10 +40,27 @@ describe('orchestrator: its own model and effort', () => {
     expect((await t.s.call('GET', '/settings/orchestrator')).data).toEqual({ model: 'sonnet', effort: 'medium' });
     expect(own((await post({})).data.session_id)).toEqual({ model: 'sonnet', effort: 'medium' });
     // what is picked at the start goes before the default, each on its own
-    expect(own((await post({ model: 'haiku' })).data.session_id)).toEqual({ model: 'haiku', effort: 'medium' });
+    expect(own((await post({ model: 'fable' })).data.session_id)).toEqual({ model: 'fable', effort: 'medium' });
     expect((await t.s.call('PUT', '/settings/orchestrator', { model: 'gpt', effort: 'medium' })).status).toBe(400);
     // one value alone keeps the other
     expect((await t.s.call('PUT', '/settings/orchestrator', { effort: 'low' })).data).toEqual({ model: 'sonnet', effort: 'low' });
+  });
+
+  // DISP-95
+  it('never runs on Haiku: not when picked, not from a default saved before, not from an orchestration started before', async () => {
+    expect((await post({ model: 'haiku' })).status).toBe(400);
+    expect((await t.s.call('PUT', '/settings/orchestrator', { model: 'haiku' })).status).toBe(400);
+    // a default saved while Haiku was a choice: the model is Default, the effort stays
+    const me = t.store.session((await post({})).data.session_id)!.started_by;
+    t.store.db.setSetting(`orchestrator_default:${me ?? ''}`, JSON.stringify({ model: 'haiku', effort: 'low' }));
+    expect((await t.s.call('GET', '/settings/orchestrator')).data).toEqual({ model: 'default', effort: 'low' });
+    const made = (await post({})).data;
+    expect(made).toMatchObject({ model: 'default', effort: 'low' });
+    expect(own(made.session_id)).toEqual({ model: 'default', effort: 'low' });
+    // an orchestration started on Haiku before: its next turn is on the worker's own model
+    const old = t.store.updateSession(made.session_id, { options: { ...t.store.session(made.session_id)!.options, model: 'haiku' } });
+    expect(t.s.ctx.sessions.spec(old, '', null, null).options).toMatchObject({ model: 'default', effort: 'low' });
+    expect(t.s.ctx.orchestrator.view(made.session_id)).toMatchObject({ model: 'default', effort: 'low' });
   });
 });
 
@@ -52,9 +69,9 @@ describe('orchestrator defaults: several people', () => {
     const s = await startMultiUser();
     try {
       await projects(s, as('alice'));
-      await s.call('PUT', '/settings/orchestrator', { model: 'haiku', effort: 'low' }, as('bob'));
+      await s.call('PUT', '/settings/orchestrator', { model: 'fable', effort: 'low' }, as('bob'));
       expect((await s.call('GET', '/settings/orchestrator', undefined, as('alice'))).data).toEqual({ model: 'default', effort: 'default' });
-      expect((await s.call('GET', '/settings/orchestrator', undefined, as('bob'))).data).toEqual({ model: 'haiku', effort: 'low' });
+      expect((await s.call('GET', '/settings/orchestrator', undefined, as('bob'))).data).toEqual({ model: 'fable', effort: 'low' });
       const made = (await s.call<Orchestration>('POST', '/orchestrations', { goal: 'x', project_keys: ['AA'] }, as('alice'))).data;
       expect(made).toMatchObject({ model: 'default', effort: 'default' });
     } finally {
@@ -94,5 +111,20 @@ describe('orchestrator model: the app', () => {
     const html = renderPage(createElement(ui.OrchestratorDefaults), { qc });
     expect(html).toContain('New orchestrations start with this');
     expect(picked(html)).toEqual(['Opus', 'Default']);
+  });
+
+  // DISP-95
+  it('offers Default, Fable, Opus and Sonnet for the orchestrator, in that order, and no Haiku', () => {
+    /** the labels of the first group of choices on the page */
+    const offered = (html: string) => [...html.match(/role="radiogroup">(.*?)<\/div>/)![1].matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').trim());
+    const qc = new QueryClient();
+    qc.setQueryData(['projects'], []);
+    qc.setQueryData(['settings', 'orchestrator'], { model: 'fable', effort: 'default' });
+    expect(offered(renderPage(createElement(ui.OrchestratorDefaults), { qc }))).toEqual(['Default', 'Fable', 'Opus', 'Sonnet']);
+    const sheet = renderPage(createElement(ui.NewOrchestrationForm, { onDone: () => {} }), { qc });
+    expect(offered(sheet)).toEqual(['Default', 'Fable', 'Opus', 'Sonnet']);
+    expect(picked(sheet)[0]).toBe('Fable');
+    // the batches it starts keep their own choices
+    expect(sheet).toContain('Haiku');
   });
 });

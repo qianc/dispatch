@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions } from '../../../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions, type SessionOptions } from '../../../src/shared/types.ts';
 import { api, type Item, type Project, type Repo, type Session } from '../api.ts';
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
 import { projectClaude, useAccounts } from '../accounts.ts';
@@ -8,6 +8,8 @@ import { useWorkers } from '../workers.ts';
 
 const LABELS = {
   model: { default: 'Default', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' },
+  // the orchestrator itself: never Haiku
+  orchestratorModel: { default: 'Default', fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet' },
   effort: { default: 'Default', low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max' },
   subagents: { auto: 'Claude decides', prefer: 'Prefer subagents', none: 'No subagents' },
   start: { now: 'Now, in parallel', after: 'After running ones' },
@@ -133,9 +135,9 @@ function pickWorker(able: number[] | null, preferred: (number | null | undefined
 }
 
 /** Short summary of non-default options, for session headers and proposal cards. */
-export function runOptionsSummary(o: RunOptions): string[] {
+export function runOptionsSummary(o: SessionOptions): string[] {
   const out: string[] = [];
-  if (o.model !== 'default') out.push(LABELS.model[o.model]);
+  if (o.model !== 'default') out.push({ ...LABELS.model, ...LABELS.orchestratorModel }[o.model]);
   if (o.effort !== 'default') out.push(`effort ${o.effort}`);
   if (o.subagents !== 'auto') out.push(LABELS.subagents[o.subagents].toLowerCase());
   if (o.start === 'after') out.push('after running ones');

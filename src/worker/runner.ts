@@ -347,7 +347,9 @@ export class ClaudeRunner implements AgentRunner {
         cwd: this.deps.cwd,
         resume: this.spec.resume ?? undefined,
         model: assistant ? this.opts.assistantModel : discuss ? this.opts.discussModel
-          : this.spec.options.model !== 'default' ? this.spec.options.model : this.opts.model,
+          : this.spec.options.model !== 'default' ? this.spec.options.model
+          // an orchestrator never runs on Haiku, also where that is the worker's own model
+          : this.spec.kind === 'orchestrator' && /haiku/i.test(this.opts.model ?? '') ? undefined : this.opts.model,
         ...(this.spec.options.effort !== 'default' && !chat ? { effort: this.spec.options.effort } : {}),
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
         settingSources: chat ? [] : this.opts.settingSources,
