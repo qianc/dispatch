@@ -90,6 +90,9 @@ export function ChatInput({ value, onChange, onSubmit, canSubmit = true, disable
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`; // +2: the border
     el.style.overflowY = el.scrollHeight + 2 > max ? 'auto' : 'hidden';
+    // a scroll bar that takes room (Windows) narrows the box's lines: the copy behind it gives up the same room
+    const bar = el.offsetWidth - el.clientWidth - 2;
+    if (backdrop.current) backdrop.current.style.paddingRight = bar > 0 ? `calc(${getComputedStyle(el).paddingRight} + ${bar}px)` : '';
   });
 
   return (
@@ -111,12 +114,13 @@ export function ChatInput({ value, onChange, onSubmit, canSubmit = true, disable
       <div className="relative flex-1 min-w-0 flex">
       {open && <MentionList options={options} active={Math.min(active, options.length - 1)} onChoose={choose} />}
       {projects && (
-        // the text again, behind the box, with the tags as chips; the box's own text is transparent
-        <div ref={backdrop} aria-hidden className={cx(inputCls, 'absolute inset-0 min-h-10 py-2 leading-snug whitespace-pre-wrap break-words overflow-hidden pointer-events-none')}>
+        // the text again, behind the box, with the tags as chips; the box's own text is transparent.
+        // Both must lay the text out the same (font, padding, wrapping), or caret and selection drift (DISP-94)
+        <div ref={backdrop} aria-hidden className={cx(inputCls, 'input-mirror absolute inset-0 min-h-10 py-2 leading-snug whitespace-pre-wrap break-words overflow-hidden pointer-events-none')}>
           {segments(value, keys).map((seg, i) => {
             const p = seg.key ? byKey.get(seg.key) : undefined;
             return p ? (
-              <span key={i} data-chip={p.key} className="rounded font-medium" style={{ color: lookColor(p), background: `color-mix(in srgb, ${lookColor(p)} 18%, transparent)`, boxShadow: `0 0 0 2px color-mix(in srgb, ${lookColor(p)} 18%, transparent)` }}>{seg.text}</span>
+              <span key={i} data-chip={p.key} className="rounded" style={{ color: lookColor(p), background: `color-mix(in srgb, ${lookColor(p)} 18%, transparent)`, boxShadow: `0 0 0 2px color-mix(in srgb, ${lookColor(p)} 18%, transparent)` }}>{seg.text}</span>
             ) : <span key={i}>{seg.text}</span>;
           })}
           {'\u200b'}
