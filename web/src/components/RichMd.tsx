@@ -2,7 +2,7 @@
 //   #anchor        → the item whose title has that heading slug (backlog files link items this way)
 //   relative path  → the in-app file viewer (repo default branch, or the source file's folder)
 //   images         → served by the same file route
-import Markdown from 'react-markdown';
+import Markdown, { defaultUrlTransform, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -24,6 +24,13 @@ export const fileUrl = (ctx: LinkContext, path: string) =>
 export const viewerUrl = (ctx: LinkContext, path: string) =>
   `/files/${ctx.project.key}?path=${encodeURIComponent(path)}${ctx.sourceId ? `&source=${ctx.sourceId}` : ''}`;
 
+/**
+ * react-markdown empties every `data:` URL. An image may have one, for the bitmap types only (not
+ * SVG, which can carry script); a link never does (DISP-104).
+ */
+export const urlTransform: UrlTransform = (url, key, node) =>
+  node.tagName === 'img' && key === 'src' && /^data:image\/(png|jpeg|gif|webp)[;,]/i.test(url) ? url : defaultUrlTransform(url);
+
 export function RichMd({ children, ctx, className }: { children: string; ctx: LinkContext; className?: string }) {
   const { data: items = [] } = useQuery({
     queryKey: ['items', ctx.project.id],
@@ -34,6 +41,7 @@ export function RichMd({ children, ctx, className }: { children: string; ctx: Li
     <div className={cx('md', className)}>
       <Markdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={urlTransform}
         components={{
           a: ({ href = '', children: c }) => {
             if (/^(https?:|mailto:)/.test(href)) return <a href={href} target="_blank" rel="noreferrer">{c}</a>;
