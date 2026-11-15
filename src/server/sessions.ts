@@ -1397,9 +1397,11 @@ export class Sessions {
    * An agent changes an item itself. A scheduled run and an orchestrator triage (e.g. the scope
    * says so); they cannot take an item off hold, nor close one: SCHEDULED_SET. The title and the
    * description change only when the project allows it (agents_edit_items, DISP-93): then also
-   * from a work session, which changes nothing else.
+   * from a work session, which changes nothing else. `afterStep`: an orchestrator's line on the
+   * done step of its plan that worked on the item; then it may also close it or put it in review,
+   * and the line goes on the item with its comment (DISP-98).
    */
-  agentItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>) {
+  agentItemUpdate(s: Session, project: Project, it: Item, raw: Record<string, unknown>, afterStep?: string) {
     const triages = (s.kind === 'planner' && !!s.schedule_id) || s.kind === 'orchestrator';
     const off = `Project ${project.key} does not let agents change the title or description of its items: the owner switches that on in the project's settings ("Agents may edit item titles and descriptions"). Add a comment with the text you propose instead.`;
     if (!triages) {
@@ -1410,17 +1412,20 @@ export class Sessions {
     }
     const p = proposalSchema.parse({ ...raw, type: 'item_update', key: it.key }) as ItemUpdateProposal;
     if ((p.title !== undefined || p.body_md !== undefined) && !project.agents_edit_items) throw new Error(off);
-    const { changes, comment } = this.itemChanges(project, it, p);
+    const { changes, comment: said } = this.itemChanges(project, it, p);
+    const closes = afterStep !== undefined && changes.status !== undefined;
     if (changes.status !== undefined) {
       if (it.status === 'hold') throw new Error(`${it.key} is on hold: only the owner takes an item off hold.`);
-      if (!SCHEDULED_SET.includes(changes.status)) throw new Error(`A scheduled run cannot set an item to ${changes.status} (it may set: ${SCHEDULED_SET.join(', ')}).`);
+      const may = closes ? [...SCHEDULED_SET, 'in_review', 'done'] : SCHEDULED_SET;
+      if (!may.includes(changes.status)) throw new Error(`${s.kind === 'orchestrator' ? 'An orchestrator' : 'A scheduled run'} cannot set an item to ${changes.status} (it may set: ${may.join(', ')}).`);
     }
+    const comment = closes ? [afterStep, said].filter(Boolean).join('\n\n') : said;
     const patch = itemPatch.parse(changes);
     const updated = Object.keys(patch).length ? this.store.updateItem(it.id, patch) : it;
     if (comment) this.store.addComment(it.id, 'claude', comment, s.id);
     this.bus.emit({ t: 'item', item: updated });
-    const said = [...Object.keys(patch).map((k) => (k === 'labels' ? 'tags' : k)), comment ? 'comment' : ''].filter(Boolean);
-    this.addEvent(s.id, { kind: 'system', text: `Updated ${it.key}: ${said.join(', ')}` });
+    const what = [...Object.keys(patch).map((k) => (k === 'labels' ? 'tags' : k)), comment ? 'comment' : ''].filter(Boolean);
+    this.addEvent(s.id, { kind: 'system', text: `Updated ${it.key}: ${what.join(', ')}` });
     return { key: updated.key, title: updated.title, status: updated.status, importance: project.importance_scale[updated.importance - 1], effort: updated.effort === null ? null : project.effort_scale[updated.effort], tags: updated.labels, modules: updated.modules };
   }
 

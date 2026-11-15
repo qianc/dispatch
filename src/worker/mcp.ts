@@ -314,11 +314,11 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
     viewImage(rpc),
     tool('add_comment', 'Add a comment (markdown) to an item.', { key: z.string(), body: z.string() }, call(rpc, 'add_comment')),
     tool('create_item', 'File a new backlog item or bug in a project in your scope. It starts only as part of a step.', { project_key, ...itemShape }, call(rpc, 'create_item')),
-    tool('update_item', `Change an item: give only the fields that change, and a comment that says why. You cannot take an item off hold or close it.${editItems ? TEXT_NOTE : ''}`, {
+    tool('update_item', `Change an item: give only the fields that change, and a comment that says why. You cannot take an item off hold. An item of a step of your plan that is done, and that is still open: set it to \`done\` yourself when its work is complete and you verified it, or to \`in_review\` or \`hold\` when the owner must look at it or decide; the comment says what completed it or what they must look at.${editItems ? TEXT_NOTE : ''}`, {
       key: z.string().describe('Item key, e.g. HC-42'),
       ...textFields(editItems),
       item_type: z.enum(['backlog', 'bug']).optional(),
-      status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled']).optional(),
+      status: z.enum(['triage', 'backlog', 'todo', 'hold', 'canceled', 'in_review', 'done']).optional().describe('`done` and `in_review`: only for an item of a done step of your plan'),
       importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
       effort: z.union([z.number(), z.string()]).nullable().optional().describe('A label of the project effort scale, or null'),
       tags: z.array(z.string()).optional().describe('The full new tag list; reuse existing tags'),
