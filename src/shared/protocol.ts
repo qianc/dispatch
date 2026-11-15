@@ -104,6 +104,8 @@ export type WorkerCommand =
   | { c: 'release_version'; repo: Repo }
   /** is this Claude account signed in on the worker (DISP-60)? Answers a ClaudeAccountInfo */
   | { c: 'check_login'; account: string | null }
+  /** a short title for an orchestration from its goal, by a small model (DISP-110). Answers { title } */
+  | { c: 'make_title'; goal: string; projects: string[]; account: string | null }
   | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
 
 export type WorkerToServer =

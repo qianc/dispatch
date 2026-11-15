@@ -170,10 +170,11 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   const [answers, setAnswers] = useState(o.answer_children);
   const [keys, setKeys] = useState(o.project_keys);
   const [merge, setMerge] = useState(o.options.auto_merge);
+  const [title, setTitle] = useState(o.title);
   const fixed = fixedProjects(o);
   const amount = parseLimit(limit);
   const save = useMutation({
-    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys, auto_merge: merge }),
+    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { title: title.trim() || undefined, max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys, auto_merge: merge }),
     onSuccess: (next) => {
       qc.setQueryData<SessionDetail>(['session', next.session_id], (d) => (d ? { ...d, orchestration: next } : d));
       void qc.invalidateQueries({ queryKey: ['orchestrations'] });
@@ -185,6 +186,9 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   const shown = projects.filter((p) => !p.disabled || o.project_keys.includes(p.key));
   return (
     <form onSubmit={(e) => { e.preventDefault(); if (amount !== undefined) save.mutate(); }}>
+      <Field label="Title" hint="Written from the goal when it was created. A title you give stays.">
+        <input className={inputCls} value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} aria-label="Title" />
+      </Field>
       <Field label="Batches at once" group>
         <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
       </Field>

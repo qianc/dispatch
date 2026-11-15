@@ -660,6 +660,11 @@ export class Sessions {
     this.addEvent(sessionId, { kind: 'system', text });
   }
 
+  /** Give a session another title (an orchestration's, DISP-110). */
+  setTitle(sessionId: number, title: string) {
+    this.emitSession(this.store.updateSession(this.mustGet(sessionId).id, { title }));
+  }
+
   /** Change what happens when a live session is done (its orchestration's setting changed, DISP-109): from its next merge on. */
   setAutoMerge(sessionId: number, autoMerge: RunOptions['auto_merge'], why: string) {
     const s = this.mustGet(sessionId);

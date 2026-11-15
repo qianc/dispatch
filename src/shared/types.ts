@@ -856,6 +856,8 @@ export const orchestrationPatch = z.object({
   cost_limit_usd: z.number().positive().max(10_000).nullable().optional(),
   answer_children: z.boolean().optional(),
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.').optional(),
+  /** its title, as the owner wants it (DISP-110) */
+  title: z.string().trim().min(1, 'Give it a title.').max(80).optional(),
   /** what happens when a step's batch is done: from the next merge on (DISP-109) */
   auto_merge: z.enum(AUTO_MERGE).optional(),
 });

@@ -6,6 +6,7 @@ import { autoMergePending, failureReason } from '../shared/attention.ts';
 import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
+import { cleanTitle, firstWordsTitle } from '../shared/orchestrationTitle.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
 import { assertWritable } from './projectLock.ts';
@@ -45,7 +46,14 @@ export class Orchestrator {
   private merging: () => ReadonlySet<number>;
   private off: () => void;
 
-  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number> }) {
+  /**
+   * Asks a small model for a short title of a goal (app.ts: on the orchestrator's worker). Not set:
+   * the title stays the first words of the goal (DISP-110).
+   */
+  private makeTitle: ((s: Session, goal: string, projects: string[]) => Promise<string>) | undefined;
+
+  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string> }) {
+    this.makeTitle = deps.makeTitle;
     this.store = deps.store;
     this.bus = deps.bus;
     this.sessions = deps.sessions;
@@ -260,14 +268,32 @@ export class Orchestrator {
       assertWritable(this.store, p);
       return p;
     });
-    const title = input.title?.trim() || input.goal.split('\n')[0].slice(0, 60);
+    const title = input.title?.trim() || firstWordsTitle(input.goal);
     const prompt = `${input.goal}\n\nRead the trackers and the code of the projects in your instructions, ask me what is unclear, and then propose the plan with set_plan.`;
     // its own model and effort: what was picked, else the starter's default
     const mine = this.defaults(startedBy);
     const session = this.sessions.startOrchestrator({ title, prompt, first: projects[0], model: input.model ?? mine.model, effort: input.effort ?? mine.effort }, startedBy, (s) =>
       this.store.createOrchestration({ session_id: s.id, goal: input.goal, project_ids: projects.map((p) => p.id), max_children: input.max_children, options: input.options, answer_children: input.answer_children, cost_limit_usd: input.cost_limit_usd }));
     this.emit(session.id);
+    // a model names it, once, and nothing waits for that: no title given means the owner wrote none
+    if (!input.title?.trim()) void this.nameIt(session, title, input.goal, projects.map((p) => `${p.key} (${p.name})`));
     return this.view(session.id);
+  }
+
+  /**
+   * Replace the first-words title by a short one a model writes from the goal (DISP-110). When the
+   * model fails or is too slow, or the owner gave it a title meanwhile, the title stays as it is.
+   */
+  private async nameIt(session: Session, fallback: string, goal: string, projects: string[]) {
+    if (!this.makeTitle) return;
+    try {
+      const title = cleanTitle(String((await this.makeTitle(session, goal, projects)) ?? ''));
+      if (!title || this.store.session(session.id)?.title !== fallback) return;
+      this.sessions.setTitle(session.id, title);
+      this.emit(session.id);
+    } catch (e) {
+      console.warn(`orchestration ${session.id}: no generated title (${(e as Error).message}); it keeps the first words of its goal`);
+    }
   }
 
   // ---------- the orchestrator's tools ----------
@@ -840,6 +866,8 @@ export class Orchestrator {
       changed.push(patch.answer_children ? "it answers its batches' questions" : "its batches' questions come to the owner");
       tell = true;
     }
+    const title = patch.title !== undefined && patch.title !== o.title ? patch.title : null;
+    if (title) changed.push(`title "${title}"`);
     // the merge setting of its batches (DISP-109): for the steps that start later, and for the batches
     // still at work. A change that already waits for the owner's review keeps waiting.
     const merge = patch.auto_merge !== undefined && patch.auto_merge !== o.options.auto_merge ? patch.auto_merge : null;
@@ -850,6 +878,7 @@ export class Orchestrator {
     }
     if (!changed.length) return this.view(sessionId);
     this.store.updateOrchestration(sessionId, next);
+    if (title) this.sessions.setTitle(sessionId, title);
     if (merge) {
       for (const st of o.steps) {
         const child = st.state === 'running' && st.child_session_id ? this.store.session(st.child_session_id) : undefined;

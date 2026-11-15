@@ -152,7 +152,10 @@ starts when the server is back, if that is less than 6 hours after its time.
 **Orchestrator.** For a goal that takes several batches, also over several projects: **Activity →
 New orchestration**. You give the goal, the projects it may work in, how many batches may run at
 once, the model and effort of the orchestrator itself (your usual choice is in **Settings →
-Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page.
+Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page. A small
+model (the worker's `ASSISTANT_MODEL`) writes its short title from the goal once, when it is
+created; if that fails, the title is the first words of the goal. You can change the title in its
+**Settings**, and a title you give stays.
 
 - *Plan.* It reads the trackers and the code of those projects, asks you what is unclear, files
   missing items, and proposes a plan of steps. One step is one batch in one project; a step can
@@ -188,7 +191,7 @@ Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's 
 - *Cost limit* (optional): what it and its batches may cost together. At the limit it is paused and
   you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
   then Resume.
-- *Settings* on its page change while it runs: batches at once, the cost limit, whether it answers
+- *Settings* on its page change while it runs: its title, batches at once, the cost limit, whether it answers
   its batches, the projects (one that a step works in stays), and what happens when a step's batch
   is done (leave for review, or auto-merge). The merge setting applies from the next merge on: to
   steps that start later and to batches still at work. A change that already waits for your review
