@@ -61,6 +61,12 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   and the push says "merged and deployed" or that the deploy failed, with the end of its output.
   The deploy may restart the server itself: the worker keeps the result and reports it when the
   server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
+- **Usage limit**: a session whose turn stops on its Claude account's usage limit (the five-hour
+  or weekly limit) is not done. It shows "Waiting for limit" with the reset time, and goes on by
+  itself after the reset; a message from you makes it try at once. Until then nothing treats it as
+  finished: no auto-merge, no "waiting for you". If you start a new batch with its items instead,
+  the old session is stopped and marked as interrupted. Auto-merge runs only after a clean turn
+  end: after a turn that ended with an error, or a wait you interrupted, the merge waits for you.
 - **Accounts**: several GitHub accounts (a project picks one; its repos and commits use it) and several
   Claude accounts (a project has a default and an allowed list; a batch can pick another allowed one; a
   session keeps its account). SSO accounts log in once with `CLAUDE_CONFIG_DIR=… claude`. The Assistant
@@ -146,7 +152,10 @@ starts when the server is back, if that is less than 6 hours after its time.
 **Orchestrator.** For a goal that takes several batches, also over several projects: **Activity →
 New orchestration**. You give the goal, the projects it may work in, how many batches may run at
 once, the model and effort of the orchestrator itself (your usual choice is in **Settings →
-Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page.
+Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page. A small
+model (the worker's `ASSISTANT_MODEL`) writes its short title from the goal once, when it is
+created; if that fails, the title is the first words of the goal. You can change the title in its
+**Settings**, and a title you give stays.
 
 - *Plan.* It reads the trackers and the code of those projects, asks you what is unclear, files
   missing items, and proposes a plan of steps. One step is one batch in one project; a step can
@@ -182,8 +191,11 @@ Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's 
 - *Cost limit* (optional): what it and its batches may cost together. At the limit it is paused and
   you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
   then Resume.
-- *Settings* on its page change while it runs: batches at once, the cost limit, whether it answers
-  its batches, and the projects (one that a step works in stays). It is told what changed.
+- *Settings* on its page change while it runs: its title, batches at once, the cost limit, whether it answers
+  its batches, the projects (one that a step works in stays), and what happens when a step's batch
+  is done (leave for review, or auto-merge). The merge setting applies from the next merge on: to
+  steps that start later and to batches still at work. A change that already waits for your review
+  keeps waiting; merge it yourself. It is told what changed.
 - *Timers*: it can ask Dispatch to wake it later (5 minutes to 7 days, 3 at once) for something
   nothing else reports, such as a nightly build. Its page shows when. After 12 timers in a row
   with nothing else happening it must tell you what it waits for.

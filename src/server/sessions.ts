@@ -123,6 +123,8 @@ const proposalSchema = z.discriminatedUnion('type', [
 const LEFT_OUT = 'Left out by the owner on the proposal card: ';
 /** waiting_reason of a session whose chat the server could not save */
 const UNSAVED = 'Chat could not be saved';
+/** `waiting_reason` of a session that stopped on its usage limit and goes on after the reset (DISP-108); the reset time is in `limit_wait`. */
+export const LIMIT_WAIT = 'Waiting for the usage limit to reset';
 
 type BatchProposal =Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
 type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>;
@@ -402,10 +404,32 @@ export class Sessions {
     else this.finish(s.id, 'completed');
   }
 
-  /** Done, canceled, or held by a work session that is not finished. */
-  movedOn(item: Item): boolean {
+  /**
+   * Done, canceled, or held by a work session that is not finished. `forNewBatch`: the owner starts a
+   * batch with it: a session that only waits for its usage limit does not hold it (the new batch takes it over, DISP-108).
+   */
+  movedOn(item: Item, forNewBatch = false): boolean {
     return item.status === 'done' || item.status === 'canceled'
-      || this.store.sessionsForItem(item.id, 'work').some((s) => !FINAL_STATUSES.includes(s.status));
+      || this.store.sessionsForItem(item.id, 'work').some((s) => !FINAL_STATUSES.includes(s.status) && !(forNewBatch && s.limit_wait));
+  }
+
+  /**
+   * A new batch takes items of a session that waits for its usage limit: that wait is abandoned
+   * (DISP-108). The old session is stopped and says it was interrupted; it is not done, and nothing merges it.
+   */
+  private abandonLimitWaits(next: Session, items: Item[]) {
+    const waiting = new Map<number, Session>();
+    for (const it of items) {
+      for (const s of this.store.sessionsForItem(it.id, 'work')) {
+        if (s.id !== next.id && s.limit_wait && !FINAL_STATUSES.includes(s.status)) waiting.set(s.id, s);
+      }
+    }
+    for (const old of waiting.values()) {
+      const keys = items.filter((i) => old.item_ids.includes(i.id)).map((i) => i.key).join(', ');
+      this.addEvent(old.id, { kind: 'system', text: `Interrupted: this session waited for the usage limit, and session #${next.id} now works on ${keys}. It is stopped, not done: its work was not finished and is not merged.` });
+      this.addEvent(next.id, { kind: 'system', text: `Session #${old.id} worked on ${keys} and stopped on the usage limit. It is marked as interrupted; its unfinished work stays on its branch ${old.branch ?? ''}.`.replace(/ \.$/, '.') });
+      this.finish(old.id, 'stopped', false, items.map((i) => i.id));
+    }
   }
 
   /** The items on a batch card that the owner did not pick when starting it. */
@@ -432,7 +456,7 @@ export class Sessions {
     this.checkAccounts(workerId, claudeAccount, project, identity);
     let items = this.store.itemsByIds(input.item_ids).filter((i) => i.project_id === project.id);
     // a card can be older than the items on it: never re-open or re-run what moved on since
-    const gone = input.proposal ? items.filter((i) => this.movedOn(i)) : [];
+    const gone = input.proposal ? items.filter((i) => this.movedOn(i, true)) : [];
     if (gone.length) {
       items = items.filter((i) => !gone.includes(i));
       if (!items.length && !input.new_items.length) throw new SessionError(`Nothing left to start: ${gone.map((i) => i.key).join(', ')} ${gone.length === 1 ? 'is' : 'are'} already closed or in progress elsewhere.`, 409);
@@ -465,6 +489,7 @@ export class Sessions {
     session = this.store.updateSession(session.id, { branch: branchName(project.key, session.id, all.length === 1 || !input.title?.trim() ? all[0]?.title ?? title : title) });
     for (const it of all) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_progress', marked: false }) });
     if (leftOut.length) this.addEvent(session.id, { kind: 'system', text: `${LEFT_OUT}${leftOut.map((i) => i.key).join(', ')}` });
+    this.abandonLimitWaits(session, items);
     const left = (gone.length ? ` (left out ${gone.map((i) => i.key).join(', ')}: closed or in progress elsewhere)` : '')
       + (leftOut.length ? ` (left out ${leftOut.map((i) => i.key).join(', ')})` : '');
     this.markProposalDone(input.proposal, `Started session #${session.id}${left}`);
@@ -633,6 +658,18 @@ export class Sessions {
   /** A line from Dispatch itself in a session's chat (not the owner's, not Claude's). */
   systemNote(sessionId: number, text: string) {
     this.addEvent(sessionId, { kind: 'system', text });
+  }
+
+  /** Give a session another title (an orchestration's, DISP-110). */
+  setTitle(sessionId: number, title: string) {
+    this.emitSession(this.store.updateSession(this.mustGet(sessionId).id, { title }));
+  }
+
+  /** Change what happens when a live session is done (its orchestration's setting changed, DISP-109): from its next merge on. */
+  setAutoMerge(sessionId: number, autoMerge: RunOptions['auto_merge'], why: string) {
+    const s = this.mustGet(sessionId);
+    this.emitSession(this.store.updateSession(s.id, { options: { ...s.options, auto_merge: autoMerge } }));
+    this.addEvent(s.id, { kind: 'system', text: why });
   }
 
   /**
@@ -918,14 +955,15 @@ export class Sessions {
   /** Called once a session is finished (app.ts wires it to the janitor, which tidies its folders). */
   onFinished: ((s: Session, status: 'completed' | 'stopped', removeAll: boolean) => void) | null = null;
 
-  finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false) {
+  /** `keepItems`: ids of its items that stay in progress when it is stopped (another session has them now). */
+  finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
     this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
-        if (it.status === 'in_progress') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
+        if (it.status === 'in_progress' && !keepItems.includes(it.id)) this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
       }
     }
     this.setStatus(sessionId, status, { ended_at: new Date().toISOString(), waiting_reason: null, login_needed: null });
@@ -1032,6 +1070,12 @@ export class Sessions {
           patch.waiting_reason = null;
           if (s.pending_prompt) patch.pending_prompt = null; // delivered
         }
+        // the usage limit stopped the turn (DISP-108): it stays running, so nothing treats it as done, and says why
+        if (msg.status === 'running' && msg.limit) {
+          patch.limit_wait = { resets_at: msg.limit.resets_at };
+          patch.waiting_reason = LIMIT_WAIT;
+        }
+        if (msg.status === 'idle') patch.unclean = msg.unclean ?? null;
         if (msg.status === 'idle' || msg.status === 'failed') {
           for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
         }
@@ -1815,6 +1859,9 @@ export class Sessions {
   private setStatus(id: number, status: SessionStatus, patch: Partial<Session> = {}) {
     // a closed failure that runs again is open again: if it fails again, it needs the owner again (DISP-81)
     if (!FINAL_STATUSES.includes(status) && this.store.session(id)?.closed_at) patch = { ...patch, closed_at: null, closed_reason: null };
+    // a wait for the usage limit ends with any other state; a session that works again has no unclean end yet (DISP-108)
+    if (!('limit_wait' in patch)) patch = { ...patch, limit_wait: null };
+    if (status === 'running' && !('unclean' in patch)) patch = { ...patch, unclean: null };
     this.emitSession(this.store.updateSession(id, { ...patch, status }));
   }
 

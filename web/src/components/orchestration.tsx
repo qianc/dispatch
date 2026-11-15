@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type Attention, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
-import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
+import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, mergeHint, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
 import { RunOptionsFields, opts } from './batch.tsx';
 import { Button, Chip, ErrorText, Field, Md, Segmented, Sheet, cx, inputCls } from './ui.tsx';
@@ -169,10 +169,12 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   const [limit, setLimit] = useState(o.cost_limit_usd === null ? '' : String(o.cost_limit_usd));
   const [answers, setAnswers] = useState(o.answer_children);
   const [keys, setKeys] = useState(o.project_keys);
+  const [merge, setMerge] = useState(o.options.auto_merge);
+  const [title, setTitle] = useState(o.title);
   const fixed = fixedProjects(o);
   const amount = parseLimit(limit);
   const save = useMutation({
-    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys }),
+    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { title: title.trim() || undefined, max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys, auto_merge: merge }),
     onSuccess: (next) => {
       qc.setQueryData<SessionDetail>(['session', next.session_id], (d) => (d ? { ...d, orchestration: next } : d));
       void qc.invalidateQueries({ queryKey: ['orchestrations'] });
@@ -184,6 +186,9 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   const shown = projects.filter((p) => !p.disabled || o.project_keys.includes(p.key));
   return (
     <form onSubmit={(e) => { e.preventDefault(); if (amount !== undefined) save.mutate(); }}>
+      <Field label="Title" hint="Written from the goal when it was created. A title you give stays.">
+        <input className={inputCls} value={title} maxLength={80} onChange={(e) => setTitle(e.target.value)} aria-label="Title" />
+      </Field>
       <Field label="Batches at once" group>
         <Segmented value={max} onChange={setMax} options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
       </Field>
@@ -195,6 +200,9 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
         <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
         <span>It answers its batches' questions<span className="block text-[12px] text-muted">Off: every question and plan of its batches comes to you.</span></span>
       </label>
+      <Field label="When a step's batch is done" group hint={mergeHint(o, merge)}>
+        <Segmented value={merge} onChange={setMerge} options={opts('auto_merge')} />
+      </Field>
       <Field label="Projects it may work in" group>
         <div className="flex flex-wrap gap-1.5">
           {shown.map((p) => {

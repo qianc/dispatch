@@ -510,6 +510,8 @@ export class Store {
       release: json(r.release_info, null),
       schedule_id: numOrNull(r.schedule_id),
       login_needed: json(r.login_needed, null),
+      limit_wait: json(r.limit_wait, null),
+      unclean: (r.unclean as string | null) ?? null,
       started_by: (r.started_by as string | null) ?? null,
       github_login: (r.github_login as string | null) ?? null,
       closed_at: (r.closed_at as string | null) ?? null,
@@ -597,12 +599,12 @@ export class Store {
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'limit_wait' | 'unclean' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       sets.push(`${k} = ?`);
-      params.push(k === 'usage' || k === 'options' || (k === 'login_needed' && v) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | null));
+      params.push(k === 'usage' || k === 'options' || ((k === 'login_needed' || k === 'limit_wait') && v) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | null));
     }
     this.db.run(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
     return this.session(id)!;
@@ -756,13 +758,13 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason' | 'options'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       if (v === undefined) continue;
       sets.push(`${k} = ?`);
-      params.push(k === 'project_ids' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
+      params.push(k === 'project_ids' || k === 'options' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
     }
     this.db.run(`UPDATE orchestrations SET ${sets.join(', ')} WHERE session_id = ?`, ...params, sessionId);
   }

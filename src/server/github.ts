@@ -56,6 +56,9 @@ type GhPull = {
   mergeable?: boolean | null; mergeable_state?: string; head: { ref: string; sha: string };
 };
 
+/** Start of the reason auto-merge gives when the session's last turn did not end cleanly (DISP-108). */
+const UNCLEAN = 'the last turn did not end cleanly';
+
 export class GitHub {
   readonly octo: Octokit | null;
   private timer: NodeJS.Timeout | null = null;
@@ -557,6 +560,12 @@ export class GitHub {
       this.tell(s.id);
       this.queueMergeNotice(s, { stopped: label, why, prId: pr.id });
     };
+    // only a clean turn end merges by itself: not one that an error or an interrupted wait for the usage limit ended (DISP-108)
+    if (s.unclean) return note(`${UNCLEAN}: ${s.unclean}. It waits for you`);
+    if (pr.blocked?.startsWith(UNCLEAN)) {
+      this.store.setPrBlocked(pr.id, null);
+      this.bus.emit({ t: 'pr', pr: this.store.pr(pr.id)! });
+    }
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
     const repo = this.store.repo(pr.repo_id)!;

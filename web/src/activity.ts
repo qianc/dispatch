@@ -1,4 +1,4 @@
-import { waitsOnOwner } from '../../src/shared/attention.ts';
+import { LIMIT_WAIT_LABEL, limitWaitText, waitsOnOwner } from '../../src/shared/attention.ts';
 import type { Attention, Inbox, Session } from './api.ts';
 
 export interface NeedsEntry { id: number; key: string | null; title: string; tone: 'wait' | 'bad' | 'ok'; /** a failed session: why (DISP-81) */ reason?: string }
@@ -33,7 +33,9 @@ export function waitingCount(inbox?: Inbox): number {
  * A session's status in a list: an idle session that Dispatch checks or merges shows that, not
  * "Your turn" (DISP-31). Null: its plain session status.
  */
-export function busyStatus(s: Pick<Session, 'status'>, attention?: Attention): { label: string; text: string } | null {
+export function busyStatus(s: Pick<Session, 'status'> & Partial<Pick<Session, 'limit_wait'>>, attention?: Attention): { label: string; text: string } | null {
+  // it stopped on the usage limit and goes on after the reset: not at work, and not your turn (DISP-108)
+  if (s.status === 'running' && s.limit_wait) return { label: LIMIT_WAIT_LABEL, text: limitWaitText(s.limit_wait) };
   if (s.status !== 'idle' || !attention || waitsOnOwner(attention)) return null;
   return { label: attention.kind === 'merging' ? 'Merging' : 'Checking', text: attention.text };
 }

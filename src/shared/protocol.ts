@@ -104,6 +104,8 @@ export type WorkerCommand =
   | { c: 'release_version'; repo: Repo }
   /** is this Claude account signed in on the worker (DISP-60)? Answers a ClaudeAccountInfo */
   | { c: 'check_login'; account: string | null }
+  /** a short title for an orchestration from its goal, by a small model (DISP-110). Answers { title } */
+  | { c: 'make_title'; goal: string; projects: string[]; account: string | null }
   | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
 
 export type WorkerToServer =
@@ -117,7 +119,11 @@ export type WorkerToServer =
    * `login`: the session stopped because its account is not signed in (DISP-60)
    */
   | { t: 'notice'; session_id: number; title: string; body: string; login?: LoginHelp }
-  | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string }
+  /**
+   * `limit` (with running): the turn stopped on the account's usage limit; the runner waits and goes on
+   * after the reset (DISP-108). `unclean` (with idle): why the turn did not end cleanly.
+   */
+  | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string }
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }

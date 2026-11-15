@@ -264,6 +264,10 @@ export interface Session {
   schedule_id: number | null;
   /** it stopped because its Claude account is not signed in; cleared when it runs again (DISP-60) */
   login_needed: LoginHelp | null;
+  /** it stopped on its Claude account's usage limit and goes on by itself after the reset (DISP-108); `resets_at` null: not known, it tries again later */
+  limit_wait: { resets_at: string | null } | null;
+  /** why its last turn did not end cleanly (an error, an interrupted wait): auto-merge waits for the owner then (DISP-108) */
+  unclean: string | null;
   /** the user who started it (a schedule's run: the schedule's owner); null: no user (the legacy API token) */
   started_by: string | null;
   /** the GitHub login it acts as: the starter's own account (null: the env accounts) */
@@ -852,6 +856,10 @@ export const orchestrationPatch = z.object({
   cost_limit_usd: z.number().positive().max(10_000).nullable().optional(),
   answer_children: z.boolean().optional(),
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.').optional(),
+  /** its title, as the owner wants it (DISP-110) */
+  title: z.string().trim().min(1, 'Give it a title.').max(80).optional(),
+  /** what happens when a step's batch is done: from the next merge on (DISP-109) */
+  auto_merge: z.enum(AUTO_MERGE).optional(),
 });
 export type OrchestrationPatch = z.infer<typeof orchestrationPatch>;
 

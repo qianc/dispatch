@@ -283,11 +283,28 @@ const MAX_IMAGE_B64 = 14_000_000; // ~10 MB decoded
 export const LOGIN_ERRORS = new Set(['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error', 'cloud_credential_error']);
 
 export function rateLimitNotice(label: string, info: { status: string; resetsAt?: number; rateLimitType?: string; utilization?: number }) {
-  const when = info.resetsAt ? new Date(info.resetsAt * (info.resetsAt < 1e12 ? 1000 : 1)).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : null;
+  const when = info.resetsAt ? new Date(resetMs(info.resetsAt)).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : null;
   const kind = info.rateLimitType ? info.rateLimitType.replace(/_/g, ' ') : 'usage';
   return info.status === 'rejected'
-    ? { title: `${label}: ${kind} limit reached`, body: `The session waits until the limit resets${when ? ` (${when})` : ''}. To continue sooner, start the remaining work as a new batch on another allowed Claude account.` }
+    ? { title: `${label}: ${kind} limit reached`, body: `The session waits until the limit resets${when ? ` (${when})` : ''}, and goes on by itself then. To continue sooner, start the remaining work as a new batch on another allowed Claude account.` }
     : { title: `${label}: close to the ${kind} limit`, body: `${info.utilization ? `${Math.round(info.utilization * 100)}% used. ` : ''}${when ? `Resets ${when}.` : ''}` };
+}
+
+/** Seconds or milliseconds since 1970, as Claude gives a reset time: in milliseconds. */
+const resetMs = (at: number) => at * (at < 1e12 ? 1000 : 1);
+
+/** After the reset time, wait this much more before the session goes on: the clocks may differ. */
+export const LIMIT_MARGIN_MS = 60_000;
+/** The reset time is not known: try again after this time. */
+export const LIMIT_RETRY_MS = 15 * 60_000;
+/** What the session is sent when its usage limit has reset (DISP-108). */
+export const LIMIT_RESUME = 'The usage limit of the Claude account has reset. Your last turn stopped on that limit before it was done. Continue where you stopped. If a step failed or did not finish because of the limit, do it again.';
+
+/** True for the message Claude Code writes itself when the account's usage limit stops a turn. */
+export function isLimitHit(m: { error?: string; message: { model?: string; content: unknown } }): boolean {
+  if (m.error === 'rate_limit') return true;
+  if (m.message.model !== '<synthetic>' || !Array.isArray(m.message.content)) return false;
+  return m.message.content.some((c) => c && typeof c === 'object' && c.type === 'text' && /\bhit your\b.*\blimit\b/i.test(String(c.text)));
 }
 
 /** Base64 images in a tool result (Read of a png/jpg returns one), so the owner can see them too. */
@@ -321,6 +338,14 @@ export class ClaudeRunner implements AgentRunner {
   private sent = 0;
   /** Names this Claude process to the server: the cost a result reports is a total per process (DISP-89). */
   private run = randomUUID();
+  /** When the account's usage limit resets, from Claude's last "rejected" report (ms; 0: not known). */
+  private limitResetsAt = 0;
+  /** The turn that runs now stopped on the usage limit (DISP-108). */
+  private limitHit = false;
+  /** Set while the session waits for the usage limit to reset: it then goes on by itself. */
+  private limitTimer: NodeJS.Timeout | null = null;
+  /** Why the last turn did not end cleanly (null: it did): the server holds auto-merge back then. */
+  private unclean: string | null = null;
 
   constructor(spec: StartSpec, deps: RunnerDeps, opts: RunnerOptions) {
     this.sessionId = spec.session_id;
@@ -404,6 +429,8 @@ export class ClaudeRunner implements AgentRunner {
     for (const k of this.noticed) if (k.startsWith('login-')) this.noticed.delete(k);
     this.betweenTurns = false; // the server already marked the session running for this message
     this.sent++;
+    // a message during the wait for the usage limit: try now. If the limit still holds, it waits again
+    this.clearLimitWait();
     this.input.push(text);
   }
 
@@ -417,6 +444,15 @@ export class ClaudeRunner implements AgentRunner {
   async interrupt() {
     for (const resolve of this.waiting.values()) resolve(null);
     this.waiting.clear();
+    if (this.limitTimer) {
+      // the owner ended the wait for the usage limit: the work is not done, so this is no clean turn end
+      this.clearLimitWait();
+      this.unclean = 'it stopped on the usage limit, and the wait for the reset was interrupted';
+      this.event({ kind: 'system', text: 'Interrupted: the session no longer waits for the usage limit. Send a message to go on.' });
+      this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle', unclean: this.unclean });
+      this.armIdle();
+      return;
+    }
     await this.q?.interrupt().catch(() => undefined);
   }
 
@@ -424,6 +460,8 @@ export class ClaudeRunner implements AgentRunner {
     if (this.closed) return;
     this.closed = true;
     this.clearIdle();
+    this.clearLimitWait();
+    if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
     for (const resolve of this.waiting.values()) resolve(null);
     this.waiting.clear();
     this.input.end();
@@ -529,6 +567,7 @@ export class ClaudeRunner implements AgentRunner {
     }
     if (m.type === 'rate_limit_event') {
       const info = m.rate_limit_info;
+      if (info.status === 'rejected') this.limitResetsAt = info.resetsAt ? resetMs(info.resetsAt) : 0;
       if (info.status !== 'allowed') this.noticeOnce(`rate-${info.status}-${info.rateLimitType ?? ''}`, rateLimitNotice(this.opts.accountLabel?.(this.spec.claude_account) ?? 'Claude', info));
       return;
     }
@@ -542,9 +581,13 @@ export class ClaudeRunner implements AgentRunner {
           : { title: `${label} account needs attention (${m.error.replace(/_/g, ' ')})`, body: 'Log in again on the worker machine.' });
       }
       if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
+      // the usage limit stopped this turn: its end is not "done", the session waits for the reset (DISP-108)
+      const limit = !m.parent_tool_use_id && isLimitHit(m);
+      if (limit) this.limitHit = true;
       if (this.betweenTurns) {
         this.betweenTurns = false;
-        this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+        // a turn that a background task started during the wait, and that the limit stopped again: still waiting
+        if (!(limit && this.limitTimer)) this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
       }
       if (m.parent_tool_use_id) return; // subagent internals stay out of the transcript
       for (const c of m.message.content) {
@@ -573,6 +616,16 @@ export class ClaudeRunner implements AgentRunner {
         this.event({ kind: 'error', text: m.errors.join('\n') });
       }
       this.betweenTurns = true;
+      this.unclean = m.subtype === 'success' && !m.is_error ? null : `its last turn ended with an error (${m.subtype.replace(/_/g, ' ')})`;
+      if (this.limitHit) {
+        this.limitHit = false;
+        return this.waitForLimit();
+      }
+      if (this.limitTimer) {
+        // a turn ran during the wait (a background task's news) and the limit did not stop it: the limit is gone
+        this.clearLimitWait();
+        return this.resumeAfterLimit();
+      }
       if (this.bgTasks > 0) {
         // the turn ended but work goes on in the background: not the owner's turn yet, and never idle-close
         this.event({ kind: 'system', text: `Waiting for ${this.bgTasks} background task${this.bgTasks === 1 ? '' : 's'} to finish.` });
@@ -585,6 +638,7 @@ export class ClaudeRunner implements AgentRunner {
 
   /** The turn is over: report it done, unless the check before that sends the agent back to work. */
   private async endTurn() {
+    if (this.limitTimer) return; // it waits for the usage limit: the turn is not over
     if (this.deps.beforeIdle) {
       const turn = this.sent;
       const fix = await this.deps.beforeIdle().catch((e) => {
@@ -592,7 +646,7 @@ export class ClaudeRunner implements AgentRunner {
         return null;
       });
       // closed, or the owner sent a message meanwhile: that turn runs now
-      if (this.closed || turn !== this.sent || !this.betweenTurns || this.bgTasks > 0) return;
+      if (this.closed || turn !== this.sent || !this.betweenTurns || this.bgTasks > 0 || this.limitTimer) return;
       if (fix) {
         this.betweenTurns = false;
         this.sent++;
@@ -600,8 +654,44 @@ export class ClaudeRunner implements AgentRunner {
         return;
       }
     }
-    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle' });
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle', ...(this.unclean ? { unclean: this.unclean } : {}) });
     this.armIdle();
+  }
+
+  /**
+   * The usage limit stopped the turn (DISP-108): the session is not done and not the owner's turn. It
+   * stays "running" with the reset time, and goes on by itself after the reset.
+   */
+  private waitForLimit() {
+    const now = Date.now();
+    const at = this.limitResetsAt > now ? this.limitResetsAt : 0;
+    if (!this.limitTimer) {
+      const when = at ? ` (${new Date(at).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })})` : '';
+      this.event({ kind: 'system', text: at ? `The usage limit stopped this turn. The session waits until the limit resets${when} and goes on by itself then.` : 'The usage limit stopped this turn. The reset time is not known: the session tries again every 15 minutes.' });
+    }
+    this.clearLimitWait();
+    this.clearIdle();
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', limit: { resets_at: at ? new Date(at).toISOString() : null } });
+    // setTimeout takes at most 2^31-1 ms
+    this.limitTimer = setTimeout(() => this.resumeAfterLimit(), Math.min(at ? at - now + LIMIT_MARGIN_MS : LIMIT_RETRY_MS, 2 ** 31 - 1));
+  }
+
+  private resumeAfterLimit() {
+    this.limitTimer = null;
+    if (this.closed) return;
+    // a limit that holds again is news again
+    for (const k of this.noticed) if (k.startsWith('rate-rejected')) this.noticed.delete(k);
+    this.limitResetsAt = 0;
+    this.event({ kind: 'system', text: 'The wait for the usage limit is over: the session goes on.' });
+    this.betweenTurns = false;
+    this.sent++;
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+    this.input.push(LIMIT_RESUME);
+  }
+
+  private clearLimitWait() {
+    if (this.limitTimer) clearTimeout(this.limitTimer);
+    this.limitTimer = null;
   }
 
   private armIdle() {

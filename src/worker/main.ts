@@ -6,6 +6,7 @@ import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
+import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 
@@ -90,6 +91,9 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   slots,
   claudeAccounts: claudeAccountInfo,
   checkLogin: (name) => logins.info(name),
+  // no model in fake mode: the server keeps its own title then
+  ...(FAKE ? {} : { makeTitle: (goal: string, projects: string[], account: string | null) =>
+    makeTitle(goal, projects, { model: opts.assistantModel, env: claudeEnv(account ? pick(clAccounts, account) : undefined, process.env, (name) => join(configRoot, name)) }) }),
   githubAccounts: ghAccounts.map((a) => a.name),
   gitEnv: (repo) => githubEnv(pick(ghAccounts, repo.github_account)),
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',

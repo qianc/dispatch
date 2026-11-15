@@ -177,7 +177,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
   const scheduler = new Scheduler(store, sessions, bus);
-  const orchestrator = new Orchestrator({ store, bus, sessions, notifier, merging: () => github.mergingNow });
+  const orchestrator = new Orchestrator({
+    store, bus, sessions, notifier, merging: () => github.mergingNow,
+    // only a worker can ask Claude: the orchestrator's own, on its account. Short: a title is not worth a long wait (DISP-110)
+    makeTitle: async (s, goal, projects) => (await hub.cmd<{ title?: string }>(s.worker_id, { c: 'make_title', goal, projects, account: s.claude_account }, 30_000)).title ?? '',
+  });
   sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
   sessions.delegateInput = (s, input) => orchestrator.delegate(s, input);
   sessions.onDeployed = (s, repo, ok) => orchestrator.onDeploy(s, repo, ok ? 'ok' : 'failed');
