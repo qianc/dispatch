@@ -62,6 +62,15 @@ export function attentionOf(s: Pick<Session, 'options'> & Partial<Pick<Session, 
   return { kind: 'turn', text: 'Claude finished its turn and waits for your reply.' };
 }
 
+/**
+ * The session's last message for its card, or null once it is out of date (DISP-106): the message
+ * was written while its pull requests were open ("the pull request is open: …"), so it is left out
+ * when none of them is open any more (merged or closed). The status line says the state then.
+ */
+export function cardText(lastText: string | null, prs: Pick<PullRequest, 'state'>[]): string | null {
+  return prs.length && !prs.some((p) => p.state === 'open') ? null : lastText;
+}
+
 /** The first line of a text, cut to `max` characters. */
 const firstLine = (text: string, max: number) => {
   const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';

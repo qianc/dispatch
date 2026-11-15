@@ -144,6 +144,23 @@ describe('auto-merge', () => {
     });
   });
 
+  it('the inbox card of an auto-merged session no longer shows the message that says the PR is open (DISP-106)', async () => {
+    const { s, session } = await setup([{ name: 'test', status: 'in_progress', conclusion: null, html_url: null }]);
+    const said = 'AM-1 is built and the pull request is open: https://github.com/me/r/pull/7.';
+    s.ctx.store.updateSession(session.id, { last_text: said });
+    const card = async () => (await s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === session.id);
+    await s.ctx.github.syncSession(session);
+    expect(await card()).toMatchObject({ attention: { kind: 'checking' }, card_text: said });
+    // the checks pass and auto-merge runs: the message is out of date now
+    const merged = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+    merged.s.ctx.store.updateSession(merged.session.id, { last_text: said });
+    await merged.s.ctx.github.syncSession(merged.session);
+    const after = (await merged.s.call('GET', '/inbox')).data.idle.find((x: { id: number }) => x.id === merged.session.id);
+    expect(after).toMatchObject({ attention: { kind: 'merged' }, card_text: null, last_text: said });
+    await s.app.close();
+    await merged.s.app.close();
+  });
+
   it('merges once when two syncs of the same branch run at the same time', async () => {
     const { s, session, merges } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
     await Promise.all([s.ctx.github.syncSession(session), s.ctx.github.syncSession(session)]);
