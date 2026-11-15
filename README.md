@@ -572,6 +572,15 @@ and runs the agents.
   `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. An SVG read from a repo is
   served with `CSP: sandbox`, so a script in it runs as nobody. Item images are kept only when their
   bytes are PNG, JPEG, GIF or WebP.
+- The app's page carries a full Content-Security-Policy: `default-src 'self'; script-src 'self';
+  style-src 'self'; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self';
+  manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors
+  'none'`. Scripts, styles and requests come from Dispatch's own origin only and nothing inline
+  runs, so text that got into a page cannot run a script or send data elsewhere. Images are the one
+  wider rule: item text may show an image from any https host. The OAuth consent page runs no
+  script at all (`default-src 'none'`, its one style by hash); its form may post to Dispatch and be
+  sent on to the return address of the app being approved, nowhere else. The Vite dev server
+  (`npm run dev:web`) serves the page itself, without the policy.
 - In proxy mode the user header is believed only from `TRUSTED_PROXIES`, with the `PROXY_SECRET`;
   any other request not from the machine itself is refused on every path. A request that carries a
   device cookie is believed for the device only, whatever header comes with it.

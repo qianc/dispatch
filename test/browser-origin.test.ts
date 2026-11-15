@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,10 +73,49 @@ describe('response headers', () => {
       for (const url of [`${s.base}/api/me`, `${s.base}/authorize?client_id=nope`]) {
         const res = await fetch(url);
         expect(res.headers.get('x-frame-options')).toBe('DENY');
-        expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+        expect(res.headers.get('content-security-policy')).toMatch(/(^|; )frame-ancestors 'none'$/);
         expect(res.headers.get('x-content-type-options')).toBe('nosniff');
         expect(res.headers.get('referrer-policy')).toBe('same-origin');
       }
+      expect((await fetch(`${s.base}/api/me`)).headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it("limit the app's page to Dispatch's own scripts, styles and requests (DISP-72)", async () => {
+    const webDist = mkdtempSync(join(tmpdir(), 'dsp-web-'));
+    writeFileSync(join(webDist, 'index.html'), '<!doctype html><title>Dispatch</title>');
+    const s = await startServer({ WEB_DIST: webDist });
+    try {
+      // the page itself, and any path the app's router answers
+      for (const path of ['/', '/index.html', '/p/ABC?tab=settings']) {
+        const res = await fetch(`${s.base}${path}`);
+        expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+        expect(res.headers.get('content-security-policy')).toBe(
+          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        );
+      }
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('let the consent page run no script, show its one style, and post only to Dispatch and the app it returns to (DISP-72)', async () => {
+    const s = await startServer();
+    try {
+      const style = "style-src 'sha256-[A-Za-z0-9+/]{43}='";
+      const unknown = await fetch(`${s.base}/authorize?client_id=nope`);
+      expect(unknown.headers.get('content-security-policy')).toMatch(new RegExp(`^default-src 'none'; img-src 'self'; ${style}; base-uri 'none'; form-action 'self'; frame-ancestors 'none'$`));
+      // the style on the page is the one the policy names
+      const hash = createHash('sha256').update(/<style>([^]*?)<\/style>/.exec(await unknown.text())![1]).digest('base64');
+      expect(unknown.headers.get('content-security-policy')).toContain(`style-src 'sha256-${hash}'`);
+      // the consent page: the browser follows the form's redirect to the app only if the policy names it
+      const reg = async (redirect: string) => (await (await fetch(`${s.base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'app', redirect_uris: [redirect] }) })).json()).client_id;
+      const consent = async (redirect: string) => (await fetch(`${s.base}/authorize?client_id=${await reg(redirect)}&redirect_uri=${encodeURIComponent(redirect)}&response_type=code&code_challenge=x&code_challenge_method=S256`)).headers.get('content-security-policy');
+      expect(await consent('https://app.example/cb?x=1')).toMatch(/; form-action 'self' https:\/\/app\.example; frame-ancestors 'none'$/);
+      expect(await consent('http://localhost:6274/cb')).toMatch(/; form-action 'self' http:\/\/localhost:6274; frame-ancestors 'none'$/);
+      expect(await consent('http://[::1]:6274/cb')).toMatch(/; form-action 'self' http:; frame-ancestors 'none'$/);
     } finally {
       await s.app.close();
     }

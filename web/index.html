@@ -10,35 +10,12 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Dispatch</title>
-    <script>
-      try { var t = localStorage.getItem('dispatch:theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
-    </script>
+    <!-- no inline script or style on this page: the Content-Security-Policy allows files from Dispatch itself only -->
+    <script src="/boot-theme.js"></script>
   </head>
   <body>
     <div id="root"></div>
-    <!-- Watchdog: if the app has not started after 8 s (e.g. iOS kept an old build's files),
-         offer a reload, or a reset that drops the service worker and its caches. -->
-    <div id="boot-fail" hidden style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#0e0e10;color:#ededef;font:15px -apple-system,system-ui,sans-serif;padding:24px;text-align:center">
-      <div>Dispatch did not start.</div>
-      <button onclick="location.reload()" style="font:inherit;padding:10px 18px;border-radius:10px;border:1px solid #2c2c31;background:#222226;color:inherit">Reload</button>
-      <button id="boot-reset" style="font:inherit;padding:10px 18px;border-radius:10px;border:0;background:#6e6ff0;color:#fff">Reset app</button>
-    </div>
-    <script>
-      setTimeout(function () {
-        if (window.__dispatchStarted) return;
-        var el = document.getElementById('boot-fail');
-        el.hidden = false;
-        document.getElementById('boot-reset').onclick = async function () {
-          try {
-            var regs = await navigator.serviceWorker.getRegistrations();
-            await Promise.all(regs.map(function (r) { return r.unregister(); }));
-            var keys = await caches.keys();
-            await Promise.all(keys.map(function (k) { return caches.delete(k); }));
-          } catch (e) {}
-          location.replace('/?reset=' + Date.now());
-        };
-      }, 8000);
-    </script>
+    <script src="/boot-watchdog.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
