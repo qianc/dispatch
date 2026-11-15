@@ -195,7 +195,8 @@ export interface Session {
   source_id: number | null;
   waiting_reason: string | null;
   last_text: string | null;
-  usage: { cost_usd?: number; turns?: number; input_tokens?: number; output_tokens?: number } | null;
+  /** `cost_run` and `cost_run_usd`: the Claude process that reported last, and its last total (see `countCost`) */
+  usage: { cost_usd?: number; turns?: number; input_tokens?: number; output_tokens?: number; cost_run?: string; cost_run_usd?: number } | null;
   options: RunOptions;
   /** Claude account this session runs on; fixed once started (null = legacy default) */
   claude_account: string | null;
@@ -336,7 +337,8 @@ export type SessionEventBody =
   | { kind: 'assistant'; text: string }
   | { kind: 'tool_use'; tool_use_id: string; name: string; summary: string; input: unknown }
   | { kind: 'tool_result'; tool_use_id: string; is_error: boolean; text: string; images?: { url: string; media_type: string }[] }
-  | { kind: 'result'; subtype: string; cost_usd?: number; turns?: number; duration_ms?: number }
+  /** `cost_usd` is the running total of the Claude process `run`, not of the turn */
+  | { kind: 'result'; subtype: string; cost_usd?: number; turns?: number; duration_ms?: number; run?: string }
   | { kind: 'system'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'input_request'; input_id: number }

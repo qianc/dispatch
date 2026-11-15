@@ -319,6 +319,8 @@ export class ClaudeRunner implements AgentRunner {
   private bgIdleTimer: NodeJS.Timeout | null = null;
   /** counts the messages sent to Claude: a check that ends after a newer message speaks for no turn */
   private sent = 0;
+  /** Names this Claude process to the server: the cost a result reports is a total per process (DISP-89). */
+  private run = randomUUID();
 
   constructor(spec: StartSpec, deps: RunnerDeps, opts: RunnerOptions) {
     this.sessionId = spec.session_id;
@@ -564,7 +566,7 @@ export class ClaudeRunner implements AgentRunner {
       return;
     }
     if (m.type === 'result') {
-      this.event({ kind: 'result', subtype: m.subtype, cost_usd: m.total_cost_usd, turns: m.num_turns, duration_ms: m.duration_ms });
+      this.event({ kind: 'result', subtype: m.subtype, cost_usd: m.total_cost_usd, turns: m.num_turns, duration_ms: m.duration_ms, run: this.run });
       if (m.subtype !== 'success' && 'errors' in m && Array.isArray(m.errors) && m.errors.length) {
         this.event({ kind: 'error', text: m.errors.join('\n') });
       }

@@ -155,6 +155,24 @@ export interface SendOpts { client_id?: string; project_keys?: string[] }
 
 export type AssistantRpc = (s: Session, method: string, params: Record<string, unknown>) => Promise<unknown>;
 
+type CostCount = { cost_usd: number; cost_run?: string; cost_run_usd?: number };
+
+/**
+ * Add a reported cost to a session's total (DISP-89). Claude reports a running total per process. A resumed
+ * session goes on from the old total after a clean exit, and starts at 0 again after a hard kill (measured,
+ * SDK 0.3.300). So the server keeps the last total of the reporting process (`run`) and adds what is new:
+ * a repeated or late report adds nothing, and a new process that reports less than the one before it
+ * started at 0. Not seen: a restart at 0 whose first report is above the old process's last total.
+ */
+export function countCost(u: Partial<CostCount>, reported: number, run?: string): CostCount {
+  const total = u.cost_usd ?? 0;
+  // a worker from before `run`: the old count
+  if (!run) return { cost_usd: Math.max(total, reported) };
+  const last = u.cost_run_usd ?? total;
+  if (run === u.cost_run) return { cost_usd: total + Math.max(0, reported - last), cost_run: run, cost_run_usd: Math.max(last, reported) };
+  return { cost_usd: total + (reported >= last ? reported - last : reported), cost_run: run, cost_run_usd: reported };
+}
+
 export class Sessions {
   private store: Store;
   private bus: Bus;
@@ -993,8 +1011,8 @@ export class Sessions {
         if (msg.body.kind === 'assistant') this.emitSession(this.store.updateSession(s.id, { last_text: msg.body.text.slice(0, 300) }));
         if (msg.body.kind === 'result') {
           const u = s.usage ?? {};
-          // cost is a running total per Claude session (kept across resume); turns are per turn
-          const usage = { ...u, cost_usd: Math.max(u.cost_usd ?? 0, msg.body.cost_usd ?? 0), turns: (u.turns ?? 0) + (msg.body.turns ?? 0) };
+          // cost is a running total per Claude process; turns are per turn
+          const usage = { ...u, ...countCost(u, msg.body.cost_usd ?? 0, msg.body.run), turns: (u.turns ?? 0) + (msg.body.turns ?? 0) };
           this.emitSession(this.store.updateSession(s.id, { usage }));
         }
         return;
