@@ -794,7 +794,12 @@ export const answerInput = z.union([
 export const mergeInput = z.object({
   how: z.enum(['github', 'local']),
   method: z.enum(['squash', 'merge', 'rebase']).default('squash'),
+  /** the head commit the page showed: a branch that moved on since is not merged (DISP-111) */
+  sha: z.string().min(1).optional(),
 });
+
+/** `sha`: the head commit the page showed; a branch that moved on since is not approved. */
+export const approveInput = z.object({ sha: z.string().min(1).optional() });
 
 // ---------- live events (server → browser over SSE) ----------
 

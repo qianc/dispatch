@@ -246,3 +246,23 @@ GitHub PRs get the same Approve button above their existing merge controls.
 ## Left to the builder
 
 File layout, names of helpers, the exact words of the notes, and how the list groups rows.
+
+## As built
+
+Differences from the design above, found while building and in the final review:
+
+- **Approve and Merge name the commit.** The PR page sends the head commit it shows with Approve,
+  and with Merge for a PR with no session. The server answers 409 ("This pull request has new
+  commits. Look at the changes again.") when the row is at another commit, and gives the commit to
+  GitHub's merge, which refuses when the branch moved on. An open PR page is read again when a
+  `pr` event says its head or state changed.
+- **A repo no account can read.** The timer skips it and, when it could read no repo of the
+  project, leaves the last sync time and error as they are. A sync someone asked for (the list
+  opening, refresh) records "No GitHub account is configured" as the list's error.
+- **A session that takes a PR during a project sync.** The project sync reads the row again after
+  GitHub answered, so it never writes title, state or head over a row that got a session meanwhile.
+- **A linked row's details** are read again when GitHub's `updated_at` moved, not on a changed head
+  sha alone (the session sync owns the head).
+- **The list on screen** reads itself again every 5 seconds while its last sync is older than a
+  minute, and the PRs tab count means that opening a project page can start that sync.
+- **The tab bar** of the project page stays one row with six tabs (`Segmented` option `row`).

@@ -5,7 +5,7 @@ import { api, type PrDetail, type PullRequest, type Session } from '../api.ts';
 import { autoMergePending } from '../../../src/shared/attention.ts';
 import { Page } from '../components/Layout.tsx';
 import { PrOpenedBy, PrStateChip } from '../components/PrState.tsx';
-import { approvalView } from '../prs.ts';
+import { approvalView, mergeBody } from '../prs.ts';
 import { Button, Chip, Empty, ErrorText, Md, Section, Segmented, cx } from '../components/ui.tsx';
 
 function Patch({ patch }: { patch: string }) {
@@ -41,19 +41,20 @@ export function PrView() {
   const [how, setHow] = useState<'github' | 'local'>('github');
   const [method, setMethod] = useState<'squash' | 'merge' | 'rebase'>('squash');
   const { data, error, refetch, isFetching } = useQuery({ queryKey: ['pr', id], queryFn: () => api.get<PrDetail>(`/prs/${id}`) });
-  // a local review merges on the worker; a PR with no session has no worker: it merges on GitHub (DISP-111)
-  const mergeHow = data?.pr.local ? 'local' : data?.pr.session_id === null ? 'github' : how;
+  const mergeHow = data ? mergeBody(data.pr, how, method).how : how;
+  // refused (the branch moved on, or GitHub said no): show the PR as it is now
   const merge = useMutation({
-    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, { how: mergeHow, method }),
-    onSuccess: () => {
+    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, mergeBody(data!.pr, how, method)),
+    onSettled: () => {
       refetch();
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['project-prs'] });
     },
   });
+  // the approval is of the commit this page shows
   const approve = useMutation({
-    mutationFn: () => api.post<PullRequest>(`/prs/${id}/approve`),
-    onSuccess: () => {
+    mutationFn: () => api.post<PullRequest>(`/prs/${id}/approve`, { sha: data!.pr.head_sha ?? undefined }),
+    onSettled: () => {
       refetch();
       qc.invalidateQueries({ queryKey: ['project-prs'] });
     },

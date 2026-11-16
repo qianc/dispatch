@@ -20,6 +20,24 @@ export function approvalView(pr: Pick<PullRequest, 'approval' | 'head_sha'>): { 
   return { current, chip: current ? 'Approved' : 'Approved earlier', text: [first, onGithub].filter(Boolean).join(' ') };
 }
 
+type MergeHow = 'github' | 'local';
+type MergeMethod = 'squash' | 'merge' | 'rebase';
+
+/**
+ * What the Merge button sends. A local review merges on the worker. A PR with no session has no
+ * worker: it merges on GitHub, and only at the commit the page shows.
+ */
+export function mergeBody(pr: Pick<PullRequest, 'local' | 'session_id' | 'head_sha'>, how: MergeHow, method: MergeMethod): { how: MergeHow; method: MergeMethod; sha?: string } {
+  if (pr.local) return { how: 'local', method };
+  if (pr.session_id === null) return { how: 'github', method, ...(pr.head_sha ? { sha: pr.head_sha } : {}) };
+  return { how, method };
+}
+
+/** An open PR page shows one commit's diff: true when the PR is not at that commit, or in that state, any more. */
+export function prPageStale(shown: Pick<PullRequest, 'head_sha' | 'state'> | undefined, now: Pick<PullRequest, 'head_sha' | 'state'>): boolean {
+  return !!shown && (shown.head_sha !== now.head_sha || shown.state !== now.state);
+}
+
 /** The CI dot: a class for the colour and a word for screen readers; null: not known, no dot. */
 export function ciLook(ci: CiState | null): { cls: string; label: string } | null {
   if (ci === 'success') return { cls: 'bg-ok', label: 'Checks passed' };

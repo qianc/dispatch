@@ -3,7 +3,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectPr, ProjectPrList, PrApproval, Repo } from '../src/shared/types.ts';
 import type { PrDetail, ProjectSummary } from '../web/src/api.ts';
-import { approvalView, ciLook, linkLabels } from '../web/src/prs.ts';
+import { approvalView, ciLook, linkLabels, mergeBody, prPageStale } from '../web/src/prs.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
 
 vi.mock('../web/src/wide.ts', () => ({ useWide: () => false, useVeryWide: () => false }));
@@ -64,6 +64,21 @@ describe('what a pull request belongs to, and its approval, in words (DISP-111)'
     expect(linkLabels({ linked: null })).toEqual(['No item']);
     expect(linkLabels({ linked: { session_id: 3, title: 'Batch', item_keys: ['PP-1', 'PP-2'] } })).toEqual(['PP-1', 'PP-2']);
     expect(linkLabels({ linked: { session_id: 3, title: 'Plan', item_keys: [] } })).toEqual(['Session']);
+  });
+
+  it('mergeBody: a PR with no session merges on GitHub, and only the commit the page shows', () => {
+    expect(mergeBody({ local: false, session_id: null, head_sha: 'sha41' }, 'local', 'squash')).toEqual({ how: 'github', method: 'squash', sha: 'sha41' });
+    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'local', 'merge')).toEqual({ how: 'local', method: 'merge' });
+    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'github', 'rebase')).toEqual({ how: 'github', method: 'rebase' });
+    expect(mergeBody({ local: true, session_id: 3, head_sha: 'sha5' }, 'github', 'squash')).toEqual({ how: 'local', method: 'squash' });
+  });
+
+  it('prPageStale: an open PR page is read again when the branch or the state moved on', () => {
+    const shown = { head_sha: 'sha41', state: 'open' as const };
+    expect(prPageStale(undefined, shown)).toBe(false);
+    expect(prPageStale(shown, { head_sha: 'sha41', state: 'open' })).toBe(false);
+    expect(prPageStale(shown, { head_sha: 'sha41b', state: 'open' })).toBe(true);
+    expect(prPageStale(shown, { head_sha: 'sha41', state: 'merged' })).toBe(true);
   });
 
   it('approvalView', () => {

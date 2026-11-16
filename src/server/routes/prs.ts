@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { mergeInput, type Project, type ProjectPrList, type PullRequest } from '../../shared/types.ts';
+import { approveInput, mergeInput, type Project, type ProjectPrList, type PullRequest } from '../../shared/types.ts';
 import { principalName } from '../access.ts';
 import { NO_SESSION, type Caller } from '../github.ts';
 import { canDrive } from '../sessionGuard.ts';
@@ -64,16 +64,16 @@ export function prRoutes(app: FastifyInstance, { github, sessions, store, users 
   app.post('/api/prs/:id/approve', async (req) => {
     const id = intParam((req.params as { id: string }).id);
     if (!store.pr(id)) throw notFound('PR');
-    return github.approve(id, caller(req));
+    return github.approve(id, caller(req), approveInput.parse(req.body ?? {}).sha);
   });
 
   app.post('/api/prs/:id/merge', async (req) => {
     const id = intParam((req.params as { id: string }).id);
-    const { how, method } = mergeInput.parse(req.body);
+    const { how, method, sha } = mergeInput.parse(req.body);
     const pr = store.pr(id);
     // auto-merge stopped and the owner merges by hand: their hands were needed
     if (pr?.blocked && pr.session_id !== null && store.session(pr.session_id)?.options.auto_merge !== 'off') store.addMergeEvent(pr.session_id, 'manual_merge', pr.id, pr.blocked);
-    return github.merge(id, how, method, caller(req));
+    return github.merge(id, how, method, caller(req), sha);
   });
 
   /** A hosted repo's review moves to a PR on its upstream GitHub repo. */

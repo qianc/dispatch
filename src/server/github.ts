@@ -77,10 +77,13 @@ export function ciStateOf(checks: { status: string; conclusion: string | null }[
 export const NO_SESSION = 'This pull request has no session. Start work from an item.';
 const OWN_PR = 'GitHub does not accept an approval of your own pull request.';
 const NO_MERGE_GENERATE = "This repo merges only in Dispatch, on a session's worker (it has a generate command). A pull request without a session cannot be merged here.";
+const MOVED = 'This pull request has new commits. Look at the changes again.';
 const NO_DEPLOY = "The repo's deploy command does not run for this merge: it needs a session's worker.";
 
 /** An error the API answers with 400: the request does not fit this PR. */
 const refused = (message: string) => Object.assign(new Error(message), { status: 400 });
+/** 409: the branch is not at the commit the caller looked at. */
+const moved = () => Object.assign(new Error(MOVED), { status: 409 });
 
 /** How long a PR with no checks may still get some: until then the project sync asks again. */
 const CHECKS_MAY_START_MS = 30 * 60_000;
@@ -523,8 +526,9 @@ export class GitHub {
     if (repo.local_path) return (await this.syncLocal(this.sessionOf(pr)!, repo)) ?? pr;
     if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.sessionOf(pr)!, repo)) ?? pr;
     const t = this.mustTarget(repo);
-    const s = this.sessionOf(pr);
     const { data } = await this.reader(pr, repo, caller).pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
+    // read again: a session may have taken the PR while GitHub answered
+    const s = this.sessionOf(this.store.pr(prId)!);
     return s ? this.record(s, repo, data as GhPull) : this.recordUnlinked(repo, data as GhPull);
   }
 
@@ -595,23 +599,27 @@ export class GitHub {
     if (running) return opts.full && !running.full ? running.done.then(() => this.syncProjectPrs(project, opts)) : running.done;
     const done = (async () => {
       let error: string | null = null;
+      let read = 0;
       for (const repo of this.store.repos(project.id)) {
         if (repo.local_path || repo.kind === 'hosted') continue;
         try {
-          await this.syncRepoPrs(repo, opts);
+          if (await this.syncRepoPrs(repo, opts)) read++;
         } catch (e) {
           error ??= `${repo.github_owner}/${repo.github_name}: ${(e as Error).message}`;
         }
       }
-      this.prSynced.set(project.id, { synced_at: new Date().toISOString(), error });
+      // the timer with no account to read with has nothing to say: the list stays as its last reader left it
+      if (read || error) this.prSynced.set(project.id, { synced_at: new Date().toISOString(), error });
     })().finally(() => this.prSyncs.delete(project.id));
     this.prSyncs.set(project.id, { full: !!opts.full, done });
     return done;
   }
 
-  private async syncRepoPrs(repo: Repo, opts: { full?: boolean; caller?: Caller | null }) {
-    const octo = this.asCaller(opts.caller, repo, 'read').octo;
-    if (!octo) return; // no account reads this repo: skipped
+  /** false: no account reads this repo, and nobody asked (the timer skips it; for a caller it is an error). */
+  private async syncRepoPrs(repo: Repo, opts: { full?: boolean; caller?: Caller | null }): Promise<boolean> {
+    const found = this.asCaller(opts.caller, repo, 'read').octo;
+    if (!found && !opts.caller) return false;
+    const octo = this.mustClient(found, repo);
     const o = { owner: repo.github_owner, repo: repo.github_name };
     const listed = await octo.paginate(octo.pulls.list, { ...o, state: 'open', per_page: 100 }) as GhPull[];
     const numbers = new Set(listed.map((p) => p.number));
@@ -624,16 +632,19 @@ export class GitHub {
       if (!opts.full && !changed && !unsettled) continue;
       const full = (await octo.pulls.get({ ...o, pull_number: p.number })).data as GhPull;
       const ci = await this.checkRunsWith(octo, repo, full.head.sha).then(ciStateOf, () => null);
-      if (row && row.session_id !== null) {
+      // read again: a session may have taken the PR while GitHub answered
+      const now = this.store.prByNumber(repo.id, p.number);
+      if (now && now.session_id !== null) {
         // a session's PR: title, state and every side effect stay with the session sync
-        this.store.setPrMeta(row.id, this.metaOf(full, ci));
-        this.emitIfChanged(row, row.id);
+        this.store.setPrMeta(now.id, this.metaOf(full, ci));
+        this.emitIfChanged(now, now.id);
       } else this.recordUnlinked(repo, full, ci);
     }
     // open here, gone from the list: closed or merged on GitHub (a session's PR goes its session's way)
     for (const row of this.store.prs({ repo_id: repo.id, open_only: true })) {
       if (row.number > 0 && !numbers.has(row.number)) await this.syncPr(row.id, opts.caller);
     }
+    return true;
   }
 
   /**
@@ -875,12 +886,14 @@ export class GitHub {
   /**
    * Approve a PR on GitHub (DISP-111): kept on the PR in Dispatch first, then sent to GitHub as the
    * caller's review. A review GitHub does not take (your own PR, a token that may not review, no
-   * GitHub connection) is no error: the approval stays, with what happened.
+   * GitHub connection) is no error: the approval stays, with what happened. `sha`: the head commit
+   * the caller looked at; when the branch moved on since, nothing is approved.
    */
-  async approve(prId: number, caller: Caller): Promise<PullRequest> {
+  async approve(prId: number, caller: Caller, sha?: string): Promise<PullRequest> {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open' || pr.number <= 0 || !pr.head_sha) throw refused('Only an open pull request on GitHub can be approved.');
+    if (sha && sha !== pr.head_sha) throw moved();
     const repo = this.store.repo(pr.repo_id)!;
     const t = this.mustTarget(repo);
     this.store.setPrApproval(pr.id, { by: caller.name, sha: pr.head_sha });
@@ -895,11 +908,15 @@ export class GitHub {
     return this.emitIfChanged(pr, pr.id);
   }
 
-  /** `caller`: who merges a PR that has no session (a session's PR merges as its starter). */
-  async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null) {
+  /**
+   * `caller`: who merges a PR that has no session (a session's PR merges as its starter). `sha`: the
+   * head commit the caller looked at; a branch that moved on since is not merged (GitHub checks it too).
+   */
+  async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null, sha?: string) {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
+    if (sha && sha !== pr.head_sha) throw moved();
     if (!this.sessionOf(pr)) {
       // no session: no worker to merge on, so only GitHub's own merge
       const repo = this.store.repo(pr.repo_id)!;
@@ -909,7 +926,7 @@ export class GitHub {
     this.mergingNow.add(prId);
     this.bus.emit({ t: 'pr', pr });
     try {
-      const res = await this.mergeOpen(pr, how, method, caller);
+      const res = await this.mergeOpen(pr, how, method, caller, sha);
       if (res.ok) this.deploy(pr);
       return res;
     } finally {
@@ -940,7 +957,7 @@ export class GitHub {
     void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
-  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null) {
+  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null, sha?: string) {
     const prId = pr.id;
     const repo = this.store.repo(pr.repo_id)!;
     // a generate command runs in Dispatch's merge (DISP-56): GitHub's merge button would skip it
@@ -952,7 +969,7 @@ export class GitHub {
       const t = this.mustTarget(repo);
       const s = this.sessionOf(pr);
       const octo = s ? this.client(s, repo, 'write') : this.mustClient(this.asCaller(caller, repo, 'write').octo, repo);
-      await octo.pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
+      await octo.pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method, ...(sha ? { sha } : {}) });
     } else {
       const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };

@@ -12,6 +12,7 @@ const BOB_TOKEN = 'ghp_bobsOwnToken0001';
 const OWN_PR = 'GitHub does not accept an approval of your own pull request.';
 const NO_SESSION = 'This pull request has no session. Start work from an item.';
 const GENERATE = "This repo merges only in Dispatch, on a session's worker (it has a generate command). A pull request without a session cannot be merged here.";
+const MOVED = 'This pull request has new commits. Look at the changes again.';
 const DEPLOY = "The repo's deploy command does not run for this merge: it needs a session's worker.";
 
 /** #41 synced into Dispatch as a PR with no session: its row. */
@@ -129,6 +130,24 @@ describe('the open PRs of a project over the API (DISP-111)', () => {
     await t.s.app.close();
   });
 
+  it('an approval is of the commit the person looked at', async () => {
+    const t = await prServer();
+    const pr = await unlinked(t);
+    const seen = (await t.s.call('GET', `/prs/${pr.id}`)).data.pr.head_sha;
+    expect(seen).toBe('sha41');
+    // the branch moves on, and the timer stores it, while the page still shows the old diff
+    t.prs.set(41, ghPr(41, { head: { ref: 'dep-41', sha: 'sha41b' }, updated_at: '2026-11-03T00:00:00Z' }));
+    await t.s.ctx.github.syncOpenPrs();
+    const r = await t.s.call('POST', `/prs/${pr.id}/approve`, { sha: seen });
+    expect(r.status).toBe(409);
+    expect(r.data.error).toBe(MOVED);
+    expect(t.args('pulls.createReview')).toEqual([]);
+    expect(t.s.ctx.store.pr(pr.id)!.approval).toBeNull();
+    const again = await t.s.call('POST', `/prs/${pr.id}/approve`, { sha: 'sha41b' });
+    expect(again.data.approval).toMatchObject({ sha: 'sha41b', review: 'sent' });
+    await t.s.app.close();
+  });
+
   it('a second person is offered Approve, and a failed review can be sent again', async () => {
     const t = await multi();
     await connectBob(t);
@@ -202,6 +221,23 @@ describe('the open PRs of a project over the API (DISP-111)', () => {
     expect(t.gh.calls.filter((c) => c.method === 'pulls.merge').map((c) => c.token)).toEqual([BOB_TOKEN]);
     expect(t.s.ctx.store.sessions({})).toEqual([]);
     expect((await list(t, as('bob'))).prs).toEqual([]);
+    await t.s.app.close();
+  });
+
+  it('a merge is of the commit the person looked at', async () => {
+    const t = await prServer();
+    const pr = await unlinked(t);
+    // GitHub refuses a merge when the head is not the one named: the commit goes with the merge
+    t.prs.set(41, ghPr(41, { head: { ref: 'dep-41', sha: 'sha41b' }, updated_at: '2026-11-03T00:00:00Z' }));
+    await t.s.ctx.github.syncOpenPrs();
+    const old = await t.s.call('POST', `/prs/${pr.id}/merge`, { how: 'github', method: 'squash', sha: 'sha41' });
+    expect(old.status).toBe(409);
+    expect(old.data.error).toBe(MOVED);
+    expect(t.args('pulls.merge')).toEqual([]);
+    expect(t.s.ctx.store.pr(pr.id)!.state).toBe('open');
+    const r = await t.s.call('POST', `/prs/${pr.id}/merge`, { how: 'github', method: 'squash', sha: 'sha41b' });
+    expect(r.data).toMatchObject({ ok: true, pr: { state: 'merged' } });
+    expect(t.args('pulls.merge')).toEqual([{ owner: 'me', repo: 'app', pull_number: 41, merge_method: 'squash', sha: 'sha41b' }]);
     await t.s.app.close();
   });
 

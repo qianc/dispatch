@@ -19,7 +19,8 @@ export const ghError = (status: number, message: string) => Object.assign(new Er
 /**
  * A test server with project PP, GitHub repo me/app, and a fake GitHub that answers from `prs`
  * (the PRs of me/app by number; the test changes it). `repos` holds the PRs of other repos by
- * name. `fail.list` fails the list of me/app; `fail.review` fails every review.
+ * name. `fail.list` fails the list of me/app; `fail.review` fails every review. `hold.checks`: a
+ * promise every read of check runs waits for.
  */
 export async function prServer(start: (env?: Record<string, string>) => ReturnType<typeof startServer> = startServer, headers: Record<string, string> = {}) {
   const s = await start();
@@ -29,6 +30,7 @@ export async function prServer(start: (env?: Record<string, string>) => ReturnTy
   const repos = new Map<string, Map<number, GhPr>>([['app', prs]]);
   const checks = new Map<string, { name: string; status: string; conclusion: string | null }[]>();
   const fail: { list: unknown | null; review: unknown | null } = { list: null, review: null };
+  const hold: { checks: Promise<void> | null } = { checks: null };
   const of = (a: { repo: string; pull_number: number }) => {
     const p = repos.get(a.repo)?.get(a.pull_number);
     if (!p) throw ghError(404, 'Not Found');
@@ -57,7 +59,12 @@ export async function prServer(start: (env?: Record<string, string>) => ReturnTy
         return { data: {} };
       },
     },
-    checks: { listForRef: async (a: { ref: string }) => ({ data: { check_runs: checks.get(a.ref) ?? [] } }) },
+    checks: {
+      listForRef: async (a: { ref: string }) => {
+        await hold.checks;
+        return { data: { check_runs: checks.get(a.ref) ?? [] } };
+      },
+    },
     repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
     // as Octokit: page after page until a short one
     paginate: async (fn: (a: Record<string, unknown>) => Promise<{ data: unknown[] }>, args: { per_page?: number }) => {
@@ -71,5 +78,5 @@ export async function prServer(start: (env?: Record<string, string>) => ReturnTy
   });
   /** the arguments of every call of `method` */
   const args = (method: string) => gh.calls.filter((c) => c.method === method).map((c) => c.args as Record<string, any>);
-  return { s, project, repo, prs, repos, checks, fail, gh, args };
+  return { s, project, repo, prs, repos, checks, fail, hold, gh, args };
 }

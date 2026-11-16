@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { ciStateOf } from '../src/server/github.ts';
-import { OWNER } from './helpers.ts';
+import { OWNER, as, startMultiUser, waitFor } from './helpers.ts';
 import { ghError, ghPr, prServer } from './project-prs-helpers.ts';
 
 type T = Awaited<ReturnType<typeof prServer>>;
@@ -154,6 +154,27 @@ describe('the open PRs of a project (DISP-111)', () => {
     await t.s.app.close();
   });
 
+  it('a session that takes a PR while the project sync reads it keeps what it stored', async () => {
+    const t = await prServer();
+    const { item, session: s } = await session(t);
+    t.prs.set(5, ghPr(5, { head: { ref: 'dispatch/pp-1-x', sha: 'sha5' } }));
+    let go!: () => void;
+    t.hold.checks = new Promise<void>((r) => { go = r; });
+    // the project sync has read #5 as open and waits for its checks
+    const running = sync(t);
+    await waitFor(() => t.args('checks.listForRef').length === 1, 'the read of the checks');
+    // meanwhile it merges, and its session sync stores that
+    t.prs.set(5, ghPr(5, { head: { ref: 'dispatch/pp-1-x', sha: 'sha5' }, state: 'closed', merged_at: '2026-11-02T00:00:00Z' }));
+    await t.s.ctx.github.syncSession(s);
+    expect(t.s.ctx.store.prByNumber(t.repo.id, 5)).toMatchObject({ state: 'merged', session_id: s.id });
+    go();
+    await running;
+    expect(t.s.ctx.store.prs({ repo_id: t.repo.id })).toHaveLength(1);
+    expect(t.s.ctx.store.prByNumber(t.repo.id, 5)).toMatchObject({ state: 'merged', session_id: s.id });
+    expect(t.s.ctx.store.item(item.id)!.status).toBe('done');
+    await t.s.app.close();
+  });
+
   it('local and hosted repos are not asked', async () => {
     const t = await prServer();
     const base = { default_branch: 'main', check_command: null, deploy_command: null, generate_command: null, github_account: null };
@@ -182,6 +203,33 @@ describe('the open PRs of a project (DISP-111)', () => {
     t.fail.list = null;
     await sync(t);
     expect(t.s.ctx.github.prSyncInfo(t.project.id).error).toBeNull();
+    await t.s.app.close();
+  });
+
+  it('a repo that no account can read: said on the list when someone asks', async () => {
+    const t = await prServer();
+    Object.defineProperty(t.s.ctx.github, 'octo', { value: null, configurable: true, writable: true });
+    const r = await t.s.call('POST', '/projects/PP/prs/sync');
+    expect(r.status).toBe(200);
+    expect(r.data.error).toBe('me/app: No GitHub account is configured (GITHUB_ACCOUNTS or GITHUB_TOKEN)');
+    expect(r.data.synced_at).toBeTruthy();
+    expect(t.args('pulls.list')).toEqual([]);
+    await t.s.app.close();
+  });
+
+  it('the timer with no account to read with leaves the list as its last reader left it', async () => {
+    const t = await prServer(startMultiUser, as('alice'));
+    Object.defineProperty(t.s.ctx.github, 'octo', { value: null, configurable: true, writable: true });
+    await t.s.ctx.github.syncOpenPrs();
+    expect(t.s.ctx.github.prSyncInfo(t.project.id)).toEqual({ synced_at: null, error: null });
+    // bob reads with his own GitHub connection
+    t.s.ctx.identities.profile = async () => ({ id: 42, login: 'bob-gh', name: 'Bob Builder', email: 'bob@example.com', scopes: 'repo' });
+    expect((await t.s.call('PUT', '/me/github', { token: 'ghp_bobsOwnToken0001' }, as('bob'))).status).toBe(200);
+    t.prs.set(41, ghPr(41));
+    const r = await t.s.call('POST', '/projects/PP/prs/sync', undefined, as('bob'));
+    expect(r.data).toMatchObject({ error: null, prs: [{ number: 41 }] });
+    await t.s.ctx.github.syncOpenPrs();
+    expect(t.s.ctx.github.prSyncInfo(t.project.id)).toEqual({ synced_at: r.data.synced_at, error: null });
     await t.s.app.close();
   });
 
