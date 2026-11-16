@@ -494,9 +494,25 @@ export interface ItemChanges {
   modules?: string[];
 }
 
+/** A PR's checks, as one word: none (no checks), or the worst of what they say. */
+export type CiState = 'pending' | 'success' | 'failure' | 'none';
+
+/** The latest approval of a PR in Dispatch, and how its review went on GitHub. */
+export interface PrApproval {
+  at: string;
+  /** the Dispatch user (or token name) who approved */
+  by: string;
+  /** the head commit that was approved */
+  sha: string | null;
+  /** sent: GitHub has the review. own_pr: GitHub takes no approval of one's own PR. failed: see note. null: not tried yet */
+  review: 'sent' | 'own_pr' | 'failed' | null;
+  note: string | null;
+}
+
 export interface PullRequest {
   id: number;
-  session_id: number;
+  /** null: no session of Dispatch opened it (found by the project's PR sync) */
+  session_id: number | null;
   repo_id: number;
   repo_full_name: string;
   number: number;
@@ -518,6 +534,16 @@ export interface PullRequest {
   started_by: string | null;
   /** the GitHub login its session acts as (null: the env accounts) */
   github_login: string | null;
+  /** GitHub login of who opened it (null: not known, or a deleted user) */
+  author: string | null;
+  base_ref: string | null;
+  draft: boolean;
+  changed_files: number | null;
+  /** null: not known */
+  ci_state: CiState | null;
+  /** GitHub's updated_at at the last project sync */
+  gh_updated_at: string | null;
+  approval: PrApproval | null;
 }
 
 /** A GitHub permission on a repo, from strongest to weakest; null: could not be checked. */

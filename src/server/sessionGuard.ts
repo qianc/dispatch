@@ -10,7 +10,7 @@ type Params = Record<string, string>;
 const id = (v: unknown) => Number(v) || 0;
 const bySessionParam = (_store: Store, p: Params) => id(p.id) || undefined;
 const byInput = (store: Store, p: Params) => store.input(id(p.id))?.session_id;
-const byPr = (store: Store, p: Params) => store.pr(id(p.id))?.session_id;
+const byPr = (store: Store, p: Params) => store.pr(id(p.id))?.session_id ?? undefined;
 
 export type SessionNeed = 'drive' | 'stop';
 

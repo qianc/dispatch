@@ -216,6 +216,11 @@ export class GitHub {
     return id && !isRefusal(id) && id.source === 'user' ? { token: id.token, login: id.login, git_name: id.git_name, git_email: id.git_email } : null;
   }
 
+  /** The session a PR belongs to (none: no session of Dispatch opened it, DISP-111). */
+  private sessionOf(pr: Pick<PullRequest, 'session_id'>): Session | undefined {
+    return pr.session_id === null ? undefined : this.store.session(pr.session_id);
+  }
+
   /** The client for a session's repo, or the error gh() gives when there is none. */
   private client(s: Session | null | undefined, repo: Repo, mode: 'read' | 'write') {
     return this.mustClient(this.as(s, repo, mode).octo, repo);
@@ -440,7 +445,7 @@ export class GitHub {
     if (repo.kind !== 'hosted' || !pr.local || pr.state !== 'open') throw new Error('Only an open review of a hosted repo can move to GitHub.');
     const t = this.target(repo);
     if (!t) throw new Error(`${repo.github_name} has no GitHub repo to open a PR on. Link one in the repo's settings.`);
-    const s = this.store.session(pr.session_id)!;
+    const s = this.sessionOf(pr)!;
     const acting = this.as(s, repo, 'write');
     const octo = this.mustClient(acting.octo, repo);
     const pushed = await this.hosted!.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${pr.head_ref}`], acting.gitEnv);
@@ -458,10 +463,11 @@ export class GitHub {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
-    if (repo.local_path) return (await this.syncLocal(this.store.session(pr.session_id)!, repo)) ?? pr;
-    if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.store.session(pr.session_id)!, repo)) ?? pr;
+    if (repo.local_path) return (await this.syncLocal(this.sessionOf(pr)!, repo)) ?? pr;
+    if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.sessionOf(pr)!, repo)) ?? pr;
     const t = this.mustTarget(repo);
-    const s = this.store.session(pr.session_id)!;
+    const s = this.sessionOf(pr);
+    if (!s) return pr;
     const { data } = await this.client(s, repo, 'read').pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
     return this.record(s, repo, data as GhPull);
   }
@@ -484,7 +490,7 @@ export class GitHub {
 
   /** The worker that holds a PR's branch: its session's. */
   private workerOf(pr: PullRequest) {
-    return this.store.session(pr.session_id)?.worker_id ?? null;
+    return this.sessionOf(pr)?.worker_id ?? null;
   }
 
   /** Called when auto-merge waits because the branch is behind (app.ts sends the agent a message). */
@@ -504,7 +510,7 @@ export class GitHub {
       return { behind: st.behind, differs: st.differs };
     }
     const t = this.mustTarget(repo);
-    const { data } = await this.client(this.store.session(pr.session_id), repo, 'read').repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    const { data } = await this.client(this.sessionOf(pr), repo, 'read').repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
     return { behind: data.behind_by, differs: true };
   }
 
@@ -657,19 +663,20 @@ export class GitHub {
   async detail(prId: number): Promise<PrDetail> {
     const pr = await this.syncPr(prId);
     const repo = this.store.repo(pr.repo_id)!;
-    const auto_merge = this.store.session(pr.session_id)?.options.auto_merge ?? 'off';
+    const auto_merge = this.sessionOf(pr)?.options.auto_merge ?? 'off';
+    const hands = pr.session_id === null ? [] : this.store.mergeEvents(pr.session_id);
     // merged: the branch is in the default branch (and may be deleted); show it from its last commit
     const merged_sha = pr.state === 'merged' && pr.head_sha ? pr.head_sha : undefined;
     if (repo.local_path) {
       const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref, merged_sha }, 120_000);
-      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
+      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     if (repo.kind === 'hosted' && pr.local) {
       const files = await this.hosted!.branchDiff(repo, pr.head_ref, merged_sha);
-      return { pr, repo: this.repoSummary(repo), hands: this.store.mergeEvents(pr.session_id), body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
+      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
     }
     const o = this.mustTarget(repo);
-    const s = this.store.session(pr.session_id);
+    const s = this.sessionOf(pr);
     const octo = this.client(s, repo, 'read');
     const [{ data: p }, files, checks] = await Promise.all([
       octo.pulls.get({ ...o, pull_number: pr.number }),
@@ -681,7 +688,7 @@ export class GitHub {
     return {
       pr,
       repo: this.repoSummary(repo),
-      hands: this.store.mergeEvents(pr.session_id),
+      hands,
       body: p.body ?? '',
       base_ref: p.base.ref,
       files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch ?? null })),
@@ -715,7 +722,7 @@ export class GitHub {
    */
   private deploy(pr: PullRequest) {
     const repo = this.store.repo(pr.repo_id);
-    const s = this.store.session(pr.session_id);
+    const s = this.sessionOf(pr);
     if (!repo?.deploy_command || !s) return;
     const name = pr.repo_full_name.split('/').pop();
     // as the starter (their credential: the worker forgets it when the session closes)
@@ -741,7 +748,7 @@ export class GitHub {
     if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
     if (how === 'github') {
       const t = this.mustTarget(repo);
-      await this.client(this.store.session(pr.session_id), repo, 'write').pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
+      await this.client(this.sessionOf(pr), repo, 'write').pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
@@ -763,7 +770,7 @@ export class GitHub {
   private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
     type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean };
     // a GitHub repo's merge is pushed to GitHub: as the starter only. Elsewhere their name goes on the commit.
-    const s = this.store.session(pr.session_id);
+    const s = this.sessionOf(pr);
     const github = this.target(repo) && repo.kind !== 'hosted' ? this.as(s, repo, 'write').cred : this.credOf(s);
     let res: Res | undefined;
     try {
@@ -778,14 +785,14 @@ export class GitHub {
 
   /** A Dispatch merge's commit message: the batch's item keys and the title, not the branch name (DISP-57). */
   private mergeMessage(pr: PullRequest) {
-    return mergeMessage(this.store.itemsByIds(this.store.session(pr.session_id)?.item_ids ?? []).map((i) => i.key), pr.title);
+    return mergeMessage(this.store.itemsByIds(this.sessionOf(pr)?.item_ids ?? []).map((i) => i.key), pr.title);
   }
 
   /** The items a repo's generate command gets at merge (DISP-56): the project's, with the PR's batch done. */
   private generatorExport(pr: PullRequest, repo: Repo) {
     if (!repo.generate_command) return undefined;
     const project = this.store.project(repo.project_id)!;
-    return generatorItems(this.store.items(project.id), project.effort_scale, this.store.session(pr.session_id)?.item_ids ?? []);
+    return generatorItems(this.store.items(project.id), project.effort_scale, this.sessionOf(pr)?.item_ids ?? []);
   }
 
   /**
@@ -794,7 +801,7 @@ export class GitHub {
    * Then the merged default branch goes to the upstream, if there is one.
    */
   private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase') {
-    const s = this.store.session(pr.session_id)!;
+    const s = this.sessionOf(pr)!;
     const message = this.mergeMessage(pr);
     if (repo.check_command || repo.generate_command) {
       const res = await this.mergeOnWorker(pr, repo, message);

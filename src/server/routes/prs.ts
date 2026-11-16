@@ -3,11 +3,13 @@ import { mergeInput } from '../../shared/types.ts';
 import { canDrive } from '../sessionGuard.ts';
 import { HttpError, intParam, type Ctx } from './ctx.ts';
 
+const NO_SESSION = 'This pull request has no session. Start work from an item.';
+
 export function prRoutes(app: FastifyInstance, { github, sessions, store, users }: Ctx) {
   app.get('/api/prs/:id', async (req) => {
     const detail = await github.detail(intParam((req.params as { id: string }).id));
     // merged by whoever started its session (DISP-63)
-    const s = store.session(detail.pr.session_id);
+    const s = detail.pr.session_id === null ? undefined : store.session(detail.pr.session_id);
     return { ...detail, can_merge: !!s && canDrive(req.principal!, s, users.installOwner) };
   });
 
@@ -16,7 +18,7 @@ export function prRoutes(app: FastifyInstance, { github, sessions, store, users 
     const { how, method } = mergeInput.parse(req.body);
     const pr = store.pr(id);
     // auto-merge stopped and the owner merges by hand: their hands were needed
-    if (pr?.blocked && store.session(pr.session_id)?.options.auto_merge !== 'off') store.addMergeEvent(pr.session_id, 'manual_merge', pr.id, pr.blocked);
+    if (pr?.blocked && pr.session_id !== null && store.session(pr.session_id)?.options.auto_merge !== 'off') store.addMergeEvent(pr.session_id, 'manual_merge', pr.id, pr.blocked);
     return github.merge(id, how, method);
   });
 
@@ -27,6 +29,8 @@ export function prRoutes(app: FastifyInstance, { github, sessions, store, users 
   app.post('/api/prs/:id/resolve-conflicts', async (req) => {
     const pr = store.pr(intParam((req.params as { id: string }).id));
     if (!pr) throw new HttpError(404, 'PR not found');
+    // agent work starts from an item: a PR with no session has none to send back to work (DISP-111)
+    if (pr.session_id === null) throw new HttpError(400, NO_SESSION);
     const repo = store.repo(pr.repo_id)!;
     store.addMergeEvent(pr.session_id, 'resolve_conflicts', pr.id);
     sessions.send(pr.session_id, `PR #${pr.number} in ${pr.repo_full_name} has merge conflicts with ${repo.default_branch}. In this branch (${pr.head_ref}), fetch and merge origin/${repo.default_branch}, resolve the conflicts keeping the intent of both sides, run the tests, commit and push the branch.`);

@@ -146,8 +146,9 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;
     case 'pr':
-      qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
+      if (e.pr.session_id !== null) qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['project-prs'] });
       return;
   }
 }
