@@ -47,6 +47,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/projects/:key/schedules': byKey,
   'POST /api/projects/:key/releases': byKey,
   'POST /api/projects/:key/repos': byKey,
+  'POST /api/projects/:key/prs/sync': byKey,
   // checks itself: muting stays possible, everything else is refused
   'PATCH /api/projects/:key': null,
   // the switch itself
@@ -93,6 +94,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/inputs/:id/answer': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
   'POST /api/inputs/:id/overrule': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
   'POST /api/prs/:id/merge': byPr,
+  'POST /api/prs/:id/approve': byPr,
   'POST /api/prs/:id/github-pr': byPr,
   'POST /api/prs/:id/resolve-conflicts': byPr,
 

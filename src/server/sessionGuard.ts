@@ -55,6 +55,9 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   'POST /api/items/:id/discuss': null,
   'POST /api/items/:id/discuss/new': null,
   'POST /api/chat-images': null,
+  // a project's open PRs (DISP-111): a refresh acts on no session, and an approval is the caller's own review on GitHub
+  'POST /api/projects/:key/prs/sync': null,
+  'POST /api/prs/:id/approve': null,
   // schedules and cleanup: the handler checks who may
   'POST /api/projects/:key/schedules': null,
   'PATCH /api/schedules/:id': null,

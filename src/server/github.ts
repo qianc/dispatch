@@ -73,6 +73,15 @@ export function ciStateOf(checks: { status: string; conclusion: string | null }[
   return checks.every((c) => ['success', 'neutral', 'skipped'].includes(c.conclusion ?? '')) ? 'success' : 'failure';
 }
 
+/** What Dispatch says about a PR that no session owns (DISP-111). */
+export const NO_SESSION = 'This pull request has no session. Start work from an item.';
+const OWN_PR = 'GitHub does not accept an approval of your own pull request.';
+const NO_MERGE_GENERATE = "This repo merges only in Dispatch, on a session's worker (it has a generate command). A pull request without a session cannot be merged here.";
+const NO_DEPLOY = "The repo's deploy command does not run for this merge: it needs a session's worker.";
+
+/** An error the API answers with 400: the request does not fit this PR. */
+const refused = (message: string) => Object.assign(new Error(message), { status: 400 });
+
 /** How long a PR with no checks may still get some: until then the project sync asks again. */
 const CHECKS_MAY_START_MS = 30 * 60_000;
 
@@ -658,7 +667,7 @@ export class GitHub {
    * Commits on the default branch that the PR / local branch does not have yet, and whether its
    * tree differs from the default branch's (always true for GitHub PRs: not checked there).
    */
-  private async behindBy(repo: Repo, pr: PullRequest): Promise<{ behind: number; differs: boolean }> {
+  private async behindBy(repo: Repo, pr: PullRequest, caller?: Caller | null): Promise<{ behind: number; differs: boolean }> {
     if (repo.local_path) {
       const st = await this.hub.cmd<BranchStatus>(this.workerOf(pr), { c: 'branch_status', repo, branch: pr.head_ref }, 120_000);
       return { behind: st.behind, differs: st.differs };
@@ -668,7 +677,7 @@ export class GitHub {
       return { behind: st.behind, differs: st.differs };
     }
     const t = this.mustTarget(repo);
-    const { data } = await this.client(this.sessionOf(pr), repo, 'read').repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
+    const { data } = await this.reader(pr, repo, caller).repos.compareCommits({ owner: t.owner, repo: t.repo, base: repo.default_branch, head: pr.head_sha ?? pr.head_ref });
     return { behind: data.behind_by, differs: true };
   }
 
@@ -822,7 +831,10 @@ export class GitHub {
   async detail(prId: number, caller?: Caller | null): Promise<PrDetail> {
     const pr = await this.syncPr(prId, caller);
     const repo = this.store.repo(pr.repo_id)!;
-    const merge = { merge_note: null, merge_here: true };
+    // no session: no worker, so nothing that needs one (a generate command's merge, the deploy command)
+    const merge = this.sessionOf(pr) ? { merge_note: null, merge_here: true }
+      : repo.generate_command ? { merge_note: NO_MERGE_GENERATE, merge_here: false }
+      : { merge_note: repo.deploy_command ? NO_DEPLOY : null, merge_here: true };
     const auto_merge = this.sessionOf(pr)?.options.auto_merge ?? 'off';
     const hands = pr.session_id === null ? [] : this.store.mergeEvents(pr.session_id);
     // merged: the branch is in the default branch (and may be deleted); show it from its last commit
@@ -860,14 +872,44 @@ export class GitHub {
   /** PRs being merged now (auto or by the owner), with the repo's check: the inbox shows them as merging. */
   readonly mergingNow = new Set<number>();
 
-  async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
+  /**
+   * Approve a PR on GitHub (DISP-111): kept on the PR in Dispatch first, then sent to GitHub as the
+   * caller's review. A review GitHub does not take (your own PR, a token that may not review, no
+   * GitHub connection) is no error: the approval stays, with what happened.
+   */
+  async approve(prId: number, caller: Caller): Promise<PullRequest> {
+    const pr = this.store.pr(prId);
+    if (!pr) throw new Error('Unknown PR');
+    if (pr.state !== 'open' || pr.number <= 0 || !pr.head_sha) throw refused('Only an open pull request on GitHub can be approved.');
+    const repo = this.store.repo(pr.repo_id)!;
+    const t = this.mustTarget(repo);
+    this.store.setPrApproval(pr.id, { by: caller.name, sha: pr.head_sha });
+    try {
+      const octo = this.mustClient(this.asCaller(caller, repo, 'write').octo, repo);
+      await octo.pulls.createReview({ owner: t.owner, repo: t.repo, pull_number: pr.number, event: 'APPROVE', commit_id: pr.head_sha });
+      this.store.setPrReview(pr.id, 'sent', null);
+    } catch (e) {
+      const own = (e as { status?: number }).status === 422 && /own pull request/i.test((e as Error).message);
+      this.store.setPrReview(pr.id, own ? 'own_pr' : 'failed', own ? OWN_PR : (e as Error).message);
+    }
+    return this.emitIfChanged(pr, pr.id);
+  }
+
+  /** `caller`: who merges a PR that has no session (a session's PR merges as its starter). */
+  async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null) {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     if (pr.state !== 'open') throw new Error(`PR is ${pr.state}`);
+    if (!this.sessionOf(pr)) {
+      // no session: no worker to merge on, so only GitHub's own merge
+      const repo = this.store.repo(pr.repo_id)!;
+      if (repo.generate_command) throw refused(NO_MERGE_GENERATE);
+      if (how === 'local' || pr.local) throw refused(NO_SESSION);
+    }
     this.mergingNow.add(prId);
     this.bus.emit({ t: 'pr', pr });
     try {
-      const res = await this.mergeOpen(pr, how, method);
+      const res = await this.mergeOpen(pr, how, method, caller);
       if (res.ok) this.deploy(pr);
       return res;
     } finally {
@@ -898,24 +940,26 @@ export class GitHub {
     void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, s.started_by);
   }
 
-  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
+  private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null) {
     const prId = pr.id;
     const repo = this.store.repo(pr.repo_id)!;
     // a generate command runs in Dispatch's merge (DISP-56): GitHub's merge button would skip it
     if (repo.local_path || repo.generate_command) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
-    this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr).then((b) => b.behind, () => null));
+    this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr, caller).then((b) => b.behind, () => null));
     if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
     if (how === 'github') {
       const t = this.mustTarget(repo);
-      await this.client(this.sessionOf(pr), repo, 'write').pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
+      const s = this.sessionOf(pr);
+      const octo = s ? this.client(s, repo, 'write') : this.mustClient(this.asCaller(caller, repo, 'write').octo, repo);
+      await octo.pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method });
     } else {
       const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     }
     // GitHub needs a moment to register a pushed merge.
     for (let i = 0; i < 5; i++) {
-      const synced = await this.syncPr(prId);
+      const synced = await this.syncPr(prId, caller);
       if (synced.state === 'merged') return { ok: true as const, pr: synced };
       await new Promise((r) => setTimeout(r, 1500));
     }

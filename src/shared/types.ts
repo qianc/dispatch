@@ -494,6 +494,23 @@ export interface ItemChanges {
   modules?: string[];
 }
 
+/** A PR on a project's list of open pull requests (DISP-111). */
+export interface ProjectPr extends PullRequest {
+  /** the session it belongs to, with its items' keys; null: no session of Dispatch opened it */
+  linked: { session_id: number; title: string; item_keys: string[] } | null;
+}
+
+/** The open pull requests of a project's GitHub repos, and how the last sync with GitHub went. */
+export interface ProjectPrList {
+  prs: ProjectPr[];
+  /** null: not synced since the server started */
+  synced_at: string | null;
+  /** what went wrong in the last sync (the first repo's error), or null */
+  error: string | null;
+  /** how many of the project's repos are on GitHub (0: there is nothing to list) */
+  github_repos: number;
+}
+
 /** A PR's checks, as one word: none (no checks), or the worst of what they say. */
 export type CiState = 'pending' | 'success' | 'failure' | 'none';
 
