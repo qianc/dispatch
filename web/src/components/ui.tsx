@@ -203,10 +203,10 @@ export function Field({ label, children, hint, group }: { label: string; childre
 
 export const inputCls = 'w-full rounded-lg bg-panel border border-line-strong px-3 py-2 text-fg placeholder:text-faint focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent disabled:border-line';
 
-/** Pick one. Short labels sit in a row; long ones (or many) stack as a list so nothing overflows. */
-export function Segmented<T extends string | number>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+/** Pick one. Short labels sit in a row; long ones (or many) stack as a list so nothing overflows. `row`: always a row (tabs). */
+export function Segmented<T extends string | number>({ value, options, onChange, row }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void; row?: boolean }) {
   const longest = Math.max(...options.map((o) => (typeof o.label === 'string' ? o.label.length : 6)));
-  const stacked = longest * options.length > 44;
+  const stacked = !row && longest * options.length > 44;
   return (
     <div className={cx('flex rounded-lg bg-bg border border-line p-0.5 gap-0.5', stacked && 'flex-col')} role="radiogroup">
       {options.map((o) => (

@@ -11,6 +11,7 @@ import { Page } from '../components/Layout.tsx';
 import { ItemRow, NewItemForm, SessionRow, useFacets } from '../components/items.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { Schedules } from '../components/schedules.tsx';
+import { ProjectPrs, useProjectPrs } from '../components/projectPrs.tsx';
 import { GithubAccessPanel, GithubConnectBanner } from '../components/githubAccess.tsx';
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
@@ -21,7 +22,7 @@ import { messageTime } from '../time.ts';
 import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
-type Tab = 'backlog' | 'bugs' | 'sessions' | 'sources' | 'settings';
+type Tab = 'backlog' | 'bugs' | 'sessions' | 'prs' | 'sources' | 'settings';
 const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 
 export function Project() {
@@ -65,6 +66,8 @@ export function Project() {
     enabled: !!project,
     staleTime: 15_000,
   });
+  // the open pull requests of its GitHub repos: their count is in the tab's label (DISP-111)
+  const openPrs = useProjectPrs(key, !!project).data?.prs.length ?? 0;
   const qc = useQueryClient();
   const toggle = useMutation(toggleMarked(qc));
   if (!project) return <Page title={key} back="/projects"><Empty>Loading…</Empty></Page>;
@@ -125,12 +128,14 @@ export function Project() {
       {!project.disabled && <GithubConnectBanner projectKey={project.key} />}
       <div className="px-3 pt-3 overflow-x-auto">
         <Segmented<Tab>
+          row
           value={tab}
           onChange={(t) => setParams(openItem ? { tab: t, item: String(openItem) } : { tab: t }, { replace: true })}
           options={[
             { value: 'backlog', label: 'Backlog' },
             { value: 'bugs', label: 'Bugs' },
             { value: 'sessions', label: 'Sessions' },
+            { value: 'prs', label: openPrs ? `PRs · ${openPrs}` : 'PRs' },
             { value: 'sources', label: 'Sources' },
             { value: 'settings', label: 'Settings' },
           ]}
@@ -154,6 +159,7 @@ export function Project() {
         />
       )}
       {tab === 'sessions' && <ProjectSessions project={project} />}
+      {tab === 'prs' && <ProjectPrs project={project} />}
       {tab === 'sources' && <Sources project={project} />}
       {tab === 'settings' && <ProjectSettings key={project.key} project={project} />}
 

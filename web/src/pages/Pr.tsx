@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type PrDetail, type Session } from '../api.ts';
+import { api, type PrDetail, type PullRequest, type Session } from '../api.ts';
 import { autoMergePending } from '../../../src/shared/attention.ts';
 import { Page } from '../components/Layout.tsx';
 import { PrOpenedBy, PrStateChip } from '../components/PrState.tsx';
+import { approvalView } from '../prs.ts';
 import { Button, Chip, Empty, ErrorText, Md, Section, Segmented, cx } from '../components/ui.tsx';
 
 function Patch({ patch }: { patch: string }) {
@@ -40,11 +41,21 @@ export function PrView() {
   const [how, setHow] = useState<'github' | 'local'>('github');
   const [method, setMethod] = useState<'squash' | 'merge' | 'rebase'>('squash');
   const { data, error, refetch, isFetching } = useQuery({ queryKey: ['pr', id], queryFn: () => api.get<PrDetail>(`/prs/${id}`) });
+  // a local review merges on the worker; a PR with no session has no worker: it merges on GitHub (DISP-111)
+  const mergeHow = data?.pr.local ? 'local' : data?.pr.session_id === null ? 'github' : how;
   const merge = useMutation({
-    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, { how: data?.pr.local ? 'local' : how, method }),
+    mutationFn: () => api.post<MergeResult>(`/prs/${id}/merge`, { how: mergeHow, method }),
     onSuccess: () => {
       refetch();
       qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['project-prs'] });
+    },
+  });
+  const approve = useMutation({
+    mutationFn: () => api.post<PullRequest>(`/prs/${id}/approve`),
+    onSuccess: () => {
+      refetch();
+      qc.invalidateQueries({ queryKey: ['project-prs'] });
     },
   });
   const resolve = useMutation({ mutationFn: () => api.post<Session>(`/prs/${id}/resolve-conflicts`), onSuccess: (s) => nav(`/s/${s.id}`) });
@@ -60,6 +71,10 @@ export function PrView() {
   const checking = autoMergePending(data.auto_merge, pr);
   // only whoever started its session merges it (DISP-63; an older server sends no can_merge)
   const canMerge = data.can_merge !== false;
+  // found by the project's PR sync: no session, so no item, no worker and no agent to send back to work (DISP-111)
+  const unlinked = pr.session_id === null;
+  const approval = approvalView(pr);
+  const hasActions = pr.state === 'open' && (canMerge || !!data.can_approve || !!approval || !!data.merge_note);
 
   return (
     <Page title={pr.title} subtitle={pr.local ? `local branch ${pr.head_ref} → ${data.base_ref}` : `${pr.repo_full_name}#${pr.number} · ${pr.head_ref} → ${data.base_ref}`} back actions={<Button small variant="ghost" onClick={() => refetch()} disabled={isFetching}>↻</Button>}>
@@ -70,6 +85,7 @@ export function PrView() {
         {!pr.local && <a href={pr.url} target="_blank" rel="noreferrer" className="text-[13px] text-accent ml-auto">Open on GitHub ↗</a>}
       </div>
       {pr.started_by && <div className="px-4 pt-1.5"><PrOpenedBy pr={pr} className="text-[13px]" /></div>}
+      {unlinked && <p className="px-4 pt-1.5 text-[13px] text-muted break-words">Not linked to an item{pr.author ? ` · opened by @${pr.author}` : ''}</p>}
 
       {data.checks.length > 0 && (
         <div className="px-4 mt-3 space-y-1">
@@ -90,33 +106,44 @@ export function PrView() {
       )}
       {pr.blocked && <p className="mx-4 mt-3 text-[13px] text-bad">Auto-merge stopped: {pr.blocked}.</p>}
 
-      {pr.state === 'open' && !canMerge && (
+      {pr.state === 'open' && !canMerge && !unlinked && (
         <p className="mx-4 mt-3 text-[13px] text-muted">Only {pr.started_by ?? 'the person who started it'} can merge this.</p>
       )}
-      {pr.state === 'open' && canMerge && (
+      {hasActions && (
         <div className="mx-3 mt-4 rounded-xl border border-line bg-panel p-3 space-y-2">
-          {!pr.local && <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />}
-          {how === 'github' && !pr.local && (
-            <Segmented value={method} onChange={setMethod} options={[{ value: 'squash', label: 'Squash' }, { value: 'merge', label: 'Merge commit' }, { value: 'rebase', label: 'Rebase' }]} />
-          )}
-          {data.repo.kind === 'hosted' && pr.local ? (
-            <p className="text-[12px] text-muted">
-              Dispatch merges the branch into {data.base_ref} in its own repo
-              {data.repo.check_command ? `, after the session's worker runs the check (${data.repo.check_command})` : ''}
-              {data.repo.upstream ? `, then pushes ${data.base_ref} to ${data.repo.upstream} on GitHub` : ''}.
-            </p>
-          ) : (how === 'local' || pr.local) && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
-          <Button variant={checking ? undefined : 'primary'} className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
-            {merge.isPending ? 'Merging…' : 'Merge'}
-          </Button>
-          {data.repo.kind === 'hosted' && pr.local && data.repo.upstream && (
-            <Button className="w-full" disabled={toGithub.isPending} onClick={() => confirm(`Push ${pr.head_ref} to ${data.repo.upstream} and review it there as a pull request?`) && toGithub.mutate()}>
-              {toGithub.isPending ? 'Opening the PR…' : 'Open a PR on GitHub instead'}
+          {approval && <p className={cx('text-[13px] break-words', approval.current ? 'text-fg' : 'text-muted')}>{approval.text}</p>}
+          {data.can_approve && (
+            <Button className="w-full" disabled={approve.isPending} onClick={() => confirm(`Approve #${pr.number}?`) && approve.mutate()}>
+              {approve.isPending ? 'Approving…' : 'Approve'}
             </Button>
           )}
-          {result && !result.ok && <pre className="text-[12px] text-bad whitespace-pre-wrap max-h-40 overflow-y-auto">{result.output}</pre>}
-          {conflict && <Button className="w-full" disabled={resolve.isPending} onClick={() => resolve.mutate()}>Start a session to resolve conflicts</Button>}
-          <ErrorText error={merge.error ?? resolve.error ?? toGithub.error} />
+          {data.merge_note && <p className="text-[12px] text-muted">{data.merge_note}</p>}
+          {canMerge && (
+            <>
+              {!pr.local && !unlinked && <Segmented value={how} onChange={setHow} options={[{ value: 'github', label: 'Merge on GitHub' }, { value: 'local', label: 'Merge locally + push' }]} />}
+              {mergeHow === 'github' && (
+                <Segmented value={method} onChange={setMethod} options={[{ value: 'squash', label: 'Squash' }, { value: 'merge', label: 'Merge commit' }, { value: 'rebase', label: 'Rebase' }]} />
+              )}
+              {data.repo.kind === 'hosted' && pr.local ? (
+                <p className="text-[12px] text-muted">
+                  Dispatch merges the branch into {data.base_ref} in its own repo
+                  {data.repo.check_command ? `, after the session's worker runs the check (${data.repo.check_command})` : ''}
+                  {data.repo.upstream ? `, then pushes ${data.base_ref} to ${data.repo.upstream} on GitHub` : ''}.
+                </p>
+              ) : mergeHow === 'local' && <p className="text-[12px] text-muted">The worker merges the branch into {data.base_ref}, runs the repo's check command if set, and pushes it{pr.local ? ' into your local repo (your working tree must be clean)' : ''}.</p>}
+              <Button variant={checking ? undefined : 'primary'} className="w-full" disabled={merge.isPending} onClick={() => confirm(`Merge ${pr.local ? pr.head_ref : `#${pr.number}`} into ${data.base_ref}?`) && merge.mutate()}>
+                {merge.isPending ? 'Merging…' : 'Merge'}
+              </Button>
+              {data.repo.kind === 'hosted' && pr.local && data.repo.upstream && (
+                <Button className="w-full" disabled={toGithub.isPending} onClick={() => confirm(`Push ${pr.head_ref} to ${data.repo.upstream} and review it there as a pull request?`) && toGithub.mutate()}>
+                  {toGithub.isPending ? 'Opening the PR…' : 'Open a PR on GitHub instead'}
+                </Button>
+              )}
+              {result && !result.ok && <pre className="text-[12px] text-bad whitespace-pre-wrap max-h-40 overflow-y-auto">{result.output}</pre>}
+              {conflict && !unlinked && <Button className="w-full" disabled={resolve.isPending} onClick={() => resolve.mutate()}>Start a session to resolve conflicts</Button>}
+            </>
+          )}
+          <ErrorText error={approve.error ?? merge.error ?? resolve.error ?? toGithub.error} />
         </div>
       )}
 
