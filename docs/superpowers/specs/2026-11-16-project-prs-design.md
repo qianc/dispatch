@@ -1,6 +1,6 @@
 # Open pull requests of a project's GitHub repos (DISP-111)
 
-Status: proposed, waits for the owner's approval.
+Status: approved by the owner and built (DISP-111).
 
 ## Why
 
