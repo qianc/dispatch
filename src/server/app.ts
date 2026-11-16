@@ -131,6 +131,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const github = new GitHub(cfg.githubAccounts, store, bus, notifier, hub, identities, sessionIdentity, cfg.githubApiUrl);
   github.gitBase = cfg.githubGitBase;
+  // a PR without a session is read, approved and merged as the person who asks (DISP-111)
+  github.callerIdentity = (user, repo) => {
+    const project = store.project(repo.project_id);
+    return project ? resolveGithubIdentity(identityDeps, { started_by: user }, project) : null;
+  };
   github.hosted = hosted;
   const assistant = new AssistantTools(store, bus, github, sessions, hub, users);
   assistant.rules = (p) => projectRules({ store, hub, hosted }, p);

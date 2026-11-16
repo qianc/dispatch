@@ -3,7 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { createHash } from 'node:crypto';
 import type { GithubCred } from '../shared/protocol.ts';
 import type { GithubAccount } from '../shared/accounts.ts';
-import type { BranchFile, BranchStatus, MergeEvent, PullRequest, Repo, Session } from '../shared/types.ts';
+import type { BranchFile, BranchStatus, CiState, MergeEvent, Project, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import { CheckRuns } from './checkRuns.ts';
 import type { CheckProgress } from '../shared/checkProgress.ts';
@@ -19,6 +19,15 @@ import { refusalError } from './sessions.ts';
 
 /** As whom a session acts on GitHub now (identity.ts; null: its project needs no GitHub). */
 export type SessionIdentity = (s: Session) => GithubIdentity | IdentityRefusal | null;
+
+/** Who asks, for actions outside a session: `user` picks the GitHub identity, `name` goes on the record (DISP-111). */
+export interface Caller {
+  user: string | null;
+  name: string;
+}
+
+/** As whom a caller acts on a repo's GitHub (null: no rule, the env accounts). */
+export type CallerIdentity = (user: string | null, repo: Repo) => GithubIdentity | IdentityRefusal | null;
 
 /** A GitHub client and git environment, acting as someone: the session's user (`user`) or an env account. */
 interface Acting {
@@ -49,11 +58,28 @@ export interface PrDetail {
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
   /** the session's auto-merge setting: while it is on, Dispatch checks and merges an open PR itself */
   auto_merge: Session['options']['auto_merge'];
+  /** what the page says about merging this PR here (no session: what does not run, or why it cannot merge) */
+  merge_note: string | null;
+  /** false: this PR cannot be merged in Dispatch at all */
+  merge_here: boolean;
 }
+
+type Check = { name: string; status: string; conclusion: string | null; html_url: string | null };
+
+/** A PR's checks as one word (the rule auto-merge uses: success, neutral and skipped pass). */
+export function ciStateOf(checks: { status: string; conclusion: string | null }[]): CiState {
+  if (!checks.length) return 'none';
+  if (checks.some((c) => c.status !== 'completed')) return 'pending';
+  return checks.every((c) => ['success', 'neutral', 'skipped'].includes(c.conclusion ?? '')) ? 'success' : 'failure';
+}
+
+/** How long a PR with no checks may still get some: until then the project sync asks again. */
+const CHECKS_MAY_START_MS = 30 * 60_000;
 
 type GhPull = {
   number: number; html_url: string; title: string; state: string; merged_at?: string | null; merged?: boolean;
   mergeable?: boolean | null; mergeable_state?: string; head: { ref: string; sha: string };
+  user?: { login: string } | null; base?: { ref: string }; draft?: boolean; changed_files?: number; updated_at?: string;
 };
 
 /** Start of the reason auto-merge gives when the session's last turn did not end cleanly (DISP-108). */
@@ -62,6 +88,7 @@ const UNCLEAN = 'the last turn did not end cleanly';
 export class GitHub {
   readonly octo: Octokit | null;
   private timer: NodeJS.Timeout | null = null;
+  private prTimer: NodeJS.Timeout | null = null;
   private store: Store;
   private bus: Bus;
   private notifier: Notifier;
@@ -167,8 +194,22 @@ export class GitHub {
    * Without a session (or an identity rule), the env accounts as before.
    */
   private as(s: Session | null | undefined, repo: Repo, mode: 'read' | 'write'): Acting {
+    return this.actingAs(s ? this.identityOf(s) : null, repo, mode);
+  }
+
+  /** As whom a caller acts on a repo's GitHub (set by app.ts; none: the env accounts). */
+  callerIdentity: CallerIdentity | null = null;
+
+  /**
+   * GitHub as the person who asks, for a PR without a session (DISP-111): the same rule as `as`,
+   * with the caller in the starter's place. No caller (the timer): the env accounts.
+   */
+  private asCaller(caller: Caller | null | undefined, repo: Repo, mode: 'read' | 'write'): Acting {
+    return this.actingAs(caller && this.callerIdentity ? this.callerIdentity(caller.user, repo) : null, repo, mode);
+  }
+
+  private actingAs(id: GithubIdentity | IdentityRefusal | null, repo: Repo, mode: 'read' | 'write'): Acting {
     const env = (): Acting => ({ octo: this.clientFor(repo), gitEnv: this.gitEnv(repo), cred: null });
-    const id = s ? this.identityOf(s) : null;
     if (!id) return env();
     if (isRefusal(id)) {
       if (mode === 'write') throw refusalError(id);
@@ -237,14 +278,20 @@ export class GitHub {
     }));
   }
 
-  startPolling(seconds: number) {
+  /** `prSeconds`: how often the open PRs of every project are synced (0: not on a timer). */
+  startPolling(seconds: number, prSeconds = 0) {
     const tick = () => this.syncAll().catch((e) => console.warn('github sync failed:', (e as Error).message));
     this.timer = setInterval(tick, seconds * 1000);
     setTimeout(tick, 5000);
+    if (!(prSeconds > 0)) return;
+    const prTick = () => this.syncOpenPrs().catch((e) => console.warn('github PR sync failed:', (e as Error).message));
+    this.prTimer = setInterval(prTick, prSeconds * 1000);
+    setTimeout(prTick, 15_000);
   }
 
   stop() {
     if (this.timer) clearInterval(this.timer);
+    if (this.prTimer) clearInterval(this.prTimer);
   }
 
   /** Sessions worth checking: work sessions with a branch, not ended more than 14 days ago. */
@@ -459,7 +506,8 @@ export class GitHub {
     return opened;
   }
 
-  async syncPr(prId: number) {
+  /** `caller`: who reads a PR that has no session (none: the env account). */
+  async syncPr(prId: number, caller?: Caller | null) {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
@@ -467,18 +515,128 @@ export class GitHub {
     if (repo.kind === 'hosted' && pr.local) return (await this.syncHosted(this.sessionOf(pr)!, repo)) ?? pr;
     const t = this.mustTarget(repo);
     const s = this.sessionOf(pr);
-    if (!s) return pr;
-    const { data } = await this.client(s, repo, 'read').pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
-    return this.record(s, repo, data as GhPull);
+    const { data } = await this.reader(pr, repo, caller).pulls.get({ owner: t.owner, repo: t.repo, pull_number: pr.number });
+    return s ? this.record(s, repo, data as GhPull) : this.recordUnlinked(repo, data as GhPull);
+  }
+
+  /** Who reads a PR on GitHub: its session's starter, or, with no session, the caller. */
+  private reader(pr: Pick<PullRequest, 'session_id'>, repo: Repo, caller?: Caller | null): Octokit {
+    const s = this.sessionOf(pr);
+    return s ? this.client(s, repo, 'read') : this.mustClient(this.asCaller(caller, repo, 'read').octo, repo);
+  }
+
+  /**
+   * Store a GitHub PR that has no session (DISP-111): the row and what the list shows, nothing
+   * else. No item moves, no notice, no auto-merge. `ci`: its checks' state, when they were read.
+   */
+  private recordUnlinked(repo: Repo, p: GhPull, ci?: CiState | null): PullRequest {
+    const before = this.store.prByNumber(repo.id, p.number);
+    const state: PullRequest['state'] = p.merged_at || p.merged ? 'merged' : p.state === 'open' ? 'open' : 'closed';
+    const row = this.store.upsertPr({
+      session_id: null, repo_id: repo.id, number: p.number, url: p.html_url, title: p.title, state,
+      // the list of open PRs does not say: keep what is known
+      mergeable: p.mergeable === undefined ? before?.mergeable ?? null : p.mergeable, mergeable_state: p.mergeable_state ?? before?.mergeable_state ?? null,
+      head_ref: p.head.ref, head_sha: p.head.sha,
+    });
+    this.store.setPrMeta(row.id, this.metaOf(p, ci));
+    return this.emitIfChanged(before, row.id);
+  }
+
+  /** What a GitHub PR says for the columns of the project's list (only what it carries). */
+  private metaOf(p: GhPull, ci?: CiState | null): Parameters<Store['setPrMeta']>[1] {
+    return {
+      author: p.user?.login ?? null, draft: !!p.draft,
+      ...(p.base ? { base_ref: p.base.ref } : {}),
+      ...(p.changed_files === undefined ? {} : { changed_files: p.changed_files }),
+      ...(p.updated_at ? { gh_updated_at: p.updated_at } : {}),
+      ...(ci === undefined ? {} : { ci_state: ci }),
+    };
+  }
+
+  /** Tell the screens about a PR row, when it is not as it was. */
+  private emitIfChanged(before: PullRequest | undefined, id: number): PullRequest {
+    const same = (p: PullRequest | undefined) => JSON.stringify({ ...p, last_synced: null });
+    const pr = this.store.pr(id)!;
+    if (same(before) !== same(pr)) this.bus.emit({ t: 'pr', pr });
+    return pr;
+  }
+
+  /** Per project: the PR sync that runs now, and how the last one went (kept in memory). */
+  private prSyncs = new Map<number, { full: boolean; done: Promise<void> }>();
+  private prSynced = new Map<number, { synced_at: string | null; error: string | null }>();
+
+  /** When a project's open PRs were last synced, and what went wrong then (null: nothing). */
+  prSyncInfo(projectId: number): { synced_at: string | null; error: string | null } {
+    return this.prSynced.get(projectId) ?? { synced_at: null, error: null };
+  }
+
+  /** The timer's sync: the open PRs of every project that is not disabled, with the env accounts. */
+  async syncOpenPrs() {
+    for (const p of this.store.projects()) if (!p.disabled) await this.syncProjectPrs(p);
+  }
+
+  /**
+   * Bring the open PRs of a project's GitHub repos into Dispatch (DISP-111), with or without a
+   * session. One run per project at a time. `full`: read every PR's details again, also the
+   * unchanged ones. `caller`: who reads (none: the env account).
+   */
+  syncProjectPrs(project: Pick<Project, 'id'>, opts: { full?: boolean; caller?: Caller | null } = {}): Promise<void> {
+    const running = this.prSyncs.get(project.id);
+    // a refresh that meets the timer's run still gets its full run, after it
+    if (running) return opts.full && !running.full ? running.done.then(() => this.syncProjectPrs(project, opts)) : running.done;
+    const done = (async () => {
+      let error: string | null = null;
+      for (const repo of this.store.repos(project.id)) {
+        if (repo.local_path || repo.kind === 'hosted') continue;
+        try {
+          await this.syncRepoPrs(repo, opts);
+        } catch (e) {
+          error ??= `${repo.github_owner}/${repo.github_name}: ${(e as Error).message}`;
+        }
+      }
+      this.prSynced.set(project.id, { synced_at: new Date().toISOString(), error });
+    })().finally(() => this.prSyncs.delete(project.id));
+    this.prSyncs.set(project.id, { full: !!opts.full, done });
+    return done;
+  }
+
+  private async syncRepoPrs(repo: Repo, opts: { full?: boolean; caller?: Caller | null }) {
+    const octo = this.asCaller(opts.caller, repo, 'read').octo;
+    if (!octo) return; // no account reads this repo: skipped
+    const o = { owner: repo.github_owner, repo: repo.github_name };
+    const listed = await octo.paginate(octo.pulls.list, { ...o, state: 'open', per_page: 100 }) as GhPull[];
+    const numbers = new Set(listed.map((p) => p.number));
+    for (const p of listed) {
+      const row = this.store.prByNumber(repo.id, p.number);
+      // what the list does not give (changed files, mergeable, checks) is read only when it may have changed
+      const changed = !row || row.gh_updated_at !== p.updated_at || (row.session_id === null && row.head_sha !== p.head.sha);
+      const unsettled = !!row && (row.ci_state === null || row.ci_state === 'pending'
+        || (row.ci_state === 'none' && Date.now() - Date.parse(p.updated_at ?? '') < CHECKS_MAY_START_MS));
+      if (!opts.full && !changed && !unsettled) continue;
+      const full = (await octo.pulls.get({ ...o, pull_number: p.number })).data as GhPull;
+      const ci = await this.checkRunsWith(octo, repo, full.head.sha).then(ciStateOf, () => null);
+      if (row && row.session_id !== null) {
+        // a session's PR: title, state and every side effect stay with the session sync
+        this.store.setPrMeta(row.id, this.metaOf(full, ci));
+        this.emitIfChanged(row, row.id);
+      } else this.recordUnlinked(repo, full, ci);
+    }
+    // open here, gone from the list: closed or merged on GitHub (a session's PR goes its session's way)
+    for (const row of this.store.prs({ repo_id: repo.id, open_only: true })) {
+      if (row.number > 0 && !numbers.has(row.number)) await this.syncPr(row.id, opts.caller);
+    }
   }
 
   /**
    * The CI results for a commit: GitHub's check runs, or, when the token may not read them (a
    * fine-grained PAT has no Checks permission), the GitHub Actions runs for the commit (Actions: read).
    */
-  private async checkRuns(s: Session | null | undefined, repo: Repo, sha: string, perPage = 100): Promise<{ name: string; status: string; conclusion: string | null; html_url: string | null }[]> {
+  private checkRuns(s: Session | null | undefined, repo: Repo, sha: string, perPage = 100): Promise<Check[]> {
+    return this.checkRunsWith(this.client(s, repo, 'read'), repo, sha, perPage);
+  }
+
+  private async checkRunsWith(octo: Octokit, repo: Repo, sha: string, perPage = 100): Promise<Check[]> {
     const t = this.mustTarget(repo);
-    const octo = this.client(s, repo, 'read');
     try {
       return (await octo.checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage })).data.check_runs;
     } catch (e) {
@@ -660,40 +818,42 @@ export class GitHub {
     }
   }
 
-  async detail(prId: number): Promise<PrDetail> {
-    const pr = await this.syncPr(prId);
+  /** `caller`: who reads a PR that has no session (none: the env account). */
+  async detail(prId: number, caller?: Caller | null): Promise<PrDetail> {
+    const pr = await this.syncPr(prId, caller);
     const repo = this.store.repo(pr.repo_id)!;
+    const merge = { merge_note: null, merge_here: true };
     const auto_merge = this.sessionOf(pr)?.options.auto_merge ?? 'off';
     const hands = pr.session_id === null ? [] : this.store.mergeEvents(pr.session_id);
     // merged: the branch is in the default branch (and may be deleted); show it from its last commit
     const merged_sha = pr.state === 'merged' && pr.head_sha ? pr.head_sha : undefined;
     if (repo.local_path) {
       const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref, merged_sha }, 120_000);
-      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
+      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge, ...merge };
     }
     if (repo.kind === 'hosted' && pr.local) {
       const files = await this.hosted!.branchDiff(repo, pr.head_ref, merged_sha);
-      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge };
+      return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge, ...merge };
     }
     const o = this.mustTarget(repo);
-    const s = this.sessionOf(pr);
-    const octo = this.client(s, repo, 'read');
+    const octo = this.reader(pr, repo, caller);
     const [{ data: p }, files, checks] = await Promise.all([
       octo.pulls.get({ ...o, pull_number: pr.number }),
       octo.paginate(octo.pulls.listFiles, { ...o, pull_number: pr.number, per_page: 100 }),
-      pr.head_sha
-        ? this.checkRuns(s, repo, pr.head_sha, 50).catch(() => [])
-        : Promise.resolve([]),
+      // null: they could not be read
+      pr.head_sha ? this.checkRunsWith(octo, repo, pr.head_sha, 50).catch(() => null) : Promise.resolve(null),
     ]);
+    // read anyway: the project's list shows it (DISP-111)
+    this.store.setPrMeta(pr.id, { changed_files: files.length, base_ref: p.base.ref, ...(checks ? { ci_state: ciStateOf(checks) } : {}) });
     return {
-      pr,
+      pr: this.emitIfChanged(pr, pr.id),
       repo: this.repoSummary(repo),
       hands,
       body: p.body ?? '',
       base_ref: p.base.ref,
       files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch ?? null })),
-      checks: checks.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion ?? null, url: c.html_url ?? null })),
-      auto_merge,
+      checks: (checks ?? []).map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion ?? null, url: c.html_url ?? null })),
+      auto_merge, ...merge,
     };
   }
 
