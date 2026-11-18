@@ -54,6 +54,10 @@ import { Scheduler } from './scheduler.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
+import { runningVersion, sameVersion } from '../update/version.ts';
+import { keepCopy, restoreCopy } from './preUpdate.ts';
+import { Updates } from './updates.ts';
+import { updateRoutes } from './routes/updates.ts';
 
 
 declare module 'fastify' {
@@ -85,6 +89,12 @@ export const APP_CSP = [
 
 export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: boolean } = {}) {
   const dbFile = opts.dbFile ?? resolve(cfg.dataDir, 'dispatch.db');
+  // read once: the checkout may move on under a running server (DISP-112)
+  const version = { ...runningVersion() };
+  // before the database opens: an update that did not hold may have changed it
+  const restored = restoreCopy(dbFile, version.sha);
+  if (restored) console.warn(restored);
+  const startedAt = Date.now();
   const db = new Db(dbFile);
   // after the database: it made the data folder the key file goes into
   const secretKey = loadKey(cfg, dbFile);
@@ -161,9 +171,15 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return github.toldCount(s.id) > before;
   };
   let closing = false;
+  const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, users, dbFile });
+  updates.restoreNote = restored;
   hub.handlers = {
     onHello: (workerId, live, facts) => {
       workers.seen(workerId, facts);
+      // the server's commit: how a worker sees that an update of the server took
+      hub.send(workerId, { t: 'welcome', version: version.sha });
+      // before its sessions are looked at: a worker back from its update takes work again
+      updates.onWorkerHello(workerId, facts);
       sessions.onWorkerHello(workerId, live);
       // are its local repo copies still there? (sessions only go to workers whose copies are ok)
       void checkPlacements(store, hub, workerId)
@@ -178,6 +194,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     onSlots: () => sessions.dispatch(),
     // after app.close() the database is gone: links closing then have nothing to update
     onDisconnect: (workerId) => !closing && sessions.onWorkerDisconnect(workerId),
+    onUpdateResult: (workerId, m) => updates.onUpdateResult(workerId, m),
   };
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
@@ -194,11 +211,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
-  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version, updates };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
     orchestrator.resume();
+    updates.start();
   }
 
   // forceCloseConnections: live streams (/api/stream) never end on their own, so close() would wait
@@ -308,6 +326,9 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     const legacy = !!cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
     const worker = legacy ? workers.legacy() : workers.verify(token);
     if (!worker) return socket.close(4001, 'bad worker token');
+    // just started after its own update: the launcher still watches whether this version holds, and
+    // puts the old one back when it does not. No work starts before that; the worker tries again.
+    if (Date.now() - startedAt < cfg.settleMs) return socket.close(1013, 'the server just updated; try again in a moment');
     hub.attach(socket, worker);
   });
 
@@ -329,6 +350,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   orchestrationRoutes(app, ctx);
   costRoutes(app, ctx);
   githubRoutes(app, ctx);
+  updateRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);
@@ -358,9 +380,23 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     janitor.stop();
     scheduler.stop();
     orchestrator.stop();
+    updates.stop();
     github.stop();
     ctx.sessions.stop();
+    // the server stops for its own update: the old version can go back to this database
+    const own = updates.ownUpdate();
+    let noCopy: Error | null = null;
+    if (own && sameVersion(version.sha, own.from_sha)) {
+      try {
+        keepCopy(db.raw, dbFile, { from: own.from_sha, to: own.to_sha });
+      } catch (e) {
+        noCopy = e as Error;
+      }
+    }
     db.raw.close();
+    // the close fails, so the server does not end with exit code 0: the launcher then does not
+    // go on to a version that may change a database nothing can put back
+    if (noCopy) throw new Error(`keeping a copy of the database for the update failed: ${noCopy.message}`);
   });
 
   return { app, ctx, routes };

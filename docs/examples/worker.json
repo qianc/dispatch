@@ -11,6 +11,7 @@
       "read_dirs": [
         "~/repos/a"
       ],
+      "server_update_command": "~/bin/deploy-dispatch.sh",
       "releases": [
         {
           "repo": "me/app",

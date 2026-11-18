@@ -35,6 +35,8 @@ export interface AgentRunner {
   answer(localId: string, answer: InputAnswer): void;
   interrupt(): Promise<void>;
   close(): void;
+  /** What a restart of the worker would cut off now ("is working"), or null: for the update gate (DISP-112). */
+  activity(): string | null;
 }
 
 export interface RunnerOptions {
@@ -295,6 +297,8 @@ const resetMs = (at: number) => at * (at < 1e12 ? 1000 : 1);
 
 /** After the reset time, wait this much more before the session goes on: the clocks may differ. */
 export const LIMIT_MARGIN_MS = 60_000;
+/** A wake-up counts as set until this long after its time: the turn it starts shows by then. */
+const WAKE_MARGIN_MS = 60_000;
 /** The reset time is not known: try again after this time. */
 export const LIMIT_RETRY_MS = 15 * 60_000;
 /** What the session is sent when its usage limit has reset (DISP-108). */
@@ -469,6 +473,20 @@ export class ClaudeRunner implements AgentRunner {
     this.deps.onClosed();
   }
 
+  activity(): string | null {
+    if (this.closed) return null;
+    if (this.waiting.size) return 'waits for an answer';
+    if (this.bgTasks > 0) return 'has background tasks running';
+    // it waits for the usage limit: after a restart it is resumed and waits again
+    if (this.limitTimer) return null;
+    if (!this.betweenTurns) return 'is working';
+    // its background tasks just ended: Claude starts a turn on that news in a moment
+    if (this.bgIdleTimer) return 'has background tasks that just ended';
+    // a wake-up the agent set would be lost with the process; the turn it starts shows a moment after its time
+    if (this.wakeAt && Date.now() < this.wakeAt + WAKE_MARGIN_MS) return 'has a wake-up set';
+    return null;
+  }
+
   private canUseTool: CanUseTool = async (name, input, { signal }) => {
     if ((this.spec.kind === 'assistant' || this.spec.kind === 'discuss') && ASSISTANT_TOOLS.includes(name)) {
       const dirs = this.readDirs();
@@ -553,6 +571,7 @@ export class ClaudeRunner implements AgentRunner {
         // tasks done; Claude normally starts a new turn on their notification. If it does not, it is idle.
         if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
         this.bgIdleTimer = setTimeout(() => {
+          this.bgIdleTimer = null;
           if (this.betweenTurns && this.bgTasks === 0) void this.endTurn();
         }, 30_000);
       }
@@ -581,6 +600,7 @@ export class ClaudeRunner implements AgentRunner {
           : { title: `${label} account needs attention (${m.error.replace(/_/g, ' ')})`, body: 'Log in again on the worker machine.' });
       }
       if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
+      this.bgIdleTimer = null;
       // the usage limit stopped this turn: its end is not "done", the session waits for the reset (DISP-108)
       const limit = !m.parent_tool_use_id && isLimitHit(m);
       if (limit) this.limitHit = true;
@@ -696,7 +716,7 @@ export class ClaudeRunner implements AgentRunner {
 
   private armIdle() {
     this.clearIdle();
-    const until = Math.max(this.opts.idleCloseMs, this.wakeAt ? this.wakeAt - Date.now() + 60_000 : 0);
+    const until = Math.max(this.opts.idleCloseMs, this.wakeAt ? this.wakeAt - Date.now() + WAKE_MARGIN_MS : 0);
     this.idleTimer = setTimeout(() => {
       // never close under running background work or before a scheduled wakeup
       if (this.bgTasks > 0 || this.wakeAt > Date.now()) return this.armIdle();

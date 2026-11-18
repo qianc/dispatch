@@ -153,5 +153,8 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['project-prs'] });
       return;
+    case 'update':
+      qc.invalidateQueries({ queryKey: ['update'] });
+      return;
   }
 }

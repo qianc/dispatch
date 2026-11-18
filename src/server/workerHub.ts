@@ -6,7 +6,8 @@ import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { RpcMethod, ServerToWorker, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import type { Repo, WorkerFacts } from '../shared/types.ts';
 
-export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'cmd_progress' } | { t: 'slots' } | { t: 'refused' }>;
+export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'cmd_progress' } | { t: 'slots' } | { t: 'refused' } | { t: 'update_result' }>;
+export type UpdateResult = Extract<WorkerToServer, { t: 'update_result' }>;
 
 export interface HubHandlers {
   onHello(workerId: number, live: number[], facts: WorkerFacts | null): void;
@@ -17,6 +18,8 @@ export interface HubHandlers {
   /** the worker's free slots changed */
   onSlots(workerId: number, free: number): void;
   onDisconnect(workerId: number): void;
+  /** how an update of the worker, or of the server through it, ended (DISP-112) */
+  onUpdateResult?(workerId: number, msg: UpdateResult): void;
 }
 
 export class WorkerLink {
@@ -167,6 +170,18 @@ export class WorkerHub {
     return l.cmd<T>(this.forWorker(l.workerId, cmd), timeoutMs, onProgress);
   }
 
+  /** Commands the workers still run for the server (a merge, a push): `except` is not counted. */
+  pendingCommands(except?: number): number {
+    let n = 0;
+    for (const l of this.links.values()) if (l.workerId !== except) n += l.pending.size;
+    return n;
+  }
+
+  /** Commands one worker still runs for the server. */
+  pendingOn(workerId: number): number {
+    return this.links.get(workerId)?.pending.size ?? 0;
+  }
+
   facts(workerId: number | null | undefined): WorkerFacts | null {
     return this.link(workerId)?.facts ?? null;
   }
@@ -224,6 +239,8 @@ export class WorkerHub {
         return this.handlers.onSlots(link.workerId, msg.free);
       case 'refused':
         return this.handlers.onRefused(link.workerId, msg.session_id, msg.reason);
+      case 'update_result':
+        return this.handlers.onUpdateResult?.(link.workerId, msg);
       default:
         return this.handlers.onMessage(link.workerId, msg);
     }

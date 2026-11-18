@@ -3,12 +3,17 @@ import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
 import { migrateLegacyLayout } from './layout.ts';
 import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
+import type { WorkerVersion } from '../shared/types.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
 import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
+import { APP_DIR, runningVersion } from '../update/version.ts';
+import { onReleaseBranch } from '../update/apply.ts';
+import { UpdateGate } from './updateGate.ts';
+import { launcherLink } from '../update/ipc.ts';
 
 const env = process.env;
 // agents' PATH: extra tool folders first; under WSL also Windows' PATH (powershell.exe, …)
@@ -83,6 +88,13 @@ if (cfg.servers.length) {
   await migrateLegacyLayout(workspacesDir, cfg.servers[0].name, configDirs);
 }
 const slots = new Slots(cfg.max_concurrent);
+// read once: the checkout may move on under a running worker (DISP-112)
+const launcher = launcherLink();
+const version: WorkerVersion = { sha: runningVersion().sha, updatable: launcher.available, ...(launcher.why ? { why: launcher.why } : {}) };
+// Dispatch's own repo: its release branch, and the GitHub account that reads it (UPDATE_GITHUB_ACCOUNT, else the first)
+const updateBranch = env.UPDATE_BRANCH?.trim() || 'main';
+const updateGitEnv = { ...env, ...githubEnv(pick(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) };
+const minutes = (v: string | undefined, dflt: number) => (Number(v) > 0 ? Number(v) : dflt) * 60_000;
 for (const s of cfg.servers) secrets.add(s.token);
 const links = cfg.servers.map((entry) => new ServerLink(entry, {
   fake: FAKE,
@@ -98,9 +110,23 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   gitEnv: (repo) => githubEnv(pick(ghAccounts, repo.github_account)),
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',
   secrets,
+  version,
+  selfUpdate: (from, sha, updateId) => gate.selfUpdate(from, sha, updateId),
+  // a server that runs as an image is updated by its entry's server_update_command
+  serverUpdate: {
+    branch: updateBranch,
+    timeoutMs: minutes(env.UPDATE_TIMEOUT_MIN, 20),
+    healthMs: minutes(env.UPDATE_HEALTH_MIN, 5),
+    // a worker that runs from a checkout of Dispatch looks itself whether the commit is one of the release branch
+    ...(runningVersion().source === 'git' ? { verify: (sha: string, abbrev?: boolean) => onReleaseBranch(APP_DIR, sha, updateBranch, { env: updateGitEnv, abbrev }) } : {}),
+  },
 }));
 slots.links = links;
+// the worker updates itself when a server asks and nothing is working (DISP-112)
+const gate = new UpdateGate({ links: () => links, slots, launcher, version, dir: APP_DIR, branch: updateBranch, gitEnv: updateGitEnv });
 for (const l of links) l.connect();
+// the launcher's health check: the worker is up, on this commit
+launcher.ready(version.sha);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {

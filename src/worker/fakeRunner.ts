@@ -18,6 +18,8 @@ export class FakeRunner implements AgentRunner {
   private waiting = new Map<string, (a: InputAnswer | null) => void>();
   private closed = false;
   private turn = 0;
+  /** turns that run now */
+  private busy = 0;
   private delay: number;
 
   private opts: Pick<RunnerOptions, 'loginFailed' | 'sessionEnv'>;
@@ -32,11 +34,26 @@ export class FakeRunner implements AgentRunner {
 
   start(text: string) {
     this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', sdk_session_id: this.spec.resume ?? `fake-${randomUUID()}` });
-    void this.run(text);
+    void this.go(text);
   }
 
   push(text: string) {
-    void this.run(text);
+    void this.go(text);
+  }
+
+  private async go(text: string) {
+    this.busy++;
+    try {
+      await this.run(text);
+    } finally {
+      this.busy--;
+    }
+  }
+
+  activity(): string | null {
+    if (this.closed) return null;
+    if (this.waiting.size) return 'waits for an answer';
+    return this.busy ? 'is working' : null;
   }
 
   answer(localId: string, answer: InputAnswer) {

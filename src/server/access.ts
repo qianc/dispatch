@@ -129,6 +129,12 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'DELETE /api/repos/:id': 'admin',
   'GET /api/settings': 'admin',
   'PATCH /api/settings': 'admin',
+  // Dispatch's own updates (DISP-112): they change the code that runs
+  'GET /api/update': 'admin',
+  'PUT /api/update/settings': 'admin',
+  'POST /api/update/check': 'admin',
+  'POST /api/update/start': 'admin',
+  'POST /api/update/cancel': 'admin',
 
   // notifications: a person's own devices (DISP-65), never a token's
   'GET /api/push/devices': 'user',

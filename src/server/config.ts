@@ -59,6 +59,16 @@ export interface Config {
   secretKey: string | null;
   /** GitHub OAuth App for "Connect with GitHub" (GITHUB_OAUTH_CLIENT_ID / _SECRET); null: paste a token */
   githubOAuth: { clientId: string; clientSecret: string } | null;
+  /** Dispatch's own repo on GitHub, owner/name (UPDATE_REPO); null: the origin of the server's checkout (DISP-112) */
+  updateRepo: string | null;
+  /** the branch releases are on (UPDATE_BRANCH) */
+  updateBranch: string;
+  /** how often to look for a new version (UPDATE_POLL_MINUTES); 0: only on "Check now" */
+  updatePollMinutes: number;
+  /** the GitHub account to look with (UPDATE_GITHUB_ACCOUNT); null: the first, or none */
+  updateGithubAccount: string | null;
+  /** ms after its start in which the server takes no worker: the launcher still watches whether the new version holds (DISP-112) */
+  settleMs: number;
 }
 
 const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -111,6 +121,11 @@ export function loadConfig(raw = process.env): Config {
     adoptOwner: false,
     secretKey: env.DISPATCH_SECRET_KEY || null,
     githubOAuth: env.GITHUB_OAUTH_CLIENT_ID && env.GITHUB_OAUTH_CLIENT_SECRET ? { clientId: env.GITHUB_OAUTH_CLIENT_ID, clientSecret: env.GITHUB_OAUTH_CLIENT_SECRET } : null,
+    updateRepo: env.UPDATE_REPO?.trim() || null,
+    updateBranch: env.UPDATE_BRANCH?.trim() || 'main',
+    updatePollMinutes: Number(env.UPDATE_POLL_MINUTES ?? 30),
+    updateGithubAccount: env.UPDATE_GITHUB_ACCOUNT?.trim() || null,
+    settleMs: Math.max(0, Number(env.DISPATCH_SETTLE_MS) || 0),
   };
   cfg.installOwner = env.DISPATCH_OWNER?.trim() || (cfg.authMode === 'proxy' ? cfg.authUsers[0] : undefined) || (cfg.authMode === 'off' ? 'local' : 'owner');
   cfg.adoptOwner = cfg.authMode === 'proxy' && !env.DISPATCH_OWNER?.trim() && !cfg.authUsers.length;
@@ -120,6 +135,9 @@ export function loadConfig(raw = process.env): Config {
     throw new Error('Set APP_PASSWORD or APP_PASSWORD_HASH, or AUTH_MODE=proxy with TRUSTED_PROXIES (or DISABLE_AUTH=1 for local testing only).');
   }
   if (cfg.authMode === 'proxy' && !cfg.trustedProxies.length) throw new Error('AUTH_MODE=proxy needs TRUSTED_PROXIES: the address(es) of the proxy.');
+  if (cfg.updateRepo && !/^[\w.-]+\/[\w.-]+$/.test(cfg.updateRepo)) throw new Error('UPDATE_REPO must be owner/name, as on GitHub.');
+  if (!/^[\w./-]+$/.test(cfg.updateBranch) || cfg.updateBranch.startsWith('-')) throw new Error('UPDATE_BRANCH must be a branch name.');
+  if (!Number.isFinite(cfg.updatePollMinutes) || cfg.updatePollMinutes < 0) throw new Error('UPDATE_POLL_MINUTES must be 0 or more.');
   if (!cfg.workerToken) throw new Error('Set WORKER_TOKEN (shared secret between server and worker).');
   return cfg;
 }

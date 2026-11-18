@@ -6,7 +6,7 @@
 # More workers on other machines: see compose.worker.yml and README → "Distributed setup".
 services:
   server:
-    build: { context: ., dockerfile: docker/Dockerfile.server }
+    build: { context: ., dockerfile: docker/Dockerfile.server, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
     ports: ["${PORT:-3000}:3000"]
     env_file: [server.env]
     environment:
@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build: { context: ., dockerfile: docker/Dockerfile.worker }
+    build: { context: ., dockerfile: docker/Dockerfile.worker, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
     depends_on: [server]
     # worker.env: its token, the Claude login, GitHub (docker/worker.env.example)
     env_file: [worker.env]

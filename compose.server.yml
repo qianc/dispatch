@@ -4,7 +4,7 @@
 #   docker compose -f compose.server.yml up -d --build
 services:
   server:
-    build: { context: ., dockerfile: docker/Dockerfile.server }
+    build: { context: ., dockerfile: docker/Dockerfile.server, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
     ports: ["${PORT:-3000}:3000"]
     # server.env (docker/server.env.example): PUBLIC_URL must be the https address you open the app on
     env_file: [server.env]
@@ -17,7 +17,7 @@ services:
 
   # nightly copy of the database and attachments (14 days kept)
   backup:
-    build: { context: ., dockerfile: docker/Dockerfile.server }
+    build: { context: ., dockerfile: docker/Dockerfile.server, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
     command: ["node", "src/server/backup.ts", "--data", "/data", "--out", "/backups", "--at", "03:15", "--keep", "14"]
     # root, so it can write into the host folder ./backups (the app image runs as the node user).
     # To own the files yourself instead: BACKUP_USER=$(id -u):$(id -g) and make ./backups writable for it.

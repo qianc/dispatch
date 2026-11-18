@@ -10,8 +10,8 @@
     "dev:worker": "node --watch --env-file-if-exists=.env src/worker/main.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "vite build --config web/vite.config.ts",
-    "start:server": "node src/server/main.ts",
-    "start:worker": "node src/worker/main.ts",
+    "start:server": "node src/launch.ts server",
+    "start:worker": "node src/launch.ts worker",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "vitest run",
     "e2e": "playwright test"

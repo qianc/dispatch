@@ -884,6 +884,11 @@ export class GitHub {
   /** PRs being merged now (auto or by the owner), with the repo's check: the inbox shows them as merging. */
   readonly mergingNow = new Set<number>();
 
+  /** A merge is in flight: a restart of the server now would cut it off (DISP-112). */
+  busy() {
+    return this.merging.size > 0 || this.mergingNow.size > 0;
+  }
+
   /**
    * Approve a PR on GitHub (DISP-111): kept on the PR in Dispatch first, then sent to GitHub as the
    * caller's review. A review GitHub does not take (your own PR, a token that may not review, no

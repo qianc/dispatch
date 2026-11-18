@@ -16,6 +16,8 @@ import type { Identities } from '../identities.ts';
 import type { HostedGit } from '../hosted.ts';
 import type { Scheduler } from '../scheduler.ts';
 import type { Orchestrator } from '../orchestrator.ts';
+import type { VersionInfo } from '../../update/version.ts';
+import type { Updates } from '../updates.ts';
 
 export interface Ctx {
   cfg: Config;
@@ -39,6 +41,10 @@ export interface Ctx {
   janitor: Janitor;
   scheduler: Scheduler;
   orchestrator: Orchestrator;
+  /** the commit this server runs (DISP-112) */
+  version: VersionInfo;
+  /** new versions of Dispatch itself, and installing them (DISP-112) */
+  updates: Updates;
 }
 
 export class HttpError extends Error {

@@ -319,6 +319,13 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | | A GitHub OAuth App for "Connect with GitHub" (Settings → Your GitHub). Its callback URL is `PUBLIC_URL/api/github/oauth/callback`. Without it, people paste a token. |
 | `TOKEN_REMOTE_SCOPES` | `read,tracker` | What personal tokens may do from another machine. |
 | `TZ` | `UTC` (Docker) | Time zone of scheduled runs, e.g. `Europe/Berlin`. In Docker the compose files set it, so put it in the shell or the `.env` file next to them, not in `server.env`. |
+| `UPDATE_REPO` | the `origin` of the server's checkout | Dispatch's own repo on GitHub (`owner/name`), where it looks for new versions. A server from an image must set it. See [Updates](#updates). |
+| `UPDATE_BRANCH` | `main` | The release branch. Only its commits are installed. |
+| `UPDATE_POLL_MINUTES` | `30` | How often the server looks for a new version. `0`: only on "Check now". |
+| `UPDATE_GITHUB_ACCOUNT` | the first GitHub account | The account that reads `UPDATE_REPO`. A public repo needs none. |
+| `DISPATCH_VERSION` | | The commit that runs. Read only when the code is not a git checkout: an image (a build argument of the Dockerfiles). A checkout always says its own `HEAD`. |
+| `UPDATE_INSTALL_COMMAND` | `npm ci`, then `npm run build` | Replaces the install and build steps of an update of a checkout. It gets `DISPATCH_UPDATE_ROLE` (`server` or `worker`), `DISPATCH_UPDATE_SHA` (the commit the checkout is on now) and, when it runs to put the old version back, `DISPATCH_UPDATE_ROLLBACK=1`. |
+| `UPDATE_READY_SECONDS`, `UPDATE_SETTLE_SECONDS` | `90`, `10` | How long a new version has to start, and how long it must then stay up to count as healthy. |
 
 **Worker**
 
@@ -345,6 +352,10 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
 | `IDLE_CLOSE_MINUTES` | `10` | Close an idle Claude process after this long (it resumes on the next message). |
 | `RUNNER` | `claude` | `fake`: a scripted agent, to try the app without Claude. |
+| `UPDATE_BRANCH`, `UPDATE_GITHUB_ACCOUNT` | `main`, the first GitHub account | The release branch of Dispatch's own repo, and the account that fetches it: for the worker's own update, and for the check and the `DISPATCH_UPDATE_BRANCH` of a server update it runs. Set `UPDATE_BRANCH` to the same branch as on the server. `UPDATE_INSTALL_COMMAND`, `UPDATE_READY_SECONDS` and `UPDATE_SETTLE_SECONDS` work as for the server. See [Updates](#updates). |
+| `DISPATCH_VERSION` | | The commit a worker from an image runs (a build argument of `Dockerfile.worker`). A checkout always says its own `HEAD`. |
+| `SERVER_UPDATE_COMMAND` | | The command that updates a server that runs as an image. With `WORKER_CONFIG`: a `server_update_command` key per server. |
+| `UPDATE_TIMEOUT_MIN`, `UPDATE_HEALTH_MIN` | `20`, `5` | How long that command may run, and how long the server may then take to come back on the new commit. Both can count twice (the update, then the way back), and the server waits 60 minutes for the result: keep twice their sum under that. With a health time of 5 minutes, that is a command time of at most 24 minutes. |
 | `RELEASES` | | JSON list of releases this worker may run: `[{"repo", "label_prefix"?, "command"?, "notes"?}]`. `label_prefix` defaults to `rel:`; `{version}` in `command` is replaced. Without `WORKER_CONFIG` only; with it, use a `releases` key per server. See [Releases](#releases). |
 
 ## Architecture
@@ -488,6 +499,80 @@ credential on one machine is offered only there. Add `releases` to a server entr
 - **Where it runs.** A local repo is released in your own checkout, which must be on its default
   branch with no uncommitted changes. A GitHub repo is released in a checkout of the default branch
   on the worker. One release per repo runs at a time.
+
+## Updates
+
+Dispatch can update itself. Settings → **Updates** (the install owner only) shows the commit that
+runs, how many commits it is behind its release branch, and what is new. "Check now" looks at
+once; otherwise the server looks every 30 minutes. "Update now" installs the newest version. With
+**Update automatically** on, Dispatch does that itself. It follows every commit of the release
+branch, or version tags only (`v1.2.3`).
+
+**When it updates.** Only when it is idle:
+
+- The server waits until no session is in a turn, no merge runs and no worker runs a command for
+  it. While it updates, queued sessions stay in the queue and messages are kept.
+- Then the workers follow, one at a time. A worker waits until none of its sessions is in a turn
+  or waits for your answer, for every server it serves. The next worker starts only when the one
+  before is back.
+- A session at the end of its turn does not block an update. A session that waits for its usage
+  limit to reset does not block either. Both go on after the restart.
+
+The section says what an update waits for.
+
+**What one update does.** It fetches the release branch, goes to that exact commit, runs
+`npm ci` when the lock file changed and `npm run build` for a server, restarts, and checks that
+the new version starts and stays up. The database migrations run at the start, as always. When the
+new version does not start, the old commit, its packages and (when the migrations changed it) the
+database from before come back, and the old version runs again. The changed database is kept
+next to it as `dispatch.db.failed-update`. A version that failed is not tried again until you
+press "Update now". Every update is in the log of the section: what started it, from which commit
+to which, and how it ended.
+
+Only a commit of the release branch of the checkout's own `origin` is installed. No message
+carries an address, a branch or a command. A checkout with changed files, or one on another
+branch, is not touched.
+
+**Set it up.**
+
+- *From a git checkout (server or worker).* Start it through the launcher: `npm run start:server`
+  / `npm run start:worker`, or `node src/launch.ts server|worker`
+  ([systemd example](docs/examples/dispatch-worker.service)). The launcher stays alive beside the
+  process, so something is there to put the old version back. A process started another way says
+  in the section that it cannot update itself. Two things for a service unit: `npm` must be on its
+  `PATH` (an update runs `npm ci`), and a stop must go to the launcher only (`KillMode=mixed` in
+  systemd), so that a restart of the service in the middle of an update is no failed update.
+- *A server from an image.* An image has no checkout, so a worker updates it with a command you
+  set on that worker: `server_update_command` in its entry for that server
+  ([worker.json](docs/examples/worker.json)), or `SERVER_UPDATE_COMMAND`. Only a worker of the
+  install owner is used: what it says decides which version the server believes it runs. The
+  server sends only the commit. The command gets it in `DISPATCH_UPDATE_SHA`, the commit from
+  before in `DISPATCH_UPDATE_PREV`, and the branch in `DISPATCH_UPDATE_BRANCH`: the worker's own
+  `UPDATE_BRANCH`, which must be the server's. A worker that runs from a checkout of Dispatch
+  first checks that the commit is on that branch. When the command fails, or
+  the server is not back on the commit within 5 minutes, the same command runs again with the
+  commit from before in `DISPATCH_UPDATE_SHA` and `DISPATCH_UPDATE_ROLLBACK=1`. Set `UPDATE_REPO`
+  on the server, and build the image with its commit. A script like this does it:
+
+  ```sh
+  #!/bin/sh
+  set -e
+  cd ~/dispatch-deploy     # a checkout that only builds the server
+  git fetch origin "$DISPATCH_UPDATE_BRANCH"
+  git checkout --detach "$DISPATCH_UPDATE_SHA"
+  DISPATCH_VERSION="$DISPATCH_UPDATE_SHA" docker compose -f compose.server.yml up -d --build
+  ```
+
+- *A worker from an image* does not update itself. Build and start a new image.
+
+**Limits.**
+
+- Use auto-update or a deploy command for Dispatch's own repo, not both: each would restart the
+  server after a merge.
+- A server and a worker may share one checkout. Each updates when it is idle, and the second
+  finds the checkout already moved. A worker that also serves other servers should have its own
+  checkout: the server's `npm ci` can disturb a session it runs for another server.
+- A rollback loses what the new server wrote while it ran: a few seconds at most.
 
 ## Run without Docker (development)
 

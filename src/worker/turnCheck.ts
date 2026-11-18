@@ -55,6 +55,11 @@ export class TurnCheck {
     this.cancel();
   }
 
+  /** a check runs now */
+  get running() {
+    return this.ctrl !== null;
+  }
+
   /** Stop a running check (the owner stopped the session); the turn is then reported as it is. */
   cancel() {
     this.ctrl?.abort();

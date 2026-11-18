@@ -51,7 +51,7 @@ describe("the worker's link to a server (DISP-63)", () => {
       workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-wgc-')), slots: new Slots(2),
       claudeAccounts: () => [], githubAccounts: ['personal', 'work'], gitEnv: () => ({}), remoteBase: 'https://github.com', secrets,
     });
-    expect((await link.facts()).caps).toEqual(['github_cred']);
+    expect((await link.facts()).caps).toContain('github_cred');
     const sent: WorkerToServer[] = [];
     const raw: string[] = [];
     (link as unknown as { ws: unknown }).ws = { readyState: WebSocket.OPEN, send: (d: string) => { raw.push(d); sent.push(JSON.parse(d)); } };
