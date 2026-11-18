@@ -31,14 +31,23 @@ export const runShell: RunCommand = (command, env, timeoutMs) =>
         child.kill('SIGKILL');
       }
     }, timeoutMs);
-    child.on('error', (e) => {
+    let done = false;
+    const end = (code: number | null, more = '') => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
-      resolve({ code: null, out: `${out}${e.message}`, timed_out: timedOut });
-    });
-    child.on('close', (code) => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({ code, out: out + more, timed_out: timedOut });
+    };
+    child.on('error', (e) => end(null, e.message));
+    // the command has ended. What it started and left running may hold its output open: wait a
+    // moment for the last lines, not for that
+    child.on('exit', (code) => {
       clearTimeout(timer);
-      resolve({ code, out, timed_out: timedOut });
+      setTimeout(() => end(code), 500);
     });
+    child.on('close', (code) => end(code));
   });
 
 export interface ServerUpdateOptions {
@@ -52,8 +61,9 @@ export interface ServerUpdateOptions {
   /**
    * Is the commit one of the release branch? Throws with the reason when not. Only a worker that
    * runs from a checkout of Dispatch can look; without it the command gets the commit as it came.
+   * `abbrev`: the commit to go back to, which may be the start of a commit id.
    */
-  verify?: (sha: string) => Promise<void>;
+  verify?: (sha: string, abbrev?: boolean) => Promise<void>;
   run?: RunCommand;
   env?: NodeJS.ProcessEnv;
 }
@@ -115,6 +125,12 @@ export async function runServerUpdate(req: ServerUpdateRequest, o: ServerUpdateO
     why = `The update command ended well, but the server did not come back on ${short(req.sha)} within ${mins(o.healthMs)} (${now ? `it runs ${short(now)}` : 'it is not connected'}).`;
   }
   if (!prev) return fail(`${why} The server did not say which commit it ran before, so nothing was put back.`, { log_tail: tail() });
+  // the way back is also only to a commit of the release branch
+  try {
+    await o.verify?.(prev, true);
+  } catch (e) {
+    return fail(`${why} Nothing was put back: ${(e as Error).message}`, { log_tail: tail() });
+  }
   const badBack = await once(prev, true);
   if (badBack) return fail(`${why} The command for the way back to ${short(prev)} ${badBack}.`, { log_tail: tail() });
   if (!(await runs(prev))) return fail(`${why} The command ran again for ${short(prev)}, but the server did not come back on it.`, { log_tail: tail() });

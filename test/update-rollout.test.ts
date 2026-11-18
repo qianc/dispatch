@@ -171,7 +171,7 @@ describe('the rollout of an update: the server first, then the workers, each in 
 
       // "Update now" does
       expect((await s.call('POST', '/update/start', {})).status).toBe(200);
-      expect((await info()).rollout).toEqual({ sha: B, tag: null, by: OWNER });
+      expect((await info()).rollout).toEqual({ sha: B, tag: null, by: OWNER, from: A });
       await s.ctx.updates.tick();
       expect(asked).toHaveLength(2);
       expect((await log())[0]).toMatchObject({ id: 2, triggered_by: OWNER, state: 'running' });
@@ -293,6 +293,115 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect((await log())[0].detail).toBe('The server did not come back on bbbbbbb.');
       expect(s.ctx.sessions.hold).toBeNull();
       expect(notices()).toContain('Dispatch: the update failed');
+    });
+
+    it('only a worker of the install owner updates the server: the command of another user\'s worker is not used', async () => {
+      const guest = s.ctx.workers.create('guest', 'of another user', 'guest');
+      const w = await worker(guest.secret, { sha: A, updatable: false, server_update: true });
+      await online(1);
+      await autoOn(A);
+      const i = await info();
+      expect(i.mode).toBe('none');
+      expect(i.mode_why).toContain(`no connected worker of ${OWNER} has a command`);
+      await s.ctx.updates.tick();
+      expect(w.got.filter((m) => m.t === 'server_update')).toEqual([]);
+      expect(await log()).toEqual([]);
+      expect(s.ctx.sessions.hold).toBeNull();
+      // "Update now" starts nothing that would wait for ever, and says why
+      const r = await s.call('POST', '/update/start', {});
+      expect(r.status).toBe(409);
+      expect(r.data.error).toBe(`The server cannot be updated. ${i.mode_why}`);
+      expect((await info()).rollout).toBeNull();
+    });
+
+    it('a worker that says the update worked is believed only when the server runs the commit', async () => {
+      const w = await worker('test-token', { sha: A, updatable: false, server_update: true });
+      await online(1);
+      await autoOn(A);
+      await s.ctx.updates.tick();
+      await waitFor(() => w.got.some((m) => m.t === 'server_update'), 'the update message');
+      // the server starts again while the worker's command still runs: only the worker's result ends the update
+      s.ctx.updates.graceMs = 0;
+      s.ctx.updates.reconcile();
+      await new Promise((r) => setTimeout(r, 50));
+      expect((await log())[0].state).toBe('running');
+      expect(s.ctx.sessions.hold).toBe(UPDATE_HOLD);
+
+      w.send({ t: 'update_result', update_id: 1, target: 'server', ok: true, rolled_back: false, from: A, to: B });
+      await waitFor(async () => (await log())[0].state === 'failed', 'the result');
+      expect((await log())[0].detail).toBe(`Worker default says the update worked, but the server runs ${A.slice(0, 7)}, not ${B.slice(0, 7)}.`);
+      expect(notices()).not.toContain('Dispatch: updated');
+      expect(notices()).toContain('Dispatch: the update failed');
+      // and that commit is not tried again by itself
+      await s.ctx.updates.tick();
+      expect(w.got.filter((m) => m.t === 'server_update')).toHaveLength(1);
+    });
+
+    it('an update by a worker with no result: at the time limit, the commit that runs says how it ended', async () => {
+      const w = await worker('test-token', { sha: A, updatable: false, server_update: true });
+      await online(1);
+      await autoOn(A);
+      await s.ctx.updates.tick();
+      await waitFor(() => w.got.some((m) => m.t === 'server_update'), 'the update message');
+      // the new version runs, and the worker never said so
+      s.ctx.version.sha = B;
+      s.ctx.updates.serverTimeoutMs = 1;
+      await new Promise((r) => setTimeout(r, 20));
+      await s.ctx.updates.tick();
+      expect((await log())[0]).toMatchObject({ state: 'ok', detail: `No result of the update came within 0 minutes. The server runs ${B.slice(0, 7)}.` });
+      expect(s.ctx.sessions.hold).toBeNull();
+    });
+
+    it('an update started by hand is dropped when another commit was deployed meanwhile', async () => {
+      const C = sha('c');
+      withLauncher();
+      const w = await worker('test-token', { sha: A, updatable: false });
+      s.ctx.version.sha = A;
+      s.ctx.updates.source = fakeSource([A, B, C], [{ name: 'v1.1.0', sha: B }]);
+      await s.call('POST', '/update/check');
+      const id = await work(w);
+      expect((await s.call('POST', '/update/start', { target: 'tag' })).status).toBe(200);
+      expect((await info()).rollout).toEqual({ sha: B, tag: 'v1.1.0', by: OWNER, from: A });
+      await s.ctx.updates.tick();
+      expect((await info()).waiting).toEqual([`The server updates to v1.1.0 when it is idle. Now: session #${id} is working.`]);
+
+      // someone deploys the newest commit by hand: v1.1.0 is behind it now, and no update goes back
+      s.ctx.version.sha = C;
+      await status(w, id, 'idle');
+      await waitFor(() => s.ctx.updates.serverGate().length === 0, 'wait mode');
+      await s.ctx.updates.tick();
+      expect(asked).toEqual([]);
+      expect(await info()).toMatchObject({ rollout: null, waiting: [], log: [] });
+    });
+
+    it('a chat that runs holds the update back like any other session', async () => {
+      withLauncher();
+      await worker('test-token', { sha: A, updatable: true });
+      await online(1);
+      await autoOn(A);
+      const chat = (kind: 'assistant' | 'discuss', st: 'running' | 'waiting_input') => s.ctx.store.createSession({
+        started_by: OWNER, worker_id: defaultId, project_id: null, kind, title: 'A chat', status: st, force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [],
+      });
+      const a = chat('assistant', 'running');
+      expect(s.ctx.updates.serverGate()).toEqual([`session #${a.id} is working`]);
+      expect(s.ctx.updates.workerGate(defaultId)).toEqual([`session #${a.id} is working`]);
+      await s.ctx.updates.tick();
+      expect(asked).toEqual([]);
+      s.ctx.store.updateSession(a.id, { status: 'idle' });
+      // one that waits for an answer holds only its worker back
+      const d = chat('discuss', 'waiting_input');
+      expect(s.ctx.updates.serverGate()).toEqual([]);
+      expect(s.ctx.updates.workerGate(defaultId)).toEqual([`session #${d.id} waits for an answer`]);
+    });
+
+    it('Retry after a sign-in starts no turn while the server is about to stop', async () => {
+      const w = await worker('test-token');
+      const id = await work(w);
+      await status(w, id, 'idle');
+      s.ctx.sessions.hold = UPDATE_HOLD;
+      await expect(s.ctx.sessions.retryLogin(id)).rejects.toThrow('Dispatch is updating. Press Retry in a moment.');
+      expect(w.got.filter((m) => m.t === 'cmd' && m.cmd!.c === 'check_login')).toEqual([]);
+      s.ctx.sessions.hold = null;
     });
 
     it('at its start, an update with no result ends by the commit that runs', async () => {
@@ -436,7 +545,7 @@ describe('the rollout of an update: the server first, then the workers, each in 
 
       // "Update now" tries both again, one at a time
       expect((await s.call('POST', '/update/start', {})).status).toBe(200);
-      expect((await info()).rollout).toEqual({ sha: B, tag: null, by: OWNER });
+      expect((await info()).rollout).toEqual({ sha: B, tag: null, by: OWNER, from: B });
       t = step();
       await waitFor(() => wa.asks().length === 2, 'the first worker is asked again');
       wa.answer({ state: 'ahead' });
@@ -480,6 +589,80 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect((await log())[0]).toMatchObject({ state: 'running', worker_name: 'default' });
       await worker('test-token', { sha: B, updatable: true });
       await waitFor(async () => (await log())[0].state === 'ok', 'the update ends');
+    });
+
+    it('a worker whose link breaks before it answers and that is back on its old commit was only asked: it is asked again', async () => {
+      const wa = await worker('test-token', updatable);
+      await online(1);
+      await autoOn(B);
+      const t = step();
+      await waitFor(() => wa.asks().length === 1, 'the worker is asked');
+      await wa.close();
+      await t;
+      expect(await log()).toHaveLength(1);
+      const wa2 = await worker('test-token', updatable);
+      await waitFor(async () => (await log()).length === 0, 'the question is dropped');
+      expect(notices()).not.toContain('Dispatch: worker default did not update');
+      const t2 = step();
+      await waitFor(() => wa2.asks().length === 1, 'the worker is asked again');
+      wa2.answer({ state: 'started' });
+      await t2;
+      expect((await log())[0]).toMatchObject({ state: 'running', worker_name: 'default' });
+      // this time it stopped for the update: back on its old commit, the update is not dropped
+      await wa2.close();
+      await online(0);
+      await worker('test-token', updatable);
+      await online(1);
+      await new Promise((r) => setTimeout(r, 50));
+      expect((await log())[0]).toMatchObject({ state: 'running' });
+    });
+
+    it('a worker that got work after its answer says "not now": nothing is logged, and it is asked again', async () => {
+      const wa = await worker('test-token', updatable);
+      await online(1);
+      await autoOn(B);
+      let t = step();
+      await waitFor(() => wa.asks().length === 1, 'the worker is asked');
+      wa.answer({ state: 'started' });
+      await t;
+      expect(await statuses()).toMatchObject({ default: 'updating' });
+      wa.send({ t: 'update_result', update_id: 1, target: 'worker', ok: false, rolled_back: false, from: A, to: B, not_now: true, error: 'Work came in before the worker stopped.' });
+      await waitFor(async () => (await log()).length === 0, 'the question is dropped');
+      expect(notices()).not.toContain('Dispatch: worker default did not update');
+      expect(await statuses()).toMatchObject({ default: 'behind' });
+      // its sessions do not wait for an update any more
+      const id = await work(wa);
+      await status(wa, id, 'idle');
+      t = step();
+      await waitFor(() => wa.asks().length === 2, 'the worker is asked again');
+      wa.answer({ state: 'busy', reasons: ['session 1 is working'] });
+      await t;
+    });
+
+    it('a worker that was back on the new version and then did not hold: its result overrules the hello', async () => {
+      const wa = await worker('test-token', updatable);
+      await online(1);
+      await autoOn(B);
+      const t = step();
+      await waitFor(() => wa.asks().length === 1, 'the worker is asked');
+      wa.answer({ state: 'started' });
+      await t;
+      await wa.close();
+      await online(0);
+      const wa2 = await worker('test-token', { sha: B, updatable: true });
+      await waitFor(async () => (await log())[0].state === 'ok', 'the hello on the new version');
+      // it stops soon after its start: its launcher puts the old version back, and that one says so
+      await wa2.close();
+      await online(0);
+      const wa3 = await worker('test-token', updatable);
+      wa3.send({ t: 'update_result', update_id: 1, target: 'worker', ok: false, rolled_back: true, from: A, to: B, error: 'The worker stopped soon after its start.' });
+      await waitFor(async () => (await log())[0].state === 'rolled_back', 'the result');
+      expect((await log())[0].detail).toBe('The worker stopped soon after its start.');
+      expect(notices()).toContain('Dispatch: worker default did not update');
+      expect(await statuses()).toMatchObject({ default: 'failed' });
+      // and it is not asked again by itself
+      await step();
+      expect(wa3.asks()).toEqual([]);
     });
 
     it('workers that cannot update themselves, or run the same version, are left alone', async () => {

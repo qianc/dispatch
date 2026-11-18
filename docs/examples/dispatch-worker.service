@@ -16,6 +16,10 @@ WorkingDirectory=%h/dispatch
 EnvironmentFile=%h/.config/dispatch/worker.env
 Environment=WORKSPACES_DIR=%h/.local/share/dispatch/ws
 ExecStart=/usr/bin/node src/launch.ts worker
+# a stop goes to the launcher only, which stops the worker itself (also in the middle of an update)
+KillMode=mixed
+# an update runs `npm ci`: npm must be on this PATH (set it when your node is not in /usr/bin)
+#Environment=PATH=%h/.nvm/versions/node/v24.0.0/bin:/usr/local/bin:/usr/bin:/bin
 Restart=always
 RestartSec=5
 

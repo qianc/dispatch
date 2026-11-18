@@ -164,9 +164,10 @@ export type WorkerToServer =
   | { t: 'deploy_result'; session_id: number; repo_id: number; ok: boolean; sha: string | null; output: string; duration_ms: number }
   /**
    * how an update ended (DISP-112): the worker's own (after `self_update`), or the server's (after
-   * `server_update`). Kept in the worker's outbox until the server is there.
+   * `server_update`). Kept in the worker's outbox until the server is there. `not_now`: the worker
+   * said it would stop, and then work came in before it did: nothing happened, ask again later.
    */
-  | { t: 'update_result'; update_id: number; target: 'worker' | 'server'; ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string; log_tail?: string };
+  | { t: 'update_result'; update_id: number; target: 'worker' | 'server'; ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string; log_tail?: string; not_now?: boolean };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
 export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items'

@@ -83,15 +83,19 @@ HEAD must be on the release branch or detached. The branch is the machine's own 
 (default `main`); no message carries a branch or an address.
 
 **The launcher**, asked over IPC with `{ sha, branch, role, from }` (`from`: the commit the child
-runs), runs `applyUpdate`:
+runs; a full commit id or nothing), runs `applyUpdate`:
 
 1. **Check again, without the network, with the child still running.** Take the lock
    (`<git dir>/dispatch-update.lock`). The same rules as above, on the commits that are now in the
-   checkout. A refusal here changes nothing and the child keeps running.
+   checkout. A refusal here changes nothing and the child keeps running. The lock holds the
+   launcher's process id and start time, so a lock left by a crash is not taken for a live one
+   when another process has that id after a reboot.
 2. **Journal.** Write `<git dir>/dispatch-update.json`: HEAD, the commit the child ran, the
    target, whether HEAD was on the branch, whether this launcher moves the checkout, whether the
    lock file differs.
 3. **Stop the child.** A server that stops for its own update copies its database first (below).
+   A server that does not end cleanly (it could not make that copy) is started again as it was,
+   and nothing is changed.
 4. **Change.** Move the checkout to the commit: `git merge --ff-only` when on the release branch,
    `git checkout --detach` otherwise. `npm ci` when `package-lock.json` differs (without dev
    packages when `vite` is not installed now), and `npm run build` for a server.
@@ -107,7 +111,14 @@ runs), runs `applyUpdate`:
 7. The result `{ ok, from, to, rolled_back, error, log_tail }` goes to the child that runs now,
    over IPC, after its `ready`. The journal and the lock are removed.
 
-A launcher that starts and finds a journal finishes the rollback first.
+A launcher that starts and finds a journal finishes the rollback first. When that fails (no
+network for `npm ci` right after a boot), it keeps the journal and exits, so the service starts it
+again; after three tries it starts the child on the checkout as it is, and says so. The journal is
+removed as soon as the old version is in place, before the old child starts.
+
+A stop of the whole service while the new child is checked is no failed check: the launcher keeps
+the journal and ends, and the next start takes the update back. The unit example has
+`KillMode=mixed`, so a stop goes to the launcher only.
 
 **The database.** The server owns its copy, the same way for a checkout and for an image. A
 server that stops while its own update runs copies the database after it closed it
@@ -143,19 +154,23 @@ changes at the next restart of the service; the three IPC messages stay as they 
 - Then it waits (`UPDATE_HEALTH_MIN`, default 5) for a `welcome` from the server with that commit.
 - When the command fails or the wait runs out, it runs the command again with
   `DISPATCH_UPDATE_SHA=<prev>` and `DISPATCH_UPDATE_ROLLBACK=1`, and waits for the old commit.
+  A worker that can check does so for `prev` too: the way back is also only to a commit of the
+  release branch.
 - The result is an `update_result` message. Like a deploy result, it waits in the worker's outbox
   until the server is back.
 - The server uses this way only when it cannot update itself and knows its own commit. It asks
-  the first connected worker that has the command, holds queued sessions while the command runs,
-  and counts only that worker's result. With no result in 60 minutes it closes the update by the
-  commit it runs.
+  the first connected worker of the install owner that has the command (another user's worker
+  could say "ok" for an update it never ran), holds queued sessions while the command runs, and
+  counts only that worker's result. An "ok" counts only when the server runs the commit. A start
+  of the server does not close the update: the worker may still wait for it, or run its way back.
+  With no result in 60 minutes the server closes the update by the commit it runs.
 - The database copy is the server's own (above): the old image, started again by the rollback,
   puts it back when the new image had migrated the database.
 
 ### Wait mode
 
 - **Server gate.** After a `dispatch()` pass (so nothing that can start is left in the queue):
-  no session is `running`, no merge and no auto-merge check is in flight, no worker command waits
+  no session of any kind (work, assistant, discuss) is `running`, no merge and no auto-merge check is in flight, no worker command waits
   for its answer. A session in a usage-limit wait, at turn end or with an open question does not
   close the server gate: the worker keeps its runner and the question is a row in the database.
   While the server updates, a hold keeps queued sessions in the queue with a reason.
@@ -164,6 +179,11 @@ changes at the next restart of the service; the three IPC messages stay as they 
   starting, no turn check, deploy, command or update of a server running, and an empty outbox.
   Then the worker reports 0 free slots to every server and refuses a start as `busy`. Any server
   the worker serves may ask: the worker checks the commit against its own `origin` each time.
+- A chat, a reply or a command takes no slot, so the worker looks once more after its answer is
+  out. When work came in, it does not stop: it opens its slots and sends `update_result` with
+  `not_now`, and the server drops the log row and asks again later. Else it hangs up on all its
+  servers before it asks the launcher, so nothing can start that the stop would cut off. When the
+  launcher refuses, the same process connects again.
 - The server holds a worker from the moment it sends `self_update` until the worker is back or
   the time limit (15 minutes) passed. Queued sessions for it show "Waiting for worker X
   (updating)", and a message to one of its sessions is kept and delivered after.
@@ -185,14 +205,23 @@ changes at the next restart of the service; the three IPC messages stay as they 
   for that commit.
 - A worker that answers `busy` is asked again at the next tick (30 s). A worker that is not
   connected is passed over. A worker whose link breaks before its answer keeps its log row
-  running until it is back, its result comes, or the time limit passed.
+  running until it is back, its result comes, or the time limit passed. Back on its old commit
+  without an answer "started", it was only asked: the row is dropped and it is asked again.
+- A worker's hello on the target closes its update as ok. When it then does not hold (its
+  launcher puts the old version back in the settle time), its `rolled_back` result overrules
+  that.
 - A failed worker stays on its version. The attempt is logged, the owner is told, and the worker
   is not asked again for that target until "Update now".
 - A failed server update stops the rollout for that target until "Update now".
+- A manual rollout notes the commit the server ran at its start. When the server later runs
+  another commit that is not the target (someone deployed by hand), the rollout is dropped: no
+  update goes back to an older commit.
+- "Update now" on a server that cannot be updated moves only the workers, or says why.
 - Table `updates` (migration 041): `target` (`server` or `worker`), `worker_id`, `triggered_by`
   (`auto` or the user), `from_sha`, `to_sha`, `to_tag`, `state` (`running`, `ok`, `failed`,
-  `rolled_back`), `detail`, `created_at`, `ended_at`. A `running` row left by a crash is closed
-  at start by comparing the running commit with the target.
+  `rolled_back`), `detail`, `created_at`, `ended_at`. A `running` row of the server's own update
+  by its launcher that a crash left is closed at start by comparing the running commit with the
+  target.
 
 ### Routes and page
 

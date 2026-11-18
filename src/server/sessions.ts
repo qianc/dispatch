@@ -794,6 +794,8 @@ export class Sessions {
     if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
     const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
     if (!this.hub.isConnected(s.worker_id ?? -1)) throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
+    // an update is about to stop the server or this worker: a turn that starts now would be cut off
+    if (this.held(s)) throw new SessionError('Dispatch is updating. Press Retry in a moment.', 503);
     const identity = this.identityOf(s);
     if (isRefusal(identity)) throw refusalError(identity);
     const account = await this.hub.cmd<ClaudeAccountInfo>(s.worker_id, { c: 'check_login', account: s.claude_account }, 20_000);

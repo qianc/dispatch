@@ -111,6 +111,10 @@ export class ServerLink {
   private jobs = new Map<string, number>();
   private ws: WebSocket | null = null;
   private stopped = false;
+  /** the worker stops for its own update: the link is down until it is back (DISP-112) */
+  private paused = false;
+  /** counts the pauses: a connection from before one is not used after it */
+  private epoch = 0;
   /** the commit the server said it runs, in its answer to our last hello (DISP-112) */
   serverVersion: string | null = null;
   /** The server pings every 20 s (workerHub). Hearing nothing for this long means the connection
@@ -328,7 +332,8 @@ export class ServerLink {
     const live = this.runners.get(id);
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();
-      if (!this.shared.fake) await this.fetchHosted(spec);
+      // counted as work: a restart during the fetch would lose the message
+      if (!this.shared.fake) await this.job(`session ${id} gets a message`, () => this.fetchHosted(spec));
       return live.push(text);
     }
     const waiting = this.starting.get(id);
@@ -599,8 +604,29 @@ export class ServerLink {
     return next;
   }
 
-  connect(delay = 1000) {
-    if (this.stopped) return;
+  /**
+   * Hang up, and take or send nothing until `resume()`: the worker is about to stop for its own
+   * update, and what a server sent now would be cut off (DISP-112). What is still said goes to the outbox.
+   */
+  pause() {
+    if (this.paused) return;
+    this.paused = true;
+    this.epoch++;
+    const sock = this.ws;
+    this.ws = null;
+    this.serverVersion = null;
+    sock?.close(1000);
+  }
+
+  /** The update did not start after all: connect again. */
+  resume() {
+    if (!this.paused) return;
+    this.paused = false;
+    this.connect();
+  }
+
+  connect(delay = 1000, epoch = this.epoch) {
+    if (this.stopped || this.paused || epoch !== this.epoch) return;
     const { url, token, name } = this.entry;
     const sock = new WebSocket(url, { headers: { 'x-worker-token': token }, handshakeTimeout: 30_000 });
     let watchdog: NodeJS.Timeout | undefined;
@@ -611,6 +637,7 @@ export class ServerLink {
     };
     sock.on('ping', heard);
     sock.on('open', async () => {
+      if (epoch !== this.epoch) return void sock.close(1000);
       heard();
       this.ws = sock;
       delay = 1000;
@@ -623,6 +650,8 @@ export class ServerLink {
     });
     sock.on('message', (data) => {
       heard();
+      // a connection that was hung up takes nothing more
+      if (this.ws !== sock) return;
       let msg: ServerToWorker;
       try {
         msg = JSON.parse(String(data));
@@ -639,7 +668,7 @@ export class ServerLink {
       }
       if (code === 4001) console.error(`server ${name} rejected the worker token`);
       else if (code !== 1000) console.warn(`worker disconnected from ${name} (${code} ${reason}); retrying`);
-      setTimeout(() => this.connect(Math.min(delay * 2, 30_000)), delay);
+      setTimeout(() => this.connect(Math.min(delay * 2, 30_000), epoch), delay);
     });
     sock.on('error', () => undefined);
   }

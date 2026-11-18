@@ -5,7 +5,7 @@ import { Octokit } from '@octokit/rest';
 import { pick } from '../shared/accounts.ts';
 import type { SelfUpdateAnswer } from '../shared/protocol.ts';
 import { VERSION_RE, compareVersions } from '../shared/release.ts';
-import { updateSettings, type UpdateInfo, type UpdateRow, type UpdateRunState, type UpdateSettings, type UpdateState, type UpdateWorker, type WorkerFacts } from '../shared/types.ts';
+import { updateSettings, type Session, type SessionStatus, type UpdateInfo, type UpdateRow, type UpdateRunState, type UpdateSettings, type UpdateState, type UpdateWorker, type WorkerFacts } from '../shared/types.ts';
 import { Refusal, verifyTarget, type ApplyResult } from '../update/apply.ts';
 import type { LauncherLink } from '../update/ipc.ts';
 import { APP_DIR, gitOut, sameVersion, type VersionInfo } from '../update/version.ts';
@@ -17,6 +17,7 @@ import type { Notifier } from './notify.ts';
 import { dropCopy } from './preUpdate.ts';
 import type { Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
+import type { Users } from './users.ts';
 import type { UpdateResult, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
 
@@ -77,7 +78,13 @@ export function githubSource(octokit: Octokit, repo: string, branch: string): Re
     async compare(base, head) {
       try {
         const c = (await octokit.repos.compareCommitsWithBasehead({ owner, repo: name, basehead: `${base}...${head}`, per_page: 100 })).data;
-        return { status: c.status, ahead_by: c.ahead_by, commits: c.commits.map((x) => ({ sha: x.sha, message: x.commit.message })) };
+        let commits = c.commits.map((x) => ({ sha: x.sha, message: x.commit.message }));
+        // a page holds the oldest commits: far behind, the newest ones are read from the branch's end
+        if (c.ahead_by > commits.length) {
+          const newest = (await octokit.repos.listCommits({ owner, repo: name, sha: head, per_page: MAX_COMMITS })).data;
+          commits = newest.reverse().map((x) => ({ sha: x.sha, message: x.commit.message }));
+        }
+        return { status: c.status, ahead_by: c.ahead_by, commits };
       } catch (e) {
         // a commit GitHub does not have (a local one): not on the branch
         if ((e as { status?: number }).status === 404) return { status: 'diverged', ahead_by: 0, commits: [] };
@@ -109,6 +116,7 @@ export interface UpdatesDeps {
   sessions: Sessions;
   github: GitHub;
   workers: Workers;
+  users: Pick<Users, 'installOwner'>;
   /** the database's file: its copy from before the server's own update lies next to it */
   dbFile: string;
 }
@@ -149,6 +157,8 @@ export class Updates {
   private waitingNow: string[] = [];
   /** workers that said their checkout is past the server's commit, and for which commit */
   private aheadOf = new Map<number, string>();
+  /** worker updates (rows) whose worker said it stops now */
+  private started = new Set<number>();
   private lookedForOwn = false;
   private readonly startedAt = Date.now();
 
@@ -326,11 +336,14 @@ export class Updates {
    * failed before is tried again.
    */
   startRollout(by: string, kind?: 'commit' | 'tag') {
-    const t = this.target(kind === 'commit' ? 'commits' : kind === 'tag' ? 'tags' : undefined);
+    const newer = this.target(kind === 'commit' ? 'commits' : kind === 'tag' ? 'tags' : undefined);
+    // a server that cannot be updated gets no rollout that would wait for ever: only its workers move
+    const m = this.mode();
+    const t = m.mode === 'none' ? null : newer;
     const workers = !!this.version.sha && this.workerList().some((w) => w.connected && w.updatable && (w.status === 'behind' || w.status === 'failed'));
-    if (!t && !workers) throw new UpdateError('There is no newer version to update to. Press "Check now" first.');
+    if (!t && !workers) throw new UpdateError(newer ? `The server cannot be updated. ${m.why}` : 'There is no newer version to update to. Press "Check now" first.');
     this.setBlocked({ server: null, workers: {} });
-    this.db.setSetting('update_rollout', JSON.stringify({ ...(t ?? { sha: this.version.sha!, tag: this.version.tag }), by }));
+    this.db.setSetting('update_rollout', JSON.stringify({ ...(t ?? { sha: this.version.sha!, tag: this.version.tag }), by, from: this.version.sha }));
     this.changed();
     this.soon();
   }
@@ -415,9 +428,16 @@ export class Updates {
     if (this.launcher?.available) return { mode: 'self', why: null };
     const self = this.launcher?.why ?? 'It was not started through the launcher (node src/launch.ts server).';
     if (!this.version.sha) return { mode: 'none', why: `${self} It also does not know which commit it runs (DISPATCH_VERSION is not set), so no worker can update it.` };
-    const worker = this.d.hub.connectedIds().sort((a, b) => a - b).find((id) => this.d.hub.facts(id)?.version?.server_update);
+    // only a worker of the install owner: what it answers decides what the server believes it runs
+    const owner = this.d.users.installOwner;
+    const worker = this.d.hub.connectedIds().sort((a, b) => a - b).find((id) => this.d.hub.facts(id)?.version?.server_update && this.d.workers.get(id)?.owner === owner);
     if (worker !== undefined) return { mode: 'worker', why: null, worker };
-    return { mode: 'none', why: `${self} And no connected worker has a command that updates this server (server_update_command in its config).` };
+    return { mode: 'none', why: `${self} And no connected worker of ${owner} has a command that updates this server (server_update_command in its config).` };
+  }
+
+  /** Sessions of every kind in these states: a chat (assistant, discuss) runs on a worker like any other. */
+  private sessionsIn(statuses: SessionStatus[]): Session[] {
+    return ([undefined, 'assistant', 'discuss'] as const).flatMap((kind) => this.d.store.sessions({ statuses, kind, limit: 1000 }));
   }
 
   /**
@@ -428,7 +448,7 @@ export class Updates {
     this.d.sessions.dispatch();
     const out: string[] = [];
     // a session that only waits for its usage limit goes on by itself after a restart
-    const working = this.d.store.sessions({ statuses: ['running'], limit: 1000 }).filter((s) => !s.limit_wait);
+    const working = this.sessionsIn(['running']).filter((s) => !s.limit_wait);
     if (working.length) out.push(working.length === 1 ? `session #${working[0].id} is working` : `${working.length} sessions are working`);
     if (this.d.github.busy()) out.push('a merge runs');
     if (this.d.sessions.settlingCount()) out.push('a finished turn is checked and merged');
@@ -439,7 +459,7 @@ export class Updates {
   /** Wait mode of one worker, as far as the server knows; the worker itself has the last word. */
   workerGate(workerId: number): string[] {
     const out: string[] = [];
-    for (const s of this.d.store.sessions({ statuses: ['running', 'waiting_input'], limit: 1000 })) {
+    for (const s of this.sessionsIn(['running', 'waiting_input'])) {
       if (s.worker_id !== workerId || (s.status === 'running' && s.limit_wait)) continue;
       out.push(`session #${s.id} ${s.status === 'running' ? 'is working' : 'waits for an answer'}`);
     }
@@ -469,7 +489,14 @@ export class Updates {
     this.expire();
     // one at a time: the server, or one worker
     if (this.running().length) return [];
-    const manual = this.rollout();
+    let manual = this.rollout();
+    // started for another commit than the server runs now, and the server did not get to its
+    // target: someone deployed in between. What is ahead now is not what the owner asked for
+    if (manual?.from && !sameVersion(manual.from, this.version.sha) && !sameVersion(manual.sha, this.version.sha)) {
+      this.db.setSetting('update_rollout', '');
+      this.changed();
+      manual = null;
+    }
     if (!this.settings().auto && !manual) return [];
     const by = manual?.by ?? 'auto';
     const waiting: string[] = [];
@@ -498,6 +525,8 @@ export class Updates {
       if (Date.now() - Date.parse(r.created_at) <= limit) continue;
       const mins = Math.round(limit / 60_000);
       if (r.target === 'worker') this.workerEnded(r, 'failed', `Worker ${r.worker_name} was not back on ${short(r.to_sha)} within ${mins} minutes.`);
+      // the commit that runs says how it ended
+      else if (sameVersion(this.version.sha, r.to_sha)) this.serverEnded(r, 'ok', `No result of the update came within ${mins} minutes. The server runs ${short(r.to_sha)}.`);
       else this.serverEnded(r, 'failed', `No result of the update came within ${mins} minutes.`);
     }
   }
@@ -612,6 +641,7 @@ export class Updates {
       }
       if (answer.state === 'started') {
         // it stops in a moment: what would start on it now waits until it is back
+        this.started.add(row.id);
         sessions.holdWorker(id, true);
         this.changed();
         return waiting;
@@ -654,6 +684,7 @@ export class Updates {
 
   private workerEnded(row: UpdateRow, state: Exclude<UpdateRunState, 'running'>, detail: string | null) {
     if (!this.close(row.id, state, detail)) return;
+    this.started.delete(row.id);
     const id = row.worker_id!;
     this.d.sessions.holdWorker(id, false);
     if (state !== 'ok') {
@@ -679,9 +710,25 @@ export class Updates {
   onUpdateResult(workerId: number, msg: UpdateResult) {
     const row = this.row(msg.update_id);
     if (!row || row.target !== msg.target || row.worker_id !== workerId) return;
+    if (msg.not_now && row.target === 'worker' && row.state === 'running') {
+      // work reached the worker after its answer: it did not stop, and is asked again
+      this.dropRow(row.id);
+      this.d.sessions.holdWorker(workerId, false);
+      this.d.sessions.dispatch();
+      this.changed();
+      return;
+    }
     const state = msg.ok ? 'ok' : msg.rolled_back ? 'rolled_back' : 'failed';
-    if (row.target === 'server') this.serverEnded(row, state, this.detail(msg, !msg.ok));
-    else this.workerEnded(row, state, this.detail(msg));
+    if (row.target === 'server') {
+      // "ok" is true only on a server that runs the commit: the worker waited for it to say so
+      if (msg.ok && !sameVersion(this.version.sha, row.to_sha)) this.serverEnded(row, 'failed', `Worker ${row.worker_name} says the update worked, but the server runs ${short(this.version.sha)}, not ${short(row.to_sha)}.`);
+      else this.serverEnded(row, state, this.detail(msg, !msg.ok));
+      return;
+    }
+    // the worker was back on the new commit and then did not hold (its launcher put the old one
+    // back): this result overrules the "ok" its hello gave the row
+    if (!msg.ok && row.state === 'ok') this.db.run("UPDATE updates SET state = 'running', ended_at = NULL WHERE id = ? AND state = 'ok'", row.id);
+    this.workerEnded(row, state, this.detail(msg));
   }
 
   /** A worker is (back) on its link: one that runs the commit it was asked to take has updated. */
@@ -689,11 +736,12 @@ export class Updates {
     this.aheadOf.delete(workerId);
     this.d.sessions.holdWorker(workerId, false);
     const row = this.running().find((r) => r.target === 'worker' && r.worker_id === workerId);
-    if (row && sameVersion(facts?.version?.sha, row.to_sha)) this.workerEnded(row, 'ok', null);
-    else {
-      this.changed();
-      this.soon();
-    }
+    if (row && sameVersion(facts?.version?.sha, row.to_sha)) return this.workerEnded(row, 'ok', null);
+    // its link broke before it answered, and it is back on its old commit: it never stopped for
+    // the update, so the row was only a question. It is asked again
+    if (row && !this.started.has(row.id)) this.dropRow(row.id);
+    this.changed();
+    this.soon();
   }
 
   /**
@@ -705,8 +753,9 @@ export class Updates {
     const row = this.ownUpdate();
     if (!row) return;
     const here = sameVersion(this.version.sha, row.to_sha);
-    // a worker's command may still run its way back: the time limit of the update ends that wait
-    if (!here && row.worker_id !== null) return;
+    // a worker ran the command, and its result says how it ended: it may still wait for this
+    // server, or run its way back. The time limit of the update ends that wait
+    if (row.worker_id !== null) return;
     this.later(this.graceMs + this.cfg.settleMs, () => {
       const r = this.row(row.id);
       if (r?.state !== 'running') return;

@@ -1,6 +1,8 @@
 // Settings → Updates (DISP-112): which version of Dispatch runs, what is new on its release branch,
 // and the update of the server and its workers. Only the install owner sees it.
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router';
 import type { UpdateInfo, UpdateRow, UpdateSettings, UpdateWorker } from '../../../src/shared/types.ts';
 import { api } from '../api.ts';
 import { Button, Card, Chip, ErrorText, Section, Segmented, timeAgo } from './ui.tsx';
@@ -20,6 +22,16 @@ export function behindLine(info: UpdateInfo): { text: string; tone: Tone } {
   if (!st.on_branch) return { text: `The server's commit is not on ${branch}. It is not updated.`, tone: 'wait' };
   if (st.behind_by) return { text: `${st.behind_by} commit${st.behind_by === 1 ? '' : 's'} behind ${branch}`, tone: 'accent' };
   return { text: `Up to date with ${branch}`, tone: 'ok' };
+}
+
+/** The chip beside the running version. "Update available" only when there is something to update to. */
+export function versionChip(info: UpdateInfo): { label: string; tone: Tone } {
+  const { tone } = behindLine(info);
+  if (tone === 'ok') return { label: 'Up to date', tone };
+  if (tone !== 'accent') return { label: 'Not known', tone };
+  if (info.target) return { label: 'Update available', tone };
+  // behind the branch, with nothing to update to: only version tags are followed, and none is newer
+  return { label: info.settings.follow === 'tags' ? 'No newer version tag' : 'Behind', tone: 'neutral' };
 }
 
 const WORKER_LOOK: Record<UpdateWorker['status'], { label: string; tone: Tone }> = {
@@ -53,10 +65,19 @@ export function UpdatesSection() {
   const start = useMutation({ mutationFn: () => api.post<UpdateInfo>('/update/start'), onSuccess: done });
   const cancel = useMutation({ mutationFn: () => api.post<UpdateInfo>('/update/cancel'), onSuccess: done });
   const failed = check.error ?? save.error ?? start.error ?? cancel.error ?? error;
-  if (!info) return <Section title="Updates"><Card className="p-3 text-sm text-muted">{error ? <ErrorText error={error} /> : 'Loading…'}</Card></Section>;
+  // a notice of an update opens Settings here
+  const { hash } = useLocation();
+  const loaded = !!info;
+  useEffect(() => {
+    if (hash === '#updates') document.getElementById('updates')?.scrollIntoView();
+  }, [hash, loaded]);
+  if (!info) return <Section title="Updates" id="updates"><Card className="p-3 text-sm text-muted">{error ? <ErrorText error={error} /> : 'Loading…'}</Card></Section>;
 
-  const { state: st, version, target, rollout } = info;
+  const { state: st, version, rollout } = info;
   const behind = behindLine(info);
+  const chip = versionChip(info);
+  // a server that cannot be updated has nothing to update to: only its workers move
+  const target = info.mode === 'none' ? null : info.target;
   const running = info.log.some((r) => r.state === 'running');
   // also with no newer version: a worker that is behind the server, or whose update failed
   const workersBehind = info.workers.some((w) => w.connected && w.updatable && (w.status === 'behind' || w.status === 'failed'));
@@ -65,6 +86,7 @@ export function UpdatesSection() {
   return (
     <Section
       title="Updates"
+      id="updates"
       action={<Button small variant="ghost" disabled={check.isPending || !info.repo} onClick={() => check.mutate()}>{check.isPending ? 'Checking…' : 'Check now'}</Button>}
     >
       <Card>
@@ -73,7 +95,7 @@ export function UpdatesSection() {
             <div className="flex-1 min-w-0 text-[14px]">
               Dispatch runs <code>{short(version.sha)}</code>{version.tag && <span className="text-muted"> ({version.tag})</span>}
             </div>
-            <Chip tone={behind.tone}>{behind.tone === 'ok' ? 'Up to date' : behind.tone === 'accent' ? 'Update available' : 'Not known'}</Chip>
+            <Chip tone={chip.tone}>{chip.label}</Chip>
           </div>
           <div className="text-[12px] text-muted mt-0.5">
             {behind.text}

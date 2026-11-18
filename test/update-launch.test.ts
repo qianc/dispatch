@@ -141,6 +141,40 @@ test('a version that does not start is taken back, and the old one says so', asy
   expect(l.runs().filter((x) => x === 'sigterm A')).toHaveLength(1);
 }, 90_000);
 
+test('a server that does not end cleanly at its stop is not updated', async () => {
+  const f = fixture(FILES);
+  const l = launch(f.dir, { EXIT_CODE: '1' });
+  await until(() => l.runs().length);
+  l.ask({ sha: f.c, ctx: 6 });
+  const r = await until(() => l.result());
+  expect(r.result).toMatchObject({ ok: false, from: f.a, to: f.c });
+  expect(r.result.error).toMatch(/did not stop cleanly \(exit 1\)/);
+  expect(f.head()).toBe(f.a);
+  expect(starts(l)).toEqual(['A launcher=yes settle=', 'A launcher=yes settle=']);
+}, 90_000);
+
+test('a stop of the whole service while a new version is checked is no failed check: the update is taken back at the next start', async () => {
+  const f = fixture(FILES);
+  const l = launch(f.dir, { UPDATE_SETTLE_SECONDS: '15' });
+  await until(() => l.runs().length);
+  l.ask({ sha: f.c, ctx: 8 });
+  await until(() => starts(l).length === 2);
+  // the stop reaches the launcher and, by itself, the child too (Ctrl-C, or systemd's default KillMode)
+  l.proc.kill('SIGTERM');
+  await new Promise((r) => setTimeout(r, 200));
+  l.ask({ exit: 0 });
+  expect(await l.exit).toBe(0);
+  // no old version was started in between
+  expect(starts(l)).toHaveLength(2);
+  expect(f.head()).toBe(f.c);
+
+  const l2 = launch(f.dir);
+  const r = await until(() => l2.result());
+  expect(r.result).toMatchObject({ ok: false, rolled_back: true, from: f.a, to: f.c });
+  expect(r.ctx).toBe(8);
+  expect(f.head()).toBe(f.a);
+}, 90_000);
+
 test('a launcher that was killed in an update takes it back at its next start', async () => {
   const f = fixture(FILES);
   // the install step hangs (not on the way back)

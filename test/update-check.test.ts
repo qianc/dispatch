@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { githubSource } from '../src/server/updates.ts';
 import { as, startMultiUser, startServer } from './helpers.ts';
 import { fakeSource } from './update-source.ts';
 
@@ -132,5 +133,25 @@ describe('updates are the install owner\'s', () => {
     } finally {
       await s.app.close();
     }
+  });
+
+  it('far behind, the commits shown are the newest of the branch, not the oldest of the difference', async () => {
+    // GitHub's compare gives the oldest 100 of the 150 commits; the branch's own list gives the newest first
+    const c = (n: number) => ({ sha: String(n).padStart(40, '0'), commit: { message: `commit ${n}\n\nbody` } });
+    const asked: unknown[] = [];
+    const octokit = {
+      repos: {
+        compareCommitsWithBasehead: async () => ({ data: { status: 'ahead', ahead_by: 150, commits: Array.from({ length: 100 }, (_, i) => c(i + 1)) } }),
+        listCommits: async (q: unknown) => {
+          asked.push(q);
+          return { data: Array.from({ length: 20 }, (_, i) => c(150 - i)) };
+        },
+      },
+    };
+    const got = await githubSource(octokit as never, 'you/dispatch', 'main').compare(sha('a'), c(150).sha);
+    expect(asked).toEqual([{ owner: 'you', repo: 'dispatch', sha: c(150).sha, per_page: 20 }]);
+    expect(got.ahead_by).toBe(150);
+    // oldest first, as a short compare gives them
+    expect(got.commits.map((x) => x.message.split('\n')[0])).toEqual(Array.from({ length: 20 }, (_, i) => `commit ${131 + i}`));
   });
 });

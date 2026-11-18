@@ -43,8 +43,8 @@ const why = notCheckout();
 
 interface Result { ok: boolean; from: string | null; to: string; rolled_back: boolean; error?: string; log_tail?: string }
 interface Apply {
-  applyUpdate(req: object, child: { stop(): Promise<void>; start(expectSha: string | null): Promise<void> }, opts: object): Promise<Result>;
-  recoverJournal(dir: string, opts: object): Promise<{ result: Result; ctx: unknown } | null>;
+  applyUpdate(req: object, child: { stop(clean?: boolean): Promise<void>; start(expectSha: string | null): Promise<void> }, opts: object): Promise<Result>;
+  recoverJournal(dir: string, opts: object): Promise<{ result: Result; ctx: unknown; retry?: boolean } | null>;
 }
 const loadApply = () => import(`${pathToFileURL(join(dir, 'src', 'update', 'apply.ts')).href}?t=${Date.now()}`) as Promise<Apply>;
 
@@ -90,14 +90,16 @@ function start(extra: Record<string, string> = {}): ChildProcess {
 /** The child as the update steps use it. */
 function control(target: string) {
   return {
-    async stop() {
+    /** `clean`: it must end by itself, with exit code 0 (a server that closed its database and kept its copy). */
+    async stop(clean = false) {
       const c = child;
       if (!c) return;
-      const gone = new Promise<void>((r) => c.once('exit', () => r()));
+      const gone = new Promise<string | null>((r) => c.once('exit', (code, signal) => r(code === 0 ? null : signal ?? `exit ${code}`)));
       c.kill('SIGTERM');
       const kill = setTimeout(() => c.kill('SIGKILL'), STOP_MS);
-      await gone;
+      const bad = await gone;
       clearTimeout(kill);
+      if (clean && bad) throw new Error(`The ${role} did not stop cleanly (${bad}), so nothing was changed.`);
     },
     /** Healthy: `ready` with the expected commit in time, and still alive a while after. */
     start(expectSha: string | null) {
@@ -113,7 +115,12 @@ function control(target: string) {
           if (e) fail(e);
           else done();
         };
-        const onExit = (code: number | null, signal: NodeJS.Signals | null) => end(new Error(`The ${role} stopped ${settle ? 'soon after its start' : 'before it was ready'} (${signal ?? `exit ${code}`}).`));
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          // the service is stopping, and the signal went to the child too (Ctrl-C, or systemd
+          // without KillMode=mixed): this end says nothing about the version
+          if (stopSignal) return end(Object.assign(new Error(`The service was stopped (${stopSignal}) before the ${role} was checked.`), { stopped: true }));
+          end(new Error(`The ${role} stopped ${settle ? 'soon after its start' : 'before it was ready'} (${signal ?? `exit ${code}`}).`));
+        };
         const limit = setTimeout(() => end(new Error(`The ${role} was not ready after ${Math.round(READY_MS / 1000)} s.`)), READY_MS);
         c.once('exit', onExit);
         onReady = (sha) => {
@@ -151,7 +158,7 @@ async function update(asker: ChildProcess, req: { sha?: unknown; from?: unknown 
   updating = false;
   if (!child) {
     console.error(`[launcher] no version of the ${role} runs after the update: ${result.error ?? 'unknown error'}`);
-    process.exit(1);
+    process.exit(stopSignal ? 0 : 1);
   }
   if (stopSignal) return void child.kill(stopSignal);
   tell(child, { result, ctx });
@@ -171,7 +178,13 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 // an update that was cut off is taken back before anything starts
 if (!why) {
   try {
-    pending = await (await loadApply()).recoverJournal(dir, { installCommand: env.UPDATE_INSTALL_COMMAND || undefined, log: (l: string) => log(l) });
+    const back = await (await loadApply()).recoverJournal(dir, { installCommand: env.UPDATE_INSTALL_COMMAND || undefined, log: (l: string) => log(l) });
+    // the way back failed: the service manager starts the launcher again, and it tries once more
+    if (back?.retry) {
+      console.error(`[launcher] ${back.result.error}`);
+      process.exit(1);
+    }
+    pending = back;
   } catch (e) {
     console.error(`[launcher] could not look for a cut-off update: ${(e as Error).message}`);
   }

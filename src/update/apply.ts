@@ -36,9 +36,16 @@ export interface ApplyResult {
 
 /** The process that is updated, as the launcher has it. */
 export interface ChildControl {
-  /** stop it and wait until it is gone (nothing to do when it does not run) */
-  stop(): Promise<void>;
-  /** start it and wait until it is healthy on `expectSha` (null: any commit); rejects when it is not */
+  /**
+   * stop it and wait until it is gone (nothing to do when it does not run). With `clean` it rejects
+   * when the process did not end by itself with exit code 0: a server that could not close its
+   * database or keep its copy
+   */
+  stop(clean?: boolean): Promise<void>;
+  /**
+   * start it and wait until it is healthy on `expectSha` (null: any commit); rejects when it is not.
+   * An error with `stopped: true` says the service itself is stopping: no health check, no way back now
+   */
   start(expectSha: string | null): Promise<void>;
 }
 
@@ -150,10 +157,11 @@ async function onBranch(dir: string, sha: string, branch: string) {
 /**
  * Is `sha` a commit of the release branch of this checkout's origin? Fetches, and throws a Refusal
  * when not. For an update of something else than this checkout (a server that runs as an image):
- * where the checkout itself is does not matter.
+ * where the checkout itself is does not matter. `abbrev`: also the first 7 or more characters of a
+ * commit id, when they name one commit (the commit an image says it runs, for the way back).
  */
-export async function onReleaseBranch(dir: string, sha: string, branch: string, opts: { env?: NodeJS.ProcessEnv; gitMs?: number } = {}): Promise<void> {
-  if (typeof sha !== 'string' || !SHA.test(sha)) throw new Refusal('refused', 'An update needs a full commit id (40 hex characters).');
+export async function onReleaseBranch(dir: string, sha: string, branch: string, opts: { env?: NodeJS.ProcessEnv; gitMs?: number; abbrev?: boolean } = {}): Promise<void> {
+  if (typeof sha !== 'string' || !(opts.abbrev ? /^[0-9a-f]{7,40}$/ : SHA).test(sha)) throw new Refusal('refused', 'An update needs a full commit id (40 hex characters).');
   if (typeof branch !== 'string' || !BRANCH.test(branch) || branch.startsWith('-') || branch.includes('..')) throw new Refusal('refused', 'The release branch is not a branch name.');
   if (!(await isCheckout(dir))) throw new Refusal('refused', `${dir} is not a git checkout.`);
   await fetchBranch(dir, branch, opts);
@@ -173,6 +181,8 @@ export async function verifyTarget(req: ApplyRequest, opts: { fetch?: boolean; e
   const refuse = (why: string) => new Refusal('refused', why);
   if (typeof req.sha !== 'string' || !SHA.test(req.sha)) throw refuse('An update needs a full commit id (40 hex characters).');
   if (typeof req.branch !== 'string' || !BRANCH.test(req.branch) || req.branch.startsWith('-') || req.branch.includes('..')) throw refuse('The release branch is not a branch name.');
+  // the way back goes to this commit: nothing but a commit id, like the target
+  if (req.from != null && (typeof req.from !== 'string' || !SHA.test(req.from))) throw refuse('The commit that runs now is not a full commit id.');
   if (req.from && req.from === req.sha) throw new Refusal('ahead', 'This version already runs.');
   if (!(await isCheckout(req.dir))) throw refuse(`${req.dir} is not a git checkout.`);
   const changed = await gitText(req.dir, ['status', '--porcelain', '--untracked-files=no']);
@@ -212,6 +222,8 @@ interface Journal {
   moved: boolean;
   /** package-lock.json differs between the two versions */
   lockChanged: boolean;
+  /** how often a launcher that started could not put the old version back */
+  tries?: number;
   ctx?: unknown;
 }
 
@@ -233,6 +245,23 @@ function alive(pid: number): boolean {
   }
 }
 
+/** When a process started, as the kernel counts it (Linux); null where that cannot be read. */
+function startedAt(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // after the name, which may have spaces: the state is field 3, the start time field 22
+    return stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[19] || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Does the process that wrote this lock still live? After a reboot another process may have its pid: the start time tells them apart. */
+function holds(pid: number, started: string | undefined): boolean {
+  if (!alive(pid)) return false;
+  return !started || startedAt(pid) === started;
+}
+
 /** Take the checkout's update lock: one launcher works in a checkout at a time. A dead holder's lock is taken over. */
 async function lock(gd: string, waitMs: number): Promise<boolean> {
   const dir = lockDir(gd);
@@ -240,21 +269,24 @@ async function lock(gd: string, waitMs: number): Promise<boolean> {
   for (;;) {
     try {
       mkdirSync(dir);
-      writeFileSync(join(dir, 'pid'), String(process.pid));
+      writeFileSync(join(dir, 'pid'), `${process.pid} ${startedAt(process.pid) ?? ''}`.trim());
       return true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     }
     let holder = NaN;
+    let started: string | undefined;
     try {
-      holder = Number(readFileSync(join(dir, 'pid'), 'utf8'));
+      const [pid, at] = readFileSync(join(dir, 'pid'), 'utf8').trim().split(' ');
+      holder = Number(pid);
+      started = at || undefined;
     } catch {
       // just made, its pid not written yet: old enough means its maker died in between
       try {
         if (Date.now() - statSync(dir).mtimeMs > 10_000) holder = 0;
       } catch { /* gone again */ }
     }
-    if (holder === process.pid || holder === 0 || (Number.isInteger(holder) && holder > 0 && !alive(holder))) {
+    if (holder === process.pid || holder === 0 || (Number.isInteger(holder) && holder > 0 && !holds(holder, started))) {
       rmSync(dir, { recursive: true, force: true });
       continue;
     }
@@ -276,7 +308,7 @@ function writeJournal(gd: string, j: Journal) {
 function readJournal(gd: string): Journal | null {
   try {
     const j = JSON.parse(readFileSync(journalFile(gd), 'utf8')) as Journal;
-    return j && j.v === 1 && SHA.test(j.prev) && SHA.test(j.to) && (j.from === null || typeof j.from === 'string') ? j : null;
+    return j && j.v === 1 && SHA.test(j.prev) && SHA.test(j.to) && (j.from === null || SHA.test(j.from)) ? j : null;
   } catch {
     return null;
   }
@@ -334,12 +366,16 @@ const tail = (s: Steps) => s.log.join('\n').slice(-TAIL);
 /**
  * The old version back, with the child stopped. A server always goes back to the commit it ran. A
  * worker only moves a checkout back that it moved itself: in a shared checkout the server already
- * runs the new code on a changed database.
+ * runs the new code on a changed database. `cutOff`: the update may have died in the middle of its
+ * install, so such a worker gets the packages of the commit the checkout is on.
  */
-async function putBack(s: Steps, j: Journal): Promise<string | null> {
+async function putBack(s: Steps, j: Journal, cutOff = false): Promise<string | null> {
   const old = j.role === 'server' ? j.from ?? j.prev : j.moved ? j.prev : null;
   const head = await gitText(s.dir, ['rev-parse', 'HEAD']);
-  if (!old) return head;
+  if (!old) {
+    if (cutOff) await install(s, j, false);
+    return head;
+  }
   if (head !== old) await moveTo(s, old, j.attached, true);
   await install(s, j, true);
   return old;
@@ -376,10 +412,12 @@ export async function applyUpdate(req: ApplyRequest, child: ChildControl, opts: 
     writeJournal(gd, journal);
     note(s, `update ${(from ?? v.head).slice(0, 7)} -> ${req.sha.slice(0, 7)} (${req.role})`);
     // nothing in the checkout was changed yet: a failure before that needs no way back but a start
-    let touched = false;
+    // (a checkout that another process moved already has other code than the child ran)
+    let touched = !!from && from !== v.head;
     try {
-      // 3. stop, 4. change, 5. start and check
-      await child.stop();
+      // 3. stop, 4. change, 5. start and check. A server that did not stop cleanly has no copy
+      // of its database: the update ends here, with the old version started again
+      await child.stop(req.role === 'server');
       touched = true;
       if (v.moves) await moveTo(s, req.sha, v.attached, false);
       await install(s, journal, false);
@@ -390,16 +428,23 @@ export async function applyUpdate(req: ApplyRequest, child: ChildControl, opts: 
     } catch (e) {
       const error = (e as Error).message;
       note(s, `failed: ${error}`);
+      if ((e as { stopped?: boolean }).stopped) {
+        // the service is stopping, so the new version was not checked and nothing can be started
+        // now. The journal stays: the next start of the launcher takes the update back
+        return { ok: false, from: from ?? v.head, to: req.sha, rolled_back: false, error: `${error} The update is taken back at the next start.`, log_tail: tail(s) };
+      }
       // 6. roll back
       try {
         await child.stop();
         const old = touched ? await putBack(s, journal) : v.head;
-        await child.start(journal.role === 'server' || journal.moved ? old : null);
+        // the old version is in place: from here on a journal would only undo what someone does later
         rmSync(journalFile(gd), { force: true });
+        await child.start(journal.role === 'server' || journal.moved ? old : null);
         note(s, `back on ${(old ?? 'the old version').slice(0, 7)}`);
         return { ok: false, from: from ?? v.head, to: req.sha, rolled_back: true, error, log_tail: tail(s) };
       } catch (e2) {
-        // the journal stays: the next start of the launcher tries the way back again
+        // a way back that failed before the old version was in place leaves the journal: the next
+        // start of the launcher tries it again
         note(s, `rollback failed: ${(e2 as Error).message}`);
         return { ok: false, from: from ?? v.head, to: req.sha, rolled_back: false, error: `${error} Then the old version did not come back: ${(e2 as Error).message}`, log_tail: tail(s) };
       }
@@ -409,11 +454,16 @@ export async function applyUpdate(req: ApplyRequest, child: ChildControl, opts: 
   }
 }
 
+/** How often a launcher tries the way back of a cut-off update before it starts what is there. */
+const RECOVER_TRIES = 3;
+
 /**
  * At the launcher's start, before the child: an update that was cut off (the launcher was killed,
  * the machine went down) is taken back. Gives the result to report, with the `ctx` of the update.
+ * `retry`: the way back failed and the journal is kept; the launcher should end and be started
+ * again, not start the child on a checkout that is half one version and half the other.
  */
-export async function recoverJournal(dir: string, opts: ApplyOptions = {}): Promise<{ result: ApplyResult; ctx: unknown } | null> {
+export async function recoverJournal(dir: string, opts: ApplyOptions = {}): Promise<{ result: ApplyResult; ctx: unknown; retry?: boolean } | null> {
   if (!(await isCheckout(dir))) return null;
   const gd = await gitDir(dir);
   if (!existsSync(journalFile(gd))) return null;
@@ -427,18 +477,27 @@ export async function recoverJournal(dir: string, opts: ApplyOptions = {}): Prom
     }
     const s: Steps = { dir, opts, log: [], installCommand: opts.installCommand };
     note(s, `an update ${(j.from ?? j.prev).slice(0, 7)} -> ${j.to.slice(0, 7)} was cut off: putting the old version back`);
-    let error = 'The update was cut off before it was checked. The old version was put back.';
+    const result = (rolled_back: boolean, error: string): ApplyResult => ({ ok: false, from: j.from ?? j.prev, to: j.to, rolled_back, error, log_tail: tail(s) });
     try {
       const head = await gitText(dir, ['rev-parse', 'HEAD']);
-      // only a checkout that is where the update left it (before or after its move) is touched
-      if (head === j.to || head === j.prev) await putBack(s, j);
+      // only a checkout that is where the update left it (before its move, after it, or on the
+      // way back of a server in a shared checkout) is touched
+      if (head === j.to || head === j.prev || head === j.from) await putBack(s, j, true);
       else note(s, `the checkout is on ${String(head).slice(0, 7)} now: left as it is`);
     } catch (e) {
-      error = `The update was cut off, and the old version could not be put back: ${(e as Error).message}`;
+      const error = `The update was cut off, and the old version could not be put back: ${(e as Error).message}`;
       note(s, error);
+      const tries = (j.tries ?? 0) + 1;
+      if (tries < RECOVER_TRIES) {
+        writeJournal(gd, { ...j, tries });
+        return { result: result(false, error), ctx: j.ctx, retry: true };
+      }
+      // enough: what is there is started, and the result says that it may not be the old version
+      rmSync(journalFile(gd), { force: true });
+      return { result: result(false, error), ctx: j.ctx };
     }
     rmSync(journalFile(gd), { force: true });
-    return { result: { ok: false, from: j.from ?? j.prev, to: j.to, rolled_back: true, error, log_tail: tail(s) }, ctx: j.ctx };
+    return { result: result(true, 'The update was cut off before it was checked. The old version was put back.'), ctx: j.ctx };
   } finally {
     unlock(gd);
   }

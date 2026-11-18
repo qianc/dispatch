@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Refusal, applyUpdate, onReleaseBranch, recoverJournal, verifyTarget, type ApplyRequest, type ChildControl } from '../src/update/apply.ts';
@@ -14,14 +14,20 @@ function child(f: Fixture, dir = f.dir) {
     /** make the n-th stop fail (1: the stop before the change, 2: the stop of the rollback) */
     failStop: 0,
     stops: 0,
-    async stop() {
+    /** the process ends with an error when it is stopped (a server that could not keep its database copy) */
+    dirty: false,
+    /** the service is stopped while the new version starts */
+    stopped: false,
+    async stop(clean?: boolean) {
       c.stops++;
       if (c.stops === c.failStop) throw new Error('the process did not stop');
       c.calls.push('stop');
+      if (clean && c.dirty) throw new Error('The server did not stop cleanly (exit 1), so nothing was changed.');
     },
     async start(expect: string | null) {
       const v = f.read('app.txt', dir);
       c.calls.push(`start ${v}${expect ? '' : ' (any)'}`);
+      if (c.stopped) throw Object.assign(new Error('The service was stopped (SIGTERM) before the server was checked.'), { stopped: true });
       if (v === 'B') throw new Error('The new version did not start (exit 1).');
       if (expect && f.head(dir) !== expect) throw new Error('wrong commit');
     },
@@ -30,6 +36,9 @@ function child(f: Fixture, dir = f.dir) {
 }
 
 const gitFile = (dir: string, name: string) => join(dir, '.git', name);
+/** A journal as an update that was cut off leaves it. */
+const journal = (dir: string, j: Record<string, unknown>) =>
+  writeFileSync(gitFile(dir, 'dispatch-update.json'), JSON.stringify({ v: 1, attached: true, branch: 'main', role: 'server', moved: true, lockChanged: false, ...j }));
 const clean = (dir: string) => !existsSync(gitFile(dir, 'dispatch-update.json')) && !existsSync(gitFile(dir, 'dispatch-update.lock'));
 
 describe('one update of a checkout, and its way back (DISP-112)', () => {
@@ -84,7 +93,43 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
     expect(existsSync(join(dir, 'built.txt'))).toBe(false);
   });
 
-  it('a step that does not end in time is stopped, and the old version comes back', async () => {
+  it('a server that did not stop cleanly is not updated: nothing changes, and it is started again', async () => {
+    const c = child(f);
+    c.dirty = true;
+    const r = await applyUpdate(req(f.c), c);
+    expect(r).toMatchObject({ ok: false, from: f.a, to: f.c });
+    expect(r.error).toContain('did not stop cleanly');
+    expect(f.head()).toBe(f.a);
+    expect(r.log_tail).not.toContain('git merge');
+    expect(r.log_tail).not.toContain('npm');
+    // (the second stop is the way back's own, of a process that is gone already)
+    expect(c.calls).toEqual(['stop', 'stop', 'start A']);
+    expect(clean(f.dir)).toBe(true);
+    // a worker has no database: how it ended does not matter
+    const dir = f.clone(f.a);
+    const w = child(f, dir);
+    w.dirty = true;
+    expect((await applyUpdate(req(f.c, { dir, role: 'worker' }), w)).ok).toBe(true);
+  });
+
+  it('the service is stopped while the new version starts: no way back now, the next start takes the update back', async () => {
+    const c = child(f);
+    c.stopped = true;
+    const r = await applyUpdate(req(f.c), c, { ctx: 4 });
+    expect(r).toMatchObject({ ok: false, rolled_back: false });
+    expect(r.error).toContain('taken back at the next start');
+    // nothing was started or moved after it
+    expect(c.calls).toEqual(['stop', 'start C']);
+    expect(f.head()).toBe(f.c);
+    expect(existsSync(gitFile(f.dir, 'dispatch-update.lock'))).toBe(false);
+    const back = await recoverJournal(f.dir);
+    expect(back).toMatchObject({ result: { ok: false, rolled_back: true, from: f.a, to: f.c }, ctx: 4 });
+    expect(f.head()).toBe(f.a);
+    expect(f.read('built.txt')).toBe('A');
+    expect(clean(f.dir)).toBe(true);
+  });
+
+  it('a step that does not end in time is stopped; when the way back fails too, the result says so and the journal stays', async () => {
     const c = child(f);
     const r = await applyUpdate(req(f.c, { installCommand: 'sleep 30' }), c, { installMs: 300, buildMs: 300 });
     expect(r).toMatchObject({ ok: false, rolled_back: false });
@@ -118,6 +163,8 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
       for (const sha of ['main', 'origin/main', 'v1.0.0', f.c.slice(0, 12), f.c.toUpperCase(), 'https://example.com/evil.git', '--upload-pack=touch /tmp/x', `${f.c}\n`]) {
         await refused(req(sha), /full commit id/);
       }
+      // the commit that runs is where the way back goes: the same rule
+      for (const from of ['main', '--quiet', f.a.slice(0, 12)]) await refused(req(f.c, { from }), /runs now is not a full commit id/);
       await refused(req(f.c, { branch: '--force' }), /not a branch name/);
       await refused(req(f.c, { branch: 'main..other' }), /not a branch name/);
     });
@@ -177,6 +224,24 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
       writeFileSync(join(gitFile(f.dir, 'dispatch-update.lock'), 'pid'), '999999999');
       expect((await applyUpdate(req(f.c), child(f), { lockWaitMs: 100 })).ok).toBe(true);
     });
+
+    it.runIf(existsSync('/proc/self/stat'))('a lock whose pid another process has since a reboot is taken over', async () => {
+      mkdirSync(gitFile(f.dir, 'dispatch-update.lock'));
+      // this test's parent lives, but it did not start at "1"
+      writeFileSync(join(gitFile(f.dir, 'dispatch-update.lock'), 'pid'), `${process.ppid} 1`);
+      expect((await applyUpdate(req(f.c), child(f), { lockWaitMs: 100 })).ok).toBe(true);
+      // the lock this process writes names its own start, so it holds while the process lives
+      const dir = f.clone(f.a);
+      const c = child(f, dir);
+      let held = '';
+      const start = c.start;
+      c.start = async (e) => {
+        held = readFileSync(join(gitFile(dir, 'dispatch-update.lock'), 'pid'), 'utf8');
+        return start(e);
+      };
+      await applyUpdate(req(f.c, { dir }), c);
+      expect(held).toMatch(new RegExp(`^${process.pid} \\d+$`));
+    });
   });
 
   it('the asker fetches: a commit pushed since is known after, and "already there" is told apart from "refused"', async () => {
@@ -230,6 +295,39 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
     expect(await recoverJournal(f.dir)).toBeNull();
   });
 
+  it('a way back that fails at the next start is tried again, three times in all', async () => {
+    const c = child(f);
+    c.failStop = 2;
+    await applyUpdate(req(f.b), c, { ctx: 7 });
+    for (const last of [false, false, true]) {
+      const back = await recoverJournal(f.dir, { installCommand: 'echo no network >&2; exit 1' });
+      // not "rolled back": the launcher ends, and the service manager starts it again
+      expect(back?.result).toMatchObject({ ok: false, rolled_back: false, from: f.a, to: f.b });
+      expect(back?.result.error).toMatch(/could not be put back.*no network/);
+      expect(back?.ctx).toBe(7);
+      expect(!!back?.retry).toBe(!last);
+      expect(existsSync(gitFile(f.dir, 'dispatch-update.json'))).toBe(!last);
+      expect(existsSync(gitFile(f.dir, 'dispatch-update.lock'))).toBe(false);
+    }
+    expect(await recoverJournal(f.dir)).toBeNull();
+    // a try that works ends it
+    const d = f.clone(f.a);
+    const c2 = child(f, d);
+    c2.failStop = 2;
+    await applyUpdate(req(f.b, { dir: d }), c2);
+    expect((await recoverJournal(d, { installCommand: 'exit 1' }))?.retry).toBe(true);
+    expect(await recoverJournal(d)).toMatchObject({ result: { rolled_back: true } });
+    expect(f.head(d)).toBe(f.a);
+    expect(clean(d)).toBe(true);
+  });
+
+  it('a journal with anything but commit ids is thrown away', async () => {
+    journal(f.dir, { prev: f.a, from: '--quiet', to: f.b });
+    expect(await recoverJournal(f.dir)).toBeNull();
+    expect(clean(f.dir)).toBe(true);
+    expect(f.head()).toBe(f.a);
+  });
+
   describe('a checkout that another process already moved (server and worker in one folder)', () => {
     it('is installed and started, without a move', async () => {
       git(f.dir, 'merge', '-q', '--ff-only', f.c);
@@ -248,6 +346,38 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
       expect(r).toMatchObject({ ok: false, rolled_back: true, from: f.a });
       expect(f.head()).toBe(f.a);
       expect(c.calls).toEqual(['stop', 'start B', 'stop', 'start A']);
+    });
+
+    it('a server whose way back was cut off after the move still gets its build', async () => {
+      // the worker had moved the checkout to B; the server's way back put it on A and then died
+      writeFileSync(join(f.dir, 'built.txt'), 'B');
+      journal(f.dir, { prev: f.b, from: f.a, to: f.b, moved: false });
+      const back = await recoverJournal(f.dir);
+      expect(back?.result).toMatchObject({ rolled_back: true, from: f.a, to: f.b });
+      expect(f.head()).toBe(f.a);
+      expect(f.read('built.txt')).toBe('A');
+      expect(clean(f.dir)).toBe(true);
+    });
+
+    it('a worker whose install was cut off gets the packages of the commit the checkout is on', async () => {
+      git(f.dir, 'merge', '-q', '--ff-only', f.c);
+      journal(f.dir, { prev: f.c, from: f.a, to: f.c, role: 'worker', moved: false, lockChanged: true });
+      const back = await recoverJournal(f.dir);
+      expect(back?.result.log_tail).toContain('$ npm ci');
+      // the checkout is the server's: it stays
+      expect(f.head()).toBe(f.c);
+      expect(clean(f.dir)).toBe(true);
+    });
+
+    it('a server that did not stop cleanly goes back to the commit it ran', async () => {
+      git(f.dir, 'merge', '-q', '--ff-only', f.c);
+      const c = child(f);
+      c.dirty = true;
+      const r = await applyUpdate(req(f.c), c);
+      expect(r).toMatchObject({ ok: false, rolled_back: true, from: f.a });
+      expect(f.head()).toBe(f.a);
+      expect(f.read('built.txt')).toBe('A');
+      expect(c.calls).toEqual(['stop', 'stop', 'start A']);
     });
 
     it('a worker leaves the checkout where the server put it', async () => {

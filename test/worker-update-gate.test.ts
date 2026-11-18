@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import type { SelfUpdateAnswer, StartSpec, WorkerToServer } from '../src/shared/protocol.ts';
 import { DEFAULT_RUN_OPTIONS, type WorkerVersion } from '../src/shared/types.ts';
 import { Refusal, type ApplyResult } from '../src/update/apply.ts';
@@ -21,7 +21,7 @@ const spec = (id: number, more: Partial<StartSpec> = {}): StartSpec => ({
   prompt: 'go', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null, ...more,
 });
 
-type Raw = { onMessage: (m: unknown) => Promise<void>; ws: unknown; outbox: WorkerToServer[] };
+type Raw = { onMessage: (m: unknown) => Promise<void>; ws: unknown; outbox: WorkerToServer[]; stopped: boolean; paused: boolean };
 
 /** A worker with a link per server name, a launcher that notes what it is asked, and a check of the commit that passes. */
 function worker(names = ['home'], more: Partial<GateDeps> = {}, makeTitle?: () => Promise<string>) {
@@ -32,6 +32,8 @@ function worker(names = ['home'], more: Partial<GateDeps> = {}, makeTitle?: () =
   const launcher: LauncherLink = { available: true, why: null, request: (req, ctx) => void asked.push({ req, ctx }), onResult: (fn) => void (result = fn), ready: () => undefined };
   const verified: string[] = [];
   const sent: Record<string, WorkerToServer[]> = {};
+  /** the servers the worker hung up on */
+  const hungUp: string[] = [];
   const links: ServerLink[] = names.map((name) => {
     const link = new ServerLink({ name, url: 'ws://127.0.0.1:1/worker', token: 't', local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' }, {
       fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-gate-')), slots,
@@ -39,7 +41,8 @@ function worker(names = ['home'], more: Partial<GateDeps> = {}, makeTitle?: () =
       selfUpdate: (from, sha, id) => gate.selfUpdate(from, sha, id),
     });
     sent[name] = [];
-    (link as unknown as Raw).ws = { readyState: WebSocket.OPEN, send: (d: string) => sent[name].push(JSON.parse(d)) };
+    (link as unknown as Raw).ws = { readyState: WebSocket.OPEN, send: (d: string) => sent[name].push(JSON.parse(d)), close: () => void hungUp.push(name) };
+    made.push(link);
     return link;
   });
   slots.links = links;
@@ -59,28 +62,62 @@ function worker(names = ['home'], more: Partial<GateDeps> = {}, makeTitle?: () =
     expect(r.ok).toBe(true);
     return r.data;
   };
-  return { slots, links, gate, asked, sent, verified, msg, ask, launcher, result: (r: ApplyResult, ctx: unknown) => result(r, ctx) };
+  return { slots, links, gate, asked, sent, hungUp, verified, msg, ask, launcher, result: (r: ApplyResult, ctx: unknown) => result(r, ctx) };
 }
+
+const made: ServerLink[] = [];
+const connected = (l: ServerLink) => (l as unknown as Raw).ws !== null;
 
 beforeEach(() => {
   process.env.FAKE_DELAY_MS = '40';
 });
 
-test('in wait mode the worker takes the update: no slot is free from then, and the launcher is asked', async () => {
-  const w = worker();
+afterEach(() => {
+  // a link that was told to connect again (after a refused update) must not go on trying
+  for (const l of made.splice(0)) (l as unknown as Raw).stopped = true;
+});
+
+test('in wait mode the worker takes the update: no slot is free from then, it hangs up on its servers, and the launcher is asked', async () => {
+  const w = worker(['home', 'office'], { delayMs: 150 });
   expect(await w.ask()).toEqual({ state: 'started' });
   expect(w.verified).toEqual([B]);
   expect(w.slots.free).toBe(0);
   expect(w.sent.home).toContainEqual({ t: 'slots', free: 0 });
-  await waitFor(() => w.asked.length, 'the request to the launcher');
-  // only the commit goes to the launcher, with which server asked
-  expect(w.asked).toEqual([{ req: { sha: B, from: A }, ctx: { server: 'home', update_id: 5 } }]);
-  // a start that comes now is not taken
+  expect(w.sent.office).toContainEqual({ t: 'slots', free: 0 });
+  // a start that comes before it stopped is not taken
   await w.msg({ t: 'start', spec: spec(9) });
   expect(w.sent.home.at(-1)).toEqual({ t: 'refused', session_id: 9, reason: 'busy' });
   // a second server that asks meanwhile
-  expect(await w.ask(B, 'home', 6)).toEqual({ state: 'busy', reasons: ['it is updating already'] });
-  expect(w.asked).toHaveLength(1);
+  expect(await w.ask(B, 'office', 6)).toEqual({ state: 'busy', reasons: ['it is updating already'] });
+  expect(w.asked).toEqual([]);
+  await waitFor(() => w.asked.length, 'the request to the launcher');
+  // only the commit goes to the launcher, with which server asked
+  expect(w.asked).toEqual([{ req: { sha: B, from: A }, ctx: { server: 'home', update_id: 5 } }]);
+  // no server reaches the worker from here: nothing can start that the stop would cut off
+  expect(w.hungUp).toEqual(['home', 'office']);
+  expect(w.links.map(connected)).toEqual([false, false]);
+  expect(w.links.map((l) => (l as unknown as Raw).paused)).toEqual([true, true]);
+  // the launcher refused (another update holds the checkout): the same process connects again and takes work.
+  // Its result waits for the server that asked.
+  w.result({ ok: false, from: A, to: B, rolled_back: false, error: 'Another update is running in this checkout.' }, { server: 'home', update_id: 5 });
+  expect(w.links.map((l) => (l as unknown as Raw).paused)).toEqual([false, false]);
+  expect(w.slots.free).toBe(2);
+  expect((w.links[0] as unknown as Raw).outbox).toEqual([{ t: 'update_result', update_id: 5, target: 'worker', ok: false, rolled_back: false, from: A, to: B, error: 'Another update is running in this checkout.' }]);
+  expect((w.links[1] as unknown as Raw).outbox).toEqual([]);
+});
+
+test('work that comes in between the answer and the stop: the worker does not stop, and says "not now"', async () => {
+  const w = worker(['home', 'office'], { delayMs: 100 });
+  expect(await w.ask()).toEqual({ state: 'started' });
+  // a chat takes no slot, so the closed slots do not refuse it
+  await w.msg({ t: 'start', spec: spec(4, { kind: 'assistant', branch: null }) }, 'office');
+  await waitFor(() => w.sent.home.find((m) => m.t === 'update_result'), 'the worker to say it did not stop');
+  expect(w.sent.home.find((m) => m.t === 'update_result')).toEqual({ t: 'update_result', update_id: 5, target: 'worker', ok: false, rolled_back: false, from: A, to: B, not_now: true, error: 'Work came in before the worker stopped.' });
+  expect(w.asked).toEqual([]);
+  expect(w.hungUp).toEqual([]);
+  expect(w.slots.free).toBe(2);
+  expect(w.sent.home.findLast((m) => m.t === 'slots')).toEqual({ t: 'slots', free: 2 });
+  expect(w.links.map(connected)).toEqual([true, true]);
 });
 
 test('a session that works, or waits for an answer, holds the update back; one at the end of its turn does not', async () => {
@@ -173,7 +210,7 @@ test('how the update ended goes to the server that asked, also when it is not th
 
 test('what a Claude session does, as the gate sees it', () => {
   const r = new ClaudeRunner(spec(1), { emit: () => undefined, rpc: async () => null, cwd: '/tmp', onClosed: () => undefined }, { assistantReadDirs: [] } as never);
-  const state = r as unknown as { betweenTurns: boolean; bgTasks: number; wakeAt: number; waiting: Map<string, unknown>; limitTimer: NodeJS.Timeout | null; closed: boolean };
+  const state = r as unknown as { betweenTurns: boolean; bgTasks: number; bgIdleTimer: NodeJS.Timeout | null; wakeAt: number; waiting: Map<string, unknown>; limitTimer: NodeJS.Timeout | null; closed: boolean };
   expect(r.activity()).toBe('is working');
   state.betweenTurns = true;
   expect(r.activity()).toBeNull();
@@ -183,9 +220,17 @@ test('what a Claude session does, as the gate sees it', () => {
   state.bgTasks = 1;
   expect(r.activity()).toBe('has background tasks running');
   state.bgTasks = 0;
+  // the tasks ended: Claude starts a turn on that news in a moment
+  state.bgIdleTimer = setTimeout(() => undefined, 0);
+  expect(r.activity()).toBe('has background tasks that just ended');
+  clearTimeout(state.bgIdleTimer);
+  state.bgIdleTimer = null;
   state.wakeAt = Date.now() + 60_000;
   expect(r.activity()).toBe('has a wake-up set');
-  state.wakeAt = Date.now() - 1;
+  // its time came: the turn it starts shows a moment later
+  state.wakeAt = Date.now() - 1000;
+  expect(r.activity()).toBe('has a wake-up set');
+  state.wakeAt = Date.now() - 61_000;
   expect(r.activity()).toBeNull();
   // the wait for the usage limit: the session waits again after a restart
   state.limitTimer = setTimeout(() => undefined, 0);

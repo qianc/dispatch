@@ -67,6 +67,28 @@ describe('Settings → Updates (DISP-112)', () => {
     expect(textOf(page)).not.toContain('What is new');
   });
 
+  it('says "Update available" only when there is something to update to', () => {
+    // behind the branch, but only version tags are followed and none is newer
+    const noTag = html(info({ settings: { auto: false, follow: 'tags' }, state: { ...info().state, tag: { name: 'v1.2.0', sha: A, ahead: false } }, target: null }));
+    expect(textOf(noTag)).toContain('No newer version tag');
+    expect(textOf(noTag)).not.toContain('Update available');
+    expect(textOf(noTag)).toContain('2 commits behind main');
+    expect(noTag).toMatch(/<button[^>]*disabled=""[^>]*>Update now<\/button>/);
+  });
+
+  it('offers no update of a server that cannot be updated; its workers can still be', () => {
+    const stuck = info({ mode: 'none', mode_why: 'It was not started through the launcher (node src/launch.ts server).' });
+    const page = html(stuck);
+    expect(page).toMatch(/<button[^>]*disabled=""[^>]*>Update now<\/button>/);
+    expect(textOf(page)).not.toContain('Update now to');
+    const withWorker = html({ ...stuck, workers: [{ id: 2, name: 'nas', connected: true, sha: C, updatable: true, why: null, status: 'behind' }] });
+    expect(withWorker).toMatch(/<button(?![^>]*disabled="")[^>]*>Update the workers now<\/button>/);
+  });
+
+  it('has the anchor that a notice of an update opens', () => {
+    expect(html(info())).toContain('<section id="updates"');
+  });
+
   it('says in plain words why the version is not known', () => {
     expect(behindLine(info({ repo: null })).text).toMatch(/Set UPDATE_REPO/);
     expect(behindLine(info({ version: { sha: null, tag: null } })).text).toMatch(/Set DISPATCH_VERSION/);

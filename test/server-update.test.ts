@@ -116,6 +116,22 @@ test('only a full commit id reaches the command, and only one the worker finds o
   expect(f.runs.length + h.runs.length).toBe(0);
 });
 
+test('the way back is also only to a commit of the release branch', async () => {
+  const checked: [string, boolean | undefined][] = [];
+  const f = fixture(() => ({ code: 1 }), {
+    verify: async (sha, abbrev) => {
+      checked.push([sha, abbrev]);
+      if (sha !== B) throw new Error(`Commit ${sha.slice(0, 7)} is not on the release branch main of origin.`);
+    },
+  });
+  // the commit from before may be the start of a commit id (an image knows its commit as it was given)
+  const r = await f.update(B, A.slice(0, 12));
+  expect(r).toMatchObject({ ok: false, rolled_back: false });
+  expect(r.error).toBe('The update command failed (exit 1). Nothing was put back: Commit aaaaaaa is not on the release branch main of origin.');
+  expect(checked).toEqual([[B, undefined], [A.slice(0, 12), true]]);
+  expect(f.runs.map((x) => x.sha)).toEqual([B]);
+});
+
 test('the shell command gets the commit in its environment, and is killed at the time limit', async () => {
   const ok = await runShell('echo "to $DISPATCH_UPDATE_SHA"; exit 4', { PATH: process.env.PATH, DISPATCH_UPDATE_SHA: B }, 10_000);
   expect(ok).toEqual({ code: 4, out: `to ${B}\n`, timed_out: false });

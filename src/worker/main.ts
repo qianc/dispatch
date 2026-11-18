@@ -118,7 +118,7 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
     timeoutMs: minutes(env.UPDATE_TIMEOUT_MIN, 20),
     healthMs: minutes(env.UPDATE_HEALTH_MIN, 5),
     // a worker that runs from a checkout of Dispatch looks itself whether the commit is one of the release branch
-    ...(runningVersion().source === 'git' ? { verify: (sha: string) => onReleaseBranch(APP_DIR, sha, updateBranch, { env: updateGitEnv }) } : {}),
+    ...(runningVersion().source === 'git' ? { verify: (sha: string, abbrev?: boolean) => onReleaseBranch(APP_DIR, sha, updateBranch, { env: updateGitEnv, abbrev }) } : {}),
   },
 }));
 slots.links = links;

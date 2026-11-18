@@ -171,7 +171,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return github.toldCount(s.id) > before;
   };
   let closing = false;
-  const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, dbFile });
+  const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, users, dbFile });
   updates.restoreNote = restored;
   hub.handlers = {
     onHello: (workerId, live, facts) => {
@@ -385,14 +385,18 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     ctx.sessions.stop();
     // the server stops for its own update: the old version can go back to this database
     const own = updates.ownUpdate();
+    let noCopy: Error | null = null;
     if (own && sameVersion(version.sha, own.from_sha)) {
       try {
         keepCopy(db.raw, dbFile, { from: own.from_sha, to: own.to_sha });
       } catch (e) {
-        console.error('keeping a copy of the database failed:', (e as Error).message);
+        noCopy = e as Error;
       }
     }
     db.raw.close();
+    // the close fails, so the server does not end with exit code 0: the launcher then does not
+    // go on to a version that may change a database nothing can put back
+    if (noCopy) throw new Error(`keeping a copy of the database for the update failed: ${noCopy.message}`);
   });
 
   return { app, ctx, routes };

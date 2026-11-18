@@ -323,8 +323,8 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `UPDATE_BRANCH` | `main` | The release branch. Only its commits are installed. |
 | `UPDATE_POLL_MINUTES` | `30` | How often the server looks for a new version. `0`: only on "Check now". |
 | `UPDATE_GITHUB_ACCOUNT` | the first GitHub account | The account that reads `UPDATE_REPO`. A public repo needs none. |
-| `DISPATCH_VERSION` | the checkout's `HEAD` | The commit that runs, for an image (a build argument of the Dockerfiles). |
-| `UPDATE_INSTALL_COMMAND` | `npm ci`, then `npm run build` | Replaces the install and build steps of an update of a checkout. |
+| `DISPATCH_VERSION` | | The commit that runs. Read only when the code is not a git checkout: an image (a build argument of the Dockerfiles). A checkout always says its own `HEAD`. |
+| `UPDATE_INSTALL_COMMAND` | `npm ci`, then `npm run build` | Replaces the install and build steps of an update of a checkout. It gets `DISPATCH_UPDATE_ROLE` (`server` or `worker`), `DISPATCH_UPDATE_SHA` (the commit the checkout is on now) and, when it runs to put the old version back, `DISPATCH_UPDATE_ROLLBACK=1`. |
 | `UPDATE_READY_SECONDS`, `UPDATE_SETTLE_SECONDS` | `90`, `10` | How long a new version has to start, and how long it must then stay up to count as healthy. |
 
 **Worker**
@@ -352,9 +352,10 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
 | `IDLE_CLOSE_MINUTES` | `10` | Close an idle Claude process after this long (it resumes on the next message). |
 | `RUNNER` | `claude` | `fake`: a scripted agent, to try the app without Claude. |
-| `UPDATE_BRANCH`, `UPDATE_GITHUB_ACCOUNT` | `main`, the first GitHub account | The release branch of Dispatch's own repo, and the account that fetches it, for the worker's own update. `UPDATE_INSTALL_COMMAND`, `UPDATE_READY_SECONDS` and `UPDATE_SETTLE_SECONDS` work as for the server. See [Updates](#updates). |
+| `UPDATE_BRANCH`, `UPDATE_GITHUB_ACCOUNT` | `main`, the first GitHub account | The release branch of Dispatch's own repo, and the account that fetches it: for the worker's own update, and for the check and the `DISPATCH_UPDATE_BRANCH` of a server update it runs. Set `UPDATE_BRANCH` to the same branch as on the server. `UPDATE_INSTALL_COMMAND`, `UPDATE_READY_SECONDS` and `UPDATE_SETTLE_SECONDS` work as for the server. See [Updates](#updates). |
+| `DISPATCH_VERSION` | | The commit a worker from an image runs (a build argument of `Dockerfile.worker`). A checkout always says its own `HEAD`. |
 | `SERVER_UPDATE_COMMAND` | | The command that updates a server that runs as an image. With `WORKER_CONFIG`: a `server_update_command` key per server. |
-| `UPDATE_TIMEOUT_MIN`, `UPDATE_HEALTH_MIN` | `20`, `5` | How long that command may run, and how long the server may then take to come back on the new commit. |
+| `UPDATE_TIMEOUT_MIN`, `UPDATE_HEALTH_MIN` | `20`, `5` | How long that command may run, and how long the server may then take to come back on the new commit. Both can count twice (the update, then the way back), and the server waits 60 minutes for the result: keep twice their sum under that. With a health time of 5 minutes, that is a command time of at most 24 minutes. |
 | `RELEASES` | | JSON list of releases this worker may run: `[{"repo", "label_prefix"?, "command"?, "notes"?}]`. `label_prefix` defaults to `rel:`; `{version}` in `command` is replaced. Without `WORKER_CONFIG` only; with it, use a `releases` key per server. See [Releases](#releases). |
 
 ## Architecture
@@ -538,12 +539,17 @@ branch, is not touched.
   / `npm run start:worker`, or `node src/launch.ts server|worker`
   ([systemd example](docs/examples/dispatch-worker.service)). The launcher stays alive beside the
   process, so something is there to put the old version back. A process started another way says
-  in the section that it cannot update itself.
+  in the section that it cannot update itself. Two things for a service unit: `npm` must be on its
+  `PATH` (an update runs `npm ci`), and a stop must go to the launcher only (`KillMode=mixed` in
+  systemd), so that a restart of the service in the middle of an update is no failed update.
 - *A server from an image.* An image has no checkout, so a worker updates it with a command you
   set on that worker: `server_update_command` in its entry for that server
-  ([worker.json](docs/examples/worker.json)), or `SERVER_UPDATE_COMMAND`. The server sends only
-  the commit. The command gets it in `DISPATCH_UPDATE_SHA`, the commit from before in
-  `DISPATCH_UPDATE_PREV`, and the branch in `DISPATCH_UPDATE_BRANCH`. When the command fails, or
+  ([worker.json](docs/examples/worker.json)), or `SERVER_UPDATE_COMMAND`. Only a worker of the
+  install owner is used: what it says decides which version the server believes it runs. The
+  server sends only the commit. The command gets it in `DISPATCH_UPDATE_SHA`, the commit from
+  before in `DISPATCH_UPDATE_PREV`, and the branch in `DISPATCH_UPDATE_BRANCH`: the worker's own
+  `UPDATE_BRANCH`, which must be the server's. A worker that runs from a checkout of Dispatch
+  first checks that the commit is on that branch. When the command fails, or
   the server is not back on the commit within 5 minutes, the same command runs again with the
   commit from before in `DISPATCH_UPDATE_SHA` and `DISPATCH_UPDATE_ROLLBACK=1`. Set `UPDATE_REPO`
   on the server, and build the image with its commit. A script like this does it:

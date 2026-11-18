@@ -71,8 +71,24 @@ export class UpdateGate {
     reasons = this.busy(asker);
     if (reasons.length) return back({ state: 'busy', reasons });
     const ctx: Ctx = { server: asker.entry.name, update_id: updateId };
-    setTimeout(() => launcher.request({ sha, from: version.sha }, ctx), this.d.delayMs ?? 300);
+    setTimeout(() => this.stop(asker, sha, ctx), this.d.delayMs ?? 300);
     return { state: 'started' };
+  }
+
+  /** The answer is out: stop for the update, unless work came in since. */
+  private stop(asker: ServerLink, sha: string, ctx: Ctx) {
+    const { launcher, version, slots } = this.d;
+    // the last look: a reply, a chat or a command (they take no slot) may have come with the answer on its way
+    if (this.d.links().some((l) => l.busyReasons().length)) {
+      this.asked = false;
+      slots.drain(false);
+      asker.send({ t: 'update_result', update_id: ctx.update_id, target: 'worker', ok: false, rolled_back: false, from: version.sha, to: sha, not_now: true, error: 'Work came in before the worker stopped.' });
+      return;
+    }
+    // from here no server reaches the worker: the launcher may wait for another update of this
+    // checkout, and nothing may start that its stop would cut off
+    for (const l of this.d.links()) l.pause();
+    launcher.request({ sha, from: version.sha }, ctx);
   }
 
   /**
@@ -81,6 +97,8 @@ export class UpdateGate {
    */
   private onResult(result: ApplyResult, ctx: unknown) {
     this.asked = false;
+    // the launcher refused before it stopped anything: this same process goes on
+    for (const l of this.d.links()) l.resume();
     this.d.slots.drain(false);
     const c = ctx as Partial<Ctx> | null;
     const link = this.d.links().find((l) => l.entry.name === c?.server);

@@ -1032,7 +1032,7 @@ export interface UpdateInfo {
   /** what the server would update to now */
   target: { sha: string; tag: string | null } | null;
   /** an update started by hand that is not finished */
-  rollout: { sha: string; tag: string | null; by: string } | null;
+  rollout: { sha: string; tag: string | null; by: string; /** the commit the server ran when it was started */ from?: string | null } | null;
   /** why the next step has not started */
   waiting: string[];
   workers: UpdateWorker[];
