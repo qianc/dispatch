@@ -114,7 +114,7 @@ describe('the rollout of an update: the server first, then the workers, each in 
       await s.ctx.updates.tick();
       expect(asked).toEqual([]);
       expect(await log()).toEqual([]);
-      expect((await info()).waiting).toEqual([`The server updates to ${B.slice(0, 7)} when nothing works: session #${id} is working.`]);
+      expect((await info()).waiting).toEqual([`The server updates to ${B.slice(0, 7)} when it is idle. Now: session #${id} is working.`]);
       expect(s.ctx.sessions.hold).toBeNull();
 
       // the turn ends: the session waits for its owner, and that is wait mode
@@ -384,12 +384,12 @@ describe('the rollout of an update: the server first, then the workers, each in 
       const id = await work(wa);
       await step();
       expect(wa.asks()).toEqual([]);
-      expect((await info()).waiting).toEqual([`Worker default updates when nothing works on it: session #${id} is working.`]);
+      expect((await info()).waiting).toEqual([`Worker default updates when it is idle. Now: session #${id} is working.`]);
 
       await status(wa, id, 'waiting_input');
       await step();
       expect(wa.asks()).toEqual([]);
-      expect((await info()).waiting).toEqual([`Worker default updates when nothing works on it: session #${id} waits for an answer.`]);
+      expect((await info()).waiting).toEqual([`Worker default updates when it is idle. Now: session #${id} waits for an answer.`]);
       expect(await log()).toEqual([]);
 
       await status(wa, id, 'idle');
@@ -399,7 +399,7 @@ describe('the rollout of an update: the server first, then the workers, each in 
       wa.answer({ state: 'busy', reasons: ['it works for another server'] });
       await t;
       expect(await log()).toEqual([]);
-      expect((await info()).waiting).toEqual(['Worker default updates when nothing works on it: it works for another server.']);
+      expect((await info()).waiting).toEqual(['Worker default updates when it is idle. Now: it works for another server.']);
       expect(await statuses()).toMatchObject({ default: 'behind' });
     });
 

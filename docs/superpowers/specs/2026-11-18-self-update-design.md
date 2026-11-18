@@ -8,7 +8,7 @@ Updating Dispatch is manual: someone runs a deploy script for the server and res
 Nothing in the code knows which commit it runs, there is no health check, and a restart at the
 wrong moment cuts off a working session. Dispatch should find new versions of its own repo, show
 them to the install owner, and (when the owner turns it on) update the server and then each
-worker, one at a time, only while nothing works. A failed update goes back to the version before.
+worker, one at a time, only while no session is working. A failed update goes back to the version before.
 
 ## Goals, and what is not one
 

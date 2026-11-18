@@ -282,7 +282,7 @@ export class Updates {
     if (!t || this.db.setting('update_notified') === t.sha) return;
     this.db.setSetting('update_notified', t.sha);
     const what = `${t.tag ?? short(t.sha)} is ${plural(behind, 'commit')} newer than the version that runs (${short(this.version.sha)}).`;
-    const then = this.settings().auto ? 'Dispatch installs it when nothing works.' : 'Open Settings to install it.';
+    const then = this.settings().auto ? 'Dispatch installs it when no session is working.' : 'Open Settings to install it.';
     void this.notifier.send({ title: 'Dispatch: a new version', body: `${what} ${then}`, url: '/settings#updates', tag: 'update' });
   }
 
@@ -469,7 +469,7 @@ export class Updates {
         if (m.mode === 'none') waiting.push(`The server cannot be updated. ${m.why}`);
         else {
           const busy = this.serverGate();
-          if (busy.length) return [`The server updates to ${what} when nothing works: ${busy.join(', ')}.`];
+          if (busy.length) return [`The server updates to ${what} when it is idle. Now: ${busy.join(', ')}.`];
           return this.updateServer(t, by, m);
         }
       }
@@ -527,7 +527,7 @@ export class Updates {
     const busy = this.serverGate();
     if (busy.length) {
       notNow();
-      return [`The server updates to ${t.tag ?? short(t.sha)} when nothing works: ${busy.join(', ')}.`];
+      return [`The server updates to ${t.tag ?? short(t.sha)} when it is idle. Now: ${busy.join(', ')}.`];
     }
     this.changed();
     // the launcher stops this server now; it answers here only when it refused
@@ -572,7 +572,7 @@ export class Updates {
       const name = this.workerName(id);
       const wait = (reasons: string[]) => {
         left++;
-        waiting.push(`Worker ${name} updates when nothing works on it: ${reasons.join(', ')}.`);
+        waiting.push(`Worker ${name} updates when it is idle. Now: ${reasons.join(', ')}.`);
       };
       const busy = this.workerGate(id);
       if (busy.length) {
