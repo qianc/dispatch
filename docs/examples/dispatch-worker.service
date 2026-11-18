@@ -5,6 +5,7 @@
 #   systemctl --user daemon-reload && systemctl --user enable --now dispatch-worker
 #   loginctl enable-linger "$USER"      # keep it running when you are logged out
 # Adjust the two paths below: the clone of this repo, and your node (24 or newer).
+# src/launch.ts starts the worker and stays with it, so the worker can update itself (README, Updates).
 [Unit]
 Description=Dispatch worker
 After=network-online.target
@@ -14,7 +15,7 @@ Wants=network-online.target
 WorkingDirectory=%h/dispatch
 EnvironmentFile=%h/.config/dispatch/worker.env
 Environment=WORKSPACES_DIR=%h/.local/share/dispatch/ws
-ExecStart=/usr/bin/node src/worker/main.ts
+ExecStart=/usr/bin/node src/launch.ts worker
 Restart=always
 RestartSec=5
 

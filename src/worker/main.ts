@@ -11,6 +11,7 @@ import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 import { runningVersion } from '../update/version.ts';
+import { launcherLink } from '../update/ipc.ts';
 
 const env = process.env;
 // agents' PATH: extra tool folders first; under WSL also Windows' PATH (powershell.exe, …)
@@ -86,7 +87,8 @@ if (cfg.servers.length) {
 }
 const slots = new Slots(cfg.max_concurrent);
 // read once: the checkout may move on under a running worker (DISP-112)
-const version: WorkerVersion = { sha: runningVersion().sha, updatable: false, why: 'Not started through the launcher (node src/launch.ts worker).' };
+const launcher = launcherLink();
+const version: WorkerVersion = { sha: runningVersion().sha, updatable: launcher.available, ...(launcher.why ? { why: launcher.why } : {}) };
 for (const s of cfg.servers) secrets.add(s.token);
 const links = cfg.servers.map((entry) => new ServerLink(entry, {
   fake: FAKE,
@@ -106,6 +108,8 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
 }));
 slots.links = links;
 for (const l of links) l.connect();
+// the launcher's health check: the worker is up, on this commit
+launcher.ready(version.sha);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
