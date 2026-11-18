@@ -71,20 +71,21 @@ export class Updates { source: ReleaseSource | null; version: VersionInfo; start
 
 ### Task 3: Apply and roll back
 
-**Files:** create `src/update/apply.ts`, `test/update-apply.test.ts`.
+**Files:** create `src/update/apply.ts`, `src/server/preUpdate.ts`, `test/update-apply.test.ts`, `test/pre-update.test.ts`.
 
 **Interfaces — Produces:**
 
 ```ts
-export interface ApplyRequest { sha: string; branch: string; role: 'server' | 'worker'; dir: string; dbFile?: string; installCommand?: string }
+export interface ApplyRequest { sha: string; branch: string; role: 'server' | 'worker'; dir: string; from?: string | null; installCommand?: string }
 export interface ApplyResult { ok: boolean; from: string | null; to: string; rolled_back: boolean; error?: string; log_tail?: string }
 export interface ChildControl { stop(): Promise<void>; start(expectSha: string): Promise<void> } // rejects when not healthy
-export function verifyTarget(req: ApplyRequest): Promise<Verified>;
+export function verifyTarget(req: ApplyRequest, opts?: { fetch?: boolean; env?: NodeJS.ProcessEnv }): Promise<Verified>; // throws Refusal ('ahead' | 'refused')
 export function applyUpdate(req: ApplyRequest, child: ChildControl, opts?: ApplyOptions): Promise<ApplyResult>;
 export function recoverJournal(dir: string, opts?: ApplyOptions): Promise<ApplyResult | null>;
 ```
 
-- [ ] Tests, on a real temp origin and clone with a small app (A healthy, B fails at start, C healthy): A→C ok; A→B rolls back, A runs again, the result says `rolled_back` with the error; refused with nothing changed: a commit off the branch, a URL or ref name, a changed tracked file, a downgrade, HEAD on another branch; a journal left behind is rolled back; HEAD already at the target only restarts; the database copy is restored only when the migrations differ.
+- [ ] Tests for the server's database copy (`preUpdate.ts`): copied at a stop while its own update runs; put back at a start on the old commit when the database has migrations the code does not know; left alone otherwise.
+- [ ] Tests, on a real temp origin and clone with a small app (A healthy, B fails at start, C healthy): A→C ok; A→B rolls back, A runs again, the result says `rolled_back` with the error; refused with nothing changed: a commit off the branch, a URL or ref name, a changed tracked file, a downgrade, HEAD on another branch; a journal left behind is rolled back; HEAD already at the target: a server goes back to the commit it ran, a worker leaves the checkout.
 - [ ] Implement. Commit.
 
 ### Task 4: Launcher
@@ -157,7 +158,7 @@ export function updateGate(links: Pick<ServerLink, 'busyReasons' | 'entry'>[]): 
 **Interfaces — Produces:**
 
 ```ts
-// WorkerCommand: | { c: 'self_update'; sha: string; update_id: number }   → { state: 'started' } | { state: 'busy'; reasons: string[] }
+// WorkerCommand: | { c: 'self_update'; sha: string; update_id: number }   → { state: 'started' } | { state: 'busy'; reasons: string[] } | { state: 'ahead' } | { state: 'refused'; reason: string }
 // WorkerToServer: | { t: 'update_result'; update_id: number; target: 'worker' | 'server'; ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string; log_tail?: string }
 // HubHandlers.onUpdateResult(workerId: number, msg): void
 // Updates.onWorkerHello(workerId: number, facts: WorkerFacts | null): void

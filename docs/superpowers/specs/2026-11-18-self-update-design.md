@@ -71,33 +71,63 @@ worker, one at a time, only while nothing works. A failed update goes back to th
 
 `node src/launch.ts server|worker` starts `src/<role>/main.ts` as a child with an IPC channel and
 passes SIGTERM and SIGINT on. Outside an update it ends with the child's exit code, so the outside
-restart rule stays as it is. The child asks for an update over IPC with `{ sha, branch, role }`
-(the server adds its database file). The launcher then runs `applyUpdate`:
+restart rule stays as it is. An update has two halves.
 
-1. **Check, with the child still running.** Take the lock (`<git dir>/dispatch-update.lock`).
-   The id must be 40 hex characters. No tracked file may be changed. HEAD must be on the release
-   branch or detached. `git fetch --tags origin <branch>`. The commit must be an ancestor of
-   `origin/<branch>` and a descendant of HEAD (no step back this way). A refusal here changes
-   nothing and the child keeps running.
-2. **Journal.** Write `<git dir>/dispatch-update.json`: the old commit, the target, whether HEAD
-   was on the branch, whether the lock file and the migrations differ, the database copy.
-3. **Stop the child.**
-4. **Change.** Copy the database files when the migrations differ (server). Move the checkout to
-   the commit: `git merge --ff-only` when on the release branch, `git checkout --detach`
-   otherwise. `npm ci` when `package-lock.json` differs (without dev packages when `vite` is not
-   installed now), and `npm run build` for a server. `UPDATE_INSTALL_COMMAND` on that machine
-   replaces the two npm steps. Each step has a time limit.
+**The child, before it asks** (it has the GitHub account; the launcher has none): the id must be
+40 hex characters. `git fetch --tags origin <branch>`, with the GitHub account the process has,
+else with the machine's own git credentials. The commit must be an ancestor of `origin/<branch>`.
+HEAD must be an ancestor of the commit: there is no step back this way, and a process that is
+already at or past the commit answers "ahead" and nothing happens. No tracked file may be changed.
+HEAD must be on the release branch or detached. The branch is the machine's own `UPDATE_BRANCH`
+(default `main`); no message carries a branch or an address.
+
+**The launcher**, asked over IPC with `{ sha, branch, role, from }` (`from`: the commit the child
+runs), runs `applyUpdate`:
+
+1. **Check again, without the network, with the child still running.** Take the lock
+   (`<git dir>/dispatch-update.lock`). The same rules as above, on the commits that are now in the
+   checkout. A refusal here changes nothing and the child keeps running.
+2. **Journal.** Write `<git dir>/dispatch-update.json`: HEAD, the commit the child ran, the
+   target, whether HEAD was on the branch, whether this launcher moves the checkout, whether the
+   lock file differs.
+3. **Stop the child.** A server that stops for its own update copies its database first (below).
+4. **Change.** Move the checkout to the commit: `git merge --ff-only` when on the release branch,
+   `git checkout --detach` otherwise. `npm ci` when `package-lock.json` differs (without dev
+   packages when `vite` is not installed now), and `npm run build` for a server.
+   `UPDATE_INSTALL_COMMAND` on that machine replaces the two npm steps. Each step has a time limit.
 5. **Start and check.** Start the child. It is healthy when it sends `ready` with the expected
    commit (server: after it listens, so the migrations ran; worker: after its links exist) and is
-   still alive after a settle time (10 s). The limit for `ready` is 90 s.
+   still alive after a settle time (10 s). The limit for `ready` is 90 s. A server in its settle
+   time takes no worker connection, so nothing a worker sends can land in a database that may be
+   put back.
 6. **Roll back** on any failure after step 3: stop the child, put the old commit back
    (`git reset --hard` on the branch, `git checkout --detach` otherwise), install again when the
-   lock file differs, put the database copy back when one was taken, start the old child.
+   lock file differs, build again for a server, start the old child.
 7. The result `{ ok, from, to, rolled_back, error, log_tail }` goes to the child that runs now,
    over IPC, after its `ready`. The journal and the lock are removed.
 
-A launcher that starts and finds a journal finishes the rollback first. When HEAD is already the
-target (the other process of a shared checkout updated it), only the restart and the check run.
+A launcher that starts and finds a journal finishes the rollback first.
+
+**The database.** The server owns its copy, the same way for a checkout and for an image. A
+server that stops while its own update runs copies the database after it closed it
+(`dispatch.db.pre-update`, with a note of the two commits). A server that starts, finds that copy,
+runs the old commit of the note, and finds migrations in the database that its own code does not
+have, puts the copy back before it opens the database. The copy is removed when the update is
+logged as ok. Lost on a rollback: what the new server wrote while it lived (a few seconds of the
+owner's own edits at most).
+
+**One checkout for server and worker** (my call). The lock lets one launcher work at a time. The
+second process finds HEAD at the target: it installs and builds by the commit it ran, restarts
+and checks. A server always goes back to the commit it ran, also when the worker moved the
+checkout. A worker never moves a checkout back that it did not move itself: the server already
+runs the new code on a migrated database. Such a worker reports the failure and starts again on
+the new code. A worker that also serves other servers should have a checkout of its own: the
+server's `npm ci` can disturb a session that it runs for another server.
+
+**The launcher's own code** (my call). The launcher keeps running old code. It loads the update
+steps (`src/update/apply.ts`, which imports nothing of Dispatch) fresh for each update, so they
+are those of the version it updates from. Its own small part (start, stop, pass messages on)
+changes at the next restart of the service; the three IPC messages stay as they are.
 
 ### A server that runs as an image
 
@@ -113,6 +143,8 @@ target (the other process of a shared checkout updated it), only the restart and
 - The result is an `update_result` message. Like a deploy result, it waits in the worker's outbox
   until the server is back.
 - The server uses this way only when it cannot update itself and knows its own commit.
+- The database copy is the server's own (above): the old image, started again by the rollback,
+  puts it back when the new image had migrated the database.
 
 ### Wait mode
 
@@ -136,8 +168,14 @@ target (the other process of a shared checkout updated it), only the restart and
 - A rollout starts when a target exists and auto-update is on, or when the owner presses "Update
   now". A manual one is kept in the setting `update_rollout`, so it goes on after the server's
   own restart.
-- Order: the server first, then each connected worker that is behind and can update, one at a
-  time. The next starts only when the one before is back on the target or failed.
+- Order: the server first, then the workers, one at a time. The next starts only when the one
+  before is back on the target or failed.
+- Workers follow the server: a connected worker that can update and does not run the server's
+  commit is asked to move to it (when the last check found that commit on the release branch).
+  This also brings the workers along after a server update done by hand.
+- A worker checks the commit itself before it starts. One that is already at or past it (another
+  server it serves moved it on) answers "ahead": no log row, no notice, and it is not asked again
+  for that commit.
 - A worker that answers `busy` is asked again at the next tick (30 s).
 - A failed worker stays on its version. The attempt is logged, the owner is told, and the worker
   is not asked again for that target until "Update now".
