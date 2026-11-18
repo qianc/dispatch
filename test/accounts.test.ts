@@ -69,8 +69,12 @@ describe('accounts from env', () => {
   });
 
   it('words rate limit notices', () => {
-    expect(rateLimitNotice('Work', { status: 'rejected', rateLimitType: 'five_hour' }).title).toBe('Work: five hour limit reached');
+    expect(rateLimitNotice('Work', { status: 'rejected', rateLimitType: 'five_hour' }).title).toBe('Claude account Work: five hour limit reached');
     expect(rateLimitNotice('Work', { status: 'allowed_warning', utilization: 0.9 }).body).toMatch(/90% used/);
+    // DISP-117: "default" is the account, and the body names the model the session runs on
+    const near = rateLimitNotice('default', { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.9 }, 'claude-opus-5-5');
+    expect(near.title).toBe('Claude account default: close to the seven day limit');
+    expect(near.body).toBe('90% used. This session runs on claude-opus-5-5.');
   });
 });
 

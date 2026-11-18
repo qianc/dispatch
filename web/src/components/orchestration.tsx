@@ -150,7 +150,7 @@ export function OrchestratorDefaults() {
   });
   return (
     <div className="mx-3">
-      <p className="text-[13px] text-muted mb-2">The model and effort of the orchestrator itself, not of its batches. New orchestrations start with this; you can still pick another one when you start one. Default: the worker's own model.</p>
+      <p className="text-[13px] text-muted mb-2">The model and effort of the orchestrator itself, not of its batches. New orchestrations start with this; you can still pick another one when you start one. Default: the server's default model (Settings → Default model).</p>
       <Field label="Model" group><Segmented value={data?.model ?? 'default'} onChange={(model) => save.mutate({ model })} options={opts('orchestratorModel')} /></Field>
       <Field label="Effort" group><Segmented value={data?.effort ?? 'default'} onChange={(effort) => save.mutate({ effort })} options={opts('effort')} /></Field>
       <ErrorText error={save.error} />
@@ -310,7 +310,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
         </div>
       </Field>
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">The orchestrator itself</h3>
-      <Field label="Model" group hint="It plans, starts the steps and answers its batches. Default: the worker's own model. Your usual choice is in Settings.">
+      <Field label="Model" group hint="It plans, starts the steps and answers its batches. Default: the server's default model. Your usual choice is in Settings.">
         <Segmented value={model} onChange={(v) => setOwn((o) => ({ ...o, model: v }))} options={opts('orchestratorModel')} />
       </Field>
       <Field label="Effort" group><Segmented value={effort} onChange={(v) => setOwn((o) => ({ ...o, effort: v }))} options={opts('effort')} /></Field>

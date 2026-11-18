@@ -4,6 +4,8 @@ import { COOKIE, LoginLimiter } from '../auth.ts';
 import { DEVICE_COOKIE, deviceName } from '../devices.ts';
 import { SCOPES, isLoopback } from '../access.ts';
 import { HttpError, type Ctx } from './ctx.ts';
+import { getModelDefaults, setModelDefaults } from '../modelDefaults.ts';
+import { modelDefaults } from '../../shared/types.ts';
 
 export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices, users, secretKeyFile }: Ctx) {
   const db = store.db;
@@ -124,6 +126,10 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
     github: await github.accountsInfo(),
     assistant_claude_account: db.setting('assistant_claude_account') ?? null,
   }));
+
+  /** What a session on 'default' runs on, on every worker (DISP-117). */
+  app.get('/api/settings/model', async () => getModelDefaults(db));
+  app.put('/api/settings/model', async (req) => setModelDefaults(db, modelDefaults.partial().parse(req.body)));
 
   app.patch('/api/settings', async (req) => {
     const { assistant_claude_account } = z.object({ assistant_claude_account: z.string().nullable() }).parse(req.body);

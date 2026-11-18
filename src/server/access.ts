@@ -154,6 +154,9 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'PUT /api/settings/default-worker': 'user',
   'GET /api/settings/orchestrator': 'user',
   'PUT /api/settings/orchestrator': 'user',
+  // the server's default model (DISP-117): everyone sees it, the install owner sets it
+  'GET /api/settings/model': 'user',
+  'PUT /api/settings/model': 'admin',
   // a local repo's copy on a worker: the install owner, or the worker's owner (the route checks)
   'PUT /api/repos/:id/placements/:workerId': 'user',
   'DELETE /api/repos/:id/placements/:workerId': 'user',

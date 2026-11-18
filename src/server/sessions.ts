@@ -42,6 +42,7 @@ import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
 import type { Users } from './users.ts';
+import { getModelDefaults, withModelDefaults } from './modelDefaults.ts';
 import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 
 /** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
@@ -1063,6 +1064,7 @@ export class Sessions {
       case 'status': {
         const patch: Partial<Session> = {};
         if (msg.sdk_session_id) patch.sdk_session_id = msg.sdk_session_id;
+        if (msg.model) patch.run_model = msg.model;
         if (msg.status === 'failed') {
           patch.ended_at = new Date().toISOString();
           if (msg.error) this.addEvent(s.id, { kind: 'error', text: msg.error });
@@ -1786,8 +1788,9 @@ export class Sessions {
       source: s.source_id ? this.store.source(s.source_id) ?? null : null,
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
-      // an orchestrator stored with a model it may not run on (an old Haiku) runs on the worker's own
-      options: s.kind === 'orchestrator' ? { ...s.options, model: orchestratorModel(s.options.model) } : s.options,
+      // 'default' is the server's default model and effort, so a worker always gets a named model
+      // (DISP-117); an orchestrator stored with a model it may not run on (an old Haiku) runs on that too
+      options: withModelDefaults(s.kind === 'orchestrator' ? { ...s.options, model: orchestratorModel(s.options.model) } : s.options, getModelDefaults(this.store.db)),
       claude_account: s.claude_account,
       github_account: user ? null : (project ?? orchestration?.first)?.github_account ?? null,
       ...(user ? { github: { token: user.token, login: user.login, git_name: user.git_name, git_email: user.git_email } } : {}),

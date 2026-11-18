@@ -26,7 +26,7 @@ const spec: StartSpec = {
   title: 't', branch: 'b', repos: [], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS,
   claude_account: null, github_account: null, resume: null, resume_note: null,
 };
-const opts = { pluginDirs: [], settingSources: [], model: undefined, idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] };
+const opts = { pluginDirs: [], settingSources: [], idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] };
 
 describe('ClaudeRunner before idle', () => {
   it('sends the failed check as the next turn, and reports idle once it passes', async () => {

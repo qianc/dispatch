@@ -132,7 +132,7 @@ describe('phase 2 review fixes', () => {
         fake: false, opts: { assistantReadDirs: [], sessionEnv: () => ({ A: '1' }) } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-p2l-')), slots: new Slots(1),
         claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
       });
-      const spec = { session_id: 3, kind: 'work' as const, project_key: 'PR2', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/pr2-3-t', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
+      const spec = { session_id: 3, kind: 'work' as const, project_key: 'PR2', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/pr2-3-t', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' as const }, claude_account: null, github_account: null, resume: null, resume_note: null };
       const env = (link as unknown as { opts: { sessionEnv: (x: unknown) => Record<string, string> } }).opts.sessionEnv(spec);
       expect(JSON.stringify(env)).not.toContain(secret);
       expect(workPrompt(spec)).toMatch(/Repos hosted by Dispatch: commit your work and stop; do not push/);

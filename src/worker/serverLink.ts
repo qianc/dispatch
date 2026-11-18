@@ -309,6 +309,8 @@ export class ServerLink {
 
   /** Why this server may not run this spec here, or null. */
   private refusal(spec: StartSpec): string | null {
+    // the server names the model; 'default' would leave it to Claude Code, which can change it any day (DISP-117)
+    if (!CHAT_KINDS.includes(spec.kind) && spec.options.model === 'default') return `No model set for this session: server ${this.entry.name} sent none. Set the default model in the server's Settings, or update the server.`;
     if (!this.allowedClaude(spec.claude_account)) return `This worker does not allow the Claude account "${spec.claude_account ?? 'default'}" for server ${this.entry.name}.`;
     // a session as its user's own GitHub account uses none of this worker's (DISP-63)
     if (!spec.github && spec.github_account && !this.allowedGithub(spec.github_account)) return `This worker does not allow the GitHub account "${spec.github_account}" for server ${this.entry.name}.`;

@@ -71,7 +71,7 @@ describe('ClaudeRunner additional directories', () => {
     title: 't', branch: 'b', repos: [], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS,
     claude_account: null, github_account: null, resume: null, resume_note: null,
   });
-  const opts = { pluginDirs: [], settingSources: [], model: undefined, idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] };
+  const opts = { pluginDirs: [], settingSources: [], idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] };
   const optionsFor = (kind: StartSpec['kind'], agentSkillsDir?: string) => {
     seen.length = 0;
     const runner = new ClaudeRunner(spec(kind), { emit: () => undefined, rpc: async () => undefined, cwd: '/tmp', onClosed: () => undefined }, { ...opts, agentSkillsDir });

@@ -95,7 +95,7 @@ describe('the orchestration panel', () => {
 
 describe('the session page of an orchestrator', () => {
   const session = (over: Partial<Session> = {}): Session => ({
-    id: 5, project_id: null, project_key: null, kind: 'orchestrator', title: 'Auth rework', status: 'idle', force_plan: false, branch: null, sdk_session_id: null,
+    id: 5, project_id: null, project_key: null, kind: 'orchestrator', title: 'Auth rework', status: 'idle', force_plan: false, branch: null, sdk_session_id: null, run_model: null,
     initial_prompt: 'Rework auth', source_id: null, waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1,
     paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null,
     closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,

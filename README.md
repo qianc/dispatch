@@ -159,7 +159,7 @@ starts when the server is back, if that is less than 6 hours after its time.
 **Orchestrator.** For a goal that takes several batches, also over several projects: **Activity →
 New orchestration**. You give the goal, the projects it may work in, how many batches may run at
 once, the model and effort of the orchestrator itself (your usual choice is in **Settings →
-Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the worker's own model), and the run options of its batches. It is a session of its own, with a plan on its page. A small
+Orchestrator**; Default, Fable, Opus or Sonnet, where "Default" is the server's default model), and the run options of its batches. It is a session of its own, with a plan on its page. A small
 model (the worker's `ASSISTANT_MODEL`) writes its short title from the goal once, when it is
 created; if that fails, the title is the first words of the goal. You can change the title in its
 **Settings**, and a title you give stays.
@@ -346,7 +346,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
 | `ASSISTANT_READ_DIRS` | | Folders the Assistant and imports may read. |
 | `REPO_ENV_DIR` | `~/.config/dispatch/repo-env` | This machine's env files per repo, in `<owner>/<name>/` (local repos: `local/<name>/`, hosted: `hosted/<name>/`). They are copied into every new worktree (session, merge check, deploy) before the setup command runs. Only files git ignores are copied. Commands get the folder as `DISPATCH_REPO_ENV_DIR`. With `WORKER_CONFIG`: a `repo_env_dir` key, at the top level or per server. |
-| `AGENT_MODEL`, `ASSISTANT_MODEL`, `DISCUSS_MODEL` | Claude Code default, `haiku`, `haiku` | Models. |
+| `ASSISTANT_MODEL`, `DISCUSS_MODEL` | `haiku`, `haiku` | Models of the chats. Agent sessions run on the server's default model (Settings → Default model; Opus at medium effort at first), or on the model picked for the batch. A worker refuses a session that comes without a model. `AGENT_MODEL` is no longer read. |
 | `AGENT_PLUGIN_DIRS`, `AGENT_SETTING_SOURCES` | (the image adds superpowers) | Plugins and which Claude settings agents load. Plugins are separated by `:`, each a folder or a Claude plugin name such as `superpowers@claude-plugins-official`, which follows plugin updates. |
 | `AGENT_SKILLS` | | Skill folders work sessions may load, separated by `:`. For skills in `~/.claude/skills` when `AGENT_SETTING_SOURCES` leaves out `user`. |
 | `AGENT_EXTRA_PATH`, `WINDOWS_PATH` | | Tool folders for agents; under WSL the Windows PATH is added unless `WINDOWS_PATH=off`. |
