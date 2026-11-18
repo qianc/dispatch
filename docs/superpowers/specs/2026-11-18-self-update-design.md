@@ -74,8 +74,9 @@ passes SIGTERM and SIGINT on. Outside an update it ends with the child's exit co
 restart rule stays as it is. An update has two halves.
 
 **The child, before it asks** (it has the GitHub account; the launcher has none): the id must be
-40 hex characters. `git fetch --tags origin <branch>`, with the GitHub account the process has,
-else with the machine's own git credentials. The commit must be an ancestor of `origin/<branch>`.
+40 hex characters. A fetch of the release branch of `origin` (into `refs/remotes/origin/<branch>`),
+and of the tags for the version shown, with the GitHub account `UPDATE_GITHUB_ACCOUNT` names (else
+the first the process has, else the machine's own git credentials). The commit must be an ancestor of `origin/<branch>`.
 HEAD must be an ancestor of the commit: there is no step back this way, and a process that is
 already at or past the commit answers "ahead" and nothing happens. No tracked file may be changed.
 HEAD must be on the release branch or detached. The branch is the machine's own `UPDATE_BRANCH`
@@ -112,8 +113,8 @@ A launcher that starts and finds a journal finishes the rollback first.
 server that stops while its own update runs copies the database after it closed it
 (`dispatch.db.pre-update`, with a note of the two commits). A server that starts, finds that copy,
 runs the old commit of the note, and finds migrations in the database that its own code does not
-have, puts the copy back before it opens the database. The copy is removed when the update is
-logged as ok. Lost on a rollback: what the new server wrote while it lived (a few seconds of the
+have, puts the copy back before it opens the database, and keeps the changed database next to it
+(`dispatch.db.failed-update`). The copy is removed when the update is logged as ok. Lost on a rollback: what the new server wrote while it lived (a few seconds of the
 owner's own edits at most).
 
 **One checkout for server and worker** (my call). The lock lets one launcher work at a time. The
@@ -136,13 +137,18 @@ changes at the next restart of the service; the three IPC messages stay as they 
   `version.server_update: true` to that server only.
 - The server sends `{ t: 'server_update', update_id, sha, prev }`. The worker runs its own command
   with `DISPATCH_UPDATE_SHA`, `DISPATCH_UPDATE_PREV` and `DISPATCH_UPDATE_BRANCH`, with a time
-  limit (`UPDATE_TIMEOUT_MIN`, default 30).
+  limit (`UPDATE_TIMEOUT_MIN`, default 20). Only a full commit id reaches the command. A worker
+  that runs from a checkout of Dispatch first fetches the release branch itself and refuses a
+  commit that is not on it.
 - Then it waits (`UPDATE_HEALTH_MIN`, default 5) for a `welcome` from the server with that commit.
 - When the command fails or the wait runs out, it runs the command again with
   `DISPATCH_UPDATE_SHA=<prev>` and `DISPATCH_UPDATE_ROLLBACK=1`, and waits for the old commit.
 - The result is an `update_result` message. Like a deploy result, it waits in the worker's outbox
   until the server is back.
-- The server uses this way only when it cannot update itself and knows its own commit.
+- The server uses this way only when it cannot update itself and knows its own commit. It asks
+  the first connected worker that has the command, holds queued sessions while the command runs,
+  and counts only that worker's result. With no result in 60 minutes it closes the update by the
+  commit it runs.
 - The database copy is the server's own (above): the old image, started again by the rollback,
   puts it back when the new image had migrated the database.
 
@@ -155,8 +161,9 @@ changes at the next restart of the service; the three IPC messages stay as they 
   While the server updates, a hold keeps queued sessions in the queue with a reason.
 - **Worker gate**, checked on the worker over all the servers it serves: no runner in a turn (a
   background task or a set wake-up counts as a turn), none with an open question, nothing
-  starting, no turn check, deploy or command running, and an empty outbox. Then the worker reports
-  0 free slots to every server and refuses a start as `busy`.
+  starting, no turn check, deploy, command or update of a server running, and an empty outbox.
+  Then the worker reports 0 free slots to every server and refuses a start as `busy`. Any server
+  the worker serves may ask: the worker checks the commit against its own `origin` each time.
 - The server holds a worker from the moment it sends `self_update` until the worker is back or
   the time limit (15 minutes) passed. Queued sessions for it show "Waiting for worker X
   (updating)", and a message to one of its sessions is kept and delivered after.
@@ -176,7 +183,9 @@ changes at the next restart of the service; the three IPC messages stay as they 
 - A worker checks the commit itself before it starts. One that is already at or past it (another
   server it serves moved it on) answers "ahead": no log row, no notice, and it is not asked again
   for that commit.
-- A worker that answers `busy` is asked again at the next tick (30 s).
+- A worker that answers `busy` is asked again at the next tick (30 s). A worker that is not
+  connected is passed over. A worker whose link breaks before its answer keeps its log row
+  running until it is back, its result comes, or the time limit passed.
 - A failed worker stays on its version. The attempt is logged, the owner is told, and the worker
   is not asked again for that target until "Update now".
 - A failed server update stops the rollout for that target until "Update now".
@@ -190,7 +199,7 @@ changes at the next restart of the service; the three IPC messages stay as they 
 All routes are `admin` (the install owner only):
 
 - `GET /api/update`: versions of the server and the workers, the state above, settings, the
-  rollout and why it waits, the last 20 log rows.
+  rollout and why it waits, the last 30 log rows.
 - `PUT /api/update/settings`, `POST /api/update/check`, `POST /api/update/start`
   (`{ target?: 'commit' | 'tag' }`), `POST /api/update/cancel`.
 
