@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DEFAULT_RUN_OPTIONS, type Attention, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Attention, type NotifyOwner, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
 import { STEP_LABEL, STEP_MARK, changeLine, costText, doneCount, foldLive, isOpen, mergeHint, orchestrationProblem, parseLimit, partOfIndex, proposalLines, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
@@ -17,6 +17,13 @@ const PHASE: Record<OrchPhase, { label: string; tone: 'neutral' | 'wait' | 'ok' 
   done: { label: 'Done', tone: 'ok' },
   stopped: { label: 'Stopped', tone: 'neutral' },
 };
+/** Who tells the owner about its batches (DISP-122). */
+const NOTIFY_OPTIONS: { value: NotifyOwner; label: string }[] = [{ value: 'needs_you', label: 'Only what needs me' }, { value: 'all', label: 'Every batch' }];
+const NOTIFY_HINT: Record<NotifyOwner, string> = {
+  needs_you: 'Its batches send you nothing. It completes the ones that went to plan and tells you only of a decision, a failure it cannot fix or a blocker, several in one notification. What it handled is in its quiet log.',
+  all: 'Every batch notifies you itself, as a session without an orchestrator does.',
+};
+
 const STEP_TONE: Record<StepState, string> = { done: 'text-ok', running: 'text-run', review: 'text-wait', failed: 'text-bad', skipped: 'text-faint', pending: 'text-faint' };
 
 /** Keep the session page and the lists in step with an orchestration the server just returned. */
@@ -126,6 +133,20 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
           </ol>
         </details>
       )}
+      {o.quiet_log.length > 0 && (
+        <details className="border-t border-line px-3 py-2 text-[13px]">
+          <summary className="cursor-pointer text-muted">Quiet log ({o.quiet_log.length})</summary>
+          <p className="mt-1 text-[12px] text-faint">What it handled without notifying you.</p>
+          <ol className="mt-2 space-y-2">
+            {o.quiet_log.map((e) => (
+              <li key={e.id}>
+                <span className="block">{e.session_id ? <Link to={`/s/${e.session_id}`} className="text-accent">{e.text}</Link> : e.text}</span>
+                <span className="block text-[11px] text-faint">{new Date(e.created_at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
 
       <Sheet open={!!menu} onClose={() => setMenu(null)} title={menu ? `Step ${menu.position}: ${menu.title}` : 'Step'}>
         {menu && (
@@ -207,13 +228,14 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   const [max, setMax] = useState(o.max_children);
   const [limit, setLimit] = useState(o.cost_limit_usd === null ? '' : String(o.cost_limit_usd));
   const [answers, setAnswers] = useState(o.answer_children);
+  const [notify, setNotify] = useState(o.notify_owner);
   const [keys, setKeys] = useState(o.project_keys);
   const [merge, setMerge] = useState(o.options.auto_merge);
   const [title, setTitle] = useState(o.title);
   const fixed = fixedProjects(o);
   const amount = parseLimit(limit);
   const save = useMutation({
-    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { title: title.trim() || undefined, max_children: max, cost_limit_usd: amount, answer_children: answers, project_keys: keys, auto_merge: merge }),
+    mutationFn: () => api.patch<Orchestration>(`/orchestrations/${o.session_id}`, { title: title.trim() || undefined, max_children: max, cost_limit_usd: amount, answer_children: answers, notify_owner: notify, project_keys: keys, auto_merge: merge }),
     onSuccess: (next) => {
       qc.setQueryData<SessionDetail>(['session', next.session_id], (d) => (d ? { ...d, orchestration: next } : d));
       void qc.invalidateQueries({ queryKey: ['orchestrations'] });
@@ -239,6 +261,9 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
         <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
         <span>It answers its batches' questions<span className="block text-[12px] text-muted">Off: every question and plan of its batches comes to you.</span></span>
       </label>
+      <Field label="Notify me about its batches" group hint={NOTIFY_HINT[notify]}>
+        <Segmented value={notify} onChange={setNotify} options={NOTIFY_OPTIONS} />
+      </Field>
       <Field label="When a step's batch is done" group hint={mergeHint(o, merge)}>
         <Segmented value={merge} onChange={setMerge} options={opts('auto_merge')} />
       </Field>
@@ -314,6 +339,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const [keys, setKeys] = useState<string[]>([]);
   const [max, setMax] = useState(2);
   const [answers, setAnswers] = useState(true);
+  const [notify, setNotify] = useState<NotifyOwner>('needs_you');
   const [limit, setLimit] = useState('');
   const amount = parseLimit(limit);
   // the orchestrator's own model and effort: your default (Settings) until you pick here
@@ -323,7 +349,7 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
   const effort = own.effort ?? mine?.effort ?? 'default';
   const [options, setOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
   const start = useMutation({
-    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, cost_limit_usd: amount ?? null, model, effort, options }),
+    mutationFn: () => api.post<Orchestration>('/orchestrations', { goal, project_keys: keys, max_children: max, answer_children: answers, notify_owner: notify, cost_limit_usd: amount ?? null, model, effort, options }),
     onSuccess: (o) => {
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       onDone();
@@ -364,6 +390,9 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
         <input type="checkbox" checked={answers} onChange={(e) => setAnswers(e.target.checked)} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
         <span>It answers its batches' questions<span className="block text-[12px] text-muted">From the plan and what you told it, also their plans to approve. What it cannot settle comes to you. You see each answer in the batch and can overrule it.</span></span>
       </label>
+      <Field label="Notify me about its batches" group hint={NOTIFY_HINT[notify]}>
+        <Segmented value={notify} onChange={setNotify} options={NOTIFY_OPTIONS} />
+      </Field>
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">Each step's batch</h3>
       <RunOptionsFields value={options} set={(p) => setOptions((o) => ({ ...o, ...p }))} />
       <ErrorText error={start.error} />

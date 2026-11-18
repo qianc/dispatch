@@ -45,7 +45,7 @@ describe('orchestrator: children', () => {
     expect(t.store.pendingOrchEvents(p.id)).toHaveLength(2);
     t.status(p.id, 'idle');
     expect(told(p.id)).toHaveLength(before + 1);
-    expect(told(p.id).at(-1)).toMatch(/Step 1 "Token store"[^\n]*merged\.\n- Step 3 "Docs"[^\n]*merged\./);
+    expect(told(p.id).at(-1)).toMatch(/Step 1 "Token store"[^\n]*merged\.[^\n]*\n- Step 3 "Docs"[^\n]*merged\./);
   });
 
   it('a failed child fails the step, holds its dependants and tells the owner once', async () => {

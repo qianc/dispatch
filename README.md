@@ -195,6 +195,12 @@ created; if that fails, the title is the first words of the goal. You can change
   write to that batch, at most 3 times per step, before the step is yours. A message to a batch
   that still works waits until its turn ends; if the batch closes or asks a question first, the
   message is dropped and the orchestrator is told.
+- *Notifications.* Its batches send you nothing themselves: their news goes to the orchestrator.
+  A batch that is merged (and deployed) is completed without a push, and the orchestrator checks
+  its result. You are told only what needs you: a decision, a failure it cannot fix, a blocker, or
+  a batch that waits for you; things that come together arrive as one push. At the end you get one
+  "finished" push. What it handled quietly is in the **Quiet log** on its page. Set **Notify me
+  about its batches** to *Every batch* to get each batch's own notices instead.
 - *Cost limit* (optional): what it and its batches may cost together. At the limit it is paused and
   you are told: running batches go on, no new step starts. Raise the limit in its **Settings**,
   then Resume.

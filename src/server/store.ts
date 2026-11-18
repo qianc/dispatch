@@ -35,6 +35,8 @@ import {
   type Orchestration,
   type OrchestrationStep,
   type PlanChange,
+  type NotifyOwner,
+  type QuietLogEntry,
   type PlanProposal,
   type SessionKind,
   type SessionStatus,
@@ -748,6 +750,8 @@ export class Store {
       model: orchestratorModel(json<Partial<SessionOptions>>(r.session_options, {}).model),
       effort: json<Partial<RunOptions>>(r.session_options, {}).effort ?? 'default',
       answer_children: bool(r.answer_children),
+      notify_owner: r.notify_owner === 'all' ? 'all' : 'needs_you',
+      quiet_log: this.quietLog(id),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
       proposal: json<PlanProposal | null>(r.proposal, null),
@@ -763,9 +767,9 @@ export class Store {
       updated_at: String(r.updated_at),
     };
   }
-  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions; answer_children?: boolean; cost_limit_usd?: number | null }) {
-    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options, answer_children, cost_limit_usd) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options), o.answer_children === false ? 0 : 1, o.cost_limit_usd ?? null);
+  createOrchestration(o: { session_id: number; goal: string; project_ids: number[]; max_children: number; options: RunOptions; answer_children?: boolean; notify_owner?: NotifyOwner; cost_limit_usd?: number | null }) {
+    this.db.run('INSERT INTO orchestrations (session_id, goal, project_ids, max_children, options, answer_children, notify_owner, cost_limit_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      o.session_id, o.goal, JSON.stringify(o.project_ids), o.max_children, JSON.stringify(o.options), o.answer_children === false ? 0 : 1, o.notify_owner ?? 'needs_you', o.cost_limit_usd ?? null);
   }
   /** The orchestration an orchestrator session holds, with its steps in plan order. */
   orchestration(sessionId: number): Orchestration | undefined {
@@ -776,7 +780,7 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -816,6 +820,15 @@ export class Store {
       id: Number(r.id), kind: r.kind as PlanChange['kind'], decided_by: r.decided_by as PlanChange['decided_by'], summary: String(r.summary),
       reason: String(r.reason ?? ''), verification: (r.verification as string | null) ?? null, step_id: numOrNull(r.step_id), created_at: String(r.created_at),
     }));
+  }
+  /** What the orchestrator handled without a push (DISP-122), newest first. */
+  quietLog(sessionId: number, limit = 100): QuietLogEntry[] {
+    return this.db.all('SELECT * FROM orchestration_log WHERE orchestration_id = ? ORDER BY id DESC LIMIT ?', sessionId, limit).map((r) => ({
+      id: Number(r.id), session_id: numOrNull(r.session_id), step_id: numOrNull(r.step_id), text: String(r.text), created_at: String(r.created_at),
+    }));
+  }
+  addQuietLog(sessionId: number, e: { session_id: number | null; step_id: number | null; text: string }) {
+    this.db.run('INSERT INTO orchestration_log (orchestration_id, session_id, step_id, text) VALUES (?, ?, ?, ?)', sessionId, e.session_id, e.step_id, e.text);
   }
   addPlanChange(sessionId: number, c: Omit<PlanChange, 'id' | 'created_at'>) {
     this.db.run('INSERT INTO orchestration_changes (orchestration_id, kind, decided_by, summary, reason, verification, step_id) VALUES (?, ?, ?, ?, ?, ?, ?)',

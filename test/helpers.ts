@@ -18,6 +18,8 @@ export async function waitFor<T>(fn: () => T | Promise<T>, what: string, timeout
 export async function startServer(env: Record<string, string> = {}) {
   const cfg = loadConfig({ WORKER_TOKEN: 'test-token', DISABLE_AUTH: '1', WEB_DIST: '/nonexistent', ...env });
   const { app, ctx, routes } = await buildApp(cfg, { dbFile: ':memory:' });
+  // an orchestration's news for the owner goes out at once, not batched (a test of batching sets it)
+  ctx.orchestrator.batchMs = 0;
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = (app.server.address() as { port: number }).port;
   const base = `http://127.0.0.1:${port}`;
