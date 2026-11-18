@@ -17,12 +17,12 @@ afterEach(() => vi.unstubAllGlobals());
 
 const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationStep => ({
   id, orchestration_id: 5, position: id, title: `Step ${id}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-  state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, messages_sent: 0, child: null, ...over,
+  state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null, ...over,
 });
 const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1, 2], project_keys: ['AA', 'BB'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1,
   max_children: 2, answer_children: true, options: DEFAULT_RUN_OPTIONS, waiting: null, cost_usd: 4.1, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
-  started_by: null, status: 'idle', created_at: '', updated_at: '', steps: [step(1, { state: 'running', child_session_id: 11 }), step(2, { project_key: 'BB' })], ...over,
+  proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '', steps: [step(1, { state: 'running', child_session_id: 11 }), step(2, { project_key: 'BB' })], ...over,
 });
 const session = (id: number, over: Partial<Session> = {}): Session => ({
   id, project_id: 1, project_key: 'AA', kind: 'work', title: `S${id}`, status: 'running', force_plan: false, branch: null, sdk_session_id: null, run_model: null, initial_prompt: '', source_id: null,

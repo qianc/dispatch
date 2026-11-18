@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { MAX_IMAGE_BYTES, sniffImage } from '../shared/chatImages.ts';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
-import { crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
+import { FIX_TOUCHES, MINOR_CHANGES, crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
 
 export type Rpc = (method: RpcMethod, params: unknown) => Promise<unknown>;
 
@@ -302,6 +302,15 @@ export function crossProjectTools(rpc: Rpc, ownKey: string, ask: AskCrossProject
 /** An orchestrator: the tracker of the projects in its scope, its plan, and the batches of its steps. */
 function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<any>[] {
   const project_key = z.string().describe('Key of a project in your scope, e.g. HC');
+  const planSteps = z.array(z.object({
+    id: z.number().int().optional().describe('The step_id of a step that stays from the plan before; leave out for a new step'),
+    title: z.string().describe('Short name of the step'),
+    project_key,
+    prompt: z.string().default('').describe("Everything the batch's agent needs beyond its items"),
+    item_keys: z.array(z.string()).default([]).describe('Keys of the items this step works on, all in its project'),
+    after: z.array(z.number().int().min(1)).default([]).describe('Places in this list (from 1) of the steps that must be merged first'),
+    optional: z.boolean().default(false).describe('You may skip it later without asking (nice to have, not needed for the goal)'),
+  })).min(1);
   const step_id = z.number().int().describe('The step_id from "The plan now" (not its place in the list)');
   return [
     tool('list_projects', 'The projects in your scope, with repos and scales.', {}, call(rpc, 'list_projects')),
@@ -325,19 +334,27 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       modules: z.array(z.string()).optional().describe('The full new module list'),
       comment: z.string().optional().describe('A comment to add (markdown): why you changed it'),
     }, call(rpc, 'update_item')),
-    tool('set_plan', 'Propose the plan, or a changed plan: the whole list of steps, in order. The owner sees it and approves it with a button; nothing starts before that. One step = one batch (one session, one branch, one PR per changed repo) in one project.', {
+    tool('set_plan', 'Propose the plan, or a change of the approved plan that needs the owner: the whole list of steps, in order. The owner sees it and approves it with a button. Before the first approval nothing starts; a change of a running plan holds only the steps it changes, and the others go on. One step = one batch (one session, one branch, one PR per changed repo) in one project.', {
       plan_md: z.string().describe('The reasoning the owner should read: why these steps, in this order (markdown)'),
-      steps: z.array(z.object({
-        id: z.number().int().optional().describe('The step_id of a step that stays from the plan before; leave out for a new step'),
-        title: z.string().describe('Short name of the step'),
-        project_key,
-        prompt: z.string().default('').describe("Everything the batch's agent needs beyond its items"),
-        item_keys: z.array(z.string()).default([]).describe('Keys of the items this step works on, all in its project'),
-        after: z.array(z.number().int().min(1)).default([]).describe('Places in this list (from 1) of the steps that must be merged first'),
-      })).min(1),
+      steps: planSteps,
     }, call(rpc, 'set_plan')),
+    tool('amend_plan', 'Change the approved plan by yourself, without asking, for a minor change only: a step that fixes a blocker you diagnosed (touching only dependency pins, lockfiles, CI config or test config), another order of steps that have not started, new wording, or a step split in parts. It applies at once and goes in the plan\'s history for the owner. Dispatch refuses a change that is not minor and says why: then propose it with set_plan.', {
+      plan_md: z.string().default('').describe('The reasoning, if it changes; empty keeps it'),
+      steps: planSteps,
+      change: z.object({
+        kind: z.enum(MINOR_CHANGES).describe('fix_blocker: add one step that fixes a blocker. reorder: steps that have not started in another order, the same steps waiting for the same steps. reword: titles or prompts, the scope the same. split: one step that has not started in two or more parts that share out its items'),
+        reason: z.string().describe('Why: the blocker and its cause, or what was wrong'),
+        verification: z.string().optional().describe("fix_blocker: the check that proves the fix (e.g. `npm audit --audit-level=high` passes). The fix step's batch runs it and it must pass"),
+        touches: z.array(z.enum(FIX_TOUCHES)).optional().describe('fix_blocker: all that the fix changes'),
+        unblocks: z.number().int().optional().describe('fix_blocker: the step_id of the blocked step. Only that step and the steps that already wait for it may wait for the fix'),
+      }),
+    }, call(rpc, 'amend_plan')),
     tool('start_step', 'Start a step as a batch now. Dispatch refuses it when the plan is not approved, a step before it is not finished, or too many run at once; the answer says why. After it, end your turn.', { step_id }, call(rpc, 'start_step')),
-    tool('update_step', 'Skip a step that has not started, or close a step whose batch ended with nothing to merge. A merged batch closes its step by itself.', {
+    tool('retry_step', 'Run a failed step again as a new batch, once per step, without asking: when the failure looks passing (a flaky check, a worker that went away). Then start it with start_step. A second failure is the owner\'s.', {
+      step_id,
+      reason: z.string().describe('Why a new run should pass'),
+    }, call(rpc, 'retry_step')),
+    tool('update_step', 'Skip a step that has not started and that the plan marks optional, or close a step whose batch ended with nothing to merge. A merged batch closes its step by itself. Skipping a step that is not optional is the owner\'s.', {
       step_id,
       state: z.enum(['done', 'skipped']),
       note: z.string().optional().describe('Why, in one line'),

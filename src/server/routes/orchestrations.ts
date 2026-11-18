@@ -1,5 +1,5 @@
 // Orchestrations: start one, read it with its steps, and the owner's actions on it (approve the
-// plan, pause, resume, stop; skip or retry a step). An orchestration belongs to whoever started it
+// plan or a change of it, decline a change, pause, resume, stop; skip or retry a step). An orchestration belongs to whoever started it
 // and starts work as them; everyone can read it.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -62,6 +62,8 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
     const { plan_version } = z.object({ plan_version: z.number().int().optional() }).parse(req.body ?? {});
     return orchestrator.approve(mine(req, (req.params as { id: string }).id), plan_version);
   });
+  // a change of the running plan the owner does not want: the approved plan stays (DISP-119)
+  app.post('/api/orchestrations/:id/decline', async (req) => orchestrator.decline(mine(req, (req.params as { id: string }).id)));
   app.post('/api/orchestrations/:id/pause', async (req) => orchestrator.pause(mine(req, (req.params as { id: string }).id)));
   app.post('/api/orchestrations/:id/resume', async (req) => orchestrator.resumeOne(mine(req, (req.params as { id: string }).id)));
   app.post('/api/orchestrations/:id/stop', async (req) => {

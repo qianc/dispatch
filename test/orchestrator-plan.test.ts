@@ -105,7 +105,7 @@ describe('orchestrator: plan', () => {
     expect(() => t.s.ctx.orchestrator.approve(id)).toThrow(/already approved/);
   });
 
-  it('set_plan in run goes back to plan and needs a new approval', async () => {
+  it('set_plan in run proposes a change: the plan keeps running, approve applies it (DISP-119)', async () => {
     const a = await t.item('AA', 'Store tokens');
     const b = await t.item('BB', 'Use tokens');
     const id = t.start().session_id;
@@ -113,14 +113,20 @@ describe('orchestrator: plan', () => {
     t.s.ctx.orchestrator.approve(id);
     const [first, second] = t.s.ctx.orchestrator.view(id).steps;
     await t.rpc(id, 'set_plan', { plan_md: 'Changed.', steps: [
-      { id: first.id, title: 'Token store', project_key: 'AA', item_keys: [a.key] },
-      { id: second.id, title: 'Use the tokens', project_key: 'BB', item_keys: [b.key], after: [1] },
+      { id: first.id, title: 'Token store', project_key: 'AA', prompt: 'Build the store.', item_keys: [a.key] },
+      { id: second.id, title: 'Use the tokens', project_key: 'BB', prompt: 'Use it.', item_keys: [b.key], after: [1] },
       { title: 'Docs', project_key: 'AA', after: [2] },
     ] });
-    const o = t.s.ctx.orchestrator.view(id);
-    expect(o).toMatchObject({ phase: 'plan', plan_approved: false });
+    let o = t.s.ctx.orchestrator.view(id);
+    expect(o).toMatchObject({ phase: 'run', plan_approved: true, plan_md: 'First the store, then its use.', waiting: 'A change of the plan waits for your approval' });
+    expect(o.steps).toHaveLength(2);
+    expect(o.proposal).toMatchObject({ summary: 'adds step 3 "Docs"', held: [] });
+    o = t.s.ctx.orchestrator.approve(id);
+    expect(o).toMatchObject({ phase: 'run', proposal: null, plan_md: 'Changed.' });
     expect(o.steps.map((x) => x.id).slice(0, 2)).toEqual([first.id, second.id]);
-    expect(t.s.ctx.orchestrator.approve(id).phase).toBe('run');
+    expect(o.steps).toHaveLength(3);
+    expect(o.changes.map((c) => [c.kind, c.decided_by])).toEqual([['approved', 'owner']]);
+    expect(() => t.s.ctx.orchestrator.approve(id)).toThrow(/already approved/);
   });
 
   it('set_plan cannot drop a step that has a child session, nor move it to another project', async () => {

@@ -74,7 +74,11 @@ describe('orchestrator: steps', () => {
   it('update_step: a skipped step lets its dependants start; done is refused while a PR is open', async () => {
     const p = await t.approved();
     await expect(t.rpc(p.id, 'update_step', { step_id: p.first.id, state: 'done' })).rejects.toThrow('Step 1 is pending: only a step that ran can be done.');
+    // only a step the plan marks optional is the orchestrator's to skip (DISP-119)
+    await expect(t.rpc(p.id, 'update_step', { step_id: p.first.id, state: 'skipped' })).rejects.toThrow(/Step 1 is not optional in the plan: skipping it needs the owner's approval/);
+    t.store.db.run('UPDATE orchestration_steps SET optional = 1 WHERE id = ?', p.first.id);
     expect(await t.rpc(p.id, 'update_step', { step_id: p.first.id, state: 'skipped', note: 'Not needed.' })).toMatchObject({ state: 'skipped', note: 'Not needed.' });
+    expect(t.s.ctx.orchestrator.view(p.id).changes).toMatchObject([{ kind: 'skip', decided_by: 'orchestrator', reason: 'Not needed.', step_id: p.first.id }]);
     const child = await t.startStep(p.id, p.second.id);
     t.status(child, 'running');
     await expect(t.rpc(p.id, 'update_step', { step_id: p.second.id, state: 'done' })).rejects.toThrow(`Step 2 is still working in session #${child}.`);

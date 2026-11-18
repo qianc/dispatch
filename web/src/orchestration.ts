@@ -1,6 +1,6 @@
 // What the orchestration panel shows for a plan and its steps (no React here, so tests can call it).
 import { waitsOnOwner } from '../../src/shared/attention.ts';
-import { sessionStatusWords, type Attention, type PendingInput, type Orchestration, type Session, type OrchestrationStep, type SessionStatus, type StepState } from '../../src/shared/types.ts';
+import { sessionStatusWords, type Attention, type PendingInput, type Orchestration, type Session, type OrchestrationStep, type PlanChange, type SessionStatus, type StepState } from '../../src/shared/types.ts';
 
 export const STEP_MARK: Record<StepState, string> = { done: '✓', running: '●', review: '◐', failed: '✕', skipped: '–', pending: '○' };
 export const STEP_LABEL: Record<StepState, string> = { done: 'Done', running: 'Running', review: 'In review', failed: 'Failed', skipped: 'Skipped', pending: 'Not started' };
@@ -32,8 +32,9 @@ export function holderOf(step: OrchestrationStep, o: Pick<Orchestration, 'steps'
 }
 
 /** The short text at the end of a step's line: its batch and state, or what it waits for. */
-export function stepRight(step: OrchestrationStep, o: Pick<Orchestration, 'steps' | 'phase'>): string {
+export function stepRight(step: OrchestrationStep, o: Pick<Orchestration, 'steps' | 'phase'> & { proposal?: Orchestration['proposal'] }): string {
   if (step.state === 'pending') {
+    if (o.proposal?.held.includes(step.id)) return 'held by the plan change';
     const holder = holderOf(step, o);
     if (holder) return `held by step ${holder.position}`;
     const place = new Map(o.steps.map((s) => [s.id, s]));
@@ -183,4 +184,37 @@ export function parseLimit(text: string): number | null | undefined {
   if (!/^\d+([.,]\d{1,2})?$/.test(s)) return undefined;
   const n = Number(s.replace(',', '.'));
   return n > 0 && n <= 10_000 ? n : undefined;
+}
+
+const places = (n: number[]) => (n.length > 1 ? `steps ${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : `step ${n[0]}`);
+
+/** A change of the running plan that waits for the owner (DISP-119): what it holds, and what goes on meanwhile. */
+export function proposalLines(o: Pick<Orchestration, 'steps' | 'proposal'>): { held: string; goes: string } | null {
+  const p = o.proposal;
+  if (!p) return null;
+  const held = o.steps.filter((s) => p.held.includes(s.id)).map((s) => s.position);
+  const goes = o.steps.filter((s) => !p.held.includes(s.id) && ['pending', 'running', 'review'].includes(s.state)).map((s) => s.position);
+  return {
+    held: held.length ? `Held until you answer: ${places(held)}.` : 'It holds no step.',
+    goes: goes.length ? `Going on now: ${places(goes)}.` : 'Nothing else is open.',
+  };
+}
+
+const CHANGE_KIND: Record<PlanChange['kind'], string> = {
+  fix_blocker: 'Fixed a blocker', reorder: 'Reordered', reword: 'Reworded', split: 'Split a step', retry: 'Retried a step',
+  skip: 'Skipped an optional step', approved: 'You approved', declined: 'You declined',
+};
+
+/** One entry of the plan's history: who, what, why, and whether its verification passed (its step's state). */
+export function changeLine(c: PlanChange, o: Pick<Orchestration, 'steps'>): { title: string; detail: string[] } {
+  const step = c.step_id ? o.steps.find((s) => s.id === c.step_id) : undefined;
+  const result = !c.verification ? ''
+    : step?.state === 'done' ? ' (passed: its step is merged)'
+    : step?.state === 'failed' ? ' (failed)'
+    : step?.state === 'running' || step?.state === 'review' ? ' (running)'
+    : ' (not run yet)';
+  return {
+    title: `${CHANGE_KIND[c.kind]}${c.decided_by === 'orchestrator' ? ' without asking' : ''}: ${c.summary}`,
+    detail: [c.reason ? `Why: ${c.reason}` : '', c.verification ? `Verification: ${c.verification}${result}` : ''].filter(Boolean),
+  };
 }

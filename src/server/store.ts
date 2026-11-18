@@ -34,6 +34,8 @@ import {
   type Schedule,
   type Orchestration,
   type OrchestrationStep,
+  type PlanChange,
+  type PlanProposal,
   type SessionKind,
   type SessionStatus,
   type Source,
@@ -725,6 +727,7 @@ export class Store {
       seen: (r.seen as string | null) ?? null,
       deploys: json(r.deploys, {}),
       messages_sent: Number(r.messages_sent ?? 0),
+      optional: bool(r.optional),
     };
   }
   private toOrchestration(r: Row): Orchestration {
@@ -747,6 +750,8 @@ export class Store {
       answer_children: bool(r.answer_children),
       options: { ...DEFAULT_RUN_OPTIONS, ...json<Partial<RunOptions>>(r.options, {}) },
       steps: this.db.all(`${STEP_SELECT} WHERE st.orchestration_id = ? ORDER BY st.position`, id).map((x) => this.toStep(x)),
+      proposal: json<PlanProposal | null>(r.proposal, null),
+      changes: this.planChanges(id),
       waiting: null,
       cost_usd: 0,
       cost_limit_usd: r.cost_limit_usd === null || r.cost_limit_usd === undefined ? null : Number(r.cost_limit_usd),
@@ -771,13 +776,13 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason' | 'options'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
       if (v === undefined) continue;
       sets.push(`${k} = ?`);
-      params.push(k === 'project_ids' || k === 'options' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
+      params.push(k === 'project_ids' || k === 'options' || (k === 'proposal' && v !== null) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null));
     }
     this.db.run(`UPDATE orchestrations SET ${sets.join(', ')} WHERE session_id = ?`, ...params, sessionId);
   }
@@ -785,24 +790,36 @@ export class Store {
    * The plan's steps, in this order. A step given by `id` keeps its row (state, child session);
    * the others are new. Rows left out are removed. `after`: places in this list, from 1.
    */
-  replaceSteps(sessionId: number, steps: { id?: number; title: string; project_id: number; prompt_md: string; item_ids: number[]; after: number[] }[]) {
-    this.db.tx(() => {
+  replaceSteps(sessionId: number, steps: { id?: number; title: string; project_id: number; prompt_md: string; item_ids: number[]; after: number[]; optional?: boolean }[]): number[] {
+    return this.db.tx(() => {
       const kept = new Set(steps.flatMap((s) => (s.id ? [s.id] : [])));
       for (const old of this.db.all<{ id: number }>('SELECT id FROM orchestration_steps WHERE orchestration_id = ?', sessionId)) {
         if (!kept.has(Number(old.id))) this.db.run('DELETE FROM orchestration_steps WHERE id = ?', Number(old.id));
       }
       const ids = steps.map((s, i) => {
         if (s.id) {
-          this.db.run('UPDATE orchestration_steps SET position = ?, title = ?, project_id = ?, prompt_md = ?, item_ids = ? WHERE id = ? AND orchestration_id = ?',
-            i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.id, sessionId);
+          this.db.run('UPDATE orchestration_steps SET position = ?, title = ?, project_id = ?, prompt_md = ?, item_ids = ?, optional = ? WHERE id = ? AND orchestration_id = ?',
+            i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0, s.id, sessionId);
           return s.id;
         }
-        return Number(this.db.run('INSERT INTO orchestration_steps (orchestration_id, position, title, project_id, prompt_md, item_ids) VALUES (?, ?, ?, ?, ?, ?)',
-          sessionId, i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids)).lastId);
+        return Number(this.db.run('INSERT INTO orchestration_steps (orchestration_id, position, title, project_id, prompt_md, item_ids, optional) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          sessionId, i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0).lastId);
       });
       steps.forEach((s, i) => this.db.run('UPDATE orchestration_steps SET depends_on = ? WHERE id = ?', JSON.stringify(s.after.map((n) => ids[n - 1])), ids[i]));
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = ?', now(), sessionId);
+      return ids;
     });
+  }
+  /** The plan's history (DISP-119), oldest first. */
+  planChanges(sessionId: number): PlanChange[] {
+    return this.db.all('SELECT * FROM orchestration_changes WHERE orchestration_id = ? ORDER BY id', sessionId).map((r) => ({
+      id: Number(r.id), kind: r.kind as PlanChange['kind'], decided_by: r.decided_by as PlanChange['decided_by'], summary: String(r.summary),
+      reason: String(r.reason ?? ''), verification: (r.verification as string | null) ?? null, step_id: numOrNull(r.step_id), created_at: String(r.created_at),
+    }));
+  }
+  addPlanChange(sessionId: number, c: Omit<PlanChange, 'id' | 'created_at'>) {
+    this.db.run('INSERT INTO orchestration_changes (orchestration_id, kind, decided_by, summary, reason, verification, step_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      sessionId, c.kind, c.decided_by, c.summary, c.reason, c.verification, c.step_id);
   }
   step(id: number): OrchestrationStep | undefined {
     const r = this.db.get(`${STEP_SELECT} WHERE st.id = ?`, id);

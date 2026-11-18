@@ -860,6 +860,8 @@ export interface OrchestrationStep {
   deploys: Record<string, DeployState>;
   /** messages the orchestrator sent to this step's batch */
   messages_sent: number;
+  /** the plan marks it optional: the orchestrator may skip it without asking (DISP-119) */
+  optional: boolean;
   /** the batch it runs as (API views) */
   child?: { id: number; status: SessionStatus; title: string; waiting_reason: string | null } | null;
 }
@@ -889,6 +891,10 @@ export interface Orchestration {
   /** run options of the batches it starts */
   options: RunOptions;
   steps: OrchestrationStep[];
+  /** a change of the running plan that waits for the owner's approval; the rest of the plan runs on (DISP-119) */
+  proposal: PlanProposal | null;
+  /** the plan's history: every change after the first approval, newest last */
+  changes: PlanChange[];
   /** one line for lists: what it waits for now */
   waiting: string | null;
   /** what it and its batches cost so far */
@@ -947,9 +953,57 @@ export const planInput = z.object({
     item_keys: z.array(z.string()).default([]),
     /** places in this list (from 1) of the steps that must finish first */
     after: z.array(z.number().int().min(1)).default([]),
+    /** the orchestrator may skip it without asking (DISP-119) */
+    optional: z.boolean().default(false),
   })).min(1, 'A plan needs at least one step.'),
 });
 export type PlanInput = z.infer<typeof planInput>;
+
+/**
+ * The changes an orchestrator may make to its approved plan without asking (DISP-119). Anything else
+ * (architecture, usage or cost, credentials, scope, a step that holds independent work) is proposed
+ * with set_plan and waits for the owner.
+ */
+export const MINOR_CHANGES = ['fix_blocker', 'reorder', 'reword', 'split'] as const;
+/** What a step that fixes a diagnosed blocker may touch, and nothing else. */
+export const FIX_TOUCHES = ['dependency_pins', 'lockfiles', 'ci_config', 'test_config'] as const;
+export const minorChangeInput = z.object({
+  kind: z.enum(MINOR_CHANGES),
+  /** why the change: the blocker it fixes, or what was wrong */
+  reason: z.string().trim().min(1, 'Say why you change the plan.'),
+  /** fix_blocker: the check that proves the fix (it runs in the new step's batch and must pass) */
+  verification: z.string().trim().optional(),
+  /** fix_blocker: what the new step changes */
+  touches: z.array(z.enum(FIX_TOUCHES)).optional(),
+  /** fix_blocker: the step_id of the step it unblocks; only the steps that wait for that one may wait for the fix */
+  unblocks: z.number().int().optional(),
+});
+export type MinorChange = z.infer<typeof minorChangeInput>;
+
+/** A change of the running plan that waits for the owner. */
+export interface PlanProposal {
+  plan_md: string;
+  /** the whole plan it proposes, as set_plan got it */
+  steps: PlanInput['steps'];
+  /** what changes, in words */
+  summary: string;
+  /** pending steps that do not start until the owner answers; the others go on */
+  held: number[];
+  created_at: string;
+}
+
+/** One entry of the plan's history. */
+export interface PlanChange {
+  id: number;
+  kind: (typeof MINOR_CHANGES)[number] | 'retry' | 'skip' | 'approved' | 'declined';
+  decided_by: 'orchestrator' | 'owner';
+  summary: string;
+  reason: string;
+  /** the check that proves it; its step's state says whether it passed */
+  verification: string | null;
+  step_id: number | null;
+  created_at: string;
+}
 
 export type LiveEvent =
   | { t: 'hello' }

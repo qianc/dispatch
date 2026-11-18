@@ -3,12 +3,13 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason } from '../shared/attention.ts';
-import { FINAL_STATUSES, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import { cleanTitle, firstWordsTitle } from '../shared/orchestrationTitle.ts';
 import type { Bus } from './bus.ts';
 import type { Notifier } from './notify.ts';
+import { CHANGE_WORDS, TOUCH_WORDS, describeChange, heldByProposal, minorProblem, type NextStep } from './planChange.ts';
 import { assertWritable } from './projectLock.ts';
 import { SessionError, type Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
@@ -39,8 +40,8 @@ export class Orchestrator {
   private bus: Bus;
   private sessions: Sessions;
   private notifier: Notifier;
-  /** orchestrator sessions that proposed a plan this turn: the push goes out when the turn ends */
-  private planNotice = new Set<number>();
+  /** orchestrator sessions that proposed a plan (or a change of the running plan) this turn: the push goes out when the turn ends */
+  private planNotice = new Map<number, 'plan' | 'change'>();
 
   /** ids of the PRs Dispatch merges at this moment (a deploy may follow such a merge) */
   private merging: () => ReadonlySet<number>;
@@ -150,6 +151,7 @@ export class Orchestrator {
     if (o.phase !== 'run') return null;
     const failed = o.steps.find((s) => s.state === 'failed');
     if (failed) return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
+    if (o.proposal) return { kind: 'plan', text: this.proposalText(o, o.proposal) };
     // no step at work: it stopped to ask or to tell the owner something, or a step waits for their review
     return this.waitsQuietly(o) ? null : { kind: 'plan', text: this.waitingOf(o) ?? 'It waits for your reply.' };
   }
@@ -168,6 +170,7 @@ export class Orchestrator {
     if (o.phase === 'plan') return o.steps.length && !o.plan_approved ? 'Plan ready to approve' : timer();
     const failed = o.steps.find((s) => s.state === 'failed');
     if (failed) return `Step ${failed.position} failed`;
+    if (o.proposal) return 'A change of the plan waits for your approval';
     const review = o.steps.find((s) => s.state === 'review');
     if (review) return `Step ${review.position} waits for your review`;
     const running = o.steps.find((s) => s.state === 'running');
@@ -214,7 +217,9 @@ export class Orchestrator {
   readySteps(o: Orchestration): OrchestrationStep[] {
     if (o.phase !== 'run') return [];
     const state = new Map(o.steps.map((s) => [s.id, s.state]));
-    return o.steps.filter((s) => s.state === 'pending' && s.depends_on.every((d) => SETTLED.includes(state.get(d) ?? 'skipped')));
+    // a change that waits for the owner holds the steps it changes, and only those (DISP-119)
+    const held = new Set(o.proposal?.held ?? []);
+    return o.steps.filter((s) => s.state === 'pending' && !held.has(s.id) && s.depends_on.every((d) => SETTLED.includes(state.get(d) ?? 'skipped')));
   }
 
   /** The plan as the orchestrator reads it: each step with its state, and what can start. */
@@ -223,7 +228,7 @@ export class Orchestrator {
     const place = new Map(o.steps.map((s) => [s.id, s.position]));
     const lines = o.steps.map((s) => {
       const after = s.depends_on.flatMap((d) => place.get(d) ?? []);
-      const facts = [`step_id ${s.id}`, s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
+      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', o.proposal?.held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
       return `${s.position}. [${s.state}${s.note ? `: ${s.note}` : ''}] ${s.project_key} — ${s.title} (${facts.join(', ')})`;
     });
     const ready = this.readySteps(o);
@@ -232,7 +237,8 @@ export class Orchestrator {
       : !ready.length ? 'none'
       : running >= o.max_children ? 'none (limit reached)'
       : ready.map((s) => s.id).join(', ');
-    return [`Plan now (phase ${o.phase}, at most ${o.max_children} at once):`, ...lines, `Ready to start: ${can}`].join('\n');
+    const waits = o.proposal ? [`A change of the plan waits for the owner's approval: ${o.proposal.summary}. The steps it holds do not start; the others go on.`] : [];
+    return [`Plan now (phase ${o.phase}, at most ${o.max_children} at once):`, ...lines, ...waits, `Ready to start: ${can}`].join('\n');
   }
 
   private emit(sessionId: number) {
@@ -357,10 +363,14 @@ export class Orchestrator {
       }
       case 'set_plan':
         return this.setPlan(s, o, p);
+      case 'amend_plan':
+        return this.amendPlan(s, o, p);
+      case 'retry_step':
+        return this.retryOwn(s, o, this.stepOf(o, p.step_id), String(p.reason ?? '').trim());
       case 'start_step':
         return this.startStep(s, o, this.stepOf(o, p.step_id));
       case 'update_step':
-        return this.updateStep(o, this.stepOf(o, p.step_id), p);
+        return this.updateStep(s, o, this.stepOf(o, p.step_id), p);
       case 'get_session':
         return this.childView(o, Number(p.session_id));
       case 'finish':
@@ -418,14 +428,8 @@ export class Orchestrator {
     return `Set to ${word} by the orchestrator "${s.title}" after step ${step.position} "${step.title}"${facts.length ? ` (${facts.join(', ')})` : ''}.`;
   }
 
-  /**
-   * The orchestrator proposes its plan, or a change of it. Nothing is stored unless the whole plan
-   * holds. A plan the owner has not approved starts nothing: a change during the run stops new
-   * starts until they approve again.
-   */
-  private setPlan(s: Session, o: Orchestration, raw: Record<string, unknown>): string {
-    if (o.phase === 'done' || o.phase === 'stopped') throw new Error('This orchestration is closed.');
-    if (o.phase === 'paused') throw new Error('The orchestration is paused: the owner resumes it first.');
+  /** A plan as set_plan or amend_plan give it, checked against the scope, the items and the steps that ran. */
+  private buildPlan(o: Orchestration, raw: Record<string, unknown>): { plan_md: string; input: ReturnType<typeof planInput.parse>; steps: NextStep[] } {
     const plan = planInput.parse(raw);
     const old = new Map(o.steps.map((x) => [x.id, x]));
     const seen = new Set<number>();
@@ -444,7 +448,7 @@ export class Orchestrator {
         if (a === n) throw new Error(`Step ${n} cannot come after itself.`);
         if (a > plan.steps.length) throw new Error(`Step ${n} comes after step ${a}, but the plan has no step ${a}.`);
       }
-      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)] };
+      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)], optional: st.optional };
     });
     // no circle of steps that wait for each other
     const state = new Map<number, 'open' | 'done'>();
@@ -458,15 +462,91 @@ export class Orchestrator {
     steps.forEach((_, i) => visit(i + 1));
     const dropped = o.steps.find((x) => x.child_session_id && !seen.has(x.id));
     if (dropped) throw new Error(`Step "${dropped.title}" already ran as session #${dropped.child_session_id}: keep it in the plan.`);
-    this.store.replaceSteps(o.session_id, steps);
+    return { plan_md: plan.plan_md, input: plan, steps };
+  }
+
+  /**
+   * The orchestrator proposes its plan, or a change of it that needs the owner. Nothing is stored
+   * unless the whole plan holds. Before the first approval nothing starts. A change of the running
+   * plan waits as a proposal: the steps it changes are held until the owner answers, and the rest of
+   * the plan goes on (DISP-119).
+   */
+  private setPlan(s: Session, o: Orchestration, raw: Record<string, unknown>): string {
+    if (o.phase === 'done' || o.phase === 'stopped') throw new Error('This orchestration is closed.');
+    if (o.phase === 'paused') throw new Error('The orchestration is paused: the owner resumes it first.');
+    const plan = this.buildPlan(o, raw);
+    this.acted.add(s.id);
+    if (o.phase === 'run') {
+      const proposal: PlanProposal = {
+        plan_md: plan.plan_md || o.plan_md, steps: plan.input.steps, summary: describeChange(o.steps, plan.steps),
+        held: heldByProposal(o.steps, plan.steps), created_at: this.now().toISOString(),
+      };
+      this.store.updateOrchestration(o.session_id, { proposal, plan_version: o.plan_version + 1 });
+      this.sessions.systemNote(s.id, `Plan change proposed: ${proposal.summary}`);
+      this.planNotice.set(s.id, 'change');
+      this.emit(o.session_id);
+      const after = this.must(o.session_id);
+      return `The change is shown to the owner with an Approve button. ${this.proposalText(after, proposal)} Start what is ready now (${this.readySteps(after).map((x) => x.id).join(', ') || 'nothing is'}), explain the change briefly, then end your turn.`;
+    }
+    this.store.replaceSteps(o.session_id, plan.steps);
     this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan', plan_version: o.plan_version + 1 });
     // it takes its batches' questions only while an approved plan runs
     this.handOverAll(o.session_id, 'The orchestrator changed its plan and waits for your approval: this is yours.');
-    this.acted.add(s.id);
-    this.sessions.systemNote(s.id, `Plan proposed: ${steps.length} step${steps.length === 1 ? '' : 's'}`);
-    this.planNotice.add(s.id);
+    this.sessions.systemNote(s.id, `Plan proposed: ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}`);
+    this.planNotice.set(s.id, 'plan');
     this.emit(o.session_id);
     return 'The plan is shown to the owner with an Approve button. Nothing starts before they approve. Explain the plan briefly, then stop and wait.';
+  }
+
+  /** What a change that waits for the owner holds, and what goes on meanwhile: so they can answer at once. */
+  private proposalText(o: Orchestration, p: PlanProposal): string {
+    const at = (ids: number[]) => o.steps.filter((x) => ids.includes(x.id)).map((x) => x.position);
+    const list = (n: number[]) => (n.length > 1 ? `steps ${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : `step ${n[0]}`);
+    const held = at(p.held);
+    const goes = o.steps.filter((x) => !p.held.includes(x.id) && ['pending', 'running', 'review'].includes(x.state)).map((x) => x.position);
+    return [
+      `A change of the plan waits for your approval: ${p.summary}.`,
+      held.length ? `Held until you answer: ${list(held)}.` : 'It holds no step.',
+      goes.length ? `Going on now: ${list(goes)}.` : '',
+    ].filter(Boolean).join(' ');
+  }
+
+  /**
+   * A minor change of the approved plan, made without asking (DISP-119): applied at once, logged in
+   * the plan's history, and the independent steps go on. A change that is not minor is refused with
+   * the rule it breaks: the orchestrator proposes it with set_plan instead.
+   */
+  private amendPlan(s: Session, o: Orchestration, raw: Record<string, unknown>): string {
+    if (o.phase === 'plan') throw new Error('The owner has not approved the plan yet: change it with set_plan.');
+    if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase}.`);
+    if (o.proposal) throw new Error("A change of the plan waits for the owner's approval: wait for their answer, or put this change into a new set_plan.");
+    const change = minorChangeInput.parse(raw.change ?? {});
+    const plan = this.buildPlan(o, raw);
+    const problem = minorProblem(o.steps, plan.steps, change);
+    if (problem) throw new Error(`This change needs the owner's approval: ${problem}. Propose it with set_plan; the steps it does not change go on meanwhile.`);
+    const steps = plan.steps.map((st) => (st.id === undefined && change.kind === 'fix_blocker' ? { ...st, prompt_md: this.fixGuard(change, st.prompt_md) } : st));
+    const summary = describeChange(o.steps, plan.steps, change);
+    const ids = this.store.replaceSteps(o.session_id, steps);
+    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md || o.plan_md, plan_version: o.plan_version + 1 });
+    const fixStep = change.kind === 'fix_blocker' ? ids[plan.steps.findIndex((st) => st.id === undefined)] : null;
+    this.store.addPlanChange(o.session_id, { kind: change.kind, decided_by: 'orchestrator', summary, reason: change.reason, verification: change.verification || null, step_id: fixStep });
+    this.sessions.systemNote(s.id, `Plan changed without approval (${CHANGE_WORDS[change.kind]}): ${summary}. Why: ${change.reason}${change.verification ? ` Verified by: ${change.verification}` : ''}`);
+    this.acted.add(s.id);
+    this.emit(o.session_id);
+    const after = this.must(o.session_id);
+    return `Changed: ${summary}. It is in the plan's history for the owner. Ready to start: ${this.readySteps(after).map((x) => x.id).join(', ') || 'none'}.`;
+  }
+
+  /** The prompt of a step that fixes a blocker: it may touch only what the change named, and its check must pass. */
+  private fixGuard(change: ReturnType<typeof minorChangeInput.parse>, prompt: string): string {
+    const touches = (change.touches ?? []).map((t) => TOUCH_WORDS[t]).join(', ');
+    return [
+      `(Dispatch: the orchestrator added this step without the owner's approval, as a minor fix of a blocker: ${change.reason}`,
+      `Change only ${touches}. Before you open the pull request, run this check and say its result in the pull request: ${change.verification}`,
+      'If the fix needs anything else (code, a new dependency with a runtime role, credentials, another repo), or the check does not pass, do not widen the change: stop and say so.)',
+      '',
+      prompt,
+    ].join('\n').trim();
   }
 
   private stepOf(o: Orchestration, id: unknown): OrchestrationStep {
@@ -484,6 +564,7 @@ export class Orchestrator {
     if (o.phase === 'plan') throw new Error('The owner has not approved the plan yet.');
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase}.`);
     if (step.state !== 'pending') throw new Error(`Step ${step.position} is already ${step.state}.`);
+    if (o.proposal?.held.includes(step.id)) throw new Error(`Step ${step.position} is held by your change of the plan, which waits for the owner's approval.`);
     const blocker = step.depends_on.map((d) => o.steps.find((x) => x.id === d)).find((d) => d && !SETTLED.includes(d.state));
     if (blocker) throw new Error(`Step ${step.position} waits for step ${blocker.position} ("${blocker.title}"), which is ${blocker.state}.`);
     const running = o.steps.filter((x) => x.state === 'running').length;
@@ -509,11 +590,17 @@ export class Orchestrator {
     return `Started session #${child.id} for step ${step.position}.${out.length ? ` Left out: ${out.join(', ')}.` : ''} End your turn: Dispatch wakes you when it changes.`;
   }
 
-  /** The orchestrator's own word on a step: skip one that has not started, or close one whose batch needs no merge. */
-  private updateStep(o: Orchestration, step: OrchestrationStep, p: Record<string, unknown>) {
+  /**
+   * The orchestrator's own word on a step: skip one that has not started and that the plan marks
+   * optional (any other skip is the owner's, DISP-119), or close one whose batch needs no merge.
+   */
+  private updateStep(s: Session, o: Orchestration, step: OrchestrationStep, p: Record<string, unknown>) {
     const note = p.note === undefined ? step.note : String(p.note).trim() || null;
     if (p.state === 'skipped') {
       if (step.state !== 'pending') throw new Error(`Step ${step.position} is ${step.state}: only a pending step can be skipped.`);
+      if (!step.optional) throw new Error(`Step ${step.position} is not optional in the plan: skipping it needs the owner's approval. Propose the plan without it (set_plan), or ask them to skip it.`);
+      this.store.addPlanChange(o.session_id, { kind: 'skip', decided_by: 'orchestrator', summary: `skipped optional step ${step.position} "${step.title}"`, reason: note ?? '', verification: null, step_id: step.id });
+      this.sessions.systemNote(s.id, `Optional step ${step.position} skipped without approval${note ? `: ${note}` : '.'}`);
     } else if (p.state === 'done') {
       if (step.state !== 'running' && step.state !== 'review') throw new Error(`Step ${step.position} is ${step.state}: only a step that ran can be done.`);
       const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
@@ -575,6 +662,7 @@ export class Orchestrator {
     const o = this.must(sessionId);
     if (planVersion !== undefined && planVersion !== o.plan_version) throw new SessionError('The plan changed since you opened it. Read it again, then approve.', 409);
     if (o.phase === 'paused') throw new SessionError('Resume the orchestration first.', 409);
+    if (o.phase === 'run' && o.proposal) return this.approveChange(o);
     if (o.phase !== 'plan') throw new SessionError(o.phase === 'run' ? 'The plan is already approved.' : 'This orchestration is closed.', 409);
     if (!o.steps.length) throw new SessionError('There is no plan to approve yet.', 409);
     this.store.updateOrchestration(sessionId, { plan_approved: true, phase: 'run' });
@@ -582,6 +670,39 @@ export class Orchestrator {
     this.planNotice.delete(sessionId);
     this.emit(sessionId);
     this.wake(sessionId, 'The owner approved the plan.');
+    return this.view(sessionId);
+  }
+
+  /** The owner approves a change of the running plan: it replaces the plan, and the steps it held may start. */
+  private approveChange(o: Orchestration): Orchestration {
+    const p = o.proposal!;
+    let plan: ReturnType<Orchestrator['buildPlan']>;
+    try {
+      // the plan moved on since (a step ran, the scope changed): checked again as it is now
+      plan = this.buildPlan(o, { plan_md: p.plan_md, steps: p.steps });
+    } catch (e) {
+      throw new SessionError(`The change no longer fits the plan: ${(e as Error).message} Decline it, and the orchestrator proposes it again.`, 409);
+    }
+    this.store.replaceSteps(o.session_id, plan.steps);
+    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, proposal: null });
+    this.store.addPlanChange(o.session_id, { kind: 'approved', decided_by: 'owner', summary: p.summary, reason: '', verification: null, step_id: null });
+    this.sessions.systemNote(o.session_id, 'Plan change approved.');
+    this.planNotice.delete(o.session_id);
+    this.emit(o.session_id);
+    this.wake(o.session_id, 'The owner approved your change of the plan.');
+    return this.view(o.session_id);
+  }
+
+  /** The owner says no to a change of the running plan: the approved plan stays, and its held steps may start. */
+  decline(sessionId: number): Orchestration {
+    const o = this.must(sessionId);
+    if (!o.proposal) throw new SessionError('No change of the plan waits for you.', 409);
+    this.store.updateOrchestration(sessionId, { proposal: null });
+    this.store.addPlanChange(sessionId, { kind: 'declined', decided_by: 'owner', summary: o.proposal.summary, reason: '', verification: null, step_id: null });
+    this.sessions.systemNote(sessionId, 'Plan change declined by the owner.');
+    this.planNotice.delete(sessionId);
+    this.emit(sessionId);
+    this.wake(sessionId, 'The owner declined your change of the plan: the approved plan stays. Go on with it, or ask them what they want instead.');
     return this.view(sessionId);
   }
 
@@ -660,6 +781,32 @@ export class Orchestrator {
   /** Run a failed step again as a new batch: it is pending again, and the orchestrator starts it. */
   retryStep(stepId: number): Orchestration {
     const { o, step } = this.openStep(stepId);
+    this.makePending(step);
+    this.sessions.systemNote(o.session_id, `Step ${step.position}: retry asked by the owner.`);
+    this.emit(o.session_id);
+    this.wake(o.session_id, `The owner asks to retry step ${step.position} ("${step.title}"): start it again when it is ready.`);
+    return this.view(o.session_id);
+  }
+
+  /** How often the orchestrator may retry one step by itself; then it is the owner's. */
+  static readonly MAX_OWN_RETRIES = 1;
+
+  /** The orchestrator retries a failed step by itself, once (DISP-119): logged in the plan's history. */
+  private retryOwn(s: Session, o: Orchestration, step: OrchestrationStep, reason: string): string {
+    if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
+    if (!reason) throw new Error('Say why a new run should pass.');
+    const done = o.changes.filter((c) => c.kind === 'retry' && c.step_id === step.id).length;
+    if (done >= Orchestrator.MAX_OWN_RETRIES) throw new Error(`You retried step ${step.position} already: tell the owner what failed instead.`);
+    this.makePending(step);
+    this.store.addPlanChange(o.session_id, { kind: 'retry', decided_by: 'orchestrator', summary: `retried step ${step.position} "${step.title}"${step.child_session_id ? ` (session #${step.child_session_id} failed)` : ''}`, reason, verification: null, step_id: step.id });
+    this.sessions.systemNote(s.id, `Step ${step.position} retried without approval: ${reason}`);
+    this.acted.add(s.id);
+    this.emit(o.session_id);
+    return `Step ${step.position} is pending again: start it with start_step when it is ready.`;
+  }
+
+  /** A failed step goes back to pending, for a new batch, when nothing of its old one is left to finish. */
+  private makePending(step: OrchestrationStep) {
     if (step.state !== 'failed') throw new SessionError(`Step ${step.position} is ${step.state}: only a failed step can be retried.`, 409);
     const busy = this.childWorks(step);
     if (busy) throw new SessionError(`Session #${busy.id} of step ${step.position} runs again: wait for it, or stop it first.`, 409);
@@ -669,10 +816,6 @@ export class Orchestrator {
       throw new SessionError(`Session #${step.child_session_id} of step ${step.position} has a pull request: retry that session from its page, or skip the step.`, 409);
     }
     this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, messages_sent: 0, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
-    this.sessions.systemNote(o.session_id, `Step ${step.position}: retry asked by the owner.`);
-    this.emit(o.session_id);
-    this.wake(o.session_id, `The owner asks to retry step ${step.position} ("${step.title}"): start it again when it is ready.`);
-    return this.view(o.session_id);
   }
 
   /** The event that tells the orchestrator to wrap up, when every step is done or skipped. */
@@ -721,10 +864,12 @@ export class Orchestrator {
 
   /** The orchestrator session's turn ended: tell the owner what needs them, close it if it finished, else give it its events. */
   onIdle(s: Session) {
+    const notice = this.planNotice.get(s.id);
     const planned = this.planNotice.delete(s.id);
     const acted = this.acted.delete(s.id);
     if (planned) {
-      void this.notifier.send({ title: `${s.title}: plan ready to approve`, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
+      const title = notice === 'change' ? `${s.title}: plan change to approve` : `${s.title}: plan ready to approve`;
+      void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
     }
     if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
     this.emit(s.id);
@@ -779,6 +924,7 @@ export class Orchestrator {
 
   /** It waits for its steps, or for a timer it set itself, and no step has failed: nothing for the owner now. */
   private waitsQuietly(o: Orchestration): boolean {
+    if (o.proposal) return false;
     return this.waitsForSteps(o) || (o.phase === 'run' && !o.steps.some((s) => s.state === 'failed' || s.state === 'review') && this.timersOf(o).length > 0);
   }
 

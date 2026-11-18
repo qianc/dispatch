@@ -253,6 +253,18 @@ Each phase is useful alone and is its own plan.
 - It is woken when a step is done, in review or failed, when a batch asks it something, and when a
   batch's turn ended and no pull request followed within 30 seconds. Not on every turn end.
 - A closed orchestration stays closed. In the Inbox it is a card under "Your turn".
+- Changes of the approved plan (DISP-119). The orchestrator makes a minor change by itself with
+  `amend_plan`: a step that fixes a diagnosed blocker and touches only dependency pins, lockfiles,
+  CI config or test config (its batch runs the named verification); steps that have not started in
+  another order; new wording; a step split in parts; one retry of a failed step (`retry_step`); a
+  skip of a step the plan marks optional. The server checks the structure (no step removed or
+  moved to another project, the same items, the same steps waiting for the same steps, and only
+  the blocked step and its dependants may wait for a fix) and refuses anything else with the rule
+  it breaks. Every such change is in the plan's history with its reason and verification.
+- Any other change (architecture, usage or cost, credentials, scope, a step that holds independent
+  work, a skip of a required step) is proposed with `set_plan`. It waits as a proposal: the plan
+  stays approved and running, only the pending steps the change touches are held, and the owner
+  sees what is held and what goes on, with Approve change and Decline.
 
 ## Calls made without the owner (change any of them)
 
