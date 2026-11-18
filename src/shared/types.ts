@@ -910,7 +910,86 @@ export type LiveEvent =
   /** the check commands running now for a session's merges, with their progress (empty: none, DISP-5) */
   | { t: 'check'; session_id: number; checks: CheckRun[] }
   /** an orchestration, its plan or one of its steps changed */
-  | { t: 'orchestration'; orchestration: Orchestration };
+  | { t: 'orchestration'; orchestration: Orchestration }
+  /** Dispatch's own updates changed (DISP-112): the Updates section reads again */
+  | { t: 'update' };
+
+// ---------- Dispatch's own updates (DISP-112) ----------
+
+/** What the last look at the release branch found. */
+export interface UpdateState {
+  checked_at: string | null;
+  /** the server's commit the numbers below were worked out for */
+  for_sha: string | null;
+  /** the newest commit of the release branch */
+  commit: { sha: string; date: string } | null;
+  /** the highest version tag on the release branch; `ahead`: it is newer than what the server runs */
+  tag: { name: string; sha: string; ahead: boolean } | null;
+  /** commits between the server's and the newest (null: not known, e.g. the server does not know its own) */
+  behind_by: number | null;
+  /** the server's commit is on the release branch */
+  on_branch: boolean;
+  /** the first lines of those commits, newest first (at most 20) */
+  commits: { sha: string; subject: string }[];
+  error: string | null;
+}
+
+/** `auto`: update without a person, in wait mode; `follow`: every commit of the branch, or version tags only. */
+export const updateSettings = z.object({ auto: z.boolean(), follow: z.enum(['commits', 'tags']) });
+export type UpdateSettings = z.infer<typeof updateSettings>;
+
+export const UPDATE_STATES = ['running', 'ok', 'failed', 'rolled_back'] as const;
+export type UpdateRunState = (typeof UPDATE_STATES)[number];
+
+/** One update of the server or of a worker: the log on the admin page. */
+export interface UpdateRow {
+  id: number;
+  target: 'server' | 'worker';
+  worker_id: number | null;
+  worker_name: string | null;
+  /** 'auto', or the user who pressed "Update now" */
+  triggered_by: string;
+  from_sha: string | null;
+  to_sha: string;
+  to_tag: string | null;
+  state: UpdateRunState;
+  detail: string | null;
+  created_at: string;
+  ended_at: string | null;
+}
+
+export interface UpdateWorker {
+  id: number;
+  name: string;
+  connected: boolean;
+  sha: string | null;
+  updatable: boolean;
+  /** why it cannot update */
+  why: string | null;
+  /** against the server's commit */
+  status: 'current' | 'behind' | 'updating' | 'failed' | 'newer' | 'unknown';
+}
+
+/** GET /api/update: all the Updates section shows. */
+export interface UpdateInfo {
+  /** owner/name on GitHub, or null: not set */
+  repo: string | null;
+  branch: string;
+  version: { sha: string | null; tag: string | null };
+  /** how the server updates: itself (the launcher), by a worker's command (an image), or not */
+  mode: 'self' | 'worker' | 'none';
+  mode_why: string | null;
+  state: UpdateState;
+  settings: UpdateSettings;
+  /** what the server would update to now */
+  target: { sha: string; tag: string | null } | null;
+  /** an update started by hand that is not finished */
+  rollout: { sha: string; tag: string | null; by: string } | null;
+  /** why the next step has not started */
+  waiting: string[];
+  workers: UpdateWorker[];
+  log: UpdateRow[];
+}
 
 export function itemKey(projectKey: string, n: number) {
   return `${projectKey}-${n}`;

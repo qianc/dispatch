@@ -55,6 +55,8 @@ import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
 import { runningVersion } from '../update/version.ts';
+import { Updates } from './updates.ts';
+import { updateRoutes } from './routes/updates.ts';
 
 
 declare module 'fastify' {
@@ -159,6 +161,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   let closing = false;
   // read once: the checkout may move on under a running server (DISP-112)
   const version = { ...runningVersion() };
+  const updates = new Updates({ cfg, db, bus, notifier, version });
   hub.handlers = {
     onHello: (workerId, live, facts) => {
       workers.seen(workerId, facts);
@@ -194,11 +197,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
-  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version, updates };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
     orchestrator.resume();
+    updates.start();
   }
 
   // forceCloseConnections: live streams (/api/stream) never end on their own, so close() would wait
@@ -329,6 +333,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   orchestrationRoutes(app, ctx);
   costRoutes(app, ctx);
   githubRoutes(app, ctx);
+  updateRoutes(app, ctx);
   app.get('/api/sessions/:id/attachments/:name', async (req, reply) => {
     const { id, name } = req.params as { id: string; name: string };
     const file = await attachments.read(Number(id), name);
@@ -358,6 +363,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     janitor.stop();
     scheduler.stop();
     orchestrator.stop();
+    updates.stop();
     github.stop();
     ctx.sessions.stop();
     db.raw.close();
