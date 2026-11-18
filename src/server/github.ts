@@ -16,6 +16,7 @@ import type { HostedGit } from './hosted.ts';
 import type { Identities } from './identities.ts';
 import { isRefusal, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 import { refusalError } from './sessions.ts';
+import { HttpError } from './routes/ctx.ts';
 
 /** As whom a session acts on GitHub now (identity.ts; null: its project needs no GitHub). */
 export type SessionIdentity = (s: Session) => GithubIdentity | IdentityRefusal | null;
@@ -435,11 +436,11 @@ export class GitHub {
    */
   async openUpstreamPr(prId: number) {
     const pr = this.store.pr(prId);
-    if (!pr) throw new Error('Unknown PR');
+    if (!pr) throw new HttpError(404, 'Unknown PR');
     const repo = this.store.repo(pr.repo_id)!;
-    if (repo.kind !== 'hosted' || !pr.local || pr.state !== 'open') throw new Error('Only an open review of a hosted repo can move to GitHub.');
+    if (repo.kind !== 'hosted' || !pr.local || pr.state !== 'open') throw new HttpError(400, 'Only an open review of a hosted repo can move to GitHub.');
     const t = this.target(repo);
-    if (!t) throw new Error(`${repo.github_name} has no GitHub repo to open a PR on. Link one in the repo's settings.`);
+    if (!t) throw new HttpError(400, `${repo.github_name} has no GitHub repo to open a PR on. Link one in the repo's settings.`);
     const s = this.store.session(pr.session_id)!;
     const acting = this.as(s, repo, 'write');
     const octo = this.mustClient(acting.octo, repo);

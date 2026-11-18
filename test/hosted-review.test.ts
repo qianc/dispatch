@@ -205,6 +205,25 @@ describe('review and merge of hosted repos in Dispatch', () => {
     }
   });
 
+  it('refusals of a move to GitHub are 404 and 400, not 500 (DISP-116)', async () => {
+    const { s, session } = await setup(); // no upstream linked
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      const unknown = await s.call('POST', '/prs/99999/github-pr');
+      expect(unknown.status).toBe(404);
+      expect(unknown.data).toMatchObject({ error: 'Unknown PR' });
+      const unlinked = await s.call('POST', `/prs/${row.id}/github-pr`);
+      expect(unlinked.status).toBe(400);
+      expect(unlinked.data.error).toContain('has no GitHub repo to open a PR on');
+      s.ctx.store.upsertPr({ session_id: session.id, repo_id: row.repo_id, number: row.number, url: row.url, title: row.title, state: 'closed', mergeable: row.mergeable, mergeable_state: row.mergeable_state, head_ref: row.head_ref, head_sha: row.head_sha });
+      const closed = await s.call('POST', `/prs/${row.id}/github-pr`);
+      expect(closed.status).toBe(400);
+      expect(closed.data).toMatchObject({ error: 'Only an open review of a hosted repo can move to GitHub.' });
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('opens a PR on the upstream instead; merged there, it comes back into the hosted repo', async () => {
     const { s, repo, session, upstream } = await setup({ upstream: true });
     try {
