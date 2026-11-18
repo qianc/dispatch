@@ -104,7 +104,9 @@ runs; a full commit id or nothing), runs `applyUpdate`:
    commit (server: after it listens, so the migrations ran; worker: after its links exist) and is
    still alive after a settle time (10 s). The limit for `ready` is 90 s. A server in its settle
    time takes no worker connection, so nothing a worker sends can land in a database that may be
-   put back.
+   put back. The launcher passes the child's stderr on and keeps the end of it: when the child
+   stops before it is healthy, the error is the short reason on its first line, then what the
+   child wrote last, so the log says why the version did not start.
 6. **Roll back** on any failure after step 3: stop the child, put the old commit back
    (`git reset --hard` on the branch, `git checkout --detach` otherwise), install again when the
    lock file differs, build again for a server, start the old child.

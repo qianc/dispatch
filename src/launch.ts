@@ -28,6 +28,8 @@ const READY_MS = seconds(env.UPDATE_READY_SECONDS, 90);
 const SETTLE_MS = seconds(env.UPDATE_SETTLE_SECONDS, 10);
 /** how long a child gets to stop before it is killed */
 const STOP_MS = 20_000;
+/** how much of what a child wrote last is kept: the log of a version that does not start says why */
+const SAID = 1200;
 
 const log = (line: string) => console.log(`[launcher] ${line}`);
 
@@ -55,6 +57,8 @@ let stopSignal: NodeJS.Signals | null = null;
 /** a result the child has not been told yet (it gets it after its `ready`) */
 let pending: { result: Result; ctx: unknown } | null = null;
 let onReady: ((sha: string | null) => void) | null = null;
+/** the end of what each child wrote to stderr */
+const said = new WeakMap<ChildProcess, string>();
 
 function tell(c: ChildProcess, what: { result: Result; ctx: unknown }) {
   if (c.connected) c.send({ t: 'result', result: what.result, ctx: what.ctx });
@@ -62,10 +66,16 @@ function tell(c: ChildProcess, what: { result: Result; ctx: unknown }) {
 
 function start(extra: Record<string, string> = {}): ChildProcess {
   const c = spawn(process.execPath, [...process.execArgv, join(dir, 'src', role, 'main.ts'), ...process.argv.slice(3)], {
-    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    stdio: ['inherit', 'inherit', 'pipe', 'ipc'],
     env: { ...env, DISPATCH_LAUNCHER: why ? `no: ${why}` : '1', ...extra },
   });
   child = c;
+  // its errors go on to where ours go, and the end of them is kept
+  c.stderr!.on('data', (d: Buffer) => {
+    process.stderr.write(d);
+    said.set(c, ((said.get(c) ?? '') + d.toString('utf8')).slice(-SAID));
+  });
+  c.stderr!.on('error', () => {});
   c.on('message', (m: { t?: string; sha?: unknown; req?: { sha?: unknown; from?: unknown }; ctx?: unknown }) => {
     if (child !== c || !m || typeof m !== 'object') return;
     if (m.t === 'ready') {
@@ -119,7 +129,21 @@ function control(target: string) {
           // the service is stopping, and the signal went to the child too (Ctrl-C, or systemd
           // without KillMode=mixed): this end says nothing about the version
           if (stopSignal) return end(Object.assign(new Error(`The service was stopped (${stopSignal}) before the ${role} was checked.`), { stopped: true }));
-          end(new Error(`The ${role} stopped ${settle ? 'soon after its start' : 'before it was ready'} (${signal ?? `exit ${code}`}).`));
+          const reason = `The ${role} stopped ${settle ? 'soon after its start' : 'before it was ready'} (${signal ?? `exit ${code}`}).`;
+          clearTimeout(limit);
+          if (settle) clearTimeout(settle);
+          onReady = null;
+          // what it wrote last comes a moment after its end. The first line stays the short reason
+          let told = false;
+          const tell = () => {
+            if (told) return;
+            told = true;
+            clearTimeout(wait);
+            const last = said.get(c)?.trim();
+            end(new Error(last ? `${reason}\n\nIts last output:\n${last}` : reason));
+          };
+          const wait = setTimeout(tell, 1000);
+          c.once('close', tell);
         };
         const limit = setTimeout(() => end(new Error(`The ${role} was not ready after ${Math.round(READY_MS / 1000)} s.`)), READY_MS);
         c.once('exit', onExit);

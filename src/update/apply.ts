@@ -427,7 +427,8 @@ export async function applyUpdate(req: ApplyRequest, child: ChildControl, opts: 
       return { ok: true, from: from ?? v.head, to: req.sha, rolled_back: false, log_tail: tail(s) };
     } catch (e) {
       const error = (e as Error).message;
-      note(s, `failed: ${error}`);
+      // the first line: what the child wrote last is in the error, not twice in the log
+      note(s, `failed: ${error.split('\n')[0]}`);
       if ((e as { stopped?: boolean }).stopped) {
         // the service is stopping, so the new version was not checked and nothing can be started
         // now. The journal stays: the next start of the launcher takes the update back

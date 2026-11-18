@@ -22,7 +22,10 @@ const app = readFileSync(join(dir, 'app.txt'), 'utf8').trim();
 const note = (line) => appendFileSync(join(dir, '..', 'runs.txt'), line + '\\n');
 const launcher = launcherLink();
 note('start ' + app + ' launcher=' + (launcher.available ? 'yes' : 'no: ' + launcher.why) + ' settle=' + (process.env.DISPATCH_SETTLE_MS ?? '') + ' args=' + process.argv.slice(2).join(','));
-if (app === 'B') process.exit(1);
+if (app === 'B') {
+  console.error('B cannot start: no such table');
+  process.exit(1);
+}
 let sha = null;
 try {
   sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -50,7 +53,7 @@ afterEach(() => {
   for (const p of started.splice(0)) if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
 });
 
-interface Launched { proc: ChildProcess; exit: Promise<number | null>; runs(): string[]; ask(what: object): void; result(): { result: { ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string }; ctx: unknown } | null }
+interface Launched { proc: ChildProcess; exit: Promise<number | null>; runs(): string[]; ask(what: object): void; result(): { result: { ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string; log_tail?: string }; ctx: unknown } | null }
 
 /** Start the launcher in `dir`. Its child writes ../runs.txt and reads ../ask.json. */
 function launch(dir: string, env: Record<string, string> = {}, args: string[] = []): Launched {
@@ -128,7 +131,10 @@ test('a version that does not start is taken back, and the old one says so', asy
   l.ask({ sha: f.b, ctx: 'row 9' });
   const r = await until(() => l.result());
   expect(r.result).toMatchObject({ ok: false, rolled_back: true, from: f.a, to: f.b });
-  expect(r.result.error).toMatch(/stopped before it was ready \(exit 1\)/);
+  // with what it wrote last, so the log says why. The first line stays the short reason
+  expect(r.result.error).toBe('The server stopped before it was ready (exit 1).\n\nIts last output:\nB cannot start: no such table');
+  expect(r.result.log_tail).toContain('failed: The server stopped before it was ready (exit 1).\n');
+  expect(r.result.log_tail).not.toContain('no such table');
   expect(r.ctx).toBe('row 9');
   expect(f.head()).toBe(f.a);
   expect(f.read('built.txt')).toBe('A');
