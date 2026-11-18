@@ -9,7 +9,7 @@ const ctx = await browser.newContext({ ...devices['iPhone 14'], colorScheme: 'da
 const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
 page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE', m.text()));
-for (const [name, path] of shots.map((a) => a.split('='))) {
+for (const [name, path] of shots.map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)])) {
   await page.goto(base + path);
   await page.waitForTimeout(900);
   await page.screenshot({ path: `${out}/${name}.png` });

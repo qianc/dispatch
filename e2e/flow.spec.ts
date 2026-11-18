@@ -50,6 +50,8 @@ test('phone flow: project → items → batch → answer → planner card → st
 
   // plan approval, then the question
   await expect(page.getByText('Plan for approval')).toBeVisible();
+  await expect(page.getByText('Open a PR', { exact: true })).toBeVisible(); // the whole plan, in the chat (DISP-114)
+  await expect(page.getByRole('button', { name: /Go to the plan/ })).toBeVisible(); // the reply box points to it
   await page.getByRole('button', { name: 'Approve' }).click();
   await expect(page.getByText('Which approach should I take?')).toBeVisible();
   await page.getByRole('button', { name: /Refactor/ }).click();

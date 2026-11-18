@@ -173,11 +173,20 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   // desktop: an item opened from a card shows beside the chat; in a narrow side panel, over it
   const { peek, close: closePeek } = useItemPeek();
 
+  // set the chat area's own scrollTop: scrollIntoView() also scrolls the locked page on iOS
+  const showInput = (id: number) => {
+    const card = document.getElementById(`input-${id}`);
+    const area = card?.closest('.scroll-area');
+    if (card && area) area.scrollTo({ top: area.scrollTop + card.getBoundingClientRect().top - area.getBoundingClientRect().top - 12, behavior: 'smooth' });
+  };
+
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
   const attention = attentionOf(s, data.prs, data.events);
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
+  // the request the session waits on: the reply box points to it
+  const openInput = [...data.inputs].reverse().find((i) => !i.answered_at && !i.expired);
   // a chat that has not started yet takes more messages: they go with its first turn (DISP-83)
   const canSend = s.status !== 'waiting_input' && (s.status !== 'queued' || CHAT_KINDS.includes(s.kind));
   // someone else's session: read it, but no replies, answers or proposals (DISP-63)
@@ -268,7 +277,16 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {!isAssistant && <Button small variant="ghost" onClick={() => setMenu(true)} aria-label="Session actions">•••</Button>}
         </>
       }
-      footer={drive && (
+      footer={drive && (<>
+        {s.status === 'waiting_input' && openInput && (
+          <button
+            type="button"
+            className="block w-full px-4 pt-2 text-left text-[13px] text-accent"
+            onClick={() => showInput(openInput.id)}
+          >
+            {openInput.payload.kind === 'plan_approval' ? 'Go to the plan ↑' : 'Go to the question ↑'}
+          </button>
+        )}
         <ChatInput
           value={text}
           onChange={setText}
@@ -280,7 +298,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {...images.input}
           action={s.status === 'running' && !text && !images.files.length ? <Button type="button" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Interrupt">■</Button> : undefined}
         />
-      )}
+      </>)}
     >
       {/* below xl these sit above the conversation; from xl they are in the side panel */}
       {(chat || !sidePanel) && (<div>

@@ -96,3 +96,40 @@ describe('the prompt in the side panel (DISP-66)', () => {
     expect(textOf(html)).not.toMatch(/\bPrompt\b|Show more/);
   });
 });
+
+describe('a plan the owner can read and answer on a phone (DISP-114)', () => {
+  const PLAN = '# DISP-111 plan\n\nUnlinked PRs go in the existing PR table.\n\n- A 5-minute sync plus refresh\n- A new PRs tab';
+  const waiting = (payload: unknown): string => {
+    screen.wide = false;
+    const s = session({ status: 'waiting_input', force_plan: true });
+    const qc = new QueryClient();
+    const input = { id: 5, session_id: s.id, local_id: 'x', payload, answer: null, answered_at: null, expired: false, answered_by: null, delegated_to: null, created_at: s.created_at };
+    qc.setQueryData(['session', s.id], { ...detail(s), events: [{ id: 1, seq: 1, session_id: s.id, created_at: s.created_at, body: { kind: 'input_request', input_id: 5 } }], inputs: [input] });
+    return renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' });
+  };
+
+  it('a plan approval shows the full plan text, with the buttons, and the reply box points to it', () => {
+    const html = waiting({ kind: 'plan_approval', plan: PLAN });
+    const text = textOf(html);
+    expect(text).toContain('Unlinked PRs go in the existing PR table.');
+    expect(text).toContain('A new PRs tab');
+    expect(text).toContain('Approve');
+    expect(text).toContain('Request changes');
+    expect(html).toContain('placeholder="Answer the question above first"');
+    expect(text).toContain('Go to the plan');
+  });
+
+  it('a question has its own card and the reply box points to it', () => {
+    const html = waiting({ kind: 'question', questions: [{ question: 'Approve the plan?', header: 'Plan', options: [{ label: 'Yes', description: '' }], multiSelect: false }] });
+    expect(html).toContain('id="input-5"');
+    expect(textOf(html)).toContain('Go to the question');
+  });
+
+  it('the prompt of a plan-first session asks for the whole plan in ExitPlanMode, not a file path', async () => {
+    const { workPrompt } = await import('../src/worker/prompts.ts');
+    const spec = { session_id: 7, kind: 'work' as const, project_key: 'P', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null, prompt: '', force_plan: true, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
+    const text = workPrompt(spec as never);
+    expect(text).toContain('ExitPlanMode with the whole plan');
+    expect(text).toContain('Do not ask for approval of a plan with AskUserQuestion');
+  });
+});
