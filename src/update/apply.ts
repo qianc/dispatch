@@ -134,6 +134,32 @@ export async function isCheckout(dir: string): Promise<boolean> {
   }
 }
 
+const remoteRef = (branch: string) => `refs/remotes/origin/${branch}`;
+
+async function fetchBranch(dir: string, branch: string, opts: { env?: NodeJS.ProcessEnv; gitMs?: number }) {
+  const f = await git(dir, ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:${remoteRef(branch)}`], opts.gitMs ?? 120_000, opts.env);
+  if (f.code !== 0) throw new Refusal('refused', `git fetch origin ${branch} failed: ${f.timedOut ? 'no answer in time' : f.out.trim().split('\n').pop() || 'unknown error'}`);
+}
+
+/** Throws a Refusal unless `sha` is a commit of the release branch, as the checkout knows its origin. */
+async function onBranch(dir: string, sha: string, branch: string) {
+  if ((await git(dir, ['cat-file', '-e', `${sha}^{commit}`])).code !== 0) throw new Refusal('refused', `Commit ${sha.slice(0, 7)} is not in origin/${branch}.`);
+  if ((await git(dir, ['merge-base', '--is-ancestor', sha, remoteRef(branch)])).code !== 0) throw new Refusal('refused', `Commit ${sha.slice(0, 7)} is not on the release branch ${branch} of origin.`);
+}
+
+/**
+ * Is `sha` a commit of the release branch of this checkout's origin? Fetches, and throws a Refusal
+ * when not. For an update of something else than this checkout (a server that runs as an image):
+ * where the checkout itself is does not matter.
+ */
+export async function onReleaseBranch(dir: string, sha: string, branch: string, opts: { env?: NodeJS.ProcessEnv; gitMs?: number } = {}): Promise<void> {
+  if (typeof sha !== 'string' || !SHA.test(sha)) throw new Refusal('refused', 'An update needs a full commit id (40 hex characters).');
+  if (typeof branch !== 'string' || !BRANCH.test(branch) || branch.startsWith('-') || branch.includes('..')) throw new Refusal('refused', 'The release branch is not a branch name.');
+  if (!(await isCheckout(dir))) throw new Refusal('refused', `${dir} is not a git checkout.`);
+  await fetchBranch(dir, branch, opts);
+  await onBranch(dir, sha, branch);
+}
+
 /**
  * May this checkout go to `req.sha`? Throws a Refusal when not; changes nothing but (with
  * `fetch`) what the checkout knows of its origin.
@@ -154,17 +180,14 @@ export async function verifyTarget(req: ApplyRequest, opts: { fetch?: boolean; e
   if (changed) throw refuse(`The checkout has changed files (${changed.split('\n').slice(0, 3).map((l) => l.trim().replace(/^\S+\s+/, '')).join(', ')}). Commit or undo them first.`);
   const on = await gitText(req.dir, ['symbolic-ref', '-q', '--short', 'HEAD']);
   if (on && on !== req.branch) throw refuse(`The checkout is on branch ${on}, not on the release branch ${req.branch}.`);
-  const remote = `refs/remotes/origin/${req.branch}`;
   if (opts.fetch) {
-    const f = await git(req.dir, ['fetch', '--quiet', 'origin', `+refs/heads/${req.branch}:${remote}`], opts.gitMs ?? 120_000, opts.env);
-    if (f.code !== 0) throw refuse(`git fetch origin ${req.branch} failed: ${f.timedOut ? 'no answer in time' : f.out.trim().split('\n').pop() || 'unknown error'}`);
+    await fetchBranch(req.dir, req.branch, opts);
     // the version tags, for the version shown; an update never needs them
     await git(req.dir, ['fetch', '--quiet', '--tags', 'origin'], opts.gitMs ?? 120_000, opts.env);
   }
   const head = await gitText(req.dir, ['rev-parse', 'HEAD']);
   if (!head || !SHA.test(head)) throw refuse('The checkout has no commit.');
-  if ((await git(req.dir, ['cat-file', '-e', `${req.sha}^{commit}`])).code !== 0) throw refuse(`Commit ${req.sha.slice(0, 7)} is not in origin/${req.branch}.`);
-  if ((await git(req.dir, ['merge-base', '--is-ancestor', req.sha, remote])).code !== 0) throw refuse(`Commit ${req.sha.slice(0, 7)} is not on the release branch ${req.branch} of origin.`);
+  await onBranch(req.dir, req.sha, req.branch);
   if (head !== req.sha && (await git(req.dir, ['merge-base', '--is-ancestor', head, req.sha])).code !== 0) {
     if ((await git(req.dir, ['merge-base', '--is-ancestor', req.sha, head])).code === 0) throw new Refusal('ahead', `The checkout is already past ${req.sha.slice(0, 7)}.`);
     throw refuse(`The checkout (${head.slice(0, 7)}) has commits that ${req.sha.slice(0, 7)} does not have.`);

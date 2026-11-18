@@ -9,6 +9,7 @@
 //       "local_repo_dirs": ["~/projects"], "read_dirs": ["~/projects"],
 //       "claude_accounts": null, "github_accounts": null,       // null = every account this worker has
 //       "repo_env_dir": "~/.config/dispatch/repo-env",          // env files per repo, <owner>/<name>/ (default; also top level)
+//       "server_update_command": "~/bin/deploy-dispatch.sh",    // updates this server (one that runs as an image) to DISPATCH_UPDATE_SHA
 //       "releases": [                                           // releases this server may start here
 //         { "repo": "me/app", "label_prefix": "rel:", "command": "./release.sh {version} --yes",
 //           "notes": "The upload credential is on this machine." } ] }
@@ -36,6 +37,11 @@ export interface ServerEntry {
   releases: ReleaseCapability[];
   /** this machine's env files per repo, <dir>/<owner>/<name>/ (DISP-44) */
   repo_env_dir: string;
+  /**
+   * The command that updates this server, when it runs as an image and cannot update itself
+   * (DISP-112, see serverUpdate.ts). The server only asks for a commit: the command is this machine's.
+   */
+  server_update_command?: string;
 }
 
 export interface WorkerConfig {
@@ -97,6 +103,7 @@ const fileSchema = z.object({
     github_accounts: z.array(z.string()).nullable().default(null),
     releases: releasesSchema,
     repo_env_dir: z.string().min(1).optional(),
+    server_update_command: z.string().min(1).optional(),
   })),
   repo_env_dir: z.string().min(1).optional(),
 });
@@ -123,6 +130,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
         github_accounts: null,
         releases: releases(releasesSchema.parse(env.RELEASES ? JSON.parse(env.RELEASES) : []), env.HOME),
         repo_env_dir: envDir(env.REPO_ENV_DIR, env.HOME),
+        server_update_command: env.SERVER_UPDATE_COMMAND?.trim() || undefined,
       }],
     };
   }
@@ -141,6 +149,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
       claude_accounts: s.claude_accounts, github_accounts: s.github_accounts,
       releases: releases(s.releases, env.HOME),
       repo_env_dir: envDir(s.repo_env_dir ?? raw.repo_env_dir ?? env.REPO_ENV_DIR, env.HOME),
+      server_update_command: s.server_update_command,
     };
   });
   return { max_concurrent: raw.max_concurrent ?? max, servers };

@@ -138,7 +138,7 @@ export class Updates {
   /** a worker that is not back by then did not update */
   workerTimeoutMs = 15 * 60_000;
   /** an update of the server with no result by then failed */
-  serverTimeoutMs = 45 * 60_000;
+  serverTimeoutMs = 60 * 60_000;
   /** after the server's start: how long the result of its own update may take to come */
   graceMs = 2 * 60_000;
   /** how long a worker may take to say whether it updates now (it fetches first) */

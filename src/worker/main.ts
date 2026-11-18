@@ -11,6 +11,7 @@ import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 import { APP_DIR, runningVersion } from '../update/version.ts';
+import { onReleaseBranch } from '../update/apply.ts';
 import { UpdateGate } from './updateGate.ts';
 import { launcherLink } from '../update/ipc.ts';
 
@@ -90,6 +91,10 @@ const slots = new Slots(cfg.max_concurrent);
 // read once: the checkout may move on under a running worker (DISP-112)
 const launcher = launcherLink();
 const version: WorkerVersion = { sha: runningVersion().sha, updatable: launcher.available, ...(launcher.why ? { why: launcher.why } : {}) };
+// Dispatch's own repo: its release branch, and the GitHub account that reads it (UPDATE_GITHUB_ACCOUNT, else the first)
+const updateBranch = env.UPDATE_BRANCH?.trim() || 'main';
+const updateGitEnv = { ...env, ...githubEnv(pick(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) };
+const minutes = (v: string | undefined, dflt: number) => (Number(v) > 0 ? Number(v) : dflt) * 60_000;
 for (const s of cfg.servers) secrets.add(s.token);
 const links = cfg.servers.map((entry) => new ServerLink(entry, {
   fake: FAKE,
@@ -107,14 +112,18 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   secrets,
   version,
   selfUpdate: (from, sha, updateId) => gate.selfUpdate(from, sha, updateId),
+  // a server that runs as an image is updated by its entry's server_update_command
+  serverUpdate: {
+    branch: updateBranch,
+    timeoutMs: minutes(env.UPDATE_TIMEOUT_MIN, 20),
+    healthMs: minutes(env.UPDATE_HEALTH_MIN, 5),
+    // a worker that runs from a checkout of Dispatch looks itself whether the commit is one of the release branch
+    ...(runningVersion().source === 'git' ? { verify: (sha: string) => onReleaseBranch(APP_DIR, sha, updateBranch, { env: updateGitEnv }) } : {}),
+  },
 }));
 slots.links = links;
-// the worker updates itself when a server asks and nothing is working (DISP-112). The fetch of its
-// own repo uses the GitHub account UPDATE_GITHUB_ACCOUNT names, else the first.
-const gate = new UpdateGate({
-  links: () => links, slots, launcher, version, dir: APP_DIR, branch: env.UPDATE_BRANCH?.trim() || 'main',
-  gitEnv: { ...env, ...githubEnv(pick(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) },
-});
+// the worker updates itself when a server asks and nothing is working (DISP-112)
+const gate = new UpdateGate({ links: () => links, slots, launcher, version, dir: APP_DIR, branch: updateBranch, gitEnv: updateGitEnv });
 for (const l of links) l.connect();
 // the launcher's health check: the worker is up, on this commit
 launcher.ready(version.sha);

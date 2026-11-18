@@ -54,6 +54,21 @@ describe('worker config', () => {
     expect(cfg.servers[1].read_dirs).toEqual([]);
   });
 
+  it('reads the command that updates a server, per server or from the environment (DISP-112)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsp-wcfg-'));
+    writeFileSync(join(dir, 'worker.json'), JSON.stringify({
+      servers: [
+        { name: 'home', url: 'wss://dispatch.example.com/worker', token: 'a', server_update_command: '~/bin/deploy-dispatch.sh' },
+        { name: 'work', url: 'wss://dispatch.work.example/worker', token: 'b' },
+      ],
+    }));
+    // the environment's command is for the one server of the environment, never for a server of the file
+    const cfg = loadWorkerConfig({ WORKER_CONFIG: join(dir, 'worker.json'), SERVER_UPDATE_COMMAND: 'other.sh' });
+    expect(cfg.servers.map((s) => s.server_update_command)).toEqual(['~/bin/deploy-dispatch.sh', undefined]);
+    expect(loadWorkerConfig({ WORKER_TOKEN: 'x', SERVER_UPDATE_COMMAND: ' ./deploy.sh ' }).servers[0].server_update_command).toBe('./deploy.sh');
+    expect(loadWorkerConfig({ WORKER_TOKEN: 'x' }).servers[0].server_update_command).toBeUndefined();
+  });
+
   it('refuses bad names, duplicate names and servers without a token', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsp-wcfg-'));
     const write = (o: unknown) => {

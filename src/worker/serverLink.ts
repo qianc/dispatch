@@ -14,6 +14,7 @@ import { FakeRunner } from './fakeRunner.ts';
 import { serverRoot } from './layout.ts';
 import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
+import { runServerUpdate, type ServerUpdateOptions } from './serverUpdate.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
 import { checkTimeoutMs, hostedGitBase, run, Workspaces } from './workspace.ts';
 
@@ -85,6 +86,8 @@ export interface LinkShared {
   version?: WorkerVersion;
   /** a server asks the worker to update itself (see updateGate.ts) */
   selfUpdate?: (from: ServerLink, sha: string, updateId: number) => Promise<SelfUpdateAnswer>;
+  /** how a server's update command runs here (see serverUpdate.ts) */
+  serverUpdate?: ServerUpdateOptions;
 }
 
 export class ServerLink {
@@ -184,8 +187,15 @@ export class ServerLink {
       repo_envs: await this.workspaces.overlays().catch(() => []),
       // runs a session as its user's own GitHub account (DISP-63); knows the update messages (DISP-112)
       caps: ['github_cred', 'self_update'],
-      ...(this.shared.version ? { version: this.shared.version } : {}),
+      ...(this.version() ? { version: this.version() } : {}),
     };
+  }
+
+  /** The worker's version, and whether it has a command that updates this server. */
+  private version(): WorkerVersion | undefined {
+    const v = this.shared.version;
+    if (!this.entry.server_update_command) return v;
+    return { ...(v ?? { sha: null, updatable: false }), server_update: true };
   }
 
   private allowedClaude(name: string | null) {
@@ -541,6 +551,31 @@ export class ServerLink {
       case 'welcome':
         this.serverVersion = msg.version;
         return;
+      case 'server_update':
+        return this.serverUpdate(msg);
+    }
+  }
+
+  private serverUpdating = false;
+
+  /**
+   * Update the server with this machine's own command, and say how it ended: over the link when
+   * the server is back, so the result also waits in the outbox while it restarts (DISP-112).
+   */
+  private async serverUpdate(msg: Extract<ServerToWorker, { t: 'server_update' }>) {
+    const result = (r: { ok: boolean; rolled_back: boolean; error?: string; log_tail?: string }) =>
+      this.send({ t: 'update_result', update_id: msg.update_id, target: 'server', from: msg.prev, to: msg.sha, ...r });
+    const command = this.entry.server_update_command;
+    if (!command) return result({ ok: false, rolled_back: false, error: `This worker has no command that updates server ${this.entry.name} (server_update_command in its config).` });
+    if (this.serverUpdating) return result({ ok: false, rolled_back: false, error: 'This worker already runs an update of the server.' });
+    this.serverUpdating = true;
+    try {
+      const opts = this.shared.serverUpdate ?? { branch: 'main', timeoutMs: 20 * 60_000, healthMs: 5 * 60_000 };
+      result(await this.job('the server is updated', () => runServerUpdate({ command, sha: msg.sha, prev: msg.prev, serverVersion: () => this.serverVersion }, opts)));
+    } catch (e) {
+      result({ ok: false, rolled_back: false, error: (e as Error).message });
+    } finally {
+      this.serverUpdating = false;
     }
   }
 

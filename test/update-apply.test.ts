@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { Refusal, applyUpdate, recoverJournal, verifyTarget, type ApplyRequest, type ChildControl } from '../src/update/apply.ts';
+import { Refusal, applyUpdate, onReleaseBranch, recoverJournal, verifyTarget, type ApplyRequest, type ChildControl } from '../src/update/apply.ts';
 import { fixture, git, type Fixture } from './update-fixture.ts';
 
 /**
@@ -188,6 +188,27 @@ describe('one update of a checkout, and its way back (DISP-112)', () => {
     expect(past.kind).toBe('ahead');
     const bad = await verifyTarget(req('main'), { fetch: true }).catch((e) => e);
     expect(bad.kind).toBe('refused');
+  });
+
+  it('a commit for something else than this checkout: only one of the release branch, wherever the checkout is', async () => {
+    const d = f.push('D');
+    // the checkout is at C, past A and behind D: both are commits of the branch
+    const dir = f.clone(f.c);
+    await onReleaseBranch(dir, d, 'main');
+    await onReleaseBranch(dir, f.a, 'main');
+    expect(f.head(dir)).toBe(f.c);
+    // a commit that only another branch has
+    git(f.work, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(f.work, 'app.txt'), 'S');
+    git(f.work, 'commit', '-qam', 'S');
+    git(f.work, 'push', '-q', 'origin', 'side');
+    const side = git(f.work, 'rev-parse', 'HEAD');
+    git(dir, 'fetch', '-q', 'origin', 'side');
+    await expect(onReleaseBranch(dir, side, 'main')).rejects.toThrow(/is not on the release branch main of origin/);
+    await expect(onReleaseBranch(dir, '1'.repeat(40), 'main')).rejects.toThrow(/is not in origin\/main/);
+    for (const bad of ['main', 'https://example.com/x.git', d.slice(0, 10)]) await expect(onReleaseBranch(dir, bad, 'main')).rejects.toThrow(/full commit id/);
+    await expect(onReleaseBranch(dir, d, '--upload-pack=x')).rejects.toThrow(/not a branch name/);
+    await expect(onReleaseBranch(join(f.origin, '..', 'nowhere'), d, 'main')).rejects.toBeInstanceOf(Refusal);
   });
 
   it('an update that was cut off is taken back at the next start', async () => {
