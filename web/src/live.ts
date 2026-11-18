@@ -1,7 +1,8 @@
 // Server-sent events → React Query cache.
 import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
-import type { AssistantChat, SessionDetail, SessionEvent } from './api.ts';
+import type { AssistantChat, PrDetail, SessionDetail, SessionEvent } from './api.ts';
+import { prPageStale } from './prs.ts';
 import { patchItemList } from './itemsCache.ts';
 
 /** Recent live events per session, so a refetch that raced with them can't drop them. */
@@ -146,8 +147,11 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;
     case 'pr':
-      qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
+      if (e.pr.session_id !== null) qc.invalidateQueries({ queryKey: ['session', e.pr.session_id] });
+      // its open page shows the diff it approves and merges: read it again when the branch moved on
+      if (prPageStale(qc.getQueryData<PrDetail>(['pr', e.pr.id])?.pr, e.pr)) qc.invalidateQueries({ queryKey: ['pr', e.pr.id] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['project-prs'] });
       return;
     case 'update':
       qc.invalidateQueries({ queryKey: ['update'] });

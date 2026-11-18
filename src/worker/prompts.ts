@@ -121,7 +121,7 @@ export function workPrompt(spec: StartSpec): string {
     lines.push('- Your last message is sent to the owner as the notice after Dispatch merges (and deploys, if the repo has a deploy command). Say what you did. Do not say whether it is merged or deployed; Dispatch adds that.');
   }
   if (spec.force_plan) {
-    lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval (ExitPlanMode or AskUserQuestion) before you change any code.');
+    lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval before you change any code. The owner reads on a phone and cannot open files in the workspace: ask for approval by calling ExitPlanMode with the whole plan as its `plan` text, as Markdown, not a summary. A plan you wrote to a file (for example with a planning skill) goes into `plan` in full too; the file path may follow as a reference. Do not ask for approval of a plan with AskUserQuestion, and do not point the owner to a file.');
   }
   return lines.join('\n');
 }

@@ -137,7 +137,7 @@ export function updateGate(links: Pick<ServerLink, 'busyReasons' | 'entry'>[]): 
 
 ### Task 7: Rollout, server first
 
-**Files:** create `src/server/migrations/040_updates.sql`; modify `src/server/store.ts`, `src/server/updates.ts`, `src/server/routes/updates.ts`, `src/server/main.ts`, `src/server/access.ts`, `src/server/projectLock.ts`, `src/shared/types.ts`; test `test/update-gate.test.ts`.
+**Files:** create `src/server/migrations/041_updates.sql`; modify `src/server/store.ts`, `src/server/updates.ts`, `src/server/routes/updates.ts`, `src/server/main.ts`, `src/server/access.ts`, `src/server/projectLock.ts`, `src/shared/types.ts`; test `test/update-gate.test.ts`.
 
 **Interfaces — Produces:**
 

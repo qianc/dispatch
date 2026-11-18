@@ -23,12 +23,12 @@ export class CheckRuns {
 
   /** A progress report from the worker. The first one starts the run. */
   progress(pr: PullRequest, repo: Repo, p: CheckProgress) {
-    this.update(`pr:${pr.id}`, pr.session_id, pr.id, repo, p);
+    if (pr.session_id !== null) this.update(`pr:${pr.id}`, pr.session_id, pr.id, repo, p);
   }
 
   /** The merge returned: keep how the check went (if it ran), and take the run off the page. */
   finish(pr: PullRequest, repo: Repo, check: { ok: boolean; duration_ms: number; units: number } | undefined) {
-    this.end(`pr:${pr.id}`, pr.session_id, repo, check);
+    if (pr.session_id !== null) this.end(`pr:${pr.id}`, pr.session_id, repo, check);
   }
 
   /** A turn's check (DISP-15): progress while it runs, then how it went (none: it was stopped). */

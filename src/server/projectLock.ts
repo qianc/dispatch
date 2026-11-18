@@ -30,6 +30,8 @@ const byItem = (store: Store, p: Params) => store.item(id(p.id))?.project_id;
 const bySession = (store: Store, sessionId: number) => store.session(sessionId)?.project_id ?? undefined;
 const bySessionParam = (store: Store, p: Params) => bySession(store, id(p.id));
 const byRepo = (store: Store, p: Params) => store.repo(id(p.id))?.project_id;
+// a PR's project is its repo's: a PR may have no session (DISP-111)
+const byPr = (store: Store, p: Params) => store.repo(store.pr(id(p.id))?.repo_id ?? 0)?.project_id;
 const bySchedule = (store: Store, p: Params) => store.schedule(id(p.id))?.project_id;
 const bySource = (store: Store, p: Params) => store.source(id(p.id))?.project_id;
 
@@ -45,6 +47,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/projects/:key/schedules': byKey,
   'POST /api/projects/:key/releases': byKey,
   'POST /api/projects/:key/repos': byKey,
+  'POST /api/projects/:key/prs/sync': byKey,
   // checks itself: muting stays possible, everything else is refused
   'PATCH /api/projects/:key': null,
   // the switch itself
@@ -90,9 +93,10 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/sessions/:id/finish': null,
   'POST /api/inputs/:id/answer': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
   'POST /api/inputs/:id/overrule': (store, p) => bySession(store, store.input(id(p.id))?.session_id ?? 0),
-  'POST /api/prs/:id/merge': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),
-  'POST /api/prs/:id/github-pr': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),
-  'POST /api/prs/:id/resolve-conflicts': (store, p) => bySession(store, store.pr(id(p.id))?.session_id ?? 0),
+  'POST /api/prs/:id/merge': byPr,
+  'POST /api/prs/:id/approve': byPr,
+  'POST /api/prs/:id/github-pr': byPr,
+  'POST /api/prs/:id/resolve-conflicts': byPr,
 
   // no project of their own (the assistant's tools check the project they write to)
   'POST /api/projects': null,

@@ -234,7 +234,7 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
   const byOrchestrator = input.answered_by === 'orchestrator';
   const p = input.payload;
   return (
-    <div className={cx('rounded-xl border p-3', waiting ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
+    <div id={`input-${input.id}`} className={cx('rounded-xl border p-3 scroll-mt-3', waiting ? 'border-wait/70 bg-panel shadow-sm' : 'border-line bg-panel')}>
       {!open && (
         <div className="text-[12px] text-faint mb-2">{waiting ? 'Waiting for an answer' : input.expired ? 'Closed without an answer' : byOrchestrator ? 'Answered by the orchestrator' : input.answered_by === 'overruled' ? 'Answered by the orchestrator, overruled by you' : 'Answered'}</div>
       )}

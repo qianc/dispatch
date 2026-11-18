@@ -90,7 +90,7 @@ describe('acting on sessions someone else started', () => {
   it('the PR view says whether you may merge it', async () => {
     const his = started('bob');
     const p = pr(his.id, 2);
-    s.ctx.github.detail = async (id) => ({ pr: s.ctx.store.pr(id)! }) as never;
+    s.ctx.github.detail = async (id) => ({ pr: s.ctx.store.pr(id)!, merge_here: true }) as never;
     expect((await s.call('GET', `/prs/${p.id}`, undefined, as('bob'))).data.can_merge).toBe(true);
     expect((await s.call('GET', `/prs/${p.id}`, undefined, as('alice'))).data.can_merge).toBe(false);
   });

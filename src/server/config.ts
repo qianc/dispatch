@@ -12,6 +12,8 @@ export interface Config {
   githubToken: string | null;
   githubAccounts: GithubAccount[];
   pollSeconds: number;
+  /** how often the open PRs of every project's GitHub repos are synced (0: only on demand) */
+  prSyncSeconds: number;
   publicUrl: string;
   vapidSubject: string;
   /**
@@ -103,6 +105,7 @@ export function loadConfig(raw = process.env): Config {
     githubToken: env.GITHUB_TOKEN || null,
     githubAccounts: githubAccounts(env),
     pollSeconds: Number(env.GITHUB_POLL_SECONDS ?? 120),
+    prSyncSeconds: Number(env.GITHUB_PR_SYNC_SECONDS ?? 300),
     publicUrl: env.PUBLIC_URL ?? 'http://localhost:3000',
     vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@example.com',
     authMode: env.DISABLE_AUTH === '1' ? 'off' : env.AUTH_MODE === 'proxy' ? 'proxy' : 'password',

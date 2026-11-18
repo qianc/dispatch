@@ -189,7 +189,7 @@ changes at the next restart of the service; the three IPC messages stay as they 
 - A failed worker stays on its version. The attempt is logged, the owner is told, and the worker
   is not asked again for that target until "Update now".
 - A failed server update stops the rollout for that target until "Update now".
-- Table `updates` (migration 040): `target` (`server` or `worker`), `worker_id`, `triggered_by`
+- Table `updates` (migration 041): `target` (`server` or `worker`), `worker_id`, `triggered_by`
   (`auto` or the user), `from_sha`, `to_sha`, `to_tag`, `state` (`running`, `ok`, `failed`,
   `rolled_back`), `detail`, `created_at`, `ended_at`. A `running` row left by a crash is closed
   at start by comparing the running commit with the target.

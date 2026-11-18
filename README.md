@@ -19,6 +19,13 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   machine and a **Retry** that resumes the session where it stopped. Settings shows each account's
   state.
 - Review the PR diff on your phone and **merge** on GitHub, or merge locally on the worker and push.
+- A project's **PRs** tab lists every open pull request of its GitHub repos, also the ones no
+  session opened (yours, a dependency bot's): each row says which item it belongs to, or "No item".
+  The list is synced on a timer and with ↻. Open one for its diff and checks, and **Approve** it:
+  the approval is kept in Dispatch and sent to GitHub as your review (GitHub takes no approval of
+  your own PR; Dispatch keeps it and says so). A PR with no session merges on GitHub only: its
+  repo's deploy command does not run, a repo with a generate command cannot merge it here, and no
+  agent works on it until an item starts that work.
 - An **Assistant** tab (Haiku by default) that runs the tracker for you: "new project Decks for
   github.com/me/decks", "read ~/notes/retro.md and file the issues under Decks". It changes
   projects, repos, items and sources at once. To start agent work it shows a card you confirm. It
@@ -303,6 +310,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `VAPID_SUBJECT` | `mailto:admin@example.com` | Sender of push notifications. |
 | `PORT`, `DATA_DIR` | `3000`, `./data` | Where it listens and keeps the database. |
 | `GITHUB_POLL_SECONDS` | `120` | How often PRs are checked. |
+| `GITHUB_PR_SYNC_SECONDS` | `300` | How often the open PRs of every project's GitHub repos are listed for the **PRs** tab (`0`: only when the tab is opened or refreshed). |
 | `GITHUB_GIT_BASE`, `GITHUB_API_URL` | `https://github.com`, `https://api.github.com` | Another GitHub (enterprise) for hosted repos' upstreams. |
 | `AUTH_MODE` | `password` | `proxy` behind a sign-in proxy; `DISABLE_AUTH=1` turns sign-in off (testing only). |
 | `TRUSTED_PROXIES`, `AUTH_USERS`, `AUTH_HEADER`, `PROXY_SECRET`, `PROXY_SECRET_HEADER` | | Proxy mode, see [Sign-in](#sign-in-tokens-and-claude-connectors). |
