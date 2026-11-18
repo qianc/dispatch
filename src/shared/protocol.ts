@@ -84,7 +84,9 @@ export type ServerToWorker =
    * `github`: the starter's credential (DISP-63; the session may be closed by now), null: the
    * worker's env accounts; absent (an older server): the session's, while it lives.
    */
-  | { t: 'deploy'; session_id: number; repo: Repo; github?: GithubCred | null };
+  | { t: 'deploy'; session_id: number; repo: Repo; github?: GithubCred | null }
+  /** the answer to each hello: the commit the server runs (DISP-112). An older worker ignores it. */
+  | { t: 'welcome'; version: string | null };
 
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }

@@ -17,6 +17,9 @@ COPY src ./src
 
 ENV NODE_ENV=production WORKSPACES_DIR=/workspaces AGENT_PLUGIN_DIRS=/opt/plugins/superpowers
 RUN mkdir -p /workspaces /home/node/.claude && chown -R node:node /workspaces /home/node/.claude
+# the commit this image was built from: an image has no git to ask (--build-arg DISPATCH_VERSION=$(git rev-parse HEAD))
+ARG DISPATCH_VERSION=
+ENV DISPATCH_VERSION=$DISPATCH_VERSION
 USER node
 VOLUME ["/workspaces", "/home/node/.claude"]
 CMD ["node", "src/worker/main.ts"]

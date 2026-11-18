@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { GithubCred, RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
-import { CHAT_KINDS, type Repo, type WorkerFacts } from '../shared/types.ts';
+import { CHAT_KINDS, type Repo, type WorkerFacts, type WorkerVersion } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { serverRoot } from './layout.ts';
@@ -72,6 +72,8 @@ export interface LinkShared {
   remoteBase: string;
   /** every secret the worker knows: scrubbed from all it sends (DISP-63) */
   secrets?: Secrets;
+  /** the commit this worker runs, and whether it can update itself (DISP-112) */
+  version?: WorkerVersion;
 }
 
 export class ServerLink {
@@ -93,6 +95,8 @@ export class ServerLink {
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private ws: WebSocket | null = null;
   private stopped = false;
+  /** the commit the server said it runs, in its answer to our last hello (DISP-112) */
+  serverVersion: string | null = null;
   /** The server pings every 20 s (workerHub). Hearing nothing for this long means the connection
    * is dead but not closed (laptop slept, NAT entry gone): drop it and reconnect. */
   silenceMs = 60_000;
@@ -134,8 +138,9 @@ export class ServerLink {
       local_repo_dirs: this.entry.local_repo_dirs,
       releases: this.entry.releases,
       repo_envs: await this.workspaces.overlays().catch(() => []),
-      // runs a session as its user's own GitHub account (DISP-63)
-      caps: ['github_cred'],
+      // runs a session as its user's own GitHub account (DISP-63); knows the update messages (DISP-112)
+      caps: ['github_cred', 'self_update'],
+      ...(this.shared.version ? { version: this.shared.version } : {}),
     };
   }
 
@@ -484,6 +489,9 @@ export class ServerLink {
         return;
       case 'deploy':
         return this.deploy(msg.session_id, msg.repo, 'github' in msg ? msg.github ?? null : this.creds.get(msg.session_id));
+      case 'welcome':
+        this.serverVersion = msg.version;
+        return;
     }
   }
 
@@ -541,7 +549,10 @@ export class ServerLink {
     });
     sock.on('close', (code, reason) => {
       clearTimeout(watchdog);
-      if (this.ws === sock) this.ws = null;
+      if (this.ws === sock) {
+        this.ws = null;
+        this.serverVersion = null;
+      }
       if (code === 4001) console.error(`server ${name} rejected the worker token`);
       else if (code !== 1000) console.warn(`worker disconnected from ${name} (${code} ${reason}); retrying`);
       setTimeout(() => this.connect(Math.min(delay * 2, 30_000)), delay);

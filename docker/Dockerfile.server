@@ -17,6 +17,9 @@ RUN npm ci --omit=dev --omit=optional && npm cache clean --force
 COPY src ./src
 COPY --from=build /app/dist/web ./dist/web
 RUN mkdir -p /data && chown node:node /data
+# the commit this image was built from: an image has no git to ask (--build-arg DISPATCH_VERSION=$(git rev-parse HEAD))
+ARG DISPATCH_VERSION=
+ENV DISPATCH_VERSION=$DISPATCH_VERSION
 USER node
 VOLUME /data
 EXPOSE 3000

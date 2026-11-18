@@ -360,8 +360,23 @@ export interface WorkerFacts {
   releases?: ReleaseCapability[];
   /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
   repo_envs?: string[];
-  /** what it can do; 'github_cred': runs a session as its user's own GitHub account (DISP-63; missing from older workers) */
+  /**
+   * what it can do; 'github_cred': runs a session as its user's own GitHub account (DISP-63);
+   * 'self_update': knows the update messages (DISP-112). Missing from older workers.
+   */
   caps?: string[];
+  /** the commit of Dispatch it runs, and whether it can update itself (DISP-112; missing from older workers) */
+  version?: WorkerVersion;
+}
+
+export interface WorkerVersion {
+  sha: string | null;
+  /** it can move its own checkout to a new commit and restart */
+  updatable: boolean;
+  /** why not, when it cannot */
+  why?: string;
+  /** it has a command that updates this server (a server that runs as an image) */
+  server_update?: boolean;
 }
 
 export interface WorkerRecord {

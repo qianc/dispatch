@@ -3,12 +3,14 @@ import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
 import { migrateLegacyLayout } from './layout.ts';
 import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
+import type { WorkerVersion } from '../shared/types.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
 import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
+import { runningVersion } from '../update/version.ts';
 
 const env = process.env;
 // agents' PATH: extra tool folders first; under WSL also Windows' PATH (powershell.exe, …)
@@ -83,6 +85,8 @@ if (cfg.servers.length) {
   await migrateLegacyLayout(workspacesDir, cfg.servers[0].name, configDirs);
 }
 const slots = new Slots(cfg.max_concurrent);
+// read once: the checkout may move on under a running worker (DISP-112)
+const version: WorkerVersion = { sha: runningVersion().sha, updatable: false, why: 'Not started through the launcher (node src/launch.ts worker).' };
 for (const s of cfg.servers) secrets.add(s.token);
 const links = cfg.servers.map((entry) => new ServerLink(entry, {
   fake: FAKE,
@@ -98,6 +102,7 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   gitEnv: (repo) => githubEnv(pick(ghAccounts, repo.github_account)),
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',
   secrets,
+  version,
 }));
 slots.links = links;
 for (const l of links) l.connect();

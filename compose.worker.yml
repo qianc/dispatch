@@ -6,7 +6,7 @@
 # several servers").
 services:
   worker:
-    build: { context: ., dockerfile: docker/Dockerfile.worker }
+    build: { context: ., dockerfile: docker/Dockerfile.worker, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
     # worker.env (docker/worker.env.example): SERVER_WS_URL and the worker's dsw_… token
     env_file: [worker.env]
     volumes:

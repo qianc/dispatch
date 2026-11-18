@@ -54,6 +54,7 @@ import { Scheduler } from './scheduler.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
+import { runningVersion } from '../update/version.ts';
 
 
 declare module 'fastify' {
@@ -156,9 +157,13 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     return github.toldCount(s.id) > before;
   };
   let closing = false;
+  // read once: the checkout may move on under a running server (DISP-112)
+  const version = { ...runningVersion() };
   hub.handlers = {
     onHello: (workerId, live, facts) => {
       workers.seen(workerId, facts);
+      // the server's commit: how a worker sees that an update of the server took
+      hub.send(workerId, { t: 'welcome', version: version.sha });
       sessions.onWorkerHello(workerId, live);
       // are its local repo copies still there? (sessions only go to workers whose copies are ok)
       void checkPlacements(store, hub, workerId)
@@ -189,7 +194,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
-  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator };
+  const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
     scheduler.start();
