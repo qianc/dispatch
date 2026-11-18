@@ -145,8 +145,14 @@ export interface PrDetail {
   files: { filename: string; status: string; additions: number; deletions: number; patch: string | null }[];
   checks: { name: string; status: string; conclusion: string | null; url: string | null }[];
   auto_merge: Session['options']['auto_merge'];
-  /** you may merge it: you started its session (DISP-63; missing from older servers) */
+  /** you may merge it: you started its session (DISP-63; missing from older servers); a PR with no session: anyone who may act */
   can_merge?: boolean;
+  /** you may approve it: an open GitHub PR you have not approved at this commit (DISP-111) */
+  can_approve?: boolean;
+  /** what to know before merging a PR with no session (its deploy does not run), or why it cannot merge here */
+  merge_note: string | null;
+  /** false: Dispatch cannot merge it (no session, and the repo merges only on a session's worker) */
+  merge_here: boolean;
 }
 
 export interface Me {

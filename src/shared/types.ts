@@ -494,9 +494,42 @@ export interface ItemChanges {
   modules?: string[];
 }
 
+/** A PR on a project's list of open pull requests (DISP-111). */
+export interface ProjectPr extends PullRequest {
+  /** the session it belongs to, with its items' keys; null: no session of Dispatch opened it */
+  linked: { session_id: number; title: string; item_keys: string[] } | null;
+}
+
+/** The open pull requests of a project's GitHub repos, and how the last sync with GitHub went. */
+export interface ProjectPrList {
+  prs: ProjectPr[];
+  /** null: not synced since the server started */
+  synced_at: string | null;
+  /** what went wrong in the last sync (the first repo's error), or null */
+  error: string | null;
+  /** how many of the project's repos are on GitHub (0: there is nothing to list) */
+  github_repos: number;
+}
+
+/** A PR's checks, as one word: none (no checks), or the worst of what they say. */
+export type CiState = 'pending' | 'success' | 'failure' | 'none';
+
+/** The latest approval of a PR in Dispatch, and how its review went on GitHub. */
+export interface PrApproval {
+  at: string;
+  /** the Dispatch user (or token name) who approved */
+  by: string;
+  /** the head commit that was approved */
+  sha: string | null;
+  /** sent: GitHub has the review. own_pr: GitHub takes no approval of one's own PR. failed: see note. null: not tried yet */
+  review: 'sent' | 'own_pr' | 'failed' | null;
+  note: string | null;
+}
+
 export interface PullRequest {
   id: number;
-  session_id: number;
+  /** null: no session of Dispatch opened it (found by the project's PR sync) */
+  session_id: number | null;
   repo_id: number;
   repo_full_name: string;
   number: number;
@@ -518,6 +551,16 @@ export interface PullRequest {
   started_by: string | null;
   /** the GitHub login its session acts as (null: the env accounts) */
   github_login: string | null;
+  /** GitHub login of who opened it (null: not known, or a deleted user) */
+  author: string | null;
+  base_ref: string | null;
+  draft: boolean;
+  changed_files: number | null;
+  /** null: not known */
+  ci_state: CiState | null;
+  /** GitHub's updated_at at the last project sync */
+  gh_updated_at: string | null;
+  approval: PrApproval | null;
 }
 
 /** A GitHub permission on a repo, from strongest to weakest; null: could not be checked. */
@@ -751,7 +794,12 @@ export const answerInput = z.union([
 export const mergeInput = z.object({
   how: z.enum(['github', 'local']),
   method: z.enum(['squash', 'merge', 'rebase']).default('squash'),
+  /** the head commit the page showed: a branch that moved on since is not merged (DISP-111) */
+  sha: z.string().min(1).optional(),
 });
+
+/** `sha`: the head commit the page showed; a branch that moved on since is not approved. */
+export const approveInput = z.object({ sha: z.string().min(1).optional() });
 
 // ---------- live events (server → browser over SSE) ----------
 

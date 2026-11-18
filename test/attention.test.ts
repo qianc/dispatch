@@ -9,7 +9,8 @@ const planner = { kind: 'planner' as const, options: DEFAULT_RUN_OPTIONS };
 const work = { kind: 'work' as const, options: DEFAULT_RUN_OPTIONS };
 const pr = (patch: Partial<PullRequest>): PullRequest => ({
   id: 1, session_id: 1, repo_id: 1, repo_full_name: 'me/r', number: 7, url: '', title: '', state: 'open', mergeable: true, mergeable_state: null,
-  head_ref: 'b', head_sha: null, last_synced: null, local: false, blocked: null, behind_at_merge: null, started_by: null, github_login: null, ...patch,
+  head_ref: 'b', head_sha: null, last_synced: null, local: false, blocked: null, behind_at_merge: null, started_by: null, github_login: null,
+  author: null, base_ref: null, draft: false, changed_files: null, ci_state: null, gh_updated_at: null, approval: null, ...patch,
 });
 
 describe('openProposals', () => {

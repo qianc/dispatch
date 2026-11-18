@@ -58,6 +58,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/sessions/:id': 'read',
   'GET /api/sessions/:id/attachments/:name': 'read',
   'GET /api/prs/:id': 'read',
+  'GET /api/projects/:key/prs': 'read',
   'GET /api/assistant': 'read',
 
   'POST /api/projects/:key/items': 'tracker',
@@ -112,6 +113,8 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/sessions/:id/apply-update': 'sessions',
   'POST /api/sessions/:id/dismiss-proposal': 'sessions',
   'POST /api/prs/:id/merge': 'sessions',
+  'POST /api/prs/:id/approve': 'sessions',
+  'POST /api/projects/:key/prs/sync': 'sessions',
   'POST /api/prs/:id/github-pr': 'sessions',
   'POST /api/prs/:id/resolve-conflicts': 'sessions',
   'POST /api/cleanup': 'sessions',
