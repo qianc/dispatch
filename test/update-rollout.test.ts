@@ -586,6 +586,22 @@ describe('the rollout of an update: the server first, then the workers, each in 
     }
   });
 
+  it('an update that waits starts when the session ends its turn, not at the next tick', async () => {
+    withLauncher();
+    const w = await worker('test-token');
+    await online(1);
+    await autoOn(A);
+    const id = await work(w);
+    await s.ctx.updates.tick();
+    expect(asked).toEqual([]);
+    // the timed look is far away: only the session's own change can start the update
+    s.ctx.updates.tickMs = 3_600_000;
+    s.ctx.updates.start();
+    await status(w, id, 'idle');
+    await waitFor(() => asked.length, 'the update, soon after the turn');
+    expect(asked[0].req).toEqual({ sha: B, from: A });
+  });
+
   it('a row of the log has all an owner needs: who, from, to, how it ended', async () => {
     withLauncher();
     await autoOn(A, [A, B]);

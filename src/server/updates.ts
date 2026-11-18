@@ -126,6 +126,8 @@ export class Updates {
   private pollTimer: NodeJS.Timeout | null = null;
   private tickTimer: NodeJS.Timeout | null = null;
   private timers = new Set<NodeJS.Timeout>();
+  private soonSet = false;
+  private offBus: (() => void) | null = null;
   private checking: Promise<UpdateState> | null = null;
   /** the launcher that started this server (src/launch.ts); main.ts sets it */
   launcher: LauncherLink | null = null;
@@ -180,6 +182,10 @@ export class Updates {
     }
     this.tickTimer = setInterval(() => void this.tick(), this.tickMs);
     this.tickTimer.unref();
+    // a session that ends its turn may be what an update waits for: look then, not at the next tick
+    this.offBus = this.bus.on((e) => {
+      if (e.t === 'session' && this.waitingNow.length) this.soon();
+    });
   }
 
   stop() {
@@ -188,6 +194,9 @@ export class Updates {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
     this.pollTimer = this.tickTimer = null;
+    this.soonSet = false;
+    this.offBus?.();
+    this.offBus = null;
   }
 
   private later(ms: number, fn: () => void) {
@@ -201,7 +210,12 @@ export class Updates {
 
   /** Something changed that the rollout waits for: look soon, not at the next tick. */
   private soon() {
-    if (this.tickTimer) this.later(500, () => void this.tick());
+    if (!this.tickTimer || this.soonSet) return;
+    this.soonSet = true;
+    this.later(500, () => {
+      this.soonSet = false;
+      void this.tick();
+    });
   }
 
   state(): UpdateState {
@@ -714,9 +728,10 @@ export class Updates {
         : blocked[w.id] === sha ? 'failed'
         : this.aheadOf.get(w.id) === sha ? 'newer'
         : 'behind';
+      const seen = !!(hub.facts(w.id) ?? w.facts);
       return {
         id: w.id, name: w.name, connected: hub.isConnected(w.id), sha: v?.sha ?? null, updatable: !!v?.updatable,
-        why: !v ? 'It runs a version of Dispatch from before updates.' : v.updatable ? null : v.why ?? 'It cannot update itself.',
+        why: !seen ? 'It has not connected yet.' : !v ? 'It runs a version of Dispatch from before updates.' : v.updatable ? null : v.why ?? 'It cannot update itself.',
         status,
       };
     });
