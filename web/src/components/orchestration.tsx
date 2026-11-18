@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type Attention, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
-import { STEP_LABEL, STEP_MARK, costText, doneCount, foldLive, isOpen, mergeHint, orchestrationProblem, parseLimit, partOfIndex, stepActions, stepRight } from '../orchestration.ts';
+import { STEP_LABEL, STEP_MARK, changeLine, costText, doneCount, foldLive, isOpen, mergeHint, orchestrationProblem, parseLimit, partOfIndex, proposalLines, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
 import { RunOptionsFields, opts } from './batch.tsx';
 import { Button, Chip, ErrorText, Field, Md, Segmented, Sheet, cx, inputCls } from './ui.tsx';
@@ -73,6 +73,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
         {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
         {planWaits && <p className="mt-1.5 text-[12px] text-muted">Nothing starts before you approve. To change the plan, write to the orchestrator below.</p>}
+        {o.proposal && open && <ProposalCard o={o} mine={mine} act={(path) => act.mutate({ path: `${base}/${path}`, body: path === 'approve' ? { plan_version: o.plan_version } : {} })} busy={act.isPending} />}
         <ErrorText error={act.error} />
       </div>
       {o.steps.length ? (
@@ -82,7 +83,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
             const right = stepRight(s, o);
             const body = (
               <>
-                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}</span>
+                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}{s.optional && <span className="text-faint"> · optional</span>}</span>
                 <span className={cx('block truncate text-[12px]', s.state === 'failed' ? 'text-bad' : 'text-muted')}>{[s.item_keys.join(', '), right].filter(Boolean).join(' · ')}</span>
               </>
             );
@@ -106,6 +107,23 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         <details className="border-t border-line px-3 py-2 text-[13px]">
           <summary className="cursor-pointer text-muted">The plan in full</summary>
           <Md className="mt-2">{o.plan_md}</Md>
+        </details>
+      )}
+      {o.changes.length > 0 && (
+        <details className="border-t border-line px-3 py-2 text-[13px]">
+          <summary className="cursor-pointer text-muted">Plan changes ({o.changes.length})</summary>
+          <ol className="mt-2 space-y-2">
+            {o.changes.map((c) => {
+              const line = changeLine(c, o);
+              return (
+                <li key={c.id}>
+                  <span className="block">{line.title}</span>
+                  {line.detail.map((d) => <span key={d} className="block text-[12px] text-muted">{d}</span>)}
+                  <span className="block text-[11px] text-faint">{new Date(c.created_at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                </li>
+              );
+            })}
+          </ol>
         </details>
       )}
 
@@ -135,6 +153,27 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         </div>
       </Sheet>
     </section>
+  );
+}
+
+/** A change of the running plan that waits for the owner: what it changes, what it holds, what goes on now (DISP-119). */
+function ProposalCard({ o, mine, act, busy }: { o: Orchestration; mine: boolean; act: (path: 'approve' | 'decline') => void; busy: boolean }) {
+  const lines = proposalLines(o)!;
+  return (
+    <div className="mt-2 rounded-lg border border-wait/50 bg-wait/10 p-2.5">
+      <p className="text-[13px] font-medium">A change of the plan waits for you</p>
+      <p className="mt-1 text-[13px]">{o.proposal!.summary}</p>
+      <p className="mt-1 text-[12px] text-muted">{lines.held} {lines.goes}</p>
+      {o.proposal!.plan_md.trim() && o.proposal!.plan_md !== o.plan_md && (
+        <details className="mt-1 text-[12px]"><summary className="cursor-pointer text-muted">Why</summary><Md className="mt-1">{o.proposal!.plan_md}</Md></details>
+      )}
+      {mine && (
+        <div className="mt-2 flex gap-2">
+          <Button className="flex-1" disabled={busy} onClick={() => act('decline')}>Decline</Button>
+          <Button variant="primary" className="flex-1" disabled={busy} onClick={() => act('approve')}>Approve change</Button>
+        </div>
+      )}
+    </div>
   );
 }
 

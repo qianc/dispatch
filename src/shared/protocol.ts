@@ -178,6 +178,8 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   | 'cross_project' | AssistantMethod
   /** an orchestrator's plan and its steps */
   | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish'
+  /** an orchestrator changes its approved plan by itself when the change is minor, or retries a failed step once (DISP-119) */
+  | 'amend_plan' | 'retry_step'
   /** an orchestrator and its batches: answer a batch's question, hand it to the owner, write to a batch */
   | 'answer_session' | 'hand_to_owner' | 'send_to_session'
   /** an orchestrator's own timer */

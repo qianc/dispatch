@@ -74,7 +74,7 @@ describe('orchestrator part 2: review findings', () => {
     }
   });
 
-  it('a changed plan that waits for approval: its open questions are the owner\'s, and it answers none', async () => {
+  it('a changed plan that waits for approval: the plan runs on, and it still answers its batches (DISP-119)', async () => {
     const p = await running();
     t.status(p.id, 'running');
     const input = ask(p.child);
@@ -82,11 +82,9 @@ describe('orchestrator part 2: review findings', () => {
       { id: p.first.id, title: 'Token store', project_key: 'AA', item_keys: [p.a.key] },
       { title: 'New step', project_key: 'BB' },
     ] });
-    expect(t.store.input(input.id)!.delegated_to).toBeNull();
-    expect(t.pushes.map((x) => x.title)).toContain('AA: question');
-    // a question that is still its own (delegated before the phase changed, by hand here) is not answered either
-    t.store.setInputDelegated(input.id, p.id);
-    await expect(t.rpc(p.id, 'answer_session', { input_id: input.id, answer: 'Small fix' })).rejects.toThrow('The changed plan waits for the owner: until they approve it, your batches\' questions are theirs.');
+    expect(t.store.input(input.id)!.delegated_to).toBe(p.id);
+    expect(t.pushes.map((x) => x.title)).not.toContain('AA: question');
+    expect(await t.rpc(p.id, 'answer_session', { input_id: input.id, answer: 'Small fix' })).toMatch(/Answered/);
   });
 
   it('with answer_children off it does not write to batches, and is not woken about a turn with no pull request', async () => {

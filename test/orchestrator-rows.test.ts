@@ -30,10 +30,10 @@ const session = (over: Partial<Session> = {}): Session => ({
 });
 const orch: Orchestration = {
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1, answer_children: true, cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
-  max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (running) in AA', started_by: null, status: 'idle', created_at: '', updated_at: '',
+  max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (running) in AA', proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '',
   steps: [1, 2, 3].map((n) => ({
     id: n, orchestration_id: 5, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-    state: n === 1 ? 'done' as const : n === 2 ? 'running' as const : 'pending' as const, note: null, child_session_id: n < 3 ? 10 + n : null, seen: null, deploys: {}, messages_sent: 0, child: null,
+    state: n === 1 ? 'done' as const : n === 2 ? 'running' as const : 'pending' as const, note: null, child_session_id: n < 3 ? 10 + n : null, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null,
   })),
 };
 
