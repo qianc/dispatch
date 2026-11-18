@@ -65,6 +65,8 @@ export interface Config {
   updatePollMinutes: number;
   /** the GitHub account to look with (UPDATE_GITHUB_ACCOUNT); null: the first, or none */
   updateGithubAccount: string | null;
+  /** ms after its start in which the server takes no worker: the launcher still watches whether the new version holds (DISP-112) */
+  settleMs: number;
 }
 
 const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -120,6 +122,7 @@ export function loadConfig(raw = process.env): Config {
     updateBranch: env.UPDATE_BRANCH?.trim() || 'main',
     updatePollMinutes: Number(env.UPDATE_POLL_MINUTES ?? 30),
     updateGithubAccount: env.UPDATE_GITHUB_ACCOUNT?.trim() || null,
+    settleMs: Math.max(0, Number(env.DISPATCH_SETTLE_MS) || 0),
   };
   cfg.installOwner = env.DISPATCH_OWNER?.trim() || (cfg.authMode === 'proxy' ? cfg.authUsers[0] : undefined) || (cfg.authMode === 'off' ? 'local' : 'owner');
   cfg.adoptOwner = cfg.authMode === 'proxy' && !env.DISPATCH_OWNER?.trim() && !cfg.authUsers.length;

@@ -693,6 +693,11 @@ export class GitHub {
   /** PRs being merged now (auto or by the owner), with the repo's check: the inbox shows them as merging. */
   readonly mergingNow = new Set<number>();
 
+  /** A merge is in flight: a restart of the server now would cut it off (DISP-112). */
+  busy() {
+    return this.merging.size > 0 || this.mergingNow.size > 0;
+  }
+
   async merge(prId: number, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase') {
     const pr = this.store.pr(prId);
     if (!pr) throw new Error('Unknown PR');

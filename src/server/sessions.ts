@@ -684,8 +684,8 @@ export class Sessions {
     const identity = this.identityOf(s);
     if (isRefusal(identity)) throw refusalError(identity);
     this.addEvent(s.id, { kind: 'system', text });
-    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
-      // its worker is away: the message waits, and the session resumes with it when the worker is back
+    if (this.held(s) || !this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+      // its worker is away (or an update is about to stop it): the message waits, and the session resumes with it when the worker is back
       this.setStatus(s.id, 'queued', { pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
       return;
@@ -775,8 +775,8 @@ export class Sessions {
     if (isRefusal(identity)) throw refusalError(identity);
     const text = this.userMessage(sessionId, ownText, images, opts);
     const reopen = FINAL_STATUSES.includes(s.status);
-    if (!this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
-      // its worker is away: the reply waits, and the session resumes with it when the worker is back
+    if (this.held(s) || !this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+      // its worker is away (or an update is about to stop it): the reply waits, and the session resumes with it when the worker is back
       this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, login_needed: null, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
       return;
@@ -1549,6 +1549,29 @@ export class Sessions {
   /** Work sessions whose turn just ended and whose branches are being checked and auto-merged. */
   private settling = new Set<number>();
 
+  /** How many finished turns are being checked and merged now. */
+  settlingCount() {
+    return this.settling.size;
+  }
+
+  /**
+   * Dispatch updates itself (DISP-112). `hold`: the server is about to stop for its update, so
+   * nothing starts; the text is why each queued session waits. `updating`: workers that are about
+   * to stop for theirs, still connected for a moment: as if they were away.
+   */
+  hold: string | null = null;
+  private updating = new Set<number>();
+
+  holdWorker(workerId: number, on: boolean) {
+    if (on) this.updating.add(workerId);
+    else this.updating.delete(workerId);
+  }
+
+  /** A message to this session now would be cut off by an update: it waits, as for a worker that is away. */
+  private held(s: Session) {
+    return !!this.hold || (s.worker_id != null && this.updating.has(s.worker_id));
+  }
+
   /**
    * Why a queued "after" batch cannot start yet, or null. It waits until each earlier batch in its
    * project is settled: not working, and (with auto-merge) its branches merged, so it starts from
@@ -1604,6 +1627,10 @@ export class Sessions {
         wait(disabledMessage(owner));
         continue;
       }
+      if (this.hold) {
+        wait(this.hold);
+        continue;
+      }
       // an "after" batch first waits for the earlier batch, wherever that runs
       if (next.kind === 'work' && next.options.start === 'after') {
         const reason = this.waitingFor(next);
@@ -1621,6 +1648,11 @@ export class Sessions {
           this.toldWaiting.add(next.id);
           this.notify(next, `${next.project_key ?? 'Dispatch'}: waiting for worker ${name}`, `"${next.title}" starts when ${name} connects.`, `worker-wait-${next.id}`);
         }
+        continue;
+      }
+      // it restarts for its update (DISP-112): what starts now would be cut off
+      if (this.updating.has(link.workerId)) {
+        wait(`Waiting for worker ${name} (updating)`);
         continue;
       }
       const chat = CHAT_KINDS.includes(next.kind);
