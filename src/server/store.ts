@@ -507,6 +507,7 @@ export class Store {
       force_plan: bool(r.force_plan),
       branch: (r.branch as string | null) ?? null,
       sdk_session_id: (r.sdk_session_id as string | null) ?? null,
+      run_model: (r.run_model as string | null) ?? null,
       initial_prompt: String(r.initial_prompt),
       source_id: numOrNull(r.source_id),
       waiting_reason: (r.waiting_reason as string | null) ?? null,
@@ -611,7 +612,7 @@ export class Store {
       return this.session(lastId)!;
     });
   }
-  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'limit_wait' | 'unclean' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
+  updateSession(id: number, patch: Partial<Pick<Session, 'status' | 'branch' | 'sdk_session_id' | 'run_model' | 'waiting_reason' | 'last_text' | 'usage' | 'title' | 'ended_at' | 'options' | 'worker_id' | 'paused' | 'pending_prompt' | 'login_needed' | 'limit_wait' | 'unclean' | 'github_login' | 'closed_at' | 'closed_reason'>>): Session {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {

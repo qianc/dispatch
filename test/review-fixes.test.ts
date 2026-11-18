@@ -133,7 +133,7 @@ describe('review fixes in the worker', () => {
     fake: false, opts: { assistantReadDirs: [] } as never, workspacesDir: '/tmp/dsp-rf-ws', slots,
     claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
   });
-  const spec = (id: number) => ({ session_id: id, kind: 'work' as const, project_key: 'R', project_name: 'R', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null, prompt: 'p', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null });
+  const spec = (id: number) => ({ session_id: id, kind: 'work' as const, project_key: 'R', project_name: 'R', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null, prompt: 'p', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' as const }, claude_account: null, github_account: null, resume: null, resume_note: null });
 
   it('#2 a slot is taken as soon as a start is accepted, during setup', async () => {
     const slots = new Slots(1);

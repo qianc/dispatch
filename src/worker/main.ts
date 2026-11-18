@@ -23,7 +23,6 @@ const FAKE = env.RUNNER === 'fake';
 const opts: RunnerOptions = {
   pluginDirs: (env.AGENT_PLUGIN_DIRS ?? '').split(':').filter(Boolean),
   settingSources: (env.AGENT_SETTING_SOURCES ?? 'user,project').split(',').filter(Boolean) as RunnerOptions['settingSources'],
-  model: env.AGENT_MODEL || undefined,
   idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
   // per-session environment: the session's Claude account, and its starter's own GitHub account
   // (DISP-63) or else the project's env account

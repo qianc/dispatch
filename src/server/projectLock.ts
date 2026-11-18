@@ -133,6 +133,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/workers/:id/claude-accounts/:name/check': null,
   'PUT /api/settings/default-worker': null,
   'PUT /api/settings/orchestrator': null,
+  'PUT /api/settings/model': null,
   'PUT /api/update/settings': null,
   'POST /api/update/check': null,
   'POST /api/update/start': null,

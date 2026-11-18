@@ -1,4 +1,5 @@
-// DISP-95: the orchestrator never runs on Haiku, also where Haiku is the worker's own model.
+// DISP-117: a session runs on the model its spec names; the worker has no model of its own.
+// (DISP-95, no Haiku for the orchestrator, and 'default' are the server's: see default-model.test.ts.)
 import { describe, expect, it, vi } from 'vitest';
 import type { StartSpec } from '../src/shared/protocol.ts';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
@@ -22,22 +23,20 @@ const spec = (kind: StartSpec['kind'], model: StartSpec['options']['model']): St
   claude_account: null, github_account: null, resume: null, resume_note: null,
   orchestration: { goal: 'g', phase: 'plan', projects: [], max_children: 1, status_md: '' },
 });
-const opts = (model: string | undefined) => ({ pluginDirs: [], settingSources: [], model, idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] });
+const opts = () => ({ pluginDirs: [], settingSources: [], idleCloseMs: 60_000, assistantModel: 'haiku', discussModel: 'haiku', assistantReadDirs: [] });
 
-describe('ClaudeRunner: the model of an orchestrator', () => {
-  const started = (kind: StartSpec['kind'], model: StartSpec['options']['model'], own: string | undefined) => {
-    const runner = new ClaudeRunner(spec(kind, model), { emit: () => undefined, rpc: async () => undefined, cwd: '/tmp', onClosed: () => undefined }, opts(own));
+describe('ClaudeRunner: the model of a session', () => {
+  const started = (kind: StartSpec['kind'], model: StartSpec['options']['model']) => {
+    const runner = new ClaudeRunner(spec(kind, model), { emit: () => undefined, rpc: async () => undefined, cwd: '/tmp', onClosed: () => undefined }, opts());
     runner.start('go');
     runner.close();
     return models.at(-1);
   };
 
-  it('runs on the model picked for it, else on the worker\'s own, but not where that is Haiku', () => {
-    expect(started('orchestrator', 'fable', 'haiku')).toBe('fable');
-    expect(started('orchestrator', 'default', 'sonnet')).toBe('sonnet');
-    expect(started('orchestrator', 'default', 'haiku')).toBeUndefined();
-    expect(started('orchestrator', 'default', 'claude-haiku-4-5')).toBeUndefined();
-    // a batch keeps the worker's own model
-    expect(started('work', 'default', 'haiku')).toBe('haiku');
+  it('runs on the model the spec names; chats on their own', () => {
+    expect(started('orchestrator', 'fable')).toBe('fable');
+    expect(started('work', 'opus')).toBe('opus');
+    expect(started('planner', 'sonnet')).toBe('sonnet');
+    expect(started('assistant', 'opus')).toBe('haiku');
   });
 });

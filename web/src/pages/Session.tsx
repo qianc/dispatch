@@ -14,6 +14,7 @@ import { Transcript } from '../components/transcript.tsx';
 import { useItemPeek } from '../components/itemPeek.tsx';
 import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
+import { modelName } from '../models.ts';
 import { NextSteps } from '../components/nextSteps.tsx';
 import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
@@ -227,6 +228,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {workers.length > 0 && <><dt className="text-muted">Worker</dt><dd className="truncate">{workerName(workers, s.worker_id)}</dd></>}
               {(accounts?.claude.length ?? 0) > 0 && <><dt className="text-muted">Claude</dt><dd className="truncate">{claudeLabel(accounts, s.claude_account)}</dd></>}
               {project?.github_account && <><dt className="text-muted">GitHub</dt><dd className="truncate">{project.github_account}</dd></>}
+              {s.run_model && <><dt className="text-muted">Model</dt><dd className="truncate" title={s.run_model}>{modelName(s.run_model)}</dd></>}
               {s.branch && <><dt className="text-muted">Branch</dt><dd className="font-mono text-[12px] break-all">{s.branch}</dd></>}
               {(s.kind === 'work' || s.kind === 'orchestrator') && runOptionsSummary(s.options).length > 0 && <><dt className="text-muted">Options</dt><dd>{runOptionsSummary(s.options).join(' · ')}</dd></>}
               {data.part_of && <><dt className="text-muted">Orchestration</dt><dd><Link className="text-accent" to={planLink(data.part_of.orchestrator_id)}>{partOfText(data.part_of)}</Link></dd></>}
@@ -309,7 +311,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {s.retry_of && <Link className="text-accent" to={`/s/${s.retry_of}`}>retry of #{s.retry_of}</Link>}
           {(accounts?.claude.length ?? 0) > 1 && <span>Claude: {claudeLabel(accounts, s.claude_account)}</span>}
           {(accounts?.github.length ?? 0) > 1 && project?.github_account && <span>GitHub: {project.github_account}</span>}
-          {s.kind === 'work' && runOptionsSummary(s.options).length > 0 && <span>{runOptionsSummary(s.options).join(' · ')}</span>}
+          {s.kind === 'work' && runOptionsSummary(s.options, s.run_model).length > 0 && <span>{runOptionsSummary(s.options, s.run_model).join(' · ')}</span>}
         </div>
       )}
       </div>)}

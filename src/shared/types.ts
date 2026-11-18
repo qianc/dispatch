@@ -201,12 +201,20 @@ export type OrchestratorModel = (typeof ORCHESTRATOR_MODELS)[number];
 export const orchestratorModel = (model: unknown): OrchestratorModel =>
   (ORCHESTRATOR_MODELS as readonly unknown[]).includes(model) ? (model as OrchestratorModel) : 'default';
 export const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+/**
+ * The server's default model and effort (DISP-117): what a session on 'default' runs on, on every
+ * worker. A model family, not a version, so a new release is picked up; never Claude Code's own default.
+ */
+export const DEFAULT_MODELS = ['opus', 'sonnet', 'fable'] as const;
+export const modelDefaults = z.object({ model: z.enum(DEFAULT_MODELS), effort: z.enum(EFFORTS).exclude(['default']) });
+export type ModelDefaults = z.infer<typeof modelDefaults>;
+export const MODEL_DEFAULTS: ModelDefaults = { model: 'opus', effort: 'medium' };
 export const SUBAGENT_MODES = ['auto', 'prefer', 'none'] as const;
 export const START_MODES = ['now', 'after'] as const;
 export const AUTO_MERGE = ['off', 'github', 'local'] as const;
 
 export const runOptions = z.object({
-  /** Claude Code model alias; 'default' = the worker's AGENT_MODEL / Claude Code default */
+  /** Claude Code model alias; 'default' = the server's default model (`ModelDefaults`) */
   model: z.enum(MODELS).default('default'),
   effort: z.enum(EFFORTS).default('default'),
   /** how superpowers should run the implementation plan: Claude decides, subagent-driven, or inline */
@@ -240,6 +248,8 @@ export interface Session {
   force_plan: boolean;
   branch: string | null;
   sdk_session_id: string | null;
+  /** the model Claude reports the session runs on (e.g. claude-opus-5-5); null until it has started */
+  run_model: string | null;
   initial_prompt: string;
   source_id: number | null;
   waiting_reason: string | null;
@@ -871,7 +881,7 @@ export interface Orchestration {
   /** counts the plans proposed: an approval names the one the owner read */
   plan_version: number;
   max_children: number;
-  /** the model and effort the orchestrator itself runs on ('default': the worker's own); its batches have `options` */
+  /** the model and effort the orchestrator itself runs on ('default': the server's default model); its batches have `options` */
   model: OrchestratorModel;
   effort: (typeof EFFORTS)[number];
   /** it answers its batches' questions and plan approvals when it can; off: they all come to the owner */

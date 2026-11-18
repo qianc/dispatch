@@ -56,7 +56,7 @@ describe("the worker's link to a server (DISP-63)", () => {
     const raw: string[] = [];
     (link as unknown as { ws: unknown }).ws = { readyState: WebSocket.OPEN, send: (d: string) => { raw.push(d); sent.push(JSON.parse(d)); } };
     // the project's account "work" is not allowed for this server: no matter, bob's own is used
-    const spec: StartSpec = { session_id: 7, kind: 'work', project_key: 'GH', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null, prompt: '[fake:env]', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: 'work', github: BOB, resume: null, resume_note: null };
+    const spec: StartSpec = { session_id: 7, kind: 'work', project_key: 'GH', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null, prompt: '[fake:env]', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' }, claude_account: null, github_account: 'work', github: BOB, resume: null, resume_note: null };
     process.env.FAKE_DELAY_MS = '1';
     await (link as unknown as { onMessage: (m: unknown) => Promise<void> }).onMessage({ t: 'start', spec });
     const said = await waitFor(() => sent.find((m) => m.t === 'event' && m.body.kind === 'assistant'), 'the env');

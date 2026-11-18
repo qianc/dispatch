@@ -241,7 +241,7 @@ export class Orchestrator {
 
   // ---------- a person's default for new orchestrators ----------
 
-  /** The model and effort `user`'s new orchestrators start with ('default': the worker's own). */
+  /** The model and effort `user`'s new orchestrators start with ('default': the server's default model). */
   defaults(user: string | null): OrchestratorDefaults {
     try {
       // a model saved before it stopped being a choice (Haiku) is 'default'; the effort stays

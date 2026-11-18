@@ -145,9 +145,10 @@ export type WorkerToServer =
   | { t: 'notice'; session_id: number; title: string; body: string; login?: LoginHelp }
   /**
    * `limit` (with running): the turn stopped on the account's usage limit; the runner waits and goes on
-   * after the reset (DISP-108). `unclean` (with idle): why the turn did not end cleanly.
+   * after the reset (DISP-108). `unclean` (with idle): why the turn did not end cleanly. `model`
+   * (with running): the model Claude says the session runs on (DISP-117).
    */
-  | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string }
+  | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string }
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }

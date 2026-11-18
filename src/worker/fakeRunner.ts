@@ -33,7 +33,7 @@ export class FakeRunner implements AgentRunner {
   }
 
   start(text: string) {
-    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', sdk_session_id: this.spec.resume ?? `fake-${randomUUID()}` });
+    this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', sdk_session_id: this.spec.resume ?? `fake-${randomUUID()}`, model: `fake-${this.spec.options.model}` });
     void this.go(text);
   }
 

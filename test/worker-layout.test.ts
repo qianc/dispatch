@@ -22,7 +22,7 @@ function links(ws: string, names: string[]) {
   ));
 }
 
-const spec = (id: number, branch: string, repo: Repo) => ({ session_id: id, kind: 'work' as const, project_key: 'T', project_name: 'T', importance_scale: [], effort_scale: [], title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null });
+const spec = (id: number, branch: string, repo: Repo) => ({ session_id: id, kind: 'work' as const, project_key: 'T', project_name: 'T', importance_scale: [], effort_scale: [], title: 't', branch, repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' as const }, claude_account: null, github_account: null, resume: null, resume_note: null });
 
 /** A repo to work on: `local` makes worktrees in the owner's repo, else in a clone under cache/. */
 function source(local: boolean, id: number): Repo {

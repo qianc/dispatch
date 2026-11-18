@@ -5,6 +5,7 @@ import { api, type Item, type Project, type Repo, type Session } from '../api.ts
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
 import { projectClaude, useAccounts } from '../accounts.ts';
 import { useWorkers } from '../workers.ts';
+import { defaultHint, modelName, useModelDefaults } from '../models.ts';
 
 const LABELS = {
   model: { default: 'Default', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' },
@@ -41,6 +42,7 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
   const { data: accounts } = useAccounts();
   const { allowed, def } = project ? projectClaude(accounts, project) : { allowed: [], def: undefined };
   const chosen = value.claude_account && allowed.some((a) => a.name === value.claude_account) ? value.claude_account : '';
+  const { data: defaults } = useModelDefaults();
   return (
     <>
       {allowed.length > 1 && (
@@ -52,7 +54,7 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
           />
         </Field>
       )}
-      <Field label="Model" group><Segmented value={value.model} onChange={(model) => set({ model })} options={opts('model')} /></Field>
+      <Field label="Model" group hint={value.model === 'default' || value.effort === 'default' ? defaultHint(defaults) : undefined}><Segmented value={value.model} onChange={(model) => set({ model })} options={opts('model')} /></Field>
       <Field label="Effort" group><Segmented value={value.effort} onChange={(effort) => set({ effort })} options={opts('effort')} /></Field>
       <Field label="Subagents for the implementation" group><Segmented value={value.subagents} onChange={(subagents) => set({ subagents })} options={opts('subagents')} /></Field>
       <Field label="Start" group hint={value.start === 'after' ? 'Waits until this project’s other agents have finished their turn.' : 'Starts alongside anything already running (as long as a session slot is free).'}>
@@ -134,10 +136,14 @@ function pickWorker(able: number[] | null, preferred: (number | null | undefined
   return preferred.find(ok) ?? (able ? workers.find((w) => w.connected && able.includes(w.id))?.id ?? able[0] ?? null : null);
 }
 
-/** Short summary of non-default options, for session headers and proposal cards. */
-export function runOptionsSummary(o: SessionOptions): string[] {
+/**
+ * Short summary of non-default options, for session headers and proposal cards. `runModel`: the
+ * model Claude says the session runs on (DISP-117), named in place of the option.
+ */
+export function runOptionsSummary(o: SessionOptions, runModel?: string | null): string[] {
   const out: string[] = [];
-  if (o.model !== 'default') out.push({ ...LABELS.model, ...LABELS.orchestratorModel }[o.model]);
+  if (runModel) out.push(modelName(runModel));
+  else if (o.model !== 'default') out.push({ ...LABELS.model, ...LABELS.orchestratorModel }[o.model]);
   if (o.effort !== 'default') out.push(`effort ${o.effort}`);
   if (o.subagents !== 'auto') out.push(LABELS.subagents[o.subagents].toLowerCase());
   if (o.start === 'after') out.push('after running ones');

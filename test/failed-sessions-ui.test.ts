@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals());
 const LOGIN = { account: 'work', label: 'Work', kind: 'subscription', config_dir: '/tmp/claude-work', command: 'claude', fix: null, error: 'authentication_failed', host: 'box', worker: 'box' } as unknown as NonNullable<Session['login_needed']>;
 
 const session = (over: Partial<Session> = {}): Session => ({
-  id: 7, project_id: 1, project_key: 'P', kind: 'work', title: 'Fix login', status: 'failed', force_plan: false, branch: 'dispatch/p-7-fix', sdk_session_id: null,
+  id: 7, project_id: 1, project_key: 'P', kind: 'work', title: 'Fix login', status: 'failed', force_plan: false, branch: 'dispatch/p-7-fix', sdk_session_id: null, run_model: null,
   initial_prompt: 'Fix the login bug', source_id: null, waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1,
   paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null,
   closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,

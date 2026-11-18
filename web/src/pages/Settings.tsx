@@ -1,4 +1,5 @@
 import { OrchestratorDefaults } from '../components/orchestration.tsx';
+import { ModelDefaultsSection } from '../components/modelDefaults.tsx';
 import { UpdatesSection } from '../components/updates.tsx';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -74,6 +75,7 @@ export function Settings() {
       {me?.is_owner && <ServerGithubSection />}
       <WorkersSection me={me} />
       {me?.is_owner && <UpdatesSection />}
+      <ModelDefaultsSection owner={!!me?.is_owner} />
       <Section title="Orchestrator"><OrchestratorDefaults /></Section>
       <AccessSection me={me} />
       <DevicesSection />

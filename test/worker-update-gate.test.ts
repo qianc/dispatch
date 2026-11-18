@@ -18,7 +18,7 @@ const A = 'a'.repeat(40), B = 'b'.repeat(40);
 
 const spec = (id: number, more: Partial<StartSpec> = {}): StartSpec => ({
   session_id: id, kind: 'work', project_key: 'GH', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [], items: [], source: null,
-  prompt: 'go', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null, ...more,
+  prompt: 'go', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' as const }, claude_account: null, github_account: null, resume: null, resume_note: null, ...more,
 });
 
 type Raw = { onMessage: (m: unknown) => Promise<void>; ws: unknown; outbox: WorkerToServer[]; stopped: boolean; paused: boolean };

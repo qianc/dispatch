@@ -57,9 +57,9 @@ describe('orchestrator: its own model and effort', () => {
     const made = (await post({})).data;
     expect(made).toMatchObject({ model: 'default', effort: 'low' });
     expect(own(made.session_id)).toEqual({ model: 'default', effort: 'low' });
-    // an orchestration started on Haiku before: its next turn is on the worker's own model
+    // an orchestration started on Haiku before: its next turn is on the server's default model (DISP-117)
     const old = t.store.updateSession(made.session_id, { options: { ...t.store.session(made.session_id)!.options, model: 'haiku' } });
-    expect(t.s.ctx.sessions.spec(old, '', null, null).options).toMatchObject({ model: 'default', effort: 'low' });
+    expect(t.s.ctx.sessions.spec(old, '', null, null).options).toMatchObject({ model: 'opus', effort: 'low' });
     expect(t.s.ctx.orchestrator.view(made.session_id)).toMatchObject({ model: 'default', effort: 'low' });
   });
 });
@@ -99,7 +99,7 @@ describe('orchestrator model: the app', () => {
     const html = renderPage(createElement(ui.NewOrchestrationForm, { onDone: () => {} }), { qc });
     expect(html).toContain('The orchestrator itself');
     expect(picked(html).slice(0, 2)).toEqual(['Sonnet', 'High']);
-    // before the default has loaded: the worker's own
+    // before the default has loaded: the server's default
     const empty = new QueryClient();
     empty.setQueryData(['projects'], []);
     expect(picked(renderPage(createElement(ui.NewOrchestrationForm, { onDone: () => {} }), { qc: empty })).slice(0, 2)).toEqual(['Default', 'Default']);

@@ -43,7 +43,6 @@ export interface RunnerOptions {
   /** AGENT_PLUGIN_DIRS as configured; see resolvePluginDirs. */
   pluginDirs: string[];
   settingSources: ('user' | 'project' | 'local')[];
-  model: string | undefined;
   idleCloseMs: number;
   assistantModel: string;
   discussModel: string;
@@ -284,12 +283,18 @@ const MAX_IMAGE_B64 = 14_000_000; // ~10 MB decoded
 /** Assistant-message errors that mean the account itself needs the owner (log in, org, billing). */
 export const LOGIN_ERRORS = new Set(['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error', 'cloud_credential_error']);
 
-export function rateLimitNotice(label: string, info: { status: string; resetsAt?: number; rateLimitType?: string; utilization?: number }) {
+/**
+ * The notice for a usage limit. The limit is the Claude account's (`label`), not the model's, so the
+ * title names the account; the body names the model the session runs on (DISP-117).
+ */
+export function rateLimitNotice(label: string, info: { status: string; resetsAt?: number; rateLimitType?: string; utilization?: number }, model?: string | null) {
   const when = info.resetsAt ? new Date(resetMs(info.resetsAt)).toLocaleString('sv-SE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : null;
   const kind = info.rateLimitType ? info.rateLimitType.replace(/_/g, ' ') : 'usage';
+  const account = `Claude account ${label}`;
+  const runsOn = model ? ` This session runs on ${model}.` : '';
   return info.status === 'rejected'
-    ? { title: `${label}: ${kind} limit reached`, body: `The session waits until the limit resets${when ? ` (${when})` : ''}, and goes on by itself then. To continue sooner, start the remaining work as a new batch on another allowed Claude account.` }
-    : { title: `${label}: close to the ${kind} limit`, body: `${info.utilization ? `${Math.round(info.utilization * 100)}% used. ` : ''}${when ? `Resets ${when}.` : ''}` };
+    ? { title: `${account}: ${kind} limit reached`, body: `The session waits until the limit resets${when ? ` (${when})` : ''}, and goes on by itself then. To continue sooner, start the remaining work as a new batch on another allowed Claude account.${runsOn}` }
+    : { title: `${account}: close to the ${kind} limit`, body: `${info.utilization ? `${Math.round(info.utilization * 100)}% used.` : ''}${when ? ` Resets ${when}.` : ''}${runsOn}`.trim() };
 }
 
 /** Seconds or milliseconds since 1970, as Claude gives a reset time: in milliseconds. */
@@ -331,6 +336,8 @@ export class ClaudeRunner implements AgentRunner {
   private idleTimer: NodeJS.Timeout | null = null;
   private closed = false;
   private sentSdkId: string | null = null;
+  /** the model Claude says this session runs on, from its init message (DISP-117) */
+  private runModel: string | null = null;
   /** Set after a turn result; the next model output means a new turn started (e.g. a queued message). */
   private betweenTurns = false;
   /** Live background tasks (shell, subagents) that are real work; the turn can end while they run. */
@@ -376,9 +383,8 @@ export class ClaudeRunner implements AgentRunner {
         cwd: this.deps.cwd,
         resume: this.spec.resume ?? undefined,
         model: assistant ? this.opts.assistantModel : discuss ? this.opts.discussModel
-          : this.spec.options.model !== 'default' ? this.spec.options.model
-          // an orchestrator never runs on Haiku, also where that is the worker's own model
-          : this.spec.kind === 'orchestrator' && /haiku/i.test(this.opts.model ?? '') ? undefined : this.opts.model,
+          // the server names it (DISP-117); a spec without one never gets here (`ServerLink.refusal`)
+          : this.spec.options.model,
         ...(this.spec.options.effort !== 'default' && !chat ? { effort: this.spec.options.effort } : {}),
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
         settingSources: chat ? [] : this.opts.settingSources,
@@ -578,16 +584,17 @@ export class ClaudeRunner implements AgentRunner {
       return;
     }
     if (m.type === 'system' && m.subtype === 'init') {
+      this.runModel = m.model;
       if (this.sentSdkId !== m.session_id) {
         this.sentSdkId = m.session_id;
-        this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', sdk_session_id: m.session_id });
+        this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running', sdk_session_id: m.session_id, model: m.model });
       }
       return;
     }
     if (m.type === 'rate_limit_event') {
       const info = m.rate_limit_info;
       if (info.status === 'rejected') this.limitResetsAt = info.resetsAt ? resetMs(info.resetsAt) : 0;
-      if (info.status !== 'allowed') this.noticeOnce(`rate-${info.status}-${info.rateLimitType ?? ''}`, rateLimitNotice(this.opts.accountLabel?.(this.spec.claude_account) ?? 'Claude', info));
+      if (info.status !== 'allowed') this.noticeOnce(`rate-${info.status}-${info.rateLimitType ?? ''}`, rateLimitNotice(this.opts.accountLabel?.(this.spec.claude_account) ?? 'default', info, this.runModel));
       return;
     }
     if (m.type === 'assistant') {
