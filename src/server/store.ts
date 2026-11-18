@@ -22,6 +22,8 @@ import {
   orchestratorModel,
   type RunOptions,
   type SessionOptions,
+  type CiState,
+  type PrApproval,
   type PullRequest,
   type Repo,
   type Session,
@@ -132,7 +134,7 @@ function toItem(r: Row): Item {
 function toPr(r: Row): PullRequest {
   return {
     id: Number(r.id),
-    session_id: Number(r.session_id),
+    session_id: numOrNull(r.session_id),
     repo_id: Number(r.repo_id),
     repo_full_name: `${r.github_owner}/${r.github_name}`,
     number: Number(r.number),
@@ -151,6 +153,16 @@ function toPr(r: Row): PullRequest {
     behind_at_merge: numOrNull(r.behind_at_merge),
     started_by: (r.started_by as string | null) ?? null,
     github_login: (r.github_login as string | null) ?? null,
+    author: (r.author as string | null) ?? null,
+    base_ref: (r.base_ref as string | null) ?? null,
+    draft: bool(r.draft),
+    changed_files: numOrNull(r.changed_files),
+    ci_state: (r.ci_state as CiState | null) ?? null,
+    gh_updated_at: (r.gh_updated_at as string | null) ?? null,
+    approval: r.approved_at ? {
+      at: String(r.approved_at), by: String(r.approved_by ?? ''), sha: (r.approved_sha as string | null) ?? null,
+      review: (r.review_state as PrApproval['review']) ?? null, note: (r.review_note as string | null) ?? null,
+    } : null,
   };
 }
 
@@ -994,10 +1006,11 @@ export class Store {
   }
 
   // ---------- pull requests ----------
-  prs(filter: { session_id?: number; open_only?: boolean } = {}): PullRequest[] {
+  prs(filter: { session_id?: number; repo_id?: number; open_only?: boolean } = {}): PullRequest[] {
     const where: string[] = [];
     const params: number[] = [];
     if (filter.session_id) { where.push('pr.session_id = ?'); params.push(filter.session_id); }
+    if (filter.repo_id) { where.push('pr.repo_id = ?'); params.push(filter.repo_id); }
     if (filter.open_only) where.push("pr.state = 'open'");
     return this.db.all(`${PR_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY pr.id DESC`, ...params).map(toPr);
   }
@@ -1005,16 +1018,39 @@ export class Store {
     const r = this.db.get(`${PR_SELECT} WHERE pr.id = ?`, id);
     return r && toPr(r);
   }
-  upsertPr(p: { session_id: number; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null }): PullRequest {
+  prByNumber(repoId: number, number: number): PullRequest | undefined {
+    const r = this.db.get(`${PR_SELECT} WHERE pr.repo_id = ? AND pr.number = ?`, repoId, number);
+    return r && toPr(r);
+  }
+  /** One row per PR of a repo. Only a row with no session takes `session_id`: a row that has one keeps it. */
+  upsertPr(p: { session_id: number | null; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null }): PullRequest {
     this.db.run(
       `INSERT INTO pull_requests (session_id, repo_id, number, url, title, state, mergeable, mergeable_state, head_ref, head_sha, last_synced)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_id, number) DO UPDATE SET url = excluded.url, title = excluded.title, state = excluded.state,
          mergeable = excluded.mergeable, mergeable_state = excluded.mergeable_state, head_ref = excluded.head_ref,
-         head_sha = excluded.head_sha, last_synced = excluded.last_synced`,
+         head_sha = excluded.head_sha, last_synced = excluded.last_synced,
+         session_id = COALESCE(pull_requests.session_id, excluded.session_id)`,
       p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, now(),
     );
     return toPr(this.db.get(`${PR_SELECT} WHERE pr.repo_id = ? AND pr.number = ?`, p.repo_id, p.number)!);
+  }
+
+  /** What the project's PR sync learned about a PR; only the keys given are written. */
+  setPrMeta(id: number, meta: Partial<Pick<PullRequest, 'author' | 'base_ref' | 'draft' | 'changed_files' | 'ci_state' | 'gh_updated_at'>>) {
+    const keys = (['author', 'base_ref', 'draft', 'changed_files', 'ci_state', 'gh_updated_at'] as const).filter((k) => meta[k] !== undefined);
+    if (!keys.length) return;
+    this.db.run(`UPDATE pull_requests SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      ...keys.map((k) => (k === 'draft' ? (meta.draft ? 1 : 0) : meta[k] ?? null)), id);
+  }
+
+  /** A new approval of the PR at `sha`; how its review goes on GitHub comes with setPrReview. */
+  setPrApproval(id: number, a: { by: string; sha: string | null }) {
+    this.db.run('UPDATE pull_requests SET approved_at = ?, approved_by = ?, approved_sha = ?, review_state = NULL, review_note = NULL WHERE id = ?', now(), a.by, a.sha, id);
+  }
+
+  setPrReview(id: number, review: NonNullable<PrApproval['review']>, note: string | null) {
+    this.db.run('UPDATE pull_requests SET review_state = ?, review_note = ? WHERE id = ?', review, note, id);
   }
 
   /** Remember why auto-merge stopped on this PR (at its current head commit). */

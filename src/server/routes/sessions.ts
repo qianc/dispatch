@@ -54,8 +54,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     // failed sessions not yet ignored or retried (DISP-81), each with a short reason
     const failed = store.failedOpen().filter(mine).map((s) => ({ ...s, reason: failureReason(s, store.lastError(s.id)) }));
     const idleIds = new Set(idle.map((s) => s.id));
-    // PRs of idle sessions are shown on their session's card
-    const prs = store.prs({ open_only: true }).filter((p) => !idleIds.has(p.session_id) && mine(store.session(p.session_id)));
+    // PRs of idle sessions are shown on their session's card; a PR with no session is on its project's list (DISP-111)
+    const prs = store.prs({ open_only: true }).flatMap((p) => (p.session_id !== null && !idleIds.has(p.session_id) && mine(store.session(p.session_id)) ? [{ ...p, session_id: p.session_id }] : []));
     const sessionIds = new Set([...inputs.map((i) => i.session_id), ...prs.map((p) => p.session_id)]);
     const related = [...sessionIds].map((id) => store.session(id)).filter((s) => !!s);
     // leftovers of finished sessions (the install owner's to clean up); re-checked in the background when the last check is old
