@@ -7,7 +7,7 @@ import { hostname } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
-import type { GithubCred, RpcMethod, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, RpcMethod, SelfUpdateAnswer, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { CHAT_KINDS, type Repo, type WorkerFacts, type WorkerVersion } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
@@ -33,6 +33,8 @@ async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
 export class Slots {
   readonly max: number;
   private busy = new Set<string>();
+  /** the worker is about to update itself: no slot is free, for any server (DISP-112) */
+  private draining = false;
   links: ServerLink[] = [];
 
   constructor(max: number) {
@@ -40,7 +42,14 @@ export class Slots {
   }
 
   get free() {
-    return Math.max(0, this.max - this.busy.size);
+    return this.draining ? 0 : Math.max(0, this.max - this.busy.size);
+  }
+
+  /** Take no new agent session (true), or take them again (false). */
+  drain(on: boolean) {
+    if (this.draining === on) return;
+    this.draining = on;
+    for (const l of this.links) l.sendSlots();
   }
 
   has(key: string) {
@@ -74,6 +83,8 @@ export interface LinkShared {
   secrets?: Secrets;
   /** the commit this worker runs, and whether it can update itself (DISP-112) */
   version?: WorkerVersion;
+  /** a server asks the worker to update itself (see updateGate.ts) */
+  selfUpdate?: (from: ServerLink, sha: string, updateId: number) => Promise<SelfUpdateAnswer>;
 }
 
 export class ServerLink {
@@ -93,6 +104,8 @@ export class ServerLink {
   /** messages produced while the server connection is down; flushed on reconnect so nothing is lost */
   private outbox: WorkerToServer[] = [];
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  /** what runs now for the server besides sessions (commands, deploys, pushes), by what it is (DISP-112) */
+  private jobs = new Map<string, number>();
   private ws: WebSocket | null = null;
   private stopped = false;
   /** the commit the server said it runs, in its answer to our last hello (DISP-112) */
@@ -123,6 +136,37 @@ export class ServerLink {
 
   private slotKey(id: number) {
     return `${this.entry.name}:${id}`;
+  }
+
+  /** Count `fn` as work that a restart of the worker would cut off. */
+  private async job<T>(what: string, fn: () => Promise<T>): Promise<T> {
+    this.jobs.set(what, (this.jobs.get(what) ?? 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      const n = (this.jobs.get(what) ?? 1) - 1;
+      if (n > 0) this.jobs.set(what, n);
+      else this.jobs.delete(what);
+    }
+  }
+
+  /**
+   * What this worker does for this server now that a restart would cut off; empty: it is in wait
+   * mode for it (DISP-112). A session at the end of its turn, or waiting for the usage limit, is not
+   * in the list: it goes on after a restart.
+   */
+  busyReasons(): string[] {
+    const out: string[] = [];
+    for (const id of this.starting.keys()) out.push(`session ${id} is starting`);
+    for (const [id, r] of this.runners) {
+      const a = r.activity();
+      if (a) out.push(`session ${id} ${a}`);
+    }
+    for (const [id, tc] of this.turnChecks) if (tc.running) out.push(`session ${id} runs its check`);
+    out.push(...this.jobs.keys());
+    // results that wait for the server (a deploy's, a turn's end) are only in memory
+    if (this.outbox.length) out.push(`${this.outbox.length} message${this.outbox.length === 1 ? ' for the server waits' : 's for the server wait'} to be sent`);
+    return out;
   }
 
   /** What this server is told about the worker: only the accounts and folders it may use. */
@@ -333,7 +377,7 @@ export class ServerLink {
       const deps: RunnerDeps = {
         // a finished turn of work on a hosted repo: push its branch first, so the server sees it
         emit: (m) => {
-          if (hostedWork && m.t === 'status' && m.status === 'idle') void this.pushHostedBranches(spec).finally(() => this.send(m));
+          if (hostedWork && m.t === 'status' && m.status === 'idle') void this.job(`session ${id} pushes its branch`, () => this.pushHostedBranches(spec)).finally(() => this.send(m));
           else this.send(m);
         },
         rpc: this.rpcFor(id),
@@ -390,8 +434,11 @@ export class ServerLink {
     const outside = folders.find((f) => !insideDirs(f, this.entry.local_repo_dirs, '/'));
     if (outside) throw new Error(`${outside} is outside the folders this worker allows for server ${this.entry.name}`);
     // leftovers / tidy only look at real folders, so they run in fake mode too
-    if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy', 'check_login', 'make_title'].includes(cmd.c)) return { ok: true };
+    if (this.shared.fake && !local && !['read_file', 'inspect_local_repo', 'leftovers', 'tidy', 'check_login', 'make_title', 'self_update'].includes(cmd.c)) return { ok: true };
     switch (cmd.c) {
+      case 'self_update':
+        if (!this.shared.selfUpdate) return { state: 'refused', reason: 'This worker cannot update itself.' } satisfies SelfUpdateAnswer;
+        return this.shared.selfUpdate(this, cmd.sha, cmd.update_id);
       case 'check_login':
         if (!this.allowedClaude(cmd.account)) throw new Error(`Claude account ${cmd.account ?? 'default'} is not one this worker uses for server ${this.entry.name}`);
         if (!this.shared.checkLogin) throw new Error('This worker cannot check logins');
@@ -470,7 +517,7 @@ export class ServerLink {
         const r = this.runners.get(msg.session_id);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);
-        if (msg.cleanup && !this.shared.fake) await this.workspaces.cleanup(msg.session_id, msg.repos).catch((e) => console.warn('cleanup failed', e));
+        if (msg.cleanup && !this.shared.fake) await this.job(`session ${msg.session_id} is tidied`, () => this.workspaces.cleanup(msg.session_id, msg.repos)).catch((e) => console.warn('cleanup failed', e));
         return;
       }
       case 'rpc_result': {
@@ -482,7 +529,9 @@ export class ServerLink {
       case 'cmd':
         try {
           const progress = (data: unknown) => this.send({ t: 'cmd_progress', req_id: msg.req_id, data });
-          this.send({ t: 'cmd_result', req_id: msg.req_id, ok: true, data: await this.command(msg.cmd, progress) });
+          // the question whether the worker can update now is itself no work
+          const data = msg.cmd.c === 'self_update' ? await this.command(msg.cmd) : await this.job(`a command runs (${msg.cmd.c})`, () => this.command(msg.cmd, progress));
+          this.send({ t: 'cmd_result', req_id: msg.req_id, ok: true, data });
         } catch (e) {
           this.send({ t: 'cmd_result', req_id: msg.req_id, ok: false, error: (e as Error).message });
         }
@@ -510,7 +559,7 @@ export class ServerLink {
       if (!repo.deploy_command || (this.shared.fake && !repo.local_path)) return;
       result(await this.workspaces.deploy(repo, cred).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
     };
-    const next = (this.deploys.get(repo.id) ?? Promise.resolve()).then(go);
+    const next = this.job(`a deploy of ${repo.github_name} runs`, () => (this.deploys.get(repo.id) ?? Promise.resolve()).then(go));
     this.deploys.set(repo.id, next);
     return next;
   }

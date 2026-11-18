@@ -86,7 +86,13 @@ export type ServerToWorker =
    */
   | { t: 'deploy'; session_id: number; repo: Repo; github?: GithubCred | null }
   /** the answer to each hello: the commit the server runs (DISP-112). An older worker ignores it. */
-  | { t: 'welcome'; version: string | null };
+  | { t: 'welcome'; version: string | null }
+  /**
+   * update the server (an image has no checkout to update itself): run your own
+   * `server_update_command` for this commit (DISP-112). No reply: the server restarts, so the result
+   * comes as `update_result`. `prev`: the commit to go back to when the new one does not come up.
+   */
+  | { t: 'server_update'; update_id: number; sha: string; prev: string | null };
 
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }
@@ -108,7 +114,23 @@ export type WorkerCommand =
   | { c: 'check_login'; account: string | null }
   /** a short title for an orchestration from its goal, by a small model (DISP-110). Answers { title } */
   | { c: 'make_title'; goal: string; projects: string[]; account: string | null }
-  | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean };
+  | { c: 'tidy'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[]; delete_merged: boolean; force: boolean }
+  /**
+   * update yourself to this commit of your own release branch, if nothing is working (DISP-112).
+   * Answers a SelfUpdateAnswer at once; how the update went comes later as `update_result`.
+   */
+  | { c: 'self_update'; sha: string; update_id: number };
+
+/** A worker's answer to `self_update`. */
+export type SelfUpdateAnswer =
+  /** it stops now and updates */
+  | { state: 'started' }
+  /** something is working: ask again later */
+  | { state: 'busy'; reasons: string[] }
+  /** it runs this commit already, or a newer one */
+  | { state: 'ahead' }
+  /** it cannot, or the commit is not one of its release branch */
+  | { state: 'refused'; reason: string };
 
 export type WorkerToServer =
   | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts }
@@ -139,7 +161,12 @@ export type WorkerToServer =
   /** a long command's progress so far (merge_local: its check command's test progress, DISP-5) */
   | { t: 'cmd_progress'; req_id: string; data: unknown }
   /** a deploy command finished (DISP-37): `output` is the end of what it printed */
-  | { t: 'deploy_result'; session_id: number; repo_id: number; ok: boolean; sha: string | null; output: string; duration_ms: number };
+  | { t: 'deploy_result'; session_id: number; repo_id: number; ok: boolean; sha: string | null; output: string; duration_ms: number }
+  /**
+   * how an update ended (DISP-112): the worker's own (after `self_update`), or the server's (after
+   * `server_update`). Kept in the worker's outbox until the server is there.
+   */
+  | { t: 'update_result'; update_id: number; target: 'worker' | 'server'; ok: boolean; rolled_back: boolean; from: string | null; to: string; error?: string; log_tail?: string };
 
 /** Calls the agent's `dispatch` MCP tools make back into the server. */
 export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch' | 'create_item' | 'add_comment' | 'propose' | 'release_items'

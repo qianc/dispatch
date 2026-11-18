@@ -35,6 +35,8 @@ export interface AgentRunner {
   answer(localId: string, answer: InputAnswer): void;
   interrupt(): Promise<void>;
   close(): void;
+  /** What a restart of the worker would cut off now ("is working"), or null: for the update gate (DISP-112). */
+  activity(): string | null;
 }
 
 export interface RunnerOptions {
@@ -467,6 +469,18 @@ export class ClaudeRunner implements AgentRunner {
     this.input.end();
     this.q?.close();
     this.deps.onClosed();
+  }
+
+  activity(): string | null {
+    if (this.closed) return null;
+    if (this.waiting.size) return 'waits for an answer';
+    if (this.bgTasks > 0) return 'has background tasks running';
+    // it waits for the usage limit: after a restart it is resumed and waits again
+    if (this.limitTimer) return null;
+    if (!this.betweenTurns) return 'is working';
+    // a wake-up the agent set would be lost with the process
+    if (this.wakeAt > Date.now()) return 'has a wake-up set';
+    return null;
   }
 
   private canUseTool: CanUseTool = async (name, input, { signal }) => {

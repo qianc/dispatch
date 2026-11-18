@@ -10,7 +10,8 @@ import { Logins } from './login.ts';
 import { makeTitle } from './title.ts';
 import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
-import { runningVersion } from '../update/version.ts';
+import { APP_DIR, runningVersion } from '../update/version.ts';
+import { UpdateGate } from './updateGate.ts';
 import { launcherLink } from '../update/ipc.ts';
 
 const env = process.env;
@@ -105,8 +106,15 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',
   secrets,
   version,
+  selfUpdate: (from, sha, updateId) => gate.selfUpdate(from, sha, updateId),
 }));
 slots.links = links;
+// the worker updates itself when a server asks and nothing is working (DISP-112). The fetch of its
+// own repo uses the GitHub account UPDATE_GITHUB_ACCOUNT names, else the first.
+const gate = new UpdateGate({
+  links: () => links, slots, launcher, version, dir: APP_DIR, branch: env.UPDATE_BRANCH?.trim() || 'main',
+  gitEnv: { ...env, ...githubEnv(pick(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) },
+});
 for (const l of links) l.connect();
 // the launcher's health check: the worker is up, on this commit
 launcher.ready(version.sha);
