@@ -34,7 +34,7 @@ import { scrub } from '../shared/scrub.ts';
 import { searchTerms, snippetOf } from '../shared/search.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
-import type { Notifier } from './notify.ts';
+import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
 import { labelReleased } from './releases.ts';
 import { placementProblem } from './repos.ts';
 import { assertWritable, disabledMessage } from './projectLock.ts';
@@ -1130,12 +1130,12 @@ export class Sessions {
         } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const waiting = () => {
             const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
-            this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`);
+            this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`, 'turn_end');
           };
           if (mergeSpeaks && idleWork) void idleWork.then((told) => !told && waiting(), waiting);
           else waiting();
         }
-        if (msg.status === 'failed') this.notify(s, `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`);
+        if (msg.status === 'failed') this.notify(s, `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`, 'routine');
         if (msg.status !== 'running') this.dispatch();
         return;
       }
@@ -1186,7 +1186,7 @@ export class Sessions {
     }
     this.addEvent(s.id, { kind: 'error', text: reason });
     this.setStatus(s.id, 'failed', { ended_at: new Date().toISOString(), waiting_reason: null });
-    this.notify(s, `${s.project_key ?? 'Dispatch'}: session failed`, reason, `failed-${s.id}`);
+    this.notify(s, `${s.project_key ?? 'Dispatch'}: session failed`, reason, `failed-${s.id}`, 'routine');
   }
 
   /** The `dispatch` MCP tools the agent calls. `workerId`: the worker that asks (must be the session's). */
@@ -1959,10 +1959,19 @@ export class Sessions {
     else this.notify(s, `${key}: merged, but the deploy failed`, `${repo.github_name}${at}: ${msg.output.trim().split('\n').slice(-3).join(' ')}`, `deploy-${s.id}`);
   }
 
-  private notify(s: Session, title: string, body: string, tag: string) {
+  /**
+   * A step's batch tells its orchestration instead of the owner (app.ts wires it, DISP-122). True:
+   * the orchestration took the notice. `kind`: see Orchestrator.childNotice.
+   */
+  childNotice: ((s: Session, n: Notice, kind: ChildNoticeKind) => boolean) | null = null;
+
+  /** `kind`: what the notice means for a step's batch (its orchestration may take it). */
+  private notify(s: Session, title: string, body: string, tag: string, kind: ChildNoticeKind = 'needs_owner') {
     const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' && s.item_ids.length ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
+    const notice: Notice = { title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined };
+    if (s.orchestrator_id && this.childNotice?.(s, notice, kind)) return;
     // to whoever started it (a schedule's run: the schedule's owner); nobody: the install owner
-    void this.notifier.send({ title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined }, s.started_by);
+    void this.notifier.send(notice, s.started_by);
   }
 
   isActive(s: Session) {

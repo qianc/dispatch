@@ -9,7 +9,7 @@ import { CheckRuns } from './checkRuns.ts';
 import type { CheckProgress } from '../shared/checkProgress.ts';
 import { generatorItems } from '../shared/generatorItems.ts';
 import { mergeMessage } from '../shared/mergeMessage.ts';
-import type { Notifier } from './notify.ts';
+import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import type { HostedGit } from './hosted.ts';
@@ -416,18 +416,27 @@ export class GitHub {
     const project_id = s.project_id ?? undefined;
     if (stopped.length) {
       const body = stopped.map((x) => `${x.label}: ${x.why}`).join('\n') + (merged.length ? `\nMerged: ${merged.join(', ')}` : '');
-      void this.notifier.send({ title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id }, s.started_by);
+      this.tellStarter(s, { title: `${s.project_key}: not auto-merged`, body, url: stopped.length === 1 && !merged.length ? `/pr/${stopped[0].prId}` : `/s/${s.id}`, tag: `automerge-${s.id}`, project_id }, 'routine');
       return;
     }
     // a deploy follows: its result is the one notice for this turn (sessions.ts, DISP-40)
     if (deploys) return;
     // the one notice for this turn: what Claude said it did, now merged
     const summary = this.store.session(s.id)?.last_text;
-    void this.notifier.send({
+    this.tellStarter(s, {
       title: `${s.project_key}: done and merged${merged.length > 1 ? ` (${merged.length} repos)` : ''}`,
       body: summary || merged.join(', '),
       url: `/s/${s.id}`, tag: `merged-${s.id}`, project_id,
-    }, s.started_by);
+    }, 'routine');
+  }
+
+  /** A step's batch tells its orchestration instead of the owner (app.ts wires it, DISP-122). True: it took the notice. */
+  childNotice: ((s: Session, n: Notice, kind: ChildNoticeKind) => boolean) | null = null;
+
+  /** A session's notice to whoever started it, unless its orchestration takes it. */
+  private tellStarter(s: Session, n: Notice, kind: ChildNoticeKind) {
+    if (s.orchestrator_id && this.childNotice?.(s, n, kind)) return;
+    void this.notifier.send(n, s.started_by);
   }
 
   /**
@@ -483,7 +492,7 @@ export class GitHub {
     this.upstreamToldFor.add(key);
     const why = res.output.split('\n').slice(-3).join(' ').slice(0, 300);
     this.store.addEvent(s.id, { kind: 'error', text: `Merged in Dispatch, but pushing ${repo.default_branch} to ${t.owner}/${t.repo} failed: ${why}` });
-    void this.notifier.send({ title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined }, s.started_by);
+    this.tellStarter(s, { title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined }, 'needs_owner');
   }
 
   /** A PR on the upstream was merged: bring the result into the hosted repo (fast-forward only). */
@@ -819,11 +828,11 @@ export class GitHub {
     if (pr.state === 'open' && was === null) {
       for (const it of items) if (it.status === 'in_progress' || it.status === 'todo') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'in_review' }) });
       // with auto-merge on, the merge result is the notice (merged, or why not)
-      if (s.options.auto_merge === 'off') void this.notifier.send({
+      if (s.options.auto_merge === 'off') this.tellStarter(s, {
         title: pr.local ? `${s.project_key}: branch ready for review` : `${s.project_key}: PR ready`,
         body: pr.local ? `${pr.head_ref} · ${pr.title}` : `#${pr.number} ${pr.title}`,
         url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined,
-      }, s.started_by);
+      }, 'routine');
     }
     if (pr.state === 'closed') {
       const all = this.store.prs({ session_id: s.id });
@@ -960,7 +969,7 @@ export class GitHub {
     const why = `the session's worker is not connected, so \`${repo.deploy_command}\` did not run. Deploy by hand.`;
     this.store.addEvent(s.id, { kind: 'error', text: `Deploy failed for ${name}: ${why}` });
     if (followed) return;
-    void this.notifier.send({ title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, s.started_by);
+    this.tellStarter(s, { title: `${s.project_key}: merged, but the deploy failed`, body: `${name}: ${why}`, url: `/s/${s.id}`, tag: `deploy-${s.id}`, project_id: s.project_id ?? undefined }, 'needs_owner');
   }
 
   private async mergeOpen(pr: PullRequest, how: 'github' | 'local', method: 'squash' | 'merge' | 'rebase', caller?: Caller | null, sha?: string) {

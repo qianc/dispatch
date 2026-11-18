@@ -14,6 +14,12 @@ export interface Notice {
 }
 
 /**
+ * What a step's batch's notice means for its orchestration (DISP-122). routine: news the step's
+ * state tells anyway. turn_end: the batch ended its turn. needs_owner: only the owner can act on it.
+ */
+export type ChildNoticeKind = 'routine' | 'turn_end' | 'needs_owner';
+
+/**
  * Who a notice is for (DISP-65): a user name, several, or nobody named (null, undefined, an empty
  * list), which means the install owner: notices about the install itself, and about work no user started.
  */

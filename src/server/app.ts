@@ -206,6 +206,9 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   });
   sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
   sessions.delegateInput = (s, input) => orchestrator.delegate(s, input);
+  // a step's batch tells its orchestration, and the owner hears only what needs them (DISP-122)
+  sessions.childNotice = (s, n, kind) => orchestrator.childNotice(s, n, kind);
+  github.childNotice = (s, n, kind) => orchestrator.childNotice(s, n, kind);
   sessions.onDeployed = (s, repo, ok) => orchestrator.onDeploy(s, repo, ok ? 'ok' : 'failed');
   github.onDeployStarted = (s, repo) => orchestrator.onDeploy(s, repo, 'running');
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');

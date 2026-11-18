@@ -21,7 +21,7 @@ const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationS
 });
 const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1, 2], project_keys: ['AA', 'BB'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1,
-  max_children: 2, answer_children: true, options: DEFAULT_RUN_OPTIONS, waiting: null, cost_usd: 4.1, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
+  max_children: 2, answer_children: true, notify_owner: 'needs_you', quiet_log: [], options: DEFAULT_RUN_OPTIONS, waiting: null, cost_usd: 4.1, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
   proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '', steps: [step(1, { state: 'running', child_session_id: 11 }), step(2, { project_key: 'BB' })], ...over,
 });
 const session = (id: number, over: Partial<Session> = {}): Session => ({
@@ -59,6 +59,23 @@ describe('an orchestration\'s cost, timer and settings on its page', () => {
     expect(text).not.toContain('DD');
     expect(text).toContain('Save');
     expect(ui.fixedProjects(orch())).toEqual(['AA', 'BB']);
+  });
+
+  it('the notification setting is in the settings and the start sheet (DISP-122)', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(['projects'], [{ key: 'AA', name: 'Alpha', disabled: false }, { key: 'BB', name: 'Beta', disabled: false }]);
+    const settings = textOf(renderPage(createElement(ui.OrchestrationSettings, { o: orch(), onDone: () => {} }), { qc }));
+    expect(settings).toContain('Notify me about its batches');
+    expect(settings).toContain('Only what needs me');
+    expect(settings).toContain('Every batch');
+    expect(textOf(renderPage(createElement(ui.NewOrchestrationForm, { onDone: () => {} }), { qc }))).toContain('Notify me about its batches');
+  });
+
+  it('its page has the quiet log when it handled something (DISP-122)', () => {
+    expect(panel(orch())).not.toContain('Quiet log');
+    const text = panel(orch({ quiet_log: [{ id: 1, session_id: 11, step_id: 1, text: 'Step 1 "Step 1" (session #11): merged; session completed.', created_at: '2026-01-01T00:00:00Z' }] }));
+    expect(text).toContain('Quiet log (1)');
+    expect(text).toContain('merged; session completed.');
   });
 
   it('a timer it set shows on its page, and it counts as running', () => {

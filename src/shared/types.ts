@@ -888,6 +888,10 @@ export interface Orchestration {
   effort: (typeof EFFORTS)[number];
   /** it answers its batches' questions and plan approvals when it can; off: they all come to the owner */
   answer_children: boolean;
+  /** who tells the owner about its batches (DISP-122): see NOTIFY_OWNER */
+  notify_owner: NotifyOwner;
+  /** what it handled without a push: batches it completed, notices it did not send; newest first */
+  quiet_log: QuietLogEntry[];
   /** run options of the batches it starts */
   options: RunOptions;
   steps: OrchestrationStep[];
@@ -912,12 +916,21 @@ export interface Orchestration {
   updated_at: string;
 }
 
+/**
+ * How an orchestration tells the owner about its batches (DISP-122). needs_you: the batches send
+ * nothing themselves; the orchestrator tells the owner only what needs them, several at once in one
+ * push. all: every batch notifies the owner itself, as a session without an orchestrator does.
+ */
+export const NOTIFY_OWNER = ['needs_you', 'all'] as const;
+export type NotifyOwner = (typeof NOTIFY_OWNER)[number];
+
 export const orchestrationInput = z.object({
   goal: z.string().trim().min(1, 'Say what it should reach.'),
   title: z.string().trim().max(80).optional(),
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.'),
   max_children: z.number().int().min(1).max(5).default(2),
   answer_children: z.boolean().default(true),
+  notify_owner: z.enum(NOTIFY_OWNER).default('needs_you'),
   cost_limit_usd: z.number().positive().max(10_000).nullable().default(null),
   /** the orchestrator's own model and effort; left out: the starter's default (Settings) */
   model: z.enum(ORCHESTRATOR_MODELS).optional(),
@@ -934,6 +947,7 @@ export const orchestrationPatch = z.object({
   max_children: z.number().int().min(1).max(5).optional(),
   cost_limit_usd: z.number().positive().max(10_000).nullable().optional(),
   answer_children: z.boolean().optional(),
+  notify_owner: z.enum(NOTIFY_OWNER).optional(),
   project_keys: z.array(z.string()).min(1, 'Pick at least one project.').optional(),
   /** its title, as the owner wants it (DISP-110) */
   title: z.string().trim().min(1, 'Give it a title.').max(80).optional(),
@@ -989,6 +1003,15 @@ export interface PlanProposal {
   summary: string;
   /** pending steps that do not start until the owner answers; the others go on */
   held: number[];
+  created_at: string;
+}
+
+/** One line of an orchestration's quiet log. */
+export interface QuietLogEntry {
+  id: number;
+  session_id: number | null;
+  step_id: number | null;
+  text: string;
   created_at: string;
 }
 
