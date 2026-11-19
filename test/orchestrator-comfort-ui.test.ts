@@ -125,4 +125,23 @@ describe("an orchestrator's batches are folded under it in Activity", () => {
     expect(text).toContain('Docs'); // needs the owner: shown
     expect(text).toContain('1 session'); // the other one is folded
   });
+
+  it('the fold stays open or closed per orchestrator, kept in the browser (DISP-118)', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) });
+    const live = [o, kid(11), session(6, { kind: 'orchestrator', project_id: null, project_key: null, title: 'Other', status: 'idle' }), session(21, { orchestrator_id: 6 })];
+    const html = () => renderPage(createElement(ui.FoldedLive, { live, attention: new Map(), orchestrations: [orch(), orch({ session_id: 6 })] }), { qc: new QueryClient() });
+    expect(html()).not.toContain('<details open');
+    ui.saveFoldOpen(5, true);
+    // only orchestrator 5 opens, and it is still open in a new render (back on the page, or a reload)
+    expect(html().match(/<details open/g)).toHaveLength(1);
+    expect(ui.foldOpen(5)).toBe(true);
+    expect(ui.foldOpen(6)).toBe(false);
+    ui.saveFoldOpen(5, false);
+    expect(html()).not.toContain('<details open');
+    // a browser that keeps nothing: closed, and no error
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); }, removeItem: () => { throw new Error('denied'); } });
+    expect(() => ui.saveFoldOpen(5, true)).not.toThrow();
+    expect(html()).not.toContain('<details open');
+  });
 });
