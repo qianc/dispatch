@@ -1,6 +1,6 @@
 // Orchestrations: the sheet that starts one, and the panel on its session page with the plan, the
 // steps and what the owner can do with them.
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type Attention, type NotifyOwner, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
@@ -286,6 +286,29 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
   );
 }
 
+/** Whether an orchestrator's folded batches are shown, kept per orchestrator in the browser (DISP-118). */
+const foldKey = (id: number) => `dispatch:fold-open:${id}`;
+export const foldOpen = (id: number) => { try { return localStorage.getItem(foldKey(id)) === '1'; } catch { return false; } };
+export const saveFoldOpen = (id: number, open: boolean) => { try { open ? localStorage.setItem(foldKey(id), '1') : localStorage.removeItem(foldKey(id)); } catch { /* memory only */ } };
+
+function Fold({ id, label, children }: { id: number; label: string; children: ReactNode }) {
+  const [open, setOpen] = useState(() => foldOpen(id));
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        const now = e.currentTarget.open;
+        if (now === open) return;
+        setOpen(now);
+        saveFoldOpen(id, now);
+      }}
+    >
+      <summary className="cursor-pointer px-3 py-1.5 text-[12px] text-muted">{label}</summary>
+      {children}
+    </details>
+  );
+}
+
 /**
  * Activity's Live list: each orchestrator with its batches under it. Those that need the owner
  * show at once; the others are behind "N sessions".
@@ -305,10 +328,9 @@ export function FoldedLive({ live, attention, orchestrations }: { live: Session[
             <div className="ml-4 border-l border-line">
               {r.needs.map((s) => row(s, true))}
               {r.children.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer px-3 py-1.5 text-[12px] text-muted">{r.children.length} session{r.children.length === 1 ? '' : 's'}</summary>
+                <Fold id={r.s.id} label={`${r.children.length} session${r.children.length === 1 ? '' : 's'}`}>
                   {r.children.map((s) => row(s, true))}
-                </details>
+                </Fold>
               )}
             </div>
           )}
