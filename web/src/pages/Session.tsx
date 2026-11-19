@@ -15,7 +15,7 @@ import { useItemPeek } from '../components/itemPeek.tsx';
 import { ItemDetail } from './ItemDetail.tsx';
 import { runOptionsSummary } from '../components/batch.tsx';
 import { modelName } from '../models.ts';
-import { NextSteps } from '../components/nextSteps.tsx';
+import { NextSteps, nextStepsOnPage } from '../components/nextSteps.tsx';
 import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
@@ -372,7 +372,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
         ? <p role="status" className="px-4 text-[13px] text-wait">{limitWaitText(s.limit_wait)} To go on sooner, send a message.</p>
         : <p className="px-4 text-[13px] text-run animate-pulse">Claude is working…</p>)}
       {data.checks?.map((c) => <CheckProgressCard key={`${c.pr_id ?? 'turn'}-${c.repo}`} run={c} />)}
-      {drive && ((s.status === 'idle' && s.kind === 'work') || (attention.kind === 'login' && (s.status === 'idle' || s.status === 'failed'))) && (
+      {drive && ((s.status === 'idle' && nextStepsOnPage(s, attention)) || (attention.kind === 'login' && (s.status === 'idle' || s.status === 'failed'))) && (
         <div className="px-4 pt-2 pb-1">
           {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
