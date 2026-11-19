@@ -34,6 +34,8 @@ process.on('SIGTERM', () => {
   note('sigterm ' + app);
   process.exit(Number(process.env.EXIT_CODE ?? 0));
 });
+// a SIGTERM before this line ends it by the signal, not by its code (DISP-123)
+note('ready ' + app);
 launcher.onResult((result, ctx) => note('result ' + JSON.stringify({ result, ctx })));
 launcher.ready(sha);
 const ask = join(dir, '..', 'ask.json');
@@ -92,7 +94,7 @@ const starts = (l: Launched) => l.runs().filter((r) => r.startsWith('start ')).m
 test('outside an update the launcher is its child: signals go on, and it ends with the child\'s code', async () => {
   const f = fixture(FILES);
   const l = launch(f.dir, { EXIT_CODE: '7' }, ['--flag']);
-  await until(() => l.runs().length);
+  await until(() => l.runs().includes('ready A'));
   expect(l.runs()[0]).toBe('start A launcher=yes settle= args=--flag');
   l.proc.kill('SIGTERM');
   expect(await l.exit).toBe(7);
@@ -100,7 +102,7 @@ test('outside an update the launcher is its child: signals go on, and it ends wi
 
   // a child that ends by itself: the same code, so the service manager's restart rule holds
   const l2 = launch(f.dir);
-  await until(() => l2.runs().length > 2);
+  await until(() => l2.runs().filter((r) => r === 'ready A').length === 2);
   l2.ask({ exit: 3 });
   expect(await l2.exit).toBe(3);
 }, 60_000);
@@ -208,7 +210,7 @@ test('code that is no checkout runs through the launcher, and says why it cannot
     writeFileSync(join(dir, name), text);
   }
   const l = launch(dir);
-  await until(() => l.runs().length);
+  await until(() => l.runs().includes('ready A'));
   expect(l.runs()[0]).toBe('start A launcher=no: The code is not a git checkout, so it cannot update itself. settle= args=');
   l.proc.kill('SIGTERM');
   expect(await l.exit).toBe(0);
