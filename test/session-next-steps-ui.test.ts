@@ -2,7 +2,8 @@
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_RUN_OPTIONS, type Session } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Attention, type Session } from '../src/shared/types.ts';
+import { nextStepsOnPage } from '../web/src/components/nextSteps.tsx';
 import type { SessionDetail } from '../web/src/api.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
 
@@ -41,5 +42,18 @@ describe('Mark as complete on a session\'s own page (DISP-124)', () => {
   it('not while it runs, and not on an orchestrator, which has its own controls', () => {
     expect(page(session({ kind: 'release', status: 'running' }))).not.toContain('Mark as complete');
     expect(page(session({ kind: 'orchestrator', project_id: null, project_key: null }))).not.toContain('Mark as complete');
+  });
+
+  it('not on the Assistant chat, but a chat on an item still has it (DISP-128)', () => {
+    expect(page(session({ kind: 'assistant', title: 'Assistant', project_id: null, project_key: null }))).not.toContain('Mark as complete');
+    expect(page(session({ kind: 'discuss', title: 'Discuss P-1', item_ids: [1] }))).toContain('Mark as complete');
+  });
+});
+
+describe('nextStepsOnPage (DISP-128)', () => {
+  const turn: Attention = { kind: 'turn', text: '' };
+  it('every kind but the Assistant chat and an orchestrator', () => {
+    for (const kind of ['work', 'release', 'discuss', 'planner']) expect(nextStepsOnPage({ kind }, turn)).toBe(true);
+    for (const kind of ['assistant', 'orchestrator']) expect(nextStepsOnPage({ kind }, turn)).toBe(false);
   });
 });
