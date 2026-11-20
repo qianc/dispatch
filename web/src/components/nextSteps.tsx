@@ -64,10 +64,10 @@ function ProposalActions({ sessionId, projectKey, card, many }: { sessionId: num
 /**
  * Whether an idle session's own page shows NextSteps (DISP-124): for any kind, as the Inbox does,
  * except where the page has the controls itself: an orchestrator's plan, and a planning chat's
- * cards in the chat.
+ * cards in the chat. The Assistant chat is never complete, so it has none (DISP-128).
  */
 export const nextStepsOnPage = (s: { kind: string }, a: Attention) =>
-  s.kind !== 'orchestrator' && a.kind !== 'proposal' && a.kind !== 'plan' && a.kind !== 'step_failed';
+  s.kind !== 'orchestrator' && s.kind !== 'assistant' && a.kind !== 'proposal' && a.kind !== 'plan' && a.kind !== 'step_failed';
 
 /**
  * What an idle session needs, with buttons. Ready-made replies are sent and open the session so
