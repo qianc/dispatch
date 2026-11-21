@@ -49,6 +49,10 @@ const json = <T>(v: unknown, fallback: T): T => (typeof v === 'string' ? (JSON.p
 const bool = (v: unknown) => v === 1 || v === 1n;
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
+/** A project row with its neighbours' keys (DISP-126) as a JSON array. */
+const PROJECT_SELECT = `SELECT p.*, (SELECT json_group_array(n.key) FROM project_neighbours pn2 JOIN projects n ON n.id = pn2.neighbour_id
+  WHERE pn2.project_id = p.id) AS neighbours FROM projects p`;
+
 function toProject(r: Row): Project {
   return {
     id: Number(r.id),
@@ -66,6 +70,7 @@ function toProject(r: Row): Project {
     worker_id: numOrNull(r.worker_id),
     placement_md: String(r.placement_md ?? ''),
     agents_edit_items: bool(r.agents_edit_items),
+    neighbours: json<string[]>(r.neighbours, []).sort(),
     disabled: bool(r.disabled),
     disabled_at: (r.disabled_at as string | null) ?? null,
     disabled_by: (r.disabled_by as string | null) ?? null,
@@ -234,24 +239,38 @@ export class Store {
 
   // ---------- projects ----------
   projects(): Project[] {
-    return this.db.all('SELECT * FROM projects ORDER BY name').map(toProject);
+    return this.db.all(`${PROJECT_SELECT} ORDER BY p.name`).map(toProject);
   }
   project(id: number): Project | undefined {
-    const r = this.db.get('SELECT * FROM projects WHERE id = ?', id);
+    const r = this.db.get(`${PROJECT_SELECT} WHERE p.id = ?`, id);
     return r && toProject(r);
   }
   projectByKey(key: string): Project | undefined {
-    const r = this.db.get('SELECT * FROM projects WHERE key = ?', key.toUpperCase());
+    const r = this.db.get(`${PROJECT_SELECT} WHERE p.key = ?`, key.toUpperCase());
     return r && toProject(r);
   }
-  createProject(p: Omit<Project, 'id' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md' | 'agents_edit_items'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
+  /** The projects whose items this project's sessions may file (DISP-126), by key. */
+  neighbours(projectId: number): Project[] {
+    return this.db
+      .all(`${PROJECT_SELECT} JOIN project_neighbours pn ON pn.neighbour_id = p.id WHERE pn.project_id = ? ORDER BY p.key`, projectId)
+      .map(toProject);
+  }
+  setNeighbours(projectId: number, neighbourIds: number[]) {
+    this.db.tx(() => {
+      this.db.run('DELETE FROM project_neighbours WHERE project_id = ?', projectId);
+      for (const id of new Set(neighbourIds)) {
+        if (id !== projectId) this.db.run('INSERT INTO project_neighbours (project_id, neighbour_id) VALUES (?, ?)', projectId, id);
+      }
+    });
+  }
+  createProject(p: Omit<Project, 'id' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md' | 'agents_edit_items' | 'neighbours'> & Partial<Pick<Project, 'github_account' | 'claude_account' | 'claude_allowed' | 'color' | 'icon' | 'worker_id' | 'placement_md'>>): Project {
     const { lastId } = this.db.run(
       'INSERT INTO projects (key, name, description, default_force_plan, importance_scale, effort_scale) VALUES (?, ?, ?, ?, ?, ?)',
       p.key, p.name, p.description, p.default_force_plan ? 1 : 0, JSON.stringify(p.importance_scale), JSON.stringify(p.effort_scale),
     );
     return this.project(lastId)!;
   }
-  updateProject(id: number, patch: Partial<Omit<Project, 'id' | 'key' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by'>>): Project {
+  updateProject(id: number, patch: Partial<Omit<Project, 'id' | 'key' | 'created_at' | 'disabled' | 'disabled_at' | 'disabled_by' | 'neighbours'>>): Project {
     const cur = this.project(id)!;
     const n = { ...cur, ...patch };
     this.db.run(

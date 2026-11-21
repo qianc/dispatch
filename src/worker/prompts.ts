@@ -98,6 +98,7 @@ export function workPrompt(spec: StartSpec): string {
       : []),
     '- Your environment: change nothing outside this checkout (the owner\'s own checkout, its venv, shared caches) except through the repo\'s own tools and scripts. If a test fails because of your environment and not your change, fix the environment and re-run, so shared test records are true. Before you finish, remove any failure records you caused that way.',
     '- If you find a problem outside this batch, file it with the `create_item` tool (dispatch MCP server) instead of fixing it. Use `get_item` / `add_comment` to read or annotate items.' + (spec.agents_edit_items ? ' When your work makes an item\'s title or description wrong or incomplete, correct it with `update_item` (title, body_md); do not leave that as a comment for the owner to apply.' : ''),
+    ...neighbourLine(spec.neighbours, '- '),
     '- If the owner asks you to also work on another item (by key, or by its number, e.g. "also do 100" means ' + spec.project_key + '-100), call `add_to_batch` with its key before you start on it. Items in the batch are closed when the branch merges; items you only mention are not.',
   );
   const exec = {
@@ -153,7 +154,7 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
     '',
   ];
   if (spec.schedule) {
-    lines.push(...scheduledJob(spec.schedule, !!spec.agents_edit_items));
+    lines.push(...scheduledJob(spec.schedule, !!spec.agents_edit_items), ...neighbourLine(spec.neighbours));
   } else if (spec.source) {
     lines.push(
       '## Source document to split',
@@ -265,6 +266,13 @@ function otherProjects(spec: StartSpec): string[] {
 }
 
 /** A scheduled run (DISP-13): pick within the scope and start it, or start nothing. */
+/** Work for a neighbour project goes there (DISP-126); nothing when the project has none. */
+function neighbourLine(neighbours: StartSpec['neighbours'], bullet = ''): string[] {
+  if (!neighbours?.length) return [];
+  const list = neighbours.map((n) => `${n.key} (${n.name})`).join(', ');
+  return [`${bullet}Work that belongs to a neighbour project (${list}) goes there: file it with \`create_item\` and its \`project_key\`. It lands in that project's triage for the owner, linked to this session. Other projects are out of reach: file such work here and name the project it belongs to.`];
+}
+
 function scheduledJob(s: NonNullable<StartSpec['schedule']>, editItems = false): string[] {
   const n = s.max_batches;
   return [

@@ -189,6 +189,10 @@ export class Sessions {
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
   assistantRpc: AssistantRpc | null = null;
+  /** A project's own instructions for agents (set by app.ts; see projectRules.ts). */
+  rules: (p: Project) => Promise<string> = async () => '';
+  /** `session:project` pairs whose rules a session was shown before filing there (DISP-126) */
+  private neighbourRulesShown = new Set<string>();
   /** The orchestrator's tools (set by app.ts). */
   orchestratorRpc: ((s: Session, method: string, p: Record<string, unknown>) => Promise<unknown>) | null = null;
   /**
@@ -1257,6 +1261,7 @@ export class Sessions {
         return { batch: this.store.itemsByIds(this.store.session(s.id)!.item_ids).map((i) => ({ key: i.key, title: i.title, status: i.status })) };
       }
       case 'create_item': {
+        if (p.project_key != null && String(p.project_key).trim().toUpperCase() !== project.key) return this.createNeighbourItem(s, project, p);
         const parsed = proposedItemSchema.parse(p);
         const item = this.store.createProposedItems(project.id, [parsed], this.agentSource(s).id)[0];
         this.bus.emit({ t: 'item', item });
@@ -1347,6 +1352,42 @@ export class Sessions {
         return { commented: it.key, comment_id: c.id };
       }
     }
+  }
+
+  /**
+   * A work session or a scheduled run files an item into a neighbour of its project (DISP-126): only
+   * one the owner linked, never the other way round. It lands in triage there, for the owner to
+   * review, linked to this session. The neighbour's own rules for agents come back first, once.
+   */
+  private async createNeighbourItem(s: Session, own: Project, p: Record<string, unknown>) {
+    if (!(s.kind === 'work' || (s.kind === 'planner' && s.schedule_id))) throw new Error(`Only work sessions and scheduled runs file items into other projects.`);
+    const key = String(p.project_key).trim().toUpperCase();
+    const allowed = this.store.neighbours(own.id);
+    const target = allowed.find((n) => n.key === key);
+    if (!target) {
+      throw new Error(`${key} is not a neighbour of ${own.key}: ${allowed.length ? `you may file into ${allowed.map((n) => n.key).join(', ')}` : 'it has none'}. File it here and say in the description which project it belongs to.`);
+    }
+    assertWritable(this.store, target);
+    const seen = `${s.id}:${target.id}`;
+    if (!this.neighbourRulesShown.has(seen)) {
+      this.neighbourRulesShown.add(seen);
+      const rules = await this.rules(target);
+      if (rules) {
+        throw new Error([
+          `Nothing created yet. ${target.key} has its own instructions for agents (below). Apply what they say about items (type, required ids or fields, naming, language) and call create_item again.`,
+          '',
+          rules,
+        ].join('\n'));
+      }
+    }
+    const { project_key: _k, ...fields } = p;
+    const parsed = proposedItemSchema.parse(fields);
+    const item = this.store.createItem(target.id, {
+      ...parsed, status: 'triage', source_id: this.agentSource(s, target.id).id, labels: parsed.labels ?? [], modules: parsed.modules ?? [],
+    });
+    this.bus.emit({ t: 'item', item });
+    this.addEvent(s.id, { kind: 'system', text: `Filed ${item.key} in project ${target.key}` });
+    return { key: item.key, id: item.id, project: target.key, status: item.status };
   }
 
   /** cross-project approvals already used: each one runs its request once */
@@ -1797,6 +1838,9 @@ export class Sessions {
       resume,
       resume_note: resumeNote,
       ...(s.kind === 'planner' ? { workers: this.plannerWorkers(s.started_by), placement_md: project?.placement_md ?? '' } : {}),
+      ...(project && (s.kind === 'work' || schedule) && project.neighbours.length
+        ? { neighbours: this.store.neighbours(project.id).filter((n) => !n.disabled).map((n) => ({ key: n.key, name: n.name, importance_scale: n.importance_scale, effort_scale: n.effort_scale })) }
+        : {}),
       ...(project?.agents_edit_items || orchestration?.spec.projects.some((p) => p.agents_edit_items) ? { agents_edit_items: true } : {}),
       ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
@@ -1882,7 +1926,8 @@ export class Sessions {
   agentSource(s: Session, projectId = s.project_id!) {
     const existing = this.store.sources(projectId).find((src) => src.kind === 'agent_session' && src.session_id === s.id);
     return existing ?? this.store.createSource(projectId, {
-      kind: 'agent_session', title: `Found during session #${s.id}: ${s.title}`, body_md: '', reporter: 'claude',
+      // filed in another project (DISP-126, an orchestrator): say which project the session is in
+      kind: 'agent_session', title: `Found during session #${s.id}${projectId !== s.project_id && s.project_id ? ` (${this.store.project(s.project_id)?.key})` : ''}: ${s.title}`, body_md: '', reporter: 'claude',
       version_tag: null, skill_name: null, session_id: s.id,
     });
   }

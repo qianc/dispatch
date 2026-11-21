@@ -574,7 +574,7 @@ function ProjectWorkers({ project, onSave, text, onText, onBlur }: { project: Pr
 }
 
 /** The project's own settings: each saves when it changes, and Revert restores them all (DISP-96). */
-const SETTING_KEYS = ['name', 'description', 'importance_scale', 'effort_scale', 'color', 'icon', 'worker_id', 'placement_md', 'default_force_plan', 'agents_edit_items', 'muted', 'github_account', 'claude_allowed', 'claude_account', 'disabled'] as const;
+const SETTING_KEYS = ['name', 'description', 'importance_scale', 'effort_scale', 'color', 'icon', 'worker_id', 'placement_md', 'default_force_plan', 'agents_edit_items', 'neighbours', 'muted', 'github_account', 'claude_allowed', 'claude_account', 'disabled'] as const;
 type ProjectValues = Pick<ProjectSummary, (typeof SETTING_KEYS)[number]>;
 const valuesOf = (p: ProjectSummary) => Object.fromEntries(SETTING_KEYS.map((k) => [k, p[k]])) as ProjectValues;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -590,6 +590,32 @@ type TextKey = keyof ReturnType<typeof draftValues>;
 const TYPING_KEYS: TextKey[] = ['name', 'description', 'placement_md'];
 const TYPING_PAUSE_MS = 800;
 const SAVED_SHOWN_MS = 3000;
+
+/**
+ * The projects this project's work sessions and scheduled runs may file items into (DISP-126).
+ * One way: ticking ECAI here does not let ECAI's sessions file into this project.
+ */
+function ProjectNeighbours({ project, onSave }: { project: ProjectSummary; onSave: (patch: object) => void }) {
+  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: () => api.get<ProjectSummary[]>('/projects') });
+  const others = projects.filter((p) => p.key !== project.key && (!p.disabled || project.neighbours.includes(p.key)));
+  const toggle = (key: string, on: boolean) => onSave({ neighbours: on ? [...project.neighbours, key] : project.neighbours.filter((k) => k !== key) });
+  return (
+    <Section title="Neighbour projects" intro={`Work sessions and scheduled runs of ${project.key} may file items into the projects ticked here. The items land in that project's Triage, linked to the session. One way only.`}>
+      <Card className="p-3 space-y-3">
+        {others.length === 0 && <p className="text-[14px] text-muted">No other projects.</p>}
+        {others.map((p) => (
+          <label key={p.key} className="flex items-center justify-between gap-3 text-[14px]">
+            <span className="flex items-center gap-2 min-w-0">
+              <ProjectBadge project={p} size={20} />
+              <span className="truncate">{p.name} <span className="text-muted">{p.key}{p.disabled ? ' · disabled' : ''}</span></span>
+            </span>
+            <input type="checkbox" checked={project.neighbours.includes(p.key)} onChange={(e) => toggle(p.key, e.target.checked)} className="size-5 shrink-0 accent-[var(--color-accent-strong)]" />
+          </label>
+        ))}
+      </Card>
+    </Section>
+  );
+}
 
 function ProjectSettings({ project }: { project: ProjectSummary }) {
   const qc = useQueryClient();
@@ -803,6 +829,7 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
           </label>
         </Card>
       </Section>
+      <ProjectNeighbours project={project} onSave={save} />
       <ProjectState project={project} onChange={(disabled) => void run(() => lock(disabled))} />
       <Section title="Project">
         <div className="mx-3">

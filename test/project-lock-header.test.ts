@@ -15,7 +15,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const project = (disabled: boolean): ProjectSummary => ({
   id: 1, key: 'LK', name: 'Locks', description: '', default_force_plan: false, importance_scale: [], effort_scale: [], github_account: null, claude_account: null, claude_allowed: null,
-  color: null, icon: null, worker_id: null, placement_md: '', agents_edit_items: false, disabled, disabled_at: disabled ? '2026-01-02T00:00:00Z' : null, disabled_by: disabled ? 'owner' : null,
+  color: null, icon: null, worker_id: null, placement_md: '', agents_edit_items: false, neighbours: [], disabled, disabled_at: disabled ? '2026-01-02T00:00:00Z' : null, disabled_by: disabled ? 'owner' : null,
   created_at: '2026-01-01T00:00:00Z', muted: false, repos: [],
 });
 
