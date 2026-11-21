@@ -99,7 +99,7 @@ describe('orchestrator: steps', () => {
     await expect(t.rpc(p.id, 'get_session', { session_id: other.id })).rejects.toThrow(`Session #${other.id} is not a step of this orchestration.`);
   });
 
-  it('finish is refused while a step runs; with all steps settled it completes the session', async () => {
+  it('finish is refused while a step runs; with all steps settled it waits for the owner to mark it complete (DISP-121)', async () => {
     const p = await t.approved();
     await t.startStep(p.id, p.first.id);
     await expect(t.rpc(p.id, 'finish', { result: 'x' })).rejects.toThrow('Step 1 is still running: finish when every step is done, failed or skipped.');
@@ -109,8 +109,32 @@ describe('orchestrator: steps', () => {
     t.status(p.id, 'idle');
     await t.rpc(p.id, 'finish', { result: 'Tokens are in. Both projects use them.' });
     expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('done');
-    expect(t.store.session(p.id)).toMatchObject({ status: 'completed', last_text: 'Tokens are in. Both projects use them.' });
+    expect(t.store.session(p.id)).toMatchObject({ status: 'idle', last_text: 'Tokens are in. Both projects use them.' });
     expect(t.pushes.map((x) => x.title)).toContain('Rework auth: finished');
+    expect(t.s.ctx.orchestrator.attention(p.id)).toEqual({ kind: 'finished', met: true, text: 'Finished. Read its summary, then mark it complete.' });
+    expect(t.store.events(p.id).map((e) => JSON.stringify(e.body)).join()).toContain('Finished: every step is done.');
+    // in the Inbox, with Mark as complete
+    expect((await t.s.call<{ idle: { id: number; attention: { kind: string } }[] }>('GET', '/inbox')).data.idle.find((x) => x.id === p.id)?.attention.kind).toBe('finished');
+    await t.s.call('POST', `/sessions/${p.id}/finish`, { status: 'completed' });
+    expect(t.store.session(p.id)!.status).toBe('completed');
+  });
+
+  it('a run with failed or skipped steps does not finish as a success, and the owner\'s message opens it again (DISP-121)', async () => {
+    const p = await t.approved();
+    t.store.updateStep(p.first.id, { state: 'done' });
+    t.store.updateStep(p.second.id, { state: 'failed' });
+    t.store.updateStep(p.third.id, { state: 'skipped' });
+    t.status(p.id, 'running');
+    t.status(p.id, 'idle');
+    await t.rpc(p.id, 'finish', { result: 'Half of it.' });
+    expect(t.s.ctx.orchestrator.attention(p.id)).toEqual({
+      kind: 'finished', met: false, text: 'Finished, but the goal is not fully met: step 2 failed, step 3 skipped. Read its summary, then re-plan or mark it complete.',
+    });
+    expect(t.pushes.find((x) => x.title === 'Rework auth: finished')?.body).toBe('Goal not fully met. Half of it.');
+    // Re-plan: the owner writes to it, and it runs again with its plan
+    await t.s.call('POST', `/sessions/${p.id}/messages`, { text: 'Re-plan.' });
+    expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('run');
+    expect(t.store.session(p.id)!.status).not.toBe('completed');
   });
 
   it('not approved: start_step is refused', async () => {

@@ -24,6 +24,12 @@ export function asksFor(a: Attention): Ask[] {
       { label: 'Show new output', text: 'Show me examples of the new or updated output from this work (for example screenshots, sample files, or before/after). Link to the files in the repo so I can open them in the app.' },
     ];
   }
+  // a finished orchestrator whose goal is not met: it plans what is left, and the owner approves it (DISP-121)
+  if (a.kind === 'finished' && !a.met) {
+    return [
+      { label: 'Re-plan', text: 'The goal is not fully met. Propose a change of the plan for what failed or was skipped (with amend_plan or set_plan), with one line per step on why it will work this time. Start nothing until I approve it.' },
+    ];
+  }
   if (a.kind === 'review') {
     return [
       { label: 'Summarise the change', text: 'Summarise what changed in this branch and why, and anything I should look at closely before merging.' },
@@ -64,10 +70,11 @@ function ProposalActions({ sessionId, projectKey, card, many }: { sessionId: num
 /**
  * Whether an idle session's own page shows NextSteps (DISP-124): for any kind, as the Inbox does,
  * except where the page has the controls itself: an orchestrator's plan, and a planning chat's
- * cards in the chat. The Assistant chat is never complete, so it has none (DISP-128).
+ * cards in the chat. The Assistant chat is never complete, so it has none (DISP-128). A finished
+ * orchestrator has them: its plan has nothing left to do (DISP-121).
  */
 export const nextStepsOnPage = (s: { kind: string }, a: Attention) =>
-  s.kind !== 'orchestrator' && s.kind !== 'assistant' && a.kind !== 'proposal' && a.kind !== 'plan' && a.kind !== 'step_failed';
+  a.kind === 'finished' || (s.kind !== 'orchestrator' && s.kind !== 'assistant' && a.kind !== 'proposal' && a.kind !== 'plan' && a.kind !== 'step_failed');
 
 /**
  * What an idle session needs, with buttons. Ready-made replies are sent and open the session so
@@ -104,8 +111,8 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
   }
   return (
     <div className={cx('flex flex-wrap gap-2', compact ? '' : 'mt-2.5')}>
-      {/* the same primary button wherever closing it is the next step: merged, or a turn with no ready-made reply (DISP-113) */}
-      {(attention.kind === 'merged' || attention.kind === 'turn') && (
+      {/* the same primary button wherever closing it is the next step: merged, a turn with no ready-made reply (DISP-113), a finished orchestrator (DISP-121) */}
+      {(attention.kind === 'merged' || attention.kind === 'turn' || attention.kind === 'finished') && (
         <Button small variant="primary" disabled={busy} onClick={() => complete.mutate()}>✓ Mark as complete</Button>
       )}
       {(attention.kind === 'review' || attention.kind === 'merge_blocked' || attention.kind === 'checking' || attention.kind === 'merging') && (

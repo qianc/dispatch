@@ -398,8 +398,8 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       minutes: z.number().describe('From 5 to 10080 (7 days)'),
       reason: z.string().describe('What to look at when the timer wakes you'),
     }, call(rpc, 'wake_me_in')),
-    tool('finish', 'End the orchestration when every step is done, failed or skipped. Give the result for the owner.', {
-      result: z.string().describe('What was done, what was left out and why (a few lines)'),
+    tool('finish', 'End the orchestration when every step is done, failed or skipped. Write your full summary in the chat first. The owner then marks it complete, or writes to you to re-plan.', {
+      result: z.string().describe('Short form of your summary: what was done, what failed or was left out and why, and whether the goal is met (a few lines)'),
     }, call(rpc, 'finish')),
   ];
 }

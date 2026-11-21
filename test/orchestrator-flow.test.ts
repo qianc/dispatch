@@ -56,7 +56,9 @@ describe('orchestrator: the worker', () => {
     const first = await runStep(0);
     const second = await runStep(1);
     expect(second).not.toBe(first);
-    await waitFor(() => view().phase === 'done' && t.store.session(id)!.status === 'completed', 'the end', 15_000);
+    // it waits for the owner to mark it complete (DISP-121)
+    await waitFor(() => view().phase === 'done' && t.store.session(id)!.status === 'idle', 'the end', 15_000);
+    expect(t.s.ctx.orchestrator.attention(id)).toMatchObject({ kind: 'finished', met: true });
     expect(view().steps.map((x) => x.state)).toEqual(['done', 'done']);
     expect(t.store.session(id)!.last_text).toBe('(fake) All done.');
     expect(t.pushes.map((x) => x.title)).toEqual(expect.arrayContaining(['Rework auth: plan ready to approve', 'Rework auth: finished']));

@@ -2,7 +2,7 @@
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_RUN_OPTIONS, type Attention, type Session } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type Attention, type Orchestration, type Session } from '../src/shared/types.ts';
 import { nextStepsOnPage } from '../web/src/components/nextSteps.tsx';
 import type { SessionDetail } from '../web/src/api.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
@@ -49,6 +49,24 @@ describe('Mark as complete on a session\'s own page (DISP-124)', () => {
   it('not while it runs, and not on an orchestrator, which has its own controls', () => {
     expect(page(session({ kind: 'release', status: 'running' }))).not.toContain('Mark as complete');
     expect(page(session({ kind: 'orchestrator', project_id: null, project_key: null }))).not.toContain('Mark as complete');
+  });
+
+  it('a finished orchestrator has it on its page, with what it left undone (DISP-121)', () => {
+    const s = session({ kind: 'orchestrator', project_id: null, project_key: null });
+    const qc = new QueryClient();
+    const orchestration: Orchestration = {
+      session_id: s.id, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'done', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1, answer_children: true, notify_owner: 'needs_you', quiet_log: [], cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
+      max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: null, proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '',
+      steps: [1, 2].map((n) => ({
+        id: n, orchestration_id: s.id, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
+        state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null,
+      })),
+    };
+    qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, orchestration } satisfies SessionDetail);
+    const text = textOf(renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' }));
+    expect(text).toContain('Finished, but the goal is not fully met: step 2 failed.');
+    expect(text).toContain('✓ Mark as complete');
+    expect(text).toContain('Re-plan');
   });
 
   it('not on the Assistant chat, but a chat on an item still has it (DISP-128)', () => {

@@ -2,7 +2,7 @@
 // starts each step as a batch. Every rule is enforced here, whatever the orchestrator's prompt says:
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
-import { autoMergePending, failureReason } from '../shared/attention.ts';
+import { autoMergePending, failureReason, finishGaps, finishedAttention } from '../shared/attention.ts';
 import { FINAL_STATUSES, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
@@ -148,6 +148,8 @@ export class Orchestrator {
       if (o.steps.length && !o.plan_approved) return { kind: 'plan', text: 'The plan is ready: read it and approve it.' };
       return { kind: 'plan', text: 'It waits for your reply before it can plan.' };
     }
+    // it called finish: the owner reads the summary and marks it complete, or writes to it to re-plan (DISP-121)
+    if (o.phase === 'done') return finishedAttention(o);
     if (o.phase !== 'run') return null;
     const failed = o.steps.find((s) => s.state === 'failed');
     if (failed) return { kind: 'step_failed', step_id: failed.id, text: `Step ${failed.position} failed.${this.heldText(o, failed)}` };
@@ -629,10 +631,13 @@ export class Orchestrator {
   /** orchestrator sessions that proposed a plan or started a step this turn: that turn's end needs no "waiting for you" */
   private acted = new Set<number>();
 
-  /** orchestrator sessions that called finish during a turn: closed when that turn ends */
+  /** orchestrator sessions that called finish during a turn: the owner is told when that turn ends */
   private finishWhenIdle = new Set<number>();
 
-  /** The orchestrator is done: the result is its last word, and the session completes. */
+  /**
+   * The orchestrator is done: the result is its last word. The session stays open for the owner,
+   * who reads the summary and marks it complete, or writes to it to re-plan (DISP-121).
+   */
   private finish(s: Session, o: Orchestration, result: string): string {
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
     const busy = o.steps.find((x) => x.state === 'running' || x.state === 'review');
@@ -640,22 +645,34 @@ export class Orchestrator {
     this.store.updateOrchestration(o.session_id, { phase: 'done' });
     this.store.dropTimers(o.session_id);
     if (result) this.store.updateSession(s.id, { last_text: result.slice(0, 300) });
-    if (this.store.session(s.id)!.status === 'idle') this.close(s.id);
+    // in the chat, whatever the summary says: whether the goal is met, from the steps themselves
+    const gaps = finishGaps(o);
+    this.sessions.systemNote(s.id, gaps ? `Finished, but the goal is not fully met: ${gaps}.` : 'Finished: every step is done.');
+    if (this.store.session(s.id)!.status === 'idle') this.finished(s.id);
     else this.finishWhenIdle.add(s.id);
     this.emit(o.session_id);
-    return 'Finished. End your turn now.';
+    return 'Finished. End your turn now: the owner reads your summary and marks the orchestration complete, or writes to you to re-plan.';
   }
 
-  /** Complete a finished orchestration's session and tell the owner. */
-  private close(sessionId: number) {
+  /** A finished orchestration waits for its owner: one push with the result. */
+  private finished(sessionId: number) {
     this.finishWhenIdle.delete(sessionId);
     const s = this.store.session(sessionId)!;
-    this.sessions.finish(sessionId, 'completed');
     this.flushOwner(sessionId);
     // the batches it completed without a push are counted here, the one push at the end (DISP-122)
     const quiet = this.store.quietLog(sessionId, 1000).filter((e) => e.text.includes('session completed')).length;
     const counted = quiet ? `${quiet} batch${quiet === 1 ? '' : 'es'} completed without a push (see the quiet log). ` : '';
-    void this.notifier.send({ title: `${s.title}: finished`, body: `${counted}${s.last_text ?? 'All steps are settled.'}`.slice(0, 180), url: `/s/${sessionId}`, tag: `orch-done-${sessionId}` }, s.started_by);
+    const unmet = finishGaps(this.store.orchestration(sessionId)!) ? 'Goal not fully met. ' : '';
+    void this.notifier.send({ title: `${s.title}: finished`, body: `${unmet}${counted}${s.last_text ?? 'All steps are settled.'}`.slice(0, 180), url: `/s/${sessionId}`, tag: `orch-done-${sessionId}` }, s.started_by);
+    this.emit(sessionId);
+  }
+
+  /** The owner wrote to a finished orchestration: it runs again, to re-plan or answer them (DISP-121). */
+  ownerWrote(sessionId: number) {
+    const o = this.store.orchestration(sessionId);
+    if (o?.phase !== 'done') return;
+    this.store.updateOrchestration(sessionId, { phase: 'run' });
+    this.sessions.systemNote(sessionId, 'Opened again by the owner\'s message.');
     this.emit(sessionId);
   }
 
@@ -825,7 +842,7 @@ export class Orchestrator {
   /** The event that tells the orchestrator to wrap up, when every step is done or skipped. */
   private allFinished(o: Orchestration): string[] {
     return o.phase === 'run' && o.steps.length && o.steps.every((s) => SETTLED.includes(s.state))
-      ? ['All steps are finished. Write the result for the owner and call finish.'] : [];
+      ? ['All steps are finished. Write your summary for the owner and call finish.'] : [];
   }
 
   private heldText(o: Orchestration, failed: OrchestrationStep): string {
@@ -875,7 +892,7 @@ export class Orchestrator {
       const title = notice === 'change' ? `${s.title}: plan change to approve` : `${s.title}: plan ready to approve`;
       void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
     }
-    if (this.finishWhenIdle.has(s.id)) return this.close(s.id);
+    if (this.finishWhenIdle.has(s.id)) return this.finished(s.id);
     this.emit(s.id);
     // a question it was told about and left open in the turn that just ended is the owner's
     const waiting = this.dueEvents(s.id);

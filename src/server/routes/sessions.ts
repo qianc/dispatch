@@ -177,6 +177,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const s = session((req.params as { id: string }).id);
     const { text, images, ...opts } = message.parse(req.body);
     sessions.send(s.id, text, images, opts);
+    if (s.kind === 'orchestrator') orchestrator.ownerWrote(s.id);
     return { ok: true };
   });
 

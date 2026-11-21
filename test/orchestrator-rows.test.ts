@@ -59,6 +59,24 @@ describe('orchestrations in the lists', () => {
     expect(liveGroups([], inbox).needs.map((n) => [n.title, n.tone])).toEqual([['Auth rework', 'wait'], ['Billing move', 'bad']]);
   });
 
+  it('a finished orchestrator offers Mark as complete, and Re-plan when its goal is not met (DISP-121)', () => {
+    const inbox: Inbox = {
+      inputs: [], failed: [], prs: [], sessions: [], cleanup: null,
+      idle: [
+        { ...session({ id: 5 }), attention: { kind: 'finished', met: true, text: 'Finished. Read its summary, then mark it complete.' } },
+        { ...session({ id: 6, title: 'Billing move' }), attention: { kind: 'finished', met: false, text: 'Finished, but the goal is not fully met: step 2 failed. Read its summary, then re-plan or mark it complete.' } },
+      ],
+    };
+    const qc = new QueryClient();
+    qc.setQueryData(['inbox'], inbox);
+    qc.setQueryData(['worker'], { connected: true });
+    const html = renderPage(createElement(InboxPage), { qc });
+    const text = textOf(html);
+    expect(text).toContain('Orchestrator finished: Finished, but the goal is not fully met: step 2 failed.');
+    expect(html.match(/<button[^>]*bg-accent-strong[^>]*>✓ Mark as complete/g)).toHaveLength(2);
+    expect(text.match(/Re-plan/g)).toHaveLength(1);
+  });
+
   it("an orchestrator's row shows its steps and what it waits for, not \"Your turn\"", () => {
     const text = textOf(renderPage(createElement(SessionRow, { s: session(), showProject: true, orch })));
     expect(text).toContain('Auth rework');

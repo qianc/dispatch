@@ -105,6 +105,6 @@ describe('orchestrator: notices of its batches (DISP-122)', () => {
     t.status(p.id, 'running');
     await t.rpc(p.id, 'finish', { result: 'All done.' });
     t.status(p.id, 'idle');
-    expect(t.pushes).toEqual([{ title: 'Rework auth: finished', body: '2 batches completed without a push (see the quiet log). All done.', url: `/s/${p.id}` }]);
+    expect(t.pushes).toEqual([{ title: 'Rework auth: finished', body: 'Goal not fully met. 2 batches completed without a push (see the quiet log). All done.', url: `/s/${p.id}` }]);
   });
 });

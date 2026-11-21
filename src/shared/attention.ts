@@ -1,4 +1,24 @@
-import type { Attention, OpenProposal, PullRequest, Session, SessionEvent } from './types.ts';
+import type { Attention, OpenProposal, Orchestration, PullRequest, Session, SessionEvent } from './types.ts';
+
+const listed = (n: number[]) => (n.length > 1 ? `steps ${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : `step ${n[0]}`);
+
+/**
+ * What a finished orchestration left undone: its failed steps and the skipped ones that were not
+ * optional, e.g. "step 2 failed, steps 3 and 4 skipped". Empty when the goal is met (DISP-121).
+ */
+export function finishGaps(o: Pick<Orchestration, 'steps'>): string {
+  const failed = o.steps.filter((s) => s.state === 'failed').map((s) => s.position);
+  const skipped = o.steps.filter((s) => s.state === 'skipped' && !s.optional).map((s) => s.position);
+  return [failed.length ? `${listed(failed)} failed` : '', skipped.length ? `${listed(skipped)} skipped` : ''].filter(Boolean).join(', ');
+}
+
+/** A finished orchestration: a run with failed or skipped steps never reads as a success (DISP-121). */
+export function finishedAttention(o: Pick<Orchestration, 'steps'>): Extract<Attention, { kind: 'finished' }> {
+  const gaps = finishGaps(o);
+  return gaps
+    ? { kind: 'finished', met: false, text: `Finished, but the goal is not fully met: ${gaps}. Read its summary, then re-plan or mark it complete.` }
+    : { kind: 'finished', met: true, text: 'Finished. Read its summary, then mark it complete.' };
+}
 
 /**
  * Auto-merge still has this open PR in hand: it waits for the checks (GitHub checks, or the repo's

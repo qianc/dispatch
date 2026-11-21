@@ -144,7 +144,7 @@ describe('orchestrator: children', () => {
     const child = await t.startStep(p.id, p.first.id);
     childTurn(child);
     t.pr(child, 'merged');
-    expect(told(p.id).at(-1)).toContain('- All steps are finished. Write the result for the owner and call finish.');
+    expect(told(p.id).at(-1)).toContain('- All steps are finished. Write your summary for the owner and call finish.');
   });
 
   it('a restart delivers queued events once', async () => {
@@ -186,7 +186,7 @@ describe('orchestrator: children', () => {
     expect(t.pushes.map((x) => x.title)).toEqual(['Rework auth: plan ready to approve']);
   });
 
-  it('finish during a turn completes the session when the turn ends', async () => {
+  it('finish during a turn tells the owner when the turn ends, and waits for them (DISP-121)', async () => {
     const p = await t.approved();
     for (const st of [p.first, p.second, p.third]) t.store.updateStep(st.id, { state: 'done' });
     t.status(p.id, 'running');
@@ -194,8 +194,9 @@ describe('orchestrator: children', () => {
     expect(t.store.session(p.id)!.status).toBe('running');
     // its last words arrive while it still runs: it stays finished
     t.s.ctx.bus.emit({ t: 'session', session: t.store.session(p.id)! });
+    expect(t.pushes.map((x) => x.title)).not.toContain('Rework auth: finished');
     t.status(p.id, 'idle');
-    expect(t.store.session(p.id)!.status).toBe('completed');
+    expect(t.store.session(p.id)!.status).toBe('idle');
     expect(t.pushes.map((x) => x.title)).toContain('Rework auth: finished');
     expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('done');
   });
