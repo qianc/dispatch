@@ -657,6 +657,8 @@ export type Attention =
   | { kind: 'plan'; text: string }
   /** an orchestrator with a failed step: retry or skip it there */
   | { kind: 'step_failed'; text: string; step_id: number }
+  /** an orchestrator that called finish: read its summary, then mark it complete, or re-plan when `met` is false (DISP-121) */
+  | { kind: 'finished'; text: string; met: boolean }
   /** its Claude account must be signed in again on the worker, then Retry (DISP-60) */
   | { kind: 'login'; text: string; login: LoginHelp };
 

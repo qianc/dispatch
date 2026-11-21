@@ -13,7 +13,7 @@ import { PrOpenedBy } from '../components/PrState.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from '../components/ui.tsx';
 
 type Idle = InboxData['idle'][number];
-const ORDER: Record<Idle['attention']['kind'], number> = { login: 0, step_failed: 1, merge_blocked: 2, plan: 3, review: 4, proposal: 5, turn: 6, merged: 7, checking: 8, merging: 9 };
+const ORDER: Record<Idle['attention']['kind'], number> = { login: 0, step_failed: 1, merge_blocked: 2, plan: 3, review: 4, proposal: 5, turn: 6, finished: 7, merged: 8, checking: 9, merging: 10 };
 const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | 'ok'; label: string; icon: string; spin?: boolean }> = {
   login: { tone: 'bad', label: 'Needs sign-in', icon: 'M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3' },
   merge_blocked: { tone: 'bad', label: 'Merge stopped', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
@@ -27,13 +27,16 @@ const LOOK: Record<Idle['attention']['kind'], { tone: 'bad' | 'run' | 'wait' | '
   plan: { tone: 'wait', label: 'Orchestrator needs you', icon: 'M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9' },
   step_failed: { tone: 'bad', label: 'Step failed', icon: 'M12 8v5M12 16.5v.5M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
   merged: { tone: 'ok', label: 'Done and merged', icon: 'M5 12.5l4.5 4.5L19 7.5' },
+  // an orchestrator that called finish (DISP-121): its text says when the goal is not fully met
+  finished: { tone: 'ok', label: 'Orchestrator finished', icon: 'M5 12.5l4.5 4.5L19 7.5' },
 };
 const TONE_TEXT = { bad: 'text-bad', run: 'text-run', wait: 'text-wait', ok: 'text-ok' };
 const TONE_EDGE = { bad: 'border-l-bad', run: 'border-l-run', wait: 'border-l-wait', ok: 'border-l-ok' };
 
 /** An idle session: what it needs from you in plain words, and buttons for the usual next steps. */
 function TurnCard({ s }: { s: Idle }) {
-  const look = LOOK[s.attention.kind];
+  // a finished orchestrator whose goal is not met is not a green success (DISP-121)
+  const look = s.attention.kind === 'finished' && !s.attention.met ? { ...LOOK.finished, tone: 'wait' as const } : LOOK[s.attention.kind];
   return (
     <div className={cx('mx-3 rounded-xl bg-panel border border-line border-l-[3px] px-3 py-2.5', TONE_EDGE[look.tone])}>
       <Link to={`/s/${s.id}`} className="block">

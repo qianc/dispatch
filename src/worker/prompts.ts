@@ -238,7 +238,8 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     '- To look at something again later that nothing will tell you about (a nightly build, a release that takes a day), set a timer with `wake_me_in` and end your turn. Never wait in your turn.',
     '- The owner may give you a cost limit. At the limit Dispatch pauses you; you do not track cost yourself.',
     '- When the owner writes to you, answer them. Their word goes before the plan.',
-    '- When every step is finished, write the result for the owner (what was done, what was left out and why) and call `finish`.',
+    '- When every step is finished, write your summary for the owner as your last message: what was done, each merged pull request and what it changed, each failed or skipped step and why, the follow-up items you created, and what the owner should check by hand. If a step failed or the goal is not met, say so plainly in the first line; never call such a run a success. Then call `finish` with a short form of it.',
+    '- After `finish` the owner reads your summary and marks the orchestration complete, or writes to you to re-plan. When they write, answer them; for more work, propose it with `amend_plan` or `set_plan`, and call `finish` again when it is done.',
     ...(o.answer_children ? [
       '',
       "## Your batches' questions",

@@ -21,7 +21,7 @@ import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { OrchestrationPanel } from '../components/orchestration.tsx';
 import { orchBusyLabel, planLink } from '../orchestration.ts';
-import { LIMIT_WAIT_LABEL, attentionOf, limitWaitText } from '../../../src/shared/attention.ts';
+import { LIMIT_WAIT_LABEL, attentionOf, finishedAttention, limitWaitText } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
@@ -183,7 +183,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
-  const attention = attentionOf(s, data.prs, data.events);
+  // a finished orchestrator waits for its owner to mark it complete or re-plan (DISP-121)
+  const attention = data.orchestration?.phase === 'done' ? finishedAttention(data.orchestration) : attentionOf(s, data.prs, data.events);
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   // the request the session waits on: the reply box points to it
@@ -375,6 +376,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {drive && ((s.status === 'idle' && nextStepsOnPage(s, attention)) || (attention.kind === 'login' && (s.status === 'idle' || s.status === 'failed'))) && (
         <div className="px-4 pt-2 pb-1">
           {attention.kind === 'checking' && !data.checks?.length && <p className="text-[13px] text-run animate-pulse mb-2">{attention.text}</p>}
+          {attention.kind === 'finished' && <p className={`text-[13px] mb-2 ${attention.met ? 'text-ok' : 'text-wait'}`}>{attention.text}</p>}
           <NextSteps sessionId={s.id} attention={attention} compact />
         </div>
       )}
