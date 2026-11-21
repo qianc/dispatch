@@ -94,6 +94,23 @@ const itemShape = {
   effort: z.number().int().min(0).nullable().describe('Index into the project effort scale, or null if unknown'),
 };
 
+export type Neighbour = { key: string; name: string; importance_scale: string[]; effort_scale: string[] };
+
+/**
+ * create_item; with neighbours (DISP-126) it may also file into one of them, by `project_key`.
+ * Such an item lands in that project's triage, linked to this session.
+ */
+function createItem(rpc: Rpc, description: string, neighbours: Neighbour[]) {
+  if (!neighbours.length) return tool('create_item', description, itemShape, call(rpc, 'create_item'));
+  const list = neighbours
+    .map((n) => `${n.key} (${n.name}; importance 1–${n.importance_scale.length}: ${n.importance_scale.join(', ')}; effort: ${n.effort_scale.map((e, i) => `${i} ${e}`).join(', ')})`)
+    .join('; ');
+  return tool('create_item', `${description} When the work belongs to a neighbour project, give its project_key: the item is filed there, in its triage, for the owner to review. Neighbours: ${list}. Importance and effort then follow that project's scales.`, {
+    ...itemShape,
+    project_key: z.enum(neighbours.map((n) => n.key) as [string, ...string[]]).optional().describe('Key of a neighbour project to file the item in; leave out for this project'),
+  }, call(rpc, 'create_item'));
+}
+
 /** The title and description of an item: only where the project lets agents change them (DISP-93). */
 const textFields = (edit: boolean): Record<string, z.ZodType> => (edit
   ? {
@@ -396,8 +413,9 @@ const noFiles = async () => {
  * `cross`: planner (not scheduled: nobody is there to approve) and discussion chats get the
  * cross-project tools (DISP-55). `cwd`: the session checkout, where attach_image may take files from (DISP-74).
  * `editItems`: the project lets agents change item titles and descriptions (DISP-93).
+ * `neighbours`: the projects work sessions and scheduled runs may also file items into (DISP-126).
  */
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false) {
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false, neighbours: Neighbour[] = []) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd) });
   if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc, editItems) });
@@ -457,7 +475,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       tool('add_to_batch', 'Add existing items to this batch when the owner asks you to also work on them (e.g. "also look at 100"). Dispatch then tracks them with this session and closes them when the branch merges.', {
         keys: z.array(z.string()).min(1).describe('Item keys, e.g. ["HC-3"]'),
       }, call(rpc, 'add_to_batch')),
-      tool('create_item', 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', itemShape, call(rpc, 'create_item')),
+      createItem(rpc, 'File a new backlog item or bug you found that is outside this batch. It is linked to this session.', neighbours),
     );
     if (editItems) {
       tools.push(
@@ -490,7 +508,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         modules: z.array(z.string()).optional().describe('The full new module list'),
         comment: z.string().optional().describe('A comment to add (markdown): why you changed it'),
       }, call(rpc, 'update_item')),
-      tool('create_item', 'File a new backlog item or bug you found. It is not started unless you put it in a batch.', itemShape, call(rpc, 'create_item')),
+      createItem(rpc, 'File a new backlog item or bug you found. It is not started unless you put it in a batch.', neighbours),
     );
   } else {
     tools.push(

@@ -32,7 +32,7 @@ const pr = (number: number, over: Partial<ProjectPr> = {}): ProjectPr => ({
 const repo = (id: number, over: Partial<Repo> = {}): Repo => ({ id, project_id: 1, github_owner: 'me', github_name: 'app', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null, kind: 'github', ...over });
 const project = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
   id: 1, key: 'PP', name: 'PP', description: '', default_force_plan: false, importance_scale: [], effort_scale: [], github_account: null, claude_account: null, claude_allowed: null,
-  color: null, icon: null, worker_id: null, placement_md: '', agents_edit_items: false, disabled: false, disabled_at: null, disabled_by: null, created_at: '2026-01-01T00:00:00Z', muted: false, repos: [repo(1)], ...over,
+  color: null, icon: null, worker_id: null, placement_md: '', agents_edit_items: false, neighbours: [], disabled: false, disabled_at: null, disabled_by: null, created_at: '2026-01-01T00:00:00Z', muted: false, repos: [repo(1)], ...over,
 });
 const prList = (over: Partial<ProjectPrList> = {}): ProjectPrList => ({ prs: [], synced_at: new Date().toISOString(), error: null, github_repos: 1, ...over });
 const linked = { session_id: 3, title: 'Batch', item_keys: ['PP-1'] };

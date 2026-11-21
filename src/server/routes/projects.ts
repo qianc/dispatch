@@ -63,8 +63,17 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const def = rest.claude_account === undefined ? p.claude_account : rest.claude_account;
     if (def && allowed?.length && !allowed.includes(def)) throw new HttpError(400, `The default Claude account "${def}" must be one of the allowed accounts`);
     if (rest.worker_id != null && (!workers.get(rest.worker_id) || workers.get(rest.worker_id)!.revoked_at)) throw new HttpError(400, `Unknown worker ${rest.worker_id}`);
+    const { neighbours, ...fields } = rest;
+    // DISP-126: the projects its sessions may file items into
+    const neighbourIds = neighbours?.map((k) => {
+      const n = store.projectByKey(k.trim());
+      if (!n) throw new HttpError(400, `Unknown project "${k}"`);
+      if (n.id === p.id) throw new HttpError(400, `${p.key} cannot be its own neighbour`);
+      return n.id;
+    });
     if (muted !== undefined) store.setMuted(p.id, muted);
-    const updated = store.updateProject(p.id, rest);
+    if (neighbourIds) store.setNeighbours(p.id, neighbourIds);
+    const updated = store.updateProject(p.id, fields);
     bus.emit({ t: 'project', key: p.key });
     return { ...updated, muted: store.isMuted(p.id), repos: store.repos(p.id) };
   });

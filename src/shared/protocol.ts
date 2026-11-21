@@ -34,6 +34,8 @@ export interface StartSpec {
   placement_md?: string;
   /** the project lets agents change the title and description of its items (DISP-93; an orchestrator: one of its projects does) */
   agents_edit_items?: boolean;
+  /** work sessions and scheduled runs: the projects they may also file items into (DISP-126) */
+  neighbours?: { key: string; name: string; importance_scale: string[]; effort_scale: string[] }[];
   /** a scheduled planner run (DISP-13): it starts what it picks, within this scope, unwatched */
   schedule?: { name: string; scope_md: string; max_batches: number };
   /** release sessions: what to release (the worker takes command and notes from its own config) */
