@@ -24,15 +24,22 @@ const session = (over: Partial<Session> = {}): Session => ({
   closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null, ...over,
 });
-const page = (s: Session) => {
+const html = (s: Session) => {
   const qc = new QueryClient();
   qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null } satisfies SessionDetail);
-  return textOf(renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' }));
+  return renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' });
 };
+const page = (s: Session) => textOf(html(s));
 
 describe('Mark as complete on a session\'s own page (DISP-124)', () => {
   it('a finished release session has it, as in the Your turn list', () => {
     expect(page(session({ kind: 'release' }))).toContain('Mark as complete');
+  });
+
+  it('it is the primary button, as on a merged session (DISP-113)', () => {
+    const button = html(session({ kind: 'release' })).match(/<button[^>]*>[^<]*Mark as complete/)?.[0] ?? '';
+    expect(button).toContain('bg-accent-strong');
+    expect(button).toContain('✓ Mark as complete');
   });
 
   it('a work session still has it', () => {

@@ -104,7 +104,8 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
   }
   return (
     <div className={cx('flex flex-wrap gap-2', compact ? '' : 'mt-2.5')}>
-      {attention.kind === 'merged' && (
+      {/* the same primary button wherever closing it is the next step: merged, or a turn with no ready-made reply (DISP-113) */}
+      {(attention.kind === 'merged' || attention.kind === 'turn') && (
         <Button small variant="primary" disabled={busy} onClick={() => complete.mutate()}>✓ Mark as complete</Button>
       )}
       {(attention.kind === 'review' || attention.kind === 'merge_blocked' || attention.kind === 'checking' || attention.kind === 'merging') && (
@@ -125,9 +126,6 @@ export function NextSteps({ sessionId, projectKey, attention, compact }: { sessi
       {asks.map((a) => (
         <Button key={a.label} small disabled={busy} onClick={() => send.mutate(a.text)}>{a.label}</Button>
       ))}
-      {attention.kind === 'turn' && (
-        <Button small disabled={busy} onClick={() => complete.mutate()}>Mark as complete</Button>
-      )}
       <ErrorText error={send.error ?? complete.error} />
     </div>
   );
