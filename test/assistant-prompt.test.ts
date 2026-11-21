@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { assistantPrompt } from '../src/worker/prompts.ts';
 
 describe('the Assistant prompt', () => {
@@ -16,5 +17,18 @@ describe('the Assistant prompt', () => {
     expect(rule).toContain('Do not look in the code for the cause or suggest fixes unless the owner asks.');
     // one rule for it, not two that overlap
     expect(p.match(/check `list_items` for the same bug/g)).toHaveLength(1);
+  });
+});
+
+describe('the prompts do not take the owner for phone-only (DISP-129)', () => {
+  const src = readFileSync(new URL('../src/worker/prompts.ts', import.meta.url), 'utf8');
+
+  it('say mobile or desktop, never that the owner is on their phone', () => {
+    expect(src).not.toMatch(/(from|on) their phone|reads on a phone/);
+    expect(assistantPrompt([])).toContain('on mobile or desktop');
+  });
+
+  it('keep the brevity rule on the reply, not the device', () => {
+    expect(assistantPrompt([])).toContain('Reply briefly.');
   });
 });
