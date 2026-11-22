@@ -3,7 +3,7 @@
 import { dirname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { detectScales, type MdSection } from '../shared/markdownSections.ts';
-import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
+import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, OPEN_ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Sessions } from './sessions.ts';
@@ -134,7 +134,7 @@ export class AssistantTools {
   }
 
   private projectSummary(p: Project) {
-    const open = this.store.items(p.id, { status: ['triage', 'backlog', 'todo', 'in_progress', 'in_review'] });
+    const open = this.store.items(p.id, { status: OPEN_ITEM_STATUSES });
     return {
       key: p.key, name: p.name, description: p.description, link: `/p/${p.key}`,
       repos: this.store.repos(p.id).map((r) => r.local_path ? `local: ${r.local_path} (${r.default_branch})` : `${r.github_owner}/${r.github_name} (${r.default_branch})`),
@@ -212,7 +212,7 @@ export class AssistantTools {
 
       case 'list_items': {
         const project = this.project(p.project_key);
-        const status = Array.isArray(p.status) ? (p.status as string[]) : ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
+        const status = Array.isArray(p.status) ? (p.status as string[]) : OPEN_ITEM_STATUSES;
         return this.store.items(project.id, { status, type: p.type ? String(p.type) : undefined }).map((i) => ({
           key: i.key, type: i.type, title: i.title, status: i.status,
           importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],

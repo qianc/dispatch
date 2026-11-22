@@ -7,6 +7,8 @@ import { z } from 'zod';
 
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
 export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled'] as const;
+/** Items still to be done or under way: what agents and project counts list as open. */
+export const OPEN_ITEM_STATUSES: ItemStatus[] = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
 export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss', 'release', 'orchestrator'] as const;
 /** Light read-only chats: no worker slot, not listed as agent work, no push when a reply is ready. */

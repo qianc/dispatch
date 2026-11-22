@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { MAX_IMAGE_BYTES, sniffImage } from '../shared/chatImages.ts';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
-import { FIX_TOUCHES, MINOR_CHANGES, crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
+import { FIX_TOUCHES, ITEM_STATUSES, MINOR_CHANGES, crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
 
 export type Rpc = (method: RpcMethod, params: unknown) => Promise<unknown>;
 
@@ -437,7 +437,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
             title: z.string().optional(),
             body_md: z.string().optional().describe('The full new description (markdown)'),
             item_type: z.enum(['backlog', 'bug']).optional(),
-            status: z.enum(['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled']).optional(),
+            status: z.enum(ITEM_STATUSES).optional(),
             importance: z.union([z.number(), z.string()]).optional().describe('1-4 or a label of the project importance scale'),
             effort: z.union([z.number(), z.string()]).nullable().optional().describe('A label of the project effort scale, or null'),
             tags: z.array(z.string()).optional().describe('The full new tag list; reuse existing tags'),

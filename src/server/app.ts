@@ -203,7 +203,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
-  const scheduler = new Scheduler(store, sessions, bus, cfg);
+  const scheduler = new Scheduler(store, sessions, bus);
   const orchestrator = new Orchestrator({
     store, bus, sessions, notifier, merging: () => github.mergingNow,
     // only a worker can ask Claude: the orchestrator's own, on its account. Short: a title is not worth a long wait (DISP-110)
