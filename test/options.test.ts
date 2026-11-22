@@ -372,8 +372,8 @@ describe('a queued "after" batch waits for the earlier batch to merge', () => {
     expect(waiting).toMatchObject({ status: 'queued', waiting_reason: `Waiting for #${a.id} first to merge` });
     checksDone = true;
     await s.ctx.github.syncSession((await session(a.id)).session); // checks pass: auto-merge, then the queue moves on
-    await waitFor(async () => (await session(b.id)).session.status !== 'queued', 'b started');
-    expect((await session(b.id)).session.waiting_reason).toBeNull();
+    const started = await waitFor(async () => { const x = (await session(b.id)).session; return x.status !== 'queued' ? x : null; }, 'b started');
+    expect(started.waiting_reason ?? '').not.toContain('to merge'); // b may already be asking its first question (DISP-153)
   }, 30_000);
 
   it('holds the queue while the earlier merge is stuck; Start anyway overrides it', async () => {
