@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { allowedRedirect } from '../src/server/oauth.ts';
 import { startServer } from './helpers.ts';
 
@@ -90,10 +90,9 @@ describe('OAuth for MCP clients', () => {
       expect(JSON.parse((await release({ since: '2999-01-01' })).content[0].text).released).toEqual([]);
       expect(JSON.parse((await release({})).content[0].text)).toEqual({ released: ['MC-1'], label: 'rel:v1.0.0' });
 
-      // refresh rotates: the new pair works, the old refresh token does not
+      // refresh rotates: the new pair works, the old one does not (reusing it: see below)
       const r2 = (await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id }) })).json();
       expect(r2.access_token).toBeTruthy();
-      expect((await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id }) })).statusCode).toBe(400);
       expect((await mcp(s, t.access_token, 'tools/list')).status).toBe(401);
       expect((await mcp(s, r2.access_token, 'tools/list')).status).toBe(200);
 
@@ -105,6 +104,57 @@ describe('OAuth for MCP clients', () => {
       expect((await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'refresh_token', refresh_token: r2.refresh_token, client_id }) })).statusCode).toBe(400);
       // the OAuth token is no key to the REST API
       expect((await s.app.inject({ method: 'GET', url: '/api/projects', headers: { authorization: `Bearer ${r2.access_token}` } })).statusCode).toBe(401);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a rotated refresh token used again ends the whole grant (DISP-155)', async () => {
+    const { s, cookie } = await setup();
+    try {
+      const { client_id, verifier, code } = await connect(s, cookie);
+      const token = async (o: Record<string, string>) => s.app.inject({ method: 'POST', url: '/token', ...form({ client_id, ...o }) });
+      const t = (await token({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier })).json();
+      const r2 = (await token({ grant_type: 'refresh_token', refresh_token: t.refresh_token })).json();
+      const r3 = (await token({ grant_type: 'refresh_token', refresh_token: r2.refresh_token })).json();
+      expect((await mcp(s, r3.access_token, 'tools/list')).status).toBe(200);
+      // a stolen copy of the first refresh token, after the real client moved on
+      const reuse = await token({ grant_type: 'refresh_token', refresh_token: t.refresh_token });
+      expect(reuse.statusCode).toBe(400);
+      expect(reuse.json().error).toBe('invalid_grant');
+      expect((await mcp(s, r3.access_token, 'tools/list')).status).toBe(401);
+      expect((await token({ grant_type: 'refresh_token', refresh_token: r3.refresh_token })).statusCode).toBe(400);
+      expect((await s.app.inject({ method: 'GET', url: '/api/oauth/grants', headers: { cookie } })).json()).toEqual([]);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('two refreshes with one token: only one gets through (DISP-155)', async () => {
+    const { s, cookie } = await setup();
+    try {
+      const { client_id, verifier, code } = await connect(s, cookie);
+      const token = async (o: Record<string, string>) => s.app.inject({ method: 'POST', url: '/token', ...form({ client_id, ...o }) });
+      const t = (await token({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier })).json();
+      const both = await Promise.all([1, 2].map(() => token({ grant_type: 'refresh_token', refresh_token: t.refresh_token })));
+      expect(both.map((r) => r.statusCode).sort()).toEqual([200, 400]);
+
+      // the race itself: this refresh read the row while it was live, and the other one rotated it
+      // before this one's update; the rotate changes no row, so it is refused
+      const raced = await connect(s, cookie);
+      const v = (await token({ grant_type: 'authorization_code', code: raced.code, redirect_uri: REDIRECT, code_verifier: raced.verifier, client_id: raced.client_id })).json();
+      const db = s.ctx.store.db;
+      const get = db.get.bind(db);
+      const spy = vi.spyOn(db, 'get').mockImplementation(((sql: string, ...params: never[]) => {
+        const row = get(sql, ...params) as Record<string, unknown> | undefined;
+        if (!sql.includes('WHERE refresh_hash = ?') || !row) return row;
+        db.run('UPDATE oauth_grants SET revoked_at = ? WHERE id = ?', new Date().toISOString(), row.id as number);
+        return row;
+      }) as typeof db.get);
+      const late = await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'refresh_token', refresh_token: v.refresh_token, client_id: raced.client_id }) });
+      spy.mockRestore();
+      expect(late.statusCode).toBe(400);
+      expect(late.json().error).toBe('invalid_grant');
     } finally {
       await s.app.close();
     }

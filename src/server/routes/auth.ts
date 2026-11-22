@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { COOKIE, LoginLimiter } from '../auth.ts';
 import { DEVICE_COOKIE, deviceName } from '../devices.ts';
-import { SCOPES, ipInList, isLoopback } from '../access.ts';
+import { SCOPES, clientIp, isLoopback } from '../access.ts';
 import { HttpError, type Ctx } from './ctx.ts';
 import { getModelDefaults, setModelDefaults } from '../modelDefaults.ts';
 import { modelDefaults } from '../../shared/types.ts';
@@ -13,22 +13,10 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
   /** Where the password login may be used: anywhere in password mode; only from this machine behind a proxy. */
   const passwordHere = (req: { socket: { remoteAddress?: string } }) => passwordSet && (cfg.authMode === 'password' || isLoopback(req.socket.remoteAddress));
   const limiter = new LoginLimiter();
-  /**
-   * The address the limiter counts and the log names (DISP-136): behind a proxy on this machine or in
-   * TRUSTED_PROXIES, the client's own, the last X-Forwarded-For entry no trusted proxy added.
-   */
-  const clientIp = (req: FastifyRequest) => {
-    const ip = req.socket.remoteAddress ?? 'unknown';
-    const trusted = (a: string) => isLoopback(a) || ipInList(a, cfg.trustedProxies);
-    if (!trusted(ip)) return ip;
-    const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => h.trim()).filter(Boolean);
-    while (hops.length > 1 && trusted(hops.at(-1)!)) hops.pop();
-    return hops.at(-1) ?? ip;
-  };
 
   app.post('/api/login', async (req, reply) => {
     if (!passwordHere(req)) throw new HttpError(403, 'Sign in through the proxy.');
-    const ip = clientIp(req);
+    const ip = clientIp(req, cfg.trustedProxies);
     // the limit comes first: a waiting address gets no password check at all (DISP-71)
     const wait = limiter.wait(ip);
     if (wait) {

@@ -278,7 +278,12 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     const route = req.routeOptions.url;
     if (!route || !route.startsWith('/api/')) return;
     const need = ROUTE_ACCESS[`${req.method} ${route}`] ?? (req.method === 'HEAD' ? ROUTE_ACCESS[`GET ${route}`] : undefined) ?? 'admin';
-    if (need === 'public') return;
+    if (need === 'public') {
+      // signing in or out, or starting a pairing, only from Dispatch's own pages: a sibling
+      // subdomain is the same site, so the lax cookie comes along (DISP-155)
+      if (!fromOwnOrigin(req)) return reply.status(403).send({ error: 'This request came from another site. Open Dispatch itself.' });
+      return;
+    }
     const who = access.principal(req);
     if (!who) return reply.status(401).send({ error: 'Not signed in' });
     // a browser session changes things only from Dispatch's own pages, not from another site that sends the cookie along

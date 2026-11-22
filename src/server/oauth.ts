@@ -232,11 +232,14 @@ export class OAuth {
         const g = this.db.get<{ id: number; client_id: string; user: string; scopes: string; refresh_expires_at: string; revoked_at: string | null }>(
           'SELECT id, client_id, user, scopes, refresh_expires_at, revoked_at FROM oauth_grants WHERE refresh_hash = ?', sha256(String(b.refresh_token ?? '')),
         );
+        // a used refresh token again: someone else holds a copy, so every generation ends (DISP-155)
+        if (g?.revoked_at) this.revokeGrant(g.id);
         if (!g || g.revoked_at || g.refresh_expires_at < new Date().toISOString() || (b.client_id && b.client_id !== g.client_id)) {
           return fail(reply, 400, 'invalid_grant', 'Unknown, used or expired refresh token');
         }
-        // rotate: the old pair stops working
-        this.db.run('UPDATE oauth_grants SET revoked_at = ? WHERE id = ?', new Date().toISOString(), g.id);
+        // rotate: the old pair stops working; of two refreshes with one token, only one gets through
+        const { changes } = this.db.run('UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL', new Date().toISOString(), g.id);
+        if (!changes) return fail(reply, 400, 'invalid_grant', 'Unknown, used or expired refresh token');
         return this.issue(g.client_id, g.user, JSON.parse(g.scopes));
       }
       return fail(reply, 400, 'unsupported_grant_type', 'authorization_code or refresh_token');

@@ -109,4 +109,21 @@ describe('device pairing', () => {
       await s.app.close();
     }
   });
+
+  it("a flood of pairings from one address does not evict another address's pairing (DISP-155)", async () => {
+    const { s, call } = await proxyServer();
+    try {
+      // the proxy names the client in X-Forwarded-For
+      const from = (ip: string) => ({ headers: { 'x-forwarded-for': ip } });
+      const phone = (await call('POST', '/api/devices/pair', from('192.0.2.10'))).json();
+      let last = phone;
+      for (let i = 0; i < 50; i++) last = (await call('POST', '/api/devices/pair', from('198.51.100.66'))).json();
+      expect((await call('GET', `/api/devices/pair/${phone.pair_id}`)).json()).toEqual({ status: 'pending' });
+      expect((await call('POST', '/api/devices/approve', { user: 'alice', payload: { code: phone.code } })).statusCode).toBe(200);
+      // the flooding address keeps its newest pairings, the oldest of its own are gone
+      expect((await call('GET', `/api/devices/pair/${last.pair_id}`)).json()).toEqual({ status: 'pending' });
+    } finally {
+      await s.app.close();
+    }
+  });
 });
