@@ -149,6 +149,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     },
   }, guard(true, (a: { project: string; title: string; type: 'backlog' | 'bug'; description: string; importance?: number | string; effort?: number | string | null; tags: string[]; modules: string[]; status?: Item['status']; source_id?: number | null }) => {
     const p = writable(project(a.project));
+    if (a.source_id != null && store.source(a.source_id)?.project_id !== p.id) throw new Error(`No source ${a.source_id} in project ${p.key}`);
     const it = store.createItem(p.id, {
       type: a.type, title: a.title, body_md: a.description, status: a.status ?? (a.type === 'bug' ? 'triage' : 'backlog'),
       importance: scaled(p, 'importance', a.importance) ?? 2, effort: scaled(p, 'effort', a.effort) ?? null,
@@ -240,7 +241,12 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     inputSchema: { project: z.string(), version: z.string().min(1), keys: z.array(z.string()).optional(), prefix: z.string().default('rel:'), since: z.string().optional() },
   }, guard(true, (a: { project: string; version: string; keys?: string[]; prefix: string; since?: string }) => {
     const p = writable(project(a.project));
-    const targets = labelReleased(store, p.id, a.prefix, a.version, a.keys?.map(item), emit, a.since);
+    const items = a.keys?.map((k) => {
+      const it = item(k);
+      if (it.project_id !== p.id) throw new Error(`${it.key} is not in project ${p.key}`);
+      return it;
+    });
+    const targets = labelReleased(store, p.id, a.prefix, a.version, items, emit, a.since);
     return text({ released: targets.map((i) => i.key), label: `${a.prefix}${a.version}` });
   }));
 

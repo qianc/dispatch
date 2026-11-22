@@ -134,4 +134,31 @@ describe('Own-project item tools', () => {
     expect(await s.ctx.sessions.rpc(c.id, 'get_item', { key: '1' })).toMatchObject({ title: 'Here' });
     await s.app.close();
   });
+
+  // DISP-133: a foreign key never changes the item with the same number here
+  it('refuse a key from another project in update_item, add_to_batch, release_items and item_update proposals', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'QA', name: 'A' });
+    await s.call('POST', '/projects', { key: 'QB', name: 'B' });
+    const a1 = (await s.call('POST', '/projects/QA/items', { title: 'Here' })).data;
+    s.ctx.store.updateProject(a1.project_id, { agents_edit_items: true });
+    const b1 = (await s.call('POST', '/projects/QB/items', { title: 'There' })).data;
+    s.ctx.store.updateItem(a1.id, { status: 'done' });
+    s.ctx.store.updateItem(b1.id, { status: 'done' });
+    const base = { started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: a1.project_id, title: 'c', status: 'running' as const, force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] };
+    const work = s.ctx.store.createSession({ ...base, kind: 'work' });
+    const release = s.ctx.store.createSession({ ...base, kind: 'release', release: { repo_id: 1, cap_repo: 'me/app', version: 'v1.0.0', label_prefix: 'rel:', command: '', notes: '', last_version: null } });
+    const discuss = s.ctx.store.createSession({ ...base, kind: 'discuss' });
+    const before = [s.ctx.store.item(a1.id), s.ctx.store.item(b1.id)];
+
+    await expect(s.ctx.sessions.rpc(work.id, 'update_item', { key: 'QB-1', title: 'Rewritten' })).rejects.toThrow(/QB-1 is not in project QA/);
+    await expect(s.ctx.sessions.rpc(work.id, 'add_to_batch', { keys: ['QB-1'] })).rejects.toThrow(/QB-1 is not in project QA/);
+    await expect(s.ctx.sessions.rpc(release.id, 'release_items', { keys: ['QB-1'] })).rejects.toThrow(/QB-1 is not in project QA/);
+    await expect(s.ctx.sessions.rpc(discuss.id, 'propose', { type: 'item_update', key: 'QB-1', title: 'Rewritten' })).rejects.toThrow(/QB-1 is not in project QA/);
+
+    expect([s.ctx.store.item(a1.id), s.ctx.store.item(b1.id)]).toEqual(before);
+    expect(s.ctx.store.session(work.id)!.item_ids).toEqual([]);
+    expect(s.ctx.store.events(discuss.id).some((e) => e.body.kind === 'proposal')).toBe(false);
+    await s.app.close();
+  });
 });
