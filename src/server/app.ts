@@ -216,6 +216,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
+  janitor.orchestrationOf = (s) => orchestrator.spans(s);
   const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version, updates };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();

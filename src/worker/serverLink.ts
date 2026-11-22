@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { GithubCred, RpcMethod, SelfUpdateAnswer, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
-import { CHAT_KINDS, type Repo, type WorkerFacts, type WorkerVersion } from '../shared/types.ts';
+import { CHAT_KINDS, repoFolder, type Repo, type WorkerFacts, type WorkerVersion } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
 import { serverRoot } from './layout.ts';
@@ -31,6 +31,11 @@ async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
 }
 
 /** Agent sessions running on this worker, over all servers. Chats take no slot (as on the server). */
+/** What an orchestrator's checkouts and prompt are made of: its projects and their repos' folders (DISP-167). */
+function scopeOf(spec: StartSpec) {
+  return JSON.stringify([spec.orchestration?.projects.map((p) => [p.key, p.name, p.repos, p.importance_scale, p.effort_scale]), spec.repos.map((r) => [r.id, repoFolder(r)])]);
+}
+
 export class Slots {
   readonly max: number;
   private busy = new Set<string>();
@@ -103,6 +108,9 @@ export class ServerLink {
   private turnChecks = new Map<number, TurnCheck>();
   /** sessions that act as their starter's own GitHub account (DISP-63): memory only, until the session closes */
   private creds = new Map<number, GithubCred>();
+  /** orchestrators: the scope their runner started with, and its checkouts (DISP-167) */
+  private scopes = new Map<number, string>();
+  private launched = new Map<number, Repo[]>();
   private secrets: Secrets;
   /** messages produced while the server connection is down; flushed on reconnect so nothing is lost */
   private outbox: WorkerToServer[] = [];
@@ -303,6 +311,14 @@ export class ServerLink {
     }
   }
 
+  /** An orchestrator's checkouts that its new scope no longer has, or has in another folder: removed (they are detached, read-only). */
+  private async dropCheckouts(id: number, before: Repo[], now: Repo[]) {
+    const kept = new Set(now.map((r) => `${r.id}:${repoFolder(r)}`));
+    const gone = before.filter((r) => !kept.has(`${r.id}:${repoFolder(r)}`));
+    if (!gone.length) return;
+    await this.workspaces.tidy(id, gone, null, { deleteMerged: false, force: true }).catch((e) => console.warn(`removing old checkouts of session ${id} failed:`, (e as Error).message));
+  }
+
   /** Before a turn: fetch hosted repos, so the agent can merge origin/<base> without network access. */
   private async fetchHosted(spec: StartSpec) {
     for (const repo of spec.repos.filter((r) => r.kind === 'hosted')) {
@@ -317,6 +333,9 @@ export class ServerLink {
     if (!this.allowedClaude(spec.claude_account)) return `This worker does not allow the Claude account "${spec.claude_account ?? 'default'}" for server ${this.entry.name}.`;
     // a session as its user's own GitHub account uses none of this worker's (DISP-63)
     if (!spec.github && spec.github_account && !this.allowedGithub(spec.github_account)) return `This worker does not allow the GitHub account "${spec.github_account}" for server ${this.entry.name}.`;
+    // each repo is cloned as its own project's account (an orchestrator's span has several, DISP-167)
+    const account = spec.github ? null : spec.repos.find((r) => r.github_account && !this.allowedGithub(r.github_account));
+    if (account) return `This worker does not allow the GitHub account "${account.github_account}" (of ${account.github_name}) for server ${this.entry.name}.`;
     const outside = spec.repos.find((r) => r.local_path && !insideDirs(r.local_path, this.entry.local_repo_dirs, '/'));
     if (outside) return `${outside.local_path} is outside the folders this worker allows for server ${this.entry.name}.`;
     if (spec.kind === 'release' && !this.releaseCapability(spec)) return `This worker does not offer releases of ${spec.release?.cap_repo ?? 'this repo'} (${spec.release?.label_prefix ?? '?'}) for server ${this.entry.name}.`;
@@ -329,12 +348,21 @@ export class ServerLink {
     return r ? this.entry.releases.find((c) => c.repo === r.cap_repo && c.label_prefix === r.label_prefix) : undefined;
   }
 
-  async launch(spec: StartSpec, text: string, isStart: boolean) {
+  async launch(spec: StartSpec, text: string, isStart: boolean): Promise<void> {
     // spec and text may be adjusted below (attached worktrees, setup notes)
     const id = spec.session_id;
     this.kinds.set(id, spec.kind);
     this.remember(id, spec.github);
     const live = this.runners.get(id);
+    // an orchestrator whose scope changed (DISP-167): between turns it starts again on its sdk
+    // session, with the checkouts and the prompt of the new scope; mid-turn the text waits as usual
+    if (live && spec.kind === 'orchestrator' && spec.resume && this.scopes.get(id) !== scopeOf(spec) && !live.activity()) {
+      const slot = this.shared.slots.has(this.slotKey(id));
+      live.close();
+      if (slot) this.shared.slots.set(this.slotKey(id), true);
+      await this.dropCheckouts(id, this.launched.get(id) ?? [], spec.repos);
+      return this.launch(spec, text, true);
+    }
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();
       // counted as work: a restart during the fetch would lose the message
@@ -378,7 +406,7 @@ export class ServerLink {
       } else if (spec.kind === 'release' && (!this.shared.fake || spec.repos.every((r) => r.local_path))) {
         cwd = goOn(await this.workspaces.prepareRelease(spec));
         extra = { context: goOn(await ruleFiles([cwd], ['AGENTS.md', '.dispatch.md'])) };
-      } else if (this.shared.fake) cwd = process.cwd();
+      } else if (this.shared.fake && !(spec.kind === 'orchestrator' && spec.repos.every((r) => this.workspaces.offline(r)))) cwd = process.cwd();
       else if (spec.kind === 'assistant') {
         // the assistant reads only allow-listed folders; give it an empty working dir
         cwd = join(this.workspaces.root, 'assistant');
@@ -420,6 +448,10 @@ export class ServerLink {
       goOn(null);
       this.starting.delete(id);
       this.runners.set(id, runner);
+      if (spec.kind === 'orchestrator') {
+        this.scopes.set(id, scopeOf(spec));
+        this.launched.set(id, spec.repos);
+      }
       runner.start(text);
       for (const t of queued) runner.push(t);
     } catch (e) {
@@ -546,6 +578,8 @@ export class ServerLink {
         this.turnChecks.get(msg.session_id)?.cancel();
         this.turnChecks.delete(msg.session_id);
         this.creds.delete(msg.session_id);
+        this.scopes.delete(msg.session_id);
+        this.launched.delete(msg.session_id);
         const r = this.runners.get(msg.session_id);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);

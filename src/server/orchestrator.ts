@@ -11,6 +11,7 @@ import type { Bus } from './bus.ts';
 import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
 import { CHANGE_WORDS, TOUCH_WORDS, describeChange, heldByProposal, minorProblem, type NextStep } from './planChange.ts';
 import { assertWritable } from './projectLock.ts';
+import { withFolders } from './repos.ts';
 import { SessionError, type Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
 
@@ -221,15 +222,17 @@ export class Orchestrator {
     const o = this.store.orchestration(s.id);
     if (!o) return null;
     const projects = this.projectsOf(o);
+    // each repo its own folder, also when two projects have a repo of the same name (DISP-167)
+    const repos = withFolders(projects.flatMap((p) => this.store.repos(p.id)));
     return {
-      repos: projects.flatMap((p) => this.store.repos(p.id)),
+      repos,
       first: projects[0],
       spec: {
         goal: o.goal,
         phase: o.phase,
         projects: projects.map((p) => ({
           key: p.key, name: p.name, importance_scale: p.importance_scale, effort_scale: p.effort_scale,
-          repos: this.store.repos(p.id).map((r) => r.github_name),
+          repos: repos.filter((r) => r.project_id === p.id).map((r) => (r.dir ? `${r.github_name} (folder ./${r.dir})` : r.github_name)),
           agents_edit_items: p.agents_edit_items,
         })),
         max_children: o.max_children,
@@ -1127,6 +1130,7 @@ export class Orchestrator {
     if (o.phase === 'done' || o.phase === 'stopped') throw new SessionError('This orchestration is closed.', 409);
     const changed: string[] = [];
     let tell = false;
+    let added: Project[] = [];
     const next: Parameters<Store['updateOrchestration']>[1] = {};
     if (patch.project_keys) {
       const keys = [...new Set(patch.project_keys.map((k) => k.trim().toUpperCase()))];
@@ -1140,7 +1144,7 @@ export class Orchestrator {
       const ids = projects.map((pr) => pr.id);
       const used = o.steps.find((st) => !ids.includes(st.project_id));
       if (used) throw new SessionError(`Step ${used.position} works in ${used.project_key}: it stays in the scope.`);
-      // the same projects in another order are no change (the first one stays: its checkouts use that project's GitHub account)
+      // the same projects in another order are no change (the first one stays: the orchestrator acts on GitHub as for it)
       const same = ids.length === o.project_ids.length && ids.every((id) => o.project_ids.includes(id));
       if (!same) {
         const kept = o.project_ids.filter((id) => ids.includes(id));
@@ -1148,6 +1152,8 @@ export class Orchestrator {
         next.project_ids = ordered;
         changed.push(`scope ${ordered.map((id) => projects.find((pr) => pr.id === id)!.key).join(', ')}`);
         tell = true;
+        // its next turn starts on new checkouts and a new prompt (the worker sees the new scope, DISP-167); the wake says what came in
+        added = projects.filter((pr) => !kept.includes(pr.id));
       }
     }
     if (patch.max_children !== undefined && patch.max_children !== o.max_children) {
@@ -1201,8 +1207,19 @@ export class Orchestrator {
       this.store.updateOrchestration(sessionId, { paused_reason: null });
       this.emit(sessionId);
     }
-    if (tell) this.wake(sessionId, `The owner changed your settings: ${what}`);
+    if (tell) this.wake(sessionId, `The owner changed your settings: ${what}${added.length ? `\n${this.newProjectsText(sessionId, added)}` : ''}`);
     return this.view(sessionId);
+  }
+
+  /** Projects that came into the scope, as the orchestrator's prompt lists them, with their checkouts. */
+  private newProjectsText(sessionId: number, added: Project[]) {
+    const s = this.store.session(sessionId);
+    const span = s ? this.spans(s) : null;
+    const lines = added.map((p) => {
+      const repos = span?.spec.projects.find((x) => x.key === p.key)?.repos ?? [];
+      return `- ${p.key} (${p.name}): repos ${repos.join(', ') || 'none'}. Importance 1–4: ${p.importance_scale.map((l, i) => `${i + 1}=${l}`).join(', ')}. Effort index: ${p.effort_scale.map((l, i) => `${i}=${l}`).join(', ')}.`;
+    });
+    return ['New in your scope (read-only checkouts of their repos are in your folder now):', ...lines].join('\n');
   }
 
   // ---------- its batches' questions ----------

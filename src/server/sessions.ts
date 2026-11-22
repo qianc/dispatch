@@ -36,7 +36,7 @@ import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
 import { labelReleased } from './releases.ts';
-import { placementProblem } from './repos.ts';
+import { orchestratorCheckouts, placementProblem } from './repos.ts';
 import { assertWritable, disabledMessage } from './projectLock.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
@@ -338,7 +338,8 @@ export class Sessions {
 
   /** As whom an existing session acts on GitHub now (null: no GitHub needed, or an assistant chat). */
   private identityOf(s: Session) {
-    // an orchestrator's own checkouts: as for its first project
+    // an orchestrator: as for its first project. Its checkouts each use their own project's GitHub
+    // account (Repo.github_account, DISP-167); a user's own credential is used for all of them
     if (s.kind === 'orchestrator') return this.identityFor(s.started_by, this.orchestrationOf?.(s)?.first, s.worker_id);
     if (s.kind === 'assistant' || !s.project_id) return null;
     return this.identityFor(s.started_by, this.store.project(s.project_id), s.worker_id);
@@ -1590,8 +1591,7 @@ export class Sessions {
   private reposOf(s: Session) {
     if (s.kind === 'orchestrator') {
       // read-only checkouts of every project it spans; a local repo only where this worker has an ok copy
-      const all = this.orchestrationOf?.(s)?.repos ?? [];
-      return all.filter((r) => r.kind !== 'local' || (s.worker_id != null && !placementProblem(this.store, [r], s.worker_id)));
+      return orchestratorCheckouts(this.store, this.orchestrationOf?.(s)?.repos ?? [], s.worker_id);
     }
     const repos = s.project_id ? this.store.repos(s.project_id) : [];
     // a release works on its one repo

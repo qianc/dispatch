@@ -1,6 +1,6 @@
 // System prompt text appended to Claude Code's own prompt for each session.
 import type { StartSpec } from '../shared/protocol.ts';
-import type { Item, Source } from '../shared/types.ts';
+import { repoFolder, type Item, type Source } from '../shared/types.ts';
 
 function sourceLine(s: Source) {
   const parts = [`${s.kind} "${s.title}"`];
@@ -59,7 +59,7 @@ function repoLines(spec: StartSpec) {
       const extra = r.local_path && r.read_dirs?.length
         ? `\n  Reference folders in the owner's checkout, not in git (read only): ${r.read_dirs.map((d) => `${r.local_path!.replace(/\/$/, '')}/${d}`).join(', ')}`
         : '';
-      return `- ${where} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})${extra}`;
+      return `- ${where} at ${single ? '.' : `./${repoFolder(r)}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})${extra}`;
     })
     .join('\n');
 }
