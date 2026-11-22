@@ -1,5 +1,5 @@
 // DISP-176: what a check, setup or deploy command leaves running in the background ends with it.
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -27,5 +27,16 @@ describe('runCheck and background processes', () => {
     const pid = Number(readFileSync(join(cwd, 'pid'), 'utf8'));
     expect(pid).toBeGreaterThan(0);
     await waitFor(() => !running(pid), 'the background child to end', 2000);
+  });
+
+  it('a signal aborted before it starts runs nothing (DISP-212)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'dsp-bg-'));
+    const abort = new AbortController();
+    abort.abort();
+    const started = Date.now();
+    const res = await runCheck('touch ran; sleep 30', cwd, 60_000, undefined, abort.signal);
+    expect(res.code).not.toBe(0);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(existsSync(join(cwd, 'ran'))).toBe(false);
   });
 });

@@ -99,6 +99,22 @@ describe('Move and Retry on a double tap (DISP-156)', () => {
     wb.close();
   });
 
+  it('a Move of a running session that writes events during the push goes through (DISP-204)', async () => {
+    const wb = await slowWorker(s.port, b.secret, 300, { ok: true });
+    const job = (await s.call('POST', '/projects/MR/batches', { prompt: 'x' })).data;
+    await waitFor(() => wb.of('start').length === 1, 'started');
+    wb.send({ t: 'status', session_id: job.id, status: 'running', sdk_session_id: 'sdk-w' });
+    await waitFor(async () => (await get(job.id)).status === 'running', 'running');
+    const moving = s.call('POST', `/sessions/${job.id}/move`, { worker_id: s.ctx.workers.legacy().id });
+    await waitFor(() => wb.of('cmd').length === 1, 'push asked');
+    wb.send({ t: 'event', session_id: job.id, body: { kind: 'assistant', text: 'still working' } });
+    wb.send({ t: 'event', session_id: job.id, body: { kind: 'tool_use', tool_use_id: 't1', name: 'Bash', summary: 'git commit', input: {} } });
+    const r = await moving;
+    expect(r.status).toBe(200);
+    expect(s.ctx.store.db.all('SELECT id FROM sessions WHERE moved_from = ?', job.id)).toHaveLength(1);
+    wb.close();
+  });
+
   it('a plain Move of an idle session still goes through (DISP-198)', async () => {
     const wb = await slowWorker(s.port, b.secret, 50, { ok: true });
     const job = await idleJob(wb);

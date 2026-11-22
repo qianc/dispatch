@@ -50,6 +50,36 @@ describe('the worker repeats its last statuses in the hello (DISP-197)', () => {
     await waitFor(() => hellos.length === 2, 'second hello', 5000);
     expect(hellos[1].statuses).toEqual([{ t: 'status', session_id: 5, status: 'idle', sdk_session_id: 'sdk-5' }]);
   }, 10_000);
+
+  it('statuses name the last start or send the worker got, and the hello names it per live session (DISP-202, DISP-203)', async () => {
+    wss = new WebSocketServer({ port: 0 });
+    await new Promise((r) => wss!.once('listening', r));
+    const got: WorkerToServer[] = [];
+    wss.on('connection', (ws) => ws.on('message', (d) => got.push(JSON.parse(String(d)) as WorkerToServer)));
+    const entry = { name: 'home', url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}/worker`, token: 't', local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' };
+    link = new ServerLink(entry, {
+      fake: true, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-hello-')), slots: new Slots(2),
+      claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
+    });
+    const starting = (link as unknown as { starting: Map<number, string[]> }).starting;
+    starting.set(5, []);
+    starting.set(6, []);
+    link.connect(50);
+    const hellos = () => got.filter((m): m is Extract<WorkerToServer, { t: 'hello' }> => m.t === 'hello');
+    await waitFor(() => hellos().length === 1, 'first hello');
+    expect(hellos()[0].acks).toEqual({});
+    link.send({ t: 'status', session_id: 5, status: 'idle' });
+    // a message for session 5 arrives (it is still being set up: it waits for the start)
+    for (const c of wss.clients) c.send(JSON.stringify({ t: 'send', session_id: 5, text: 'more', spec: { session_id: 5 }, turn_id: 'turn-5' }));
+    await waitFor(() => starting.get(5)!.length === 1, 'message taken');
+    link.send({ t: 'status', session_id: 5, status: 'running' });
+    link.send({ t: 'status', session_id: 6, status: 'running' });
+    await waitFor(() => got.filter((m) => m.t === 'status').length === 3, 'statuses');
+    expect(got.filter((m) => m.t === 'status').map((m) => (m as { ack?: string }).ack)).toEqual([undefined, 'turn-5', undefined]);
+    for (const c of wss.clients) c.terminate();
+    await waitFor(() => hellos().length === 2, 'second hello', 5000);
+    expect(hellos()[1].acks).toEqual({ 5: 'turn-5' });
+  }, 10_000);
 });
 
 type Msg = { t: string; session_id?: number; spec?: { session_id: number } };

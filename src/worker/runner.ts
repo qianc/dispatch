@@ -340,6 +340,8 @@ export class ClaudeRunner implements AgentRunner {
   private runModel: string | null = null;
   /** Set after a turn result; the next model output means a new turn started (e.g. a queued message). */
   private betweenTurns = false;
+  /** The last turn was reported idle: a message now starts a turn the server does not know runs (DISP-202). */
+  private idleSent = false;
   /** Live background tasks (shell, subagents) that are real work; the turn can end while they run. */
   private bgTasks = 0;
   /** A ScheduleWakeup the agent set: keep the process alive until then. */
@@ -437,7 +439,13 @@ export class ClaudeRunner implements AgentRunner {
     this.clearIdle();
     // a retry after signing in again: a login that fails again is news again (DISP-60)
     for (const k of this.noticed) if (k.startsWith('login-')) this.noticed.delete(k);
-    this.betweenTurns = false; // the server already marked the session running for this message
+    this.betweenTurns = false;
+    // the server marked the session running when it sent this, but the last turn's idle may reach it
+    // after that: say again that it runs, so the idle is not the last word (DISP-202)
+    if (this.idleSent) {
+      this.idleSent = false;
+      this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+    }
     this.sent++;
     // a message during the wait for the usage limit: try now. If the limit still holds, it waits again
     this.clearLimitWait();
@@ -460,6 +468,7 @@ export class ClaudeRunner implements AgentRunner {
       this.unclean = 'it stopped on the usage limit, and the wait for the reset was interrupted';
       this.event({ kind: 'system', text: 'Interrupted: the session no longer waits for the usage limit. Send a message to go on.' });
       this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle', unclean: this.unclean });
+      this.idleSent = true;
       this.armIdle();
       return;
     }
@@ -613,6 +622,7 @@ export class ClaudeRunner implements AgentRunner {
       if (limit) this.limitHit = true;
       if (this.betweenTurns) {
         this.betweenTurns = false;
+        this.idleSent = false;
         // a turn that a background task started during the wait, and that the limit stopped again: still waiting
         if (!(limit && this.limitTimer)) this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
       }
@@ -682,6 +692,7 @@ export class ClaudeRunner implements AgentRunner {
       }
     }
     this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'idle', ...(this.unclean ? { unclean: this.unclean } : {}) });
+    this.idleSent = true;
     this.armIdle();
   }
 

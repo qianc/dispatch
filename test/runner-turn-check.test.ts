@@ -63,4 +63,18 @@ describe('ClaudeRunner before idle', () => {
     expect(seen).toEqual(['first', 'owner: also this']);
     runner.close();
   });
+
+  it('a message after the reported idle says again that the session runs, after that idle (DISP-202)', async () => {
+    seen.length = 0;
+    const sent: WorkerToServer[] = [];
+    const runner = new ClaudeRunner(spec, { emit: (m) => sent.push(m), rpc: async () => undefined, cwd: '/tmp', onClosed: () => undefined }, opts);
+    runner.start('first');
+    const statuses = () => sent.flatMap((m) => (m.t === 'status' ? [m.status] : []));
+    await vi.waitFor(() => expect(statuses()).toContain('idle'));
+    runner.push('sent as the turn ended');
+    await vi.waitFor(() => expect(statuses().filter((x) => x === 'idle')).toHaveLength(2));
+    expect(statuses()).toEqual(['idle', 'running', 'idle']);
+    expect(seen).toEqual(['first', 'sent as the turn ended']);
+    runner.close();
+  });
 });
