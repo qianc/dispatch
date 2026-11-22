@@ -233,16 +233,21 @@ export class AssistantTools {
         const sourceId = p.source_id ? Number(p.source_id) : null;
         if (sourceId && this.store.source(sourceId)?.project_id !== project.id) throw new Error(`Source ${sourceId} is not in ${project.key}`);
         await this.showRulesFirst(s, project);
-        const created = items.map((it) => {
-          const item = this.store.createItem(project.id, {
-            type: it.type, title: it.title, body_md: it.body_md, status: it.type === 'bug' ? 'triage' : 'backlog',
-            importance: this.importance(project, it.importance), effort: this.effort(project, it.effort), source_id: sourceId,
-            labels: it.tags, modules: it.modules,
-          });
-          this.bus.emit({ t: 'item', item });
-          return { key: item.key, title: item.title, link: `/items/${item.id}` };
+        // check every item before creating any, so a retry after a bad one files no duplicates (DISP-147)
+        const rows = items.map((it, i) => {
+          try {
+            return {
+              type: it.type, title: it.title, body_md: it.body_md, status: it.type === 'bug' ? 'triage' as const : 'backlog' as const,
+              importance: this.importance(project, it.importance), effort: this.effort(project, it.effort), source_id: sourceId,
+              labels: it.tags, modules: it.modules,
+            };
+          } catch (e) {
+            throw new Error(`Item ${i + 1} ("${it.title}"): ${(e as Error).message}. No items were created.`);
+          }
         });
-        return created;
+        const created = this.store.db.tx(() => rows.map((r) => this.store.createItem(project.id, r)));
+        for (const item of created) this.bus.emit({ t: 'item', item });
+        return created.map((item) => ({ key: item.key, title: item.title, link: `/items/${item.id}` }));
       }
 
       case 'update_item': {

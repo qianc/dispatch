@@ -78,6 +78,10 @@ describe('assistant tools (server side)', () => {
     const fonts = (await s.call('GET', '/items/by-key/DECKS-1')).data;
     expect(fonts).toMatchObject({ type: 'bug', importance: 3, effort: 3, source_id: src.id, status: 'triage' });
     await expect(rpc('create_items', { project_key: 'DECKS', items: [{ title: 'x', effort: 'XL' }] })).rejects.toThrow(/not one of 1, 2, 3, 5, 8/);
+    // one bad item in five: none are created, and the error names it (DISP-147)
+    const five = ['a', 'b', 'c', 'd', 'e'].map((t) => ({ title: t, effort: t === 'd' ? 'XXL' : '3' }));
+    await expect(rpc('create_items', { project_key: 'DECKS', items: five })).rejects.toThrow(/Item 4 \("d"\): Effort "XXL".*No items were created/);
+    expect((await s.call('GET', '/items/by-key/DECKS-3')).status).toBe(404);
     await rpc('update_item', { key: 'DECKS-2', status: 'todo', effort: '8' });
     expect((await s.call('GET', '/items/by-key/DECKS-2')).data).toMatchObject({ status: 'todo', effort: 4 });
     expect(await rpc('add_repo', { project_key: 'DECKS', repo: 'me/decks' })).toMatch(/already/);
