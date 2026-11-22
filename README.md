@@ -511,11 +511,19 @@ credential on one machine is offered only there. Add `releases` to a server entr
 
 ## Updates
 
-Dispatch can update itself. Settings → **Updates** (the install owner only) shows the commit that
-runs, how many commits it is behind its release branch, and what is new. "Check now" looks at
-once; otherwise the server looks every 30 minutes. "Update now" installs the newest version. With
-**Update automatically** on, Dispatch does that itself. It follows every commit of the release
-branch, or version tags only (`v1.2.3`).
+Dispatch can update itself. Settings → **Updates** (the install owner only) shows the commit the
+server runs, how many commits it is behind its release branch, the newest commit of that branch
+(its first line and age), and what is new. "Check now" looks at once and says what it found, also
+when nothing changed ("No new commits as of 16:05") or when the check failed; otherwise the server
+looks every 30 minutes. The button names the commit it installs: "Update the server and workers to
+905e207" installs the newest commit of the release branch (or the newest version tag), on the
+server first and then on each worker that can update itself. With **Update automatically** on,
+Dispatch does that itself. It follows every commit of the release branch, or version tags only
+(`v1.2.3`).
+
+Each worker shows its commit against the server's: "Same as server" (or "Up to date" when the
+server is), "On the newest commit", "Newer than the server", or "Behind". A worker that cannot
+update itself and is behind says why, and that you update it by hand.
 
 **When it updates.** Only when it is idle:
 

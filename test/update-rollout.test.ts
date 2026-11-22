@@ -681,6 +681,18 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect((await s.call('POST', '/update/start', {})).status).toBe(409);
     });
 
+    it('a worker on the newest commit, or past the server, is not behind it (DISP-194)', async () => {
+      const C = sha('c');
+      const why = 'It was not started through the launcher (node src/launch.ts server|worker).';
+      await worker('test-token', { sha: C, updatable: false, why });
+      await worker(b.secret, { sha: B, updatable: false, why });
+      await online(2);
+      // the server runs A, behind B and C, the newest commit of the branch
+      await autoOn(A, [A, B, C]);
+      expect((await info()).target).toEqual({ sha: C, tag: null });
+      expect(await statuses()).toEqual({ default: 'newest', b: 'newer' });
+    });
+
     it('workers take only a commit of the release branch: a server off it updates none', async () => {
       const wa = await worker('test-token', updatable);
       await online(1);
