@@ -62,6 +62,8 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       /** the password form makes sense here (else: sign in through the proxy) */
       password_login: passwordHere(req),
       vapid_public_key: notifier.publicKey,
+      /** the zone schedule times are in, also for a project's first schedule (DISP-190) */
+      time_zone: user ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
     };
   });
   app.get('/api/settings', async () => ({ github: cfg.githubAccounts.length > 0, legacy_token: access.hasLegacyToken(), auth_mode: cfg.authMode }));
