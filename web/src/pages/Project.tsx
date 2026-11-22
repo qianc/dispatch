@@ -16,7 +16,7 @@ import { GithubAccessPanel, GithubConnectBanner } from '../components/githubAcce
 import { useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { DEFAULT_ITEM_SORT, ITEM_SORT_GROUPS, itemSortOption, sortItems, type ItemSort } from '../itemSort.ts';
-import { toggleMarked } from '../itemsCache.ts';
+import { fetchItems, itemsKey, toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { messageTime } from '../time.ts';
 import { ItemDetail } from './ItemDetail.tsx';
@@ -54,9 +54,10 @@ export function Project() {
     setParams(next, { replace: true });
   };
   const { data: project } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
+  // the open items only: done and canceled ones load when the list's Closed section is shown (DISP-161)
   const { data: items = [] } = useQuery({
-    queryKey: ['items', project?.id],
-    queryFn: () => api.get<Item[]>(`/projects/${key}/items`),
+    queryKey: itemsKey(project?.id, 'open'),
+    queryFn: () => fetchItems(key, 'open'),
     enabled: !!project,
   });
   // the workers that can release one of this project's repos now
@@ -146,6 +147,7 @@ export function Project() {
         <ItemList
           key={project.key}
           items={items.filter((i) => i.type === type)}
+          type={type}
           project={project}
           onToggle={(it) => toggle.mutate(it)}
           selectMode={selecting}
@@ -260,8 +262,9 @@ function ToggleChips({ label, options, value, onChange }: { label: string; optio
   );
 }
 
-function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, openItem, onOpen }: {
+function ItemList({ items, type, project, onToggle, selectMode, setSelectMode, wide, openItem, onOpen }: {
   items: Item[];
+  type: ItemType;
   project: ProjectSummary;
   onToggle: (it: Item) => void;
   selectMode: boolean;
@@ -271,6 +274,11 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
   onOpen?: (it: Item) => void;
 }) {
   const [showClosed, setShowClosed] = useState(false);
+  const { data: closedItems } = useQuery({
+    queryKey: itemsKey(project.id, 'closed'),
+    queryFn: () => fetchItems(project.key, 'closed'),
+    enabled: showClosed,
+  });
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [f, setF] = useListFilter(project.key);
@@ -280,7 +288,7 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
   const shown = sortItems(items.filter((i) => matches(i, f)), sort.value);
   const open = shown.filter((i) => OPEN.includes(i.status));
   const held = shown.filter((i) => i.status === 'hold');
-  const closed = shown.filter((i) => !OPEN.includes(i.status) && i.status !== 'hold');
+  const closed = sortItems((closedItems ?? []).filter((i) => i.type === type && matches(i, f)), sort.value);
   const groups = [
     { title: 'In review', items: open.filter((i) => i.status === 'in_review') },
     { title: 'In progress', items: open.filter((i) => i.status === 'in_progress') },
@@ -341,11 +349,9 @@ function ItemList({ items, project, onToggle, selectMode, setSelectMode, wide, o
           <Card>{held.map((it) => row(it))}</Card>
         </Section>
       )}
-      {closed.length > 0 && (
-        <Section title={`Closed · ${closed.length}`} action={<button className="text-[12px] text-accent" onClick={() => setShowClosed(!showClosed)}>{showClosed ? 'Hide' : 'Show'}</button>}>
-          {showClosed && <Card>{closed.map((it) => row(it, false))}</Card>}
-        </Section>
-      )}
+      <Section title={closedItems ? `Closed · ${closed.length}` : 'Closed'} action={<button className="text-[12px] text-accent" onClick={() => setShowClosed(!showClosed)}>{showClosed ? 'Hide' : 'Show'}</button>}>
+        {showClosed && (!closedItems ? <Empty>Loading…</Empty> : closed.length ? <Card>{closed.map((it) => row(it, false))}</Card> : <Empty>Nothing closed.</Empty>)}
+      </Section>
       <Sheet open={filterOpen} onClose={() => setFilterOpen(false)} title="Filter and view">
         <ToggleChips
           label="Importance"
