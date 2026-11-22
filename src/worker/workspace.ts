@@ -465,8 +465,9 @@ export class Workspaces {
   }
 
   /** Run a repo's setup command in a new worktree. */
-  async setup(repo: Repo, wt: string, cred?: GithubCred | null): Promise<{ ok: boolean; output: string }> {
-    const r = await repoEnv.run(this.commandEnv(repo, cred), () => run('sh', ['-c', repo.setup_command!], wt, 20 * 60_000));
+  async setup(repo: Repo, wt: string, cred?: GithubCred | null, timeoutMs = 20 * 60_000): Promise<{ ok: boolean; output: string }> {
+    // runCheck kills the whole process group at the timeout: a child holding the output pipe must not hang the session (DISP-138)
+    const r = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.setup_command!, wt, timeoutMs));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
   }
 
@@ -615,7 +616,7 @@ export class Workspaces {
     await writeFile(file, JSON.stringify(items, null, 2));
     try {
       return await repoEnv.run({ ...this.commandEnv(repo, cred), DISPATCH_ITEMS: file }, async () => {
-        const r = await run('sh', ['-c', repo.generate_command!], tmp, checkTimeoutMs());
+        const r = await runCheck(repo.generate_command!, tmp, checkTimeoutMs());
         if (r.code !== 0) return { ok: false, output: `Generate command failed (${repo.generate_command}), so nothing was merged:\n${r.out.slice(-4000)}` };
         const paths = repo.generated_paths ?? [];
         await git(paths.length ? ['add', '-A', '--', ...paths] : ['add', '-u'], tmp);
