@@ -69,6 +69,60 @@ describe('Move and Retry on a double tap (DISP-156)', () => {
     wb.close();
   });
 
+  /** A short turn sent from another tab while Move or Retry waits for the worker: it runs and ends idle again (DISP-198). */
+  const shortTurn = async (wb: Awaited<ReturnType<typeof slowWorker>>, id: number) => {
+    await waitFor(() => wb.of('cmd').length === 1, 'worker asked');
+    expect((await s.call('POST', `/sessions/${id}/messages`, { text: 'quick one' })).status).toBe(200);
+    wb.send({ t: 'status', session_id: id, status: 'running' });
+    wb.send({ t: 'status', session_id: id, status: 'idle' });
+    await waitFor(async () => (await get(id)).status === 'idle', 'idle again');
+  };
+  const idleJob = async (wb: Awaited<ReturnType<typeof slowWorker>>) => {
+    const job = (await s.call('POST', '/projects/MR/batches', { prompt: 'x' })).data;
+    await waitFor(() => wb.of('start').length === 1, 'started');
+    wb.send({ t: 'status', session_id: job.id, status: 'running', sdk_session_id: 'sdk-t' });
+    wb.send({ t: 'status', session_id: job.id, status: 'idle' });
+    await waitFor(async () => (await get(job.id)).status === 'idle', 'idle');
+    return job as { id: number };
+  };
+
+  it('a Move refuses when a turn ran and ended during the push (DISP-198)', async () => {
+    const wb = await slowWorker(s.port, b.secret, 300, { ok: true });
+    const job = await idleJob(wb);
+    const moving = s.call('POST', `/sessions/${job.id}/move`, { worker_id: s.ctx.workers.legacy().id });
+    await shortTurn(wb, job.id);
+    const r = await moving;
+    expect(r.status).toBe(409);
+    expect(r.data.error).toMatch(/changed while Dispatch was waiting/);
+    expect(s.ctx.store.db.all('SELECT id FROM sessions WHERE moved_from = ?', job.id)).toHaveLength(0);
+    expect(wb.of('close')).toHaveLength(0);
+    wb.close();
+  });
+
+  it('a plain Move of an idle session still goes through (DISP-198)', async () => {
+    const wb = await slowWorker(s.port, b.secret, 50, { ok: true });
+    const job = await idleJob(wb);
+    const r = await s.call('POST', `/sessions/${job.id}/move`, { worker_id: s.ctx.workers.legacy().id });
+    expect(r.status).toBe(200);
+    expect(s.ctx.store.db.all('SELECT id FROM sessions WHERE moved_from = ?', job.id)).toHaveLength(1);
+    wb.close();
+  });
+
+  it('a Retry refuses when a turn ran and ended during the sign-in check, and a plain one goes through (DISP-198)', async () => {
+    const wb = await slowWorker(s.port, b.secret, 300, { name: 'default', label: 'Default', kind: 'machine', logged_in: true, config_dir: null });
+    const job = await idleJob(wb);
+    const retrying = s.call('POST', `/sessions/${job.id}/retry-login`, {});
+    await shortTurn(wb, job.id);
+    const r = await retrying;
+    expect(r.status).toBe(409);
+    expect(r.data.error).toMatch(/changed while Dispatch was waiting/);
+    const sends = wb.of('send').length; // the short turn's own
+    const again = await s.call('POST', `/sessions/${job.id}/retry-login`, {});
+    expect(again.status).toBe(200);
+    await waitFor(() => wb.of('send').length === sends + 1, 'resume turn sent');
+    wb.close();
+  });
+
   it('two Retries in parallel send one resume turn; the second gets 409', async () => {
     const wb = await slowWorker(s.port, b.secret, 300, { name: 'default', label: 'Default', kind: 'machine', logged_in: true, config_dir: null });
     const job = (await s.call('POST', '/projects/MR/batches', { prompt: 'x' })).data;
