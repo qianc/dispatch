@@ -1,6 +1,7 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
+import { randomUUID } from 'node:crypto';
 import { failureReason } from '../shared/attention.ts';
-import type { GithubCred, StartSpec, StatusMsg, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, ServerToWorker, StartSpec, StatusMsg, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
   ACTIVE_STATUSES,
@@ -131,6 +132,10 @@ const LEFT_OUT = 'Left out by the owner on the proposal card: ';
 const UNSAVED = 'Chat could not be saved';
 /** `waiting_reason` of a session that stopped on its usage limit and goes on after the reset (DISP-108); the reset time is in `limit_wait`. */
 export const LIMIT_WAIT = 'Waiting for the usage limit to reset';
+/** `waiting_reason` of a session whose last message was lost on the way to its worker, and could not go again (DISP-203) */
+const LOST_MESSAGE = 'The last message may not have arrived: send it again';
+/** A start or send to a worker: a turn (DISP-202, DISP-203). */
+type TurnMsg = Extract<ServerToWorker, { t: 'start' | 'send' }>;
 
 type BatchProposal =Extract<z.infer<typeof proposalSchema>, { type: 'batch' }>;
 type ItemUpdateProposal = Extract<z.infer<typeof proposalSchema>, { type: 'item_update' }>;
@@ -722,7 +727,7 @@ export class Sessions {
     const identity = this.identityOf(s);
     if (isRefusal(identity)) throw refusalError(identity);
     this.addEvent(s.id, { kind: 'system', text });
-    if (this.held(s) || !this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+    if (this.held(s) || !this.sendTurn(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       // its worker is away (or an update is about to stop it): the message waits, and the session resumes with it when the worker is back
       this.setStatus(s.id, 'queued', { pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
@@ -813,7 +818,7 @@ export class Sessions {
     if (isRefusal(identity)) throw refusalError(identity);
     const text = this.userMessage(sessionId, ownText, images, opts);
     const reopen = FINAL_STATUSES.includes(s.status);
-    if (this.held(s) || !this.hub.send(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+    if (this.held(s) || !this.sendTurn(s.worker_id, { t: 'send', session_id: sessionId, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       // its worker is away (or an update is about to stop it): the reply waits, and the session resumes with it when the worker is back
       this.setStatus(sessionId, 'queued', { ended_at: reopen ? null : s.ended_at, login_needed: null, pending_prompt: s.pending_prompt ? `${s.pending_prompt}\n\n${text}` : text });
       this.dispatch();
@@ -857,7 +862,7 @@ export class Sessions {
     this.addEvent(s.id, { kind: 'system', text: `${account.label} account is signed in on ${name}. The session resumes where it stopped.` });
     // a conversation that exists goes on; one that never got going starts from its first message
     const text = s.sdk_session_id ? LOGIN_RESUME_NOTE : s.pending_prompt ?? s.initial_prompt;
-    if (!this.hub.send(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
+    if (!this.sendTurn(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) {
       throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
     }
     this.setStatus(s.id, 'running', { ended_at: null, waiting_reason: null, login_needed: null, pending_prompt: s.sdk_session_id ? s.pending_prompt : null });
@@ -1013,6 +1018,7 @@ export class Sessions {
   /** `keepItems`: ids of its items that stay in progress when it is stopped (another session has them now). */
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
+    this.turns.delete(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
     this.hub.send(s.worker_id, { t: 'close', session_id: sessionId });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
@@ -1028,9 +1034,11 @@ export class Sessions {
 
   // ---------- worker events ----------
 
-  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = []) {
+  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = [], acks: Record<string, string> | null = null) {
     // a removed starter's sessions that wait for the usage limit over there end now, not at the reset (DISP-208)
     for (const s of this.liveSessions()) if (s.worker_id === workerId && s.limit_wait && live.includes(s.id)) this.stopRemoved(s);
+    // first the lost turns: a repeated idle of the turn before one is no turn end (DISP-203)
+    this.lostTurns(workerId, live, acks);
     this.lostStatuses(workerId, live, statuses);
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
@@ -1040,7 +1048,7 @@ export class Sessions {
       // (unless it may not act on GitHub now: then it is closed and waits in the queue, see dispatch)
       const identity = s?.status === 'queued' && s.pending_prompt ? this.identityOf(s) : null;
       if (s && s.status === 'queued' && s.pending_prompt && !isRefusal(identity)) {
-        this.hub.send(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null, identity) });
+        this.sendTurn(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null, identity) });
         this.setStatus(s.id, 'running', { waiting_reason: null, pending_prompt: null });
         continue;
       }
@@ -1068,10 +1076,57 @@ export class Sessions {
       }
       const note = RESUME_NOTE;
       this.addEvent(s.id, { kind: 'system', text: 'Worker restarted — session resumed.' });
-      this.hub.send(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note, identity) });
+      this.sendTurn(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note, identity) });
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
+  }
+
+  /**
+   * Per session, the last start or send written to its worker, by `turn_id`. A status names the
+   * turn the worker had got when it wrote it (`ack`): an idle that names an older one ends the turn
+   * before a message still on its way, not the session's turn (DISP-202). Kept in memory: after a
+   * restart nothing is compared.
+   */
+  private turns = new Map<number, { id: string; worker: number; msg: TurnMsg }>();
+
+  /** A start or send, named so the worker's statuses and hello can say whether it arrived. */
+  private sendTurn(workerId: number | null | undefined, msg: TurnMsg) {
+    const id = randomUUID();
+    if (!this.hub.send(workerId, { ...msg, turn_id: id })) return false;
+    this.turns.set(msg.spec.session_id, { id, worker: workerId!, msg });
+    return true;
+  }
+
+  /**
+   * A start or send written on a half-open link was lost (DISP-203): the hello names the last one
+   * the worker got of each live session. A lost message is sent again, so it is answered and the
+   * last turn's repeated idle is not taken for its end. If it cannot go now, the session is idle
+   * and says the message may not have arrived. An older worker names none: nothing to compare.
+   */
+  private lostTurns(workerId: number, live: number[], acks: Record<string, string> | null) {
+    for (const [id, turn] of this.turns) {
+      if (turn.worker !== workerId) continue;
+      const s = this.store.session(id);
+      if (!acks || !live.includes(id) || !s || s.worker_id !== workerId) {
+        this.turns.delete(id);
+        continue;
+      }
+      if (acks[String(id)] === turn.id || s.status !== 'running') continue;
+      const name = this.workers.get(workerId)?.name ?? 'its worker';
+      const identity = this.identityOf(s);
+      if (this.held(s) || isRefusal(identity)) {
+        this.turns.delete(id);
+        console.warn(`session ${id}: its last ${turn.msg.t} to worker ${workerId} was lost, and cannot go again now`);
+        this.addEvent(id, { kind: 'error', text: `The last message may not have reached worker ${name}: the link to it dropped. Send it again.` });
+        this.setStatus(id, 'idle', { waiting_reason: LOST_MESSAGE });
+        continue;
+      }
+      console.warn(`session ${id}: its last ${turn.msg.t} to worker ${workerId} was lost; sent again`);
+      this.addEvent(id, { kind: 'system', text: `The last message did not reach worker ${name} (the link to it dropped): Dispatch sent it again.` });
+      const msg: TurnMsg = turn.msg.t === 'send' ? { ...turn.msg, spec: this.spec(s, turn.msg.text, s.sdk_session_id, null, identity) } : turn.msg;
+      this.sendTurn(workerId, msg);
+    }
   }
 
   /**
@@ -1139,6 +1194,12 @@ export class Sessions {
         // its starter was taken off AUTH_USERS (DISP-208): a session that waits for the usage limit, or
         // comes back from that wait, does not go on as them after the reset
         if (msg.status === 'running' && (msg.limit || s.limit_wait) && this.stopRemoved(s)) return;
+        const turn = this.turns.get(s.id);
+        if (msg.status === 'idle' && msg.ack && turn && msg.ack !== turn.id) {
+          // the end of the turn before the last message, which is on its way: its turn runs next (DISP-202)
+          if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id) this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
+          return;
+        }
         const patch: Partial<Session> = {};
         if (msg.sdk_session_id) patch.sdk_session_id = msg.sdk_session_id;
         if (msg.model) patch.run_model = msg.model;
@@ -1788,7 +1849,7 @@ export class Sessions {
       // a conversation that already exists continues: with the owner's waiting reply, or a note
       const note = next.sdk_session_id && !next.pending_prompt ? RESUME_NOTE : null;
       const prompt = next.pending_prompt ?? note ?? next.initial_prompt;
-      this.hub.send(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, note, identity) });
+      this.sendTurn(next.worker_id, { t: 'start', spec: this.spec(next, prompt, next.sdk_session_id, note, identity) });
       // until the worker reports again, count the slot as taken
       if (!chat && link.facts && link.facts.free_slots > 0) link.facts.free_slots--;
       this.toldWaiting.delete(next.id);
@@ -1963,10 +2024,11 @@ export class Sessions {
    * After an await: stop, without writing, when the session changed meanwhile: its status, its
    * worker, or its chat (`seq`: its last event before the await). A short turn sent from another
    * tab can start and end idle again while Dispatch waits; only its events show it (DISP-198).
+   * A running session writes events all the time: for it only the status counts (DISP-204).
    */
   private unchangedSince(s: Session, seq: number, action: 'move' | 'retry') {
     const now = this.mustGet(s.id);
-    if (now.status !== s.status || now.worker_id !== s.worker_id || this.store.unread(s.id).last_seq !== seq) {
+    if (now.status !== s.status || now.worker_id !== s.worker_id || (s.status !== 'running' && this.store.unread(s.id).last_seq !== seq)) {
       throw new SessionError(`Session #${s.id} changed while Dispatch was waiting for its worker (it is ${now.status} now): press ${action === 'move' ? 'Move' : 'Retry'} again if it still applies.`, 409);
     }
   }

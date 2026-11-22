@@ -121,6 +121,12 @@ export class ServerLink {
    * as a write on a half-open link is lost (DISP-197).
    */
   private lastStatus = new Map<number, StatusMsg>();
+  /**
+   * Per session, the `turn_id` of the last start or send from the server: each status names it
+   * (`ack`), and the hello repeats it, so the server knows which turn a status ends and which of
+   * its writes were lost (DISP-202, DISP-203).
+   */
+  private received = new Map<number, string>();
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   /** what runs now for the server besides sessions (commands, deploys, pushes), by what it is (DISP-112) */
   private jobs = new Map<string, number>();
@@ -233,6 +239,7 @@ export class ServerLink {
       if (msg.status === 'running') this.shared.slots.set(this.slotKey(msg.session_id), true);
       if (['idle', 'failed', 'completed', 'stopped'].includes(msg.status)) this.shared.slots.set(this.slotKey(msg.session_id), false);
     }
+    if (msg.t === 'status' && msg.ack === undefined && this.received.has(msg.session_id)) msg = { ...msg, ack: this.received.get(msg.session_id) };
     msg = this.secrets.scrub(msg);
     if (msg.t === 'status') {
       // one in the outbox goes out after the hello: the hello does not repeat an older one
@@ -447,11 +454,24 @@ export class ServerLink {
         }
       }
       const hostedWork = spec.kind === 'work' && !!spec.branch && spec.repos.some((r) => r.kind === 'hosted') && !this.shared.fake;
+      // an idle that waits for its branch push: statuses after it wait too, so they reach the server in order (DISP-202)
+      let pushing: Promise<void> | null = null;
       const deps: RunnerDeps = {
         // a finished turn of work on a hosted repo: push its branch first, so the server sees it
         emit: (m) => {
-          if (hostedWork && m.t === 'status' && m.status === 'idle') void this.job(`session ${id} pushes its branch`, () => this.pushHostedBranches(spec)).finally(() => this.send(m));
-          else this.send(m);
+          // the turn a status speaks for is the one at its writing, not after the push
+          if (m.t === 'status' && m.ack === undefined && this.received.has(id)) m = { ...m, ack: this.received.get(id) };
+          if (hostedWork && m.t === 'status' && m.status === 'idle') {
+            const p: Promise<void> = (pushing ?? Promise.resolve())
+              .then(() => this.job(`session ${id} pushes its branch`, () => this.pushHostedBranches(spec)))
+              .finally(() => this.send(m));
+            pushing = p;
+            void p.finally(() => { if (pushing === p) pushing = null; });
+          } else if (pushing && m.t === 'status') {
+            const p: Promise<void> = pushing.finally(() => this.send(m));
+            pushing = p;
+            void p.finally(() => { if (pushing === p) pushing = null; });
+          } else this.send(m);
         },
         rpc: this.rpcFor(id),
         cwd,
@@ -585,6 +605,10 @@ export class ServerLink {
     if ((msg.t === 'start' || msg.t === 'send') && msg.spec.github) this.secrets.add(msg.spec.github.token);
     // a new turn is on its way: the last status no longer says where the session is
     if (msg.t === 'start' || msg.t === 'send') this.lastStatus.delete(msg.spec.session_id);
+    if (msg.t === 'start' || msg.t === 'send') {
+      if (msg.turn_id) this.received.set(msg.spec.session_id, msg.turn_id);
+      else this.received.delete(msg.spec.session_id);
+    }
     switch (msg.t) {
       case 'start':
         return this.launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt, true);
@@ -603,6 +627,7 @@ export class ServerLink {
         this.turnChecks.get(msg.session_id)?.cancel();
         this.turnChecks.delete(msg.session_id);
         this.creds.delete(msg.session_id);
+        this.received.delete(msg.session_id);
         this.scopes.delete(msg.session_id);
         this.launched.delete(msg.session_id);
         const r = this.runners.get(msg.session_id);
@@ -725,7 +750,9 @@ export class ServerLink {
       // the worker's token goes in the connection's header, never in a message: every message is scrubbed
       const live = [...this.runners.keys(), ...this.starting.keys()];
       for (const id of this.lastStatus.keys()) if (!live.includes(id)) this.lastStatus.delete(id);
-      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values()] });
+      for (const id of this.received.keys()) if (!live.includes(id)) this.received.delete(id);
+      const acks = Object.fromEntries([...this.received].map(([id, turn]) => [String(id), turn]));
+      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values()], acks });
       for (const m of this.outbox.splice(0)) this.write(sock, m);
     });
     sock.on('message', (data) => {

@@ -72,6 +72,8 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
       dirty = false;
       onProgress(parser.progress(Date.now() - started));
     };
+    // stopped before it began (a close during the env-file copy): nothing runs (DISP-212)
+    if (signal?.aborted) return resolve({ code: 137, out: '', progress: parser.progress(0), duration_ms: 0, timed_out: false });
     const tick = setInterval(() => report(), 1000);
     const child = spawn('sh', ['-c', command], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const onData = (b: Buffer) => {
