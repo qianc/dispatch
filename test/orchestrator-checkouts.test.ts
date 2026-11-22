@@ -50,9 +50,10 @@ describe("an orchestrator's checkouts on the worker", () => {
     remote(remoteRoot, 'bolt', 'api');
     const asAccount: string[] = [];
     const entry = { name: 'default', url: 'ws://127.0.0.1:1/worker', token: 'dsw_t', local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: ['personal', 'work'], releases: [], repo_env_dir: '/nonexistent' };
+    const slots = new Slots(2);
     const link = new ServerLink(entry, {
       fake: true, opts: { assistantReadDirs: [] } as never,
-      workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-oc-ws-')), slots: new Slots(2),
+      workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-oc-ws-')), slots,
       claudeAccounts: () => [], githubAccounts: ['personal', 'work'], remoteBase: `file://${remoteRoot}`, secrets: new Secrets(),
       gitEnv: (r) => {
         asAccount.push(`${r.github_owner}/${r.github_name} as ${r.github_account}`);
@@ -100,8 +101,14 @@ describe("an orchestrator's checkouts on the worker", () => {
     const api = repo(3, 'bolt', 'api', { project_id: 3, github_account: 'work' });
     const cc = { key: 'CC', name: 'Gamma', importance_scale: ['Low', 'High'], effort_scale: ['S'], repos: ['api'] };
     const idles = () => sent.filter((m) => m.t === 'status' && m.status === 'idle').length;
+    // all slots are taken by other sessions (the idle orchestrator holds none): the message still reaches it (DISP-175)
+    slots.set('other:1', true);
+    slots.set('other:2', true);
     await onMessage({ t: 'send', session_id: 9, text: '[fake:env] scope changed', spec: spec([...two, api], [aa, bb, cc], 'sdk-9') });
     await waitFor(() => idles() === 2, 'second turn');
+    expect(sent.find((m) => m.t === 'refused')).toBeUndefined();
+    slots.set('other:1', false);
+    slots.set('other:2', false);
     expect(runners.get(9)).not.toBe(before);
     expect(sent.filter((m) => m.t === 'status' && m.status === 'running').at(-1)).toMatchObject({ sdk_session_id: 'sdk-9' });
     expect(git(ws.repoDir(9, api), 'show', 'HEAD:README.md')).toBe('bolt/api');
@@ -111,6 +118,14 @@ describe("an orchestrator's checkouts on the worker", () => {
     await waitFor(() => idles() === 3, 'third turn');
     expect(runners.get(9)).toBe(now);
 
+    // a project left the scope: only its checkout goes, the others stay as they are (DISP-177)
+    writeFileSync(join(acme, 'marker'), 'kept');
+    await onMessage({ t: 'send', session_id: 9, text: '[fake:env] scope smaller', spec: spec([two[0], api], [aa, cc], 'sdk-9') });
+    await waitFor(() => idles() === 4, 'fourth turn');
+    expect(existsSync(bolt)).toBe(false);
+    expect(existsSync(join(acme, 'marker'))).toBe(true);
+    expect(git(ws.repoDir(9, api), 'show', 'HEAD:README.md')).toBe('bolt/api');
+
     // a repo account this server may not use here: refused
     await onMessage({ t: 'start', spec: { ...spec([repo(4, 'acme', 'web', { github_account: 'other' })], [aa], null), session_id: 10 } });
     expect(sent.find((m) => m.t === 'status' && m.session_id === 10)).toMatchObject({ status: 'failed', error: expect.stringContaining('"other" (of web)') });
@@ -118,7 +133,7 @@ describe("an orchestrator's checkouts on the worker", () => {
     // (1) the janitor's tidy, forced: the detached checkouts and the session folder go
     await onMessage({ t: 'close', session_id: 9, repos: [] });
     const res = await link.command({ c: 'tidy', session_id: 9, repos: [...two, api], branch: null, merged_repo_ids: [], delete_merged: false, force: true });
-    expect(res).toEqual([{ repo: 'web', worktree: 'removed', branch: 'none' }, { repo: 'web', worktree: 'removed', branch: 'none' }, { repo: 'api', worktree: 'removed', branch: 'none' }]);
+    expect(res).toEqual([{ repo: 'web', worktree: 'removed', branch: 'none' }, { repo: 'web', worktree: 'none', branch: 'none' }, { repo: 'api', worktree: 'removed', branch: 'none' }]);
     expect(existsSync(ws.sessionDir(9))).toBe(false);
   });
 });
