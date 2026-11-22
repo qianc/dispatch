@@ -1,5 +1,6 @@
 // Tools for the assistant chat: manage projects, repos, items and sources across the whole app.
 // Creating and changing things happens at once; starting agent sessions goes through a proposal card.
+import { dirname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { detectScales, type MdSection } from '../shared/markdownSections.ts';
 import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
@@ -283,11 +284,13 @@ export class AssistantTools {
         const project = this.writable(p.project_key);
         const sections = p.sections as MdSection[];
         if (!Array.isArray(sections) || !sections.length) throw new Error('No sections to import');
-        const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null };
+        const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null; dir?: string };
+        // the folder of the imported file; the only place a source gets one (DISP-131)
+        const baseDir = src.dir && isAbsolute(src.dir) ? src.dir : isAbsolute(src.title) ? dirname(src.title) : null;
         // several imports from one file (e.g. one per group) share one source
         const source = this.store.sources(project.id).find((x) => x.title === src.title && x.body_md === src.body_md) ??
           this.store.createSource(project.id, {
-            kind: 'manual', title: src.title, body_md: src.body_md, reporter: src.reporter ?? null, version_tag: src.version_tag ?? null, skill_name: null,
+            kind: 'manual', title: src.title, body_md: src.body_md, reporter: src.reporter ?? null, version_tag: src.version_tag ?? null, skill_name: null, base_dir: baseDir,
           });
         const type = p.type === 'bug' ? 'bug' : 'backlog';
         const status = (ITEM_STATUSES as readonly string[]).includes(String(p.status)) ? (p.status as never) : type === 'bug' ? 'triage' : 'backlog';

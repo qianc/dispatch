@@ -1,8 +1,9 @@
 // The in-process `dispatch` MCP server: tracker tools for the agent, backed by server RPC.
 import { createSdkMcpServer, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { readFile as readBytes, readdir, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { MAX_IMAGE_BYTES, sniffImage } from '../shared/chatImages.ts';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
@@ -253,7 +254,8 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
         if (!picked.length) return fail(new Error('No sections matched'));
         return ok(await rpc('import_sections', {
           project_key: p.project_key, type: p.type, status: p.status, sections: picked,
-          source: { title: p.source_title ?? p.path, body_md: text, reporter: p.reporter ?? null, version_tag: p.version_tag ?? null },
+          // dir: the folder linked files of the source are read from (DISP-131)
+          source: { title: p.source_title ?? p.path, body_md: text, reporter: p.reporter ?? null, version_tag: p.version_tag ?? null, dir: dirname(resolve(cwd ?? '.', p.path.replace(/^~(?=$|\/)/, homedir()))) },
         }));
       } catch (e) {
         return fail(e);
