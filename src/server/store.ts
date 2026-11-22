@@ -781,6 +781,7 @@ export class Store {
       child_session_id: numOrNull(r.child_session_id),
       seen: (r.seen as string | null) ?? null,
       deploys: json(r.deploys, {}),
+      deploys_started: json(r.deploys_started, {}),
       messages_sent: Number(r.messages_sent ?? 0),
       offer: (r.offer as StepOffer | null) ?? null,
       offer_messages: numOrNull(r.offer_messages),
@@ -901,11 +902,11 @@ export class Store {
     const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
     return r && this.toStep(r);
   }
-  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'deploys_started' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
-        ...entries.map(([k, v]) => (k === 'deploys' ? JSON.stringify(v) : (v as string | number | null))), id);
+        ...entries.map(([k, v]) => (k === 'deploys' || k === 'deploys_started' ? JSON.stringify(v) : (v as string | number | null))), id);
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = (SELECT orchestration_id FROM orchestration_steps WHERE id = ?)', now(), id);
     }
     return this.step(id)!;

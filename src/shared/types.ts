@@ -868,6 +868,11 @@ export interface OrchestrationStep {
   seen: string | null;
   /** deploys after its merges, by repo id */
   deploys: Record<string, DeployState>;
+  /**
+   * when each deploy started (ISO time), by repo id; dropped when its result comes, so a failed
+   * deploy with an entry got no result in time (DISP-166)
+   */
+  deploys_started: Record<string, string>;
   /** messages the orchestrator sent to this step's batch */
   messages_sent: number;
   /**

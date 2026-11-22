@@ -25,6 +25,12 @@ const fenced = (text: string) => text.split('\n').map((line) => `    | ${line}`)
 
 /** Steps whose dependants may start. */
 const SETTLED = ['done', 'skipped'];
+
+/** How long a deploy may run with no result before it counts as failed (DISP-166). */
+const DEPLOY_TIMEOUT_MS = 30 * 60_000;
+const NO_DEPLOY_RESULT = 'no deploy result in 30 min';
+/** A step that failed on its deploy (its change is merged), not on its batch. */
+const deployFailed = (step: OrchestrationStep) => step.state === 'failed' && (step.note === 'deploy failed' || step.note === NO_DEPLOY_RESULT);
 /** What an orchestrator may make of an item when its step is done: closed, or the owner's to look at (DISP-98). */
 const AFTER_STEP = ['done', 'in_review', 'hold'];
 
@@ -79,9 +85,14 @@ export class Orchestrator {
     return this.store.pendingOrchEvents(sessionId, this.now().toISOString());
   }
 
-  /** Every minute: questions that waited for an orchestrator too long, messages that still wait for a batch, and timers that came due. */
+  /**
+   * Every minute: questions and offers that waited for an orchestrator too long, deploys with no
+   * result in time, messages that still wait for a batch, and timers that came due.
+   */
   tick() {
     this.checkDelegated();
+    this.checkOffers();
+    this.checkDeploys();
     this.checkQueued();
     for (const id of this.store.dueOrchestrations(this.now().toISOString())) this.safely(() => this.flush(id));
   }
@@ -834,7 +845,7 @@ export class Orchestrator {
     if (step.child_session_id && this.store.prs({ session_id: step.child_session_id }).some((pr) => pr.state !== 'closed')) {
       throw new SessionError(`Session #${step.child_session_id} of step ${step.position} has a pull request: retry that session from its page, or skip the step.`, 409);
     }
-    this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, messages_sent: 0, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
+    this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
   }
 
   /** The event that tells the orchestrator to wrap up, when every step is done or skipped. */
@@ -896,28 +907,19 @@ export class Orchestrator {
     }
     // a stopped merge it was told about and did not write to its batch about: the owner is told
     if (!waiting.length) {
-      for (const step of this.offered(s.id, 'fix_merge')) {
-        this.clearOffer(step.id);
-        if (step.state === 'review' && step.messages_sent === 0 && step.child_session_id) this.needsOwner(s, step, step.note ?? 'its merge stopped');
-      }
+      for (const step of this.offered(s.id, 'fix_merge')) this.offerToOwner(s, step);
     }
     // a batch that ended its turn with no pull request, and the orchestrator did nothing for it: it waits for the owner (DISP-122)
     for (const step of this.offered(s.id, 'no_pr')) {
       if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}) ended its turn with no pull request`))) continue;
-      this.clearOffer(step.id);
-      if (step.state !== 'running' || step.note !== 'turn ended, no PR yet' || step.messages_sent !== step.offer_messages || !step.child_session_id) continue;
-      const child = this.store.session(step.child_session_id);
-      this.tellOwner(s.id, { title: `${s.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}` });
+      this.offerToOwner(s, step);
     }
     // a failed deploy it was told about and did nothing for: the owner is told (this push, not the one below)
     let told = false;
     for (const step of this.offered(s.id, 'deploy')) {
-      if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}): failed: deploy failed`))) continue;
-      this.clearOffer(step.id);
-      if (!acted && step.state === 'failed' && step.note === 'deploy failed') {
-        this.needsOwner(s, step, 'its deploy failed, and the orchestrator did not fix it');
-        told = true;
-      }
+      if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}): failed: ${step.note}`))) continue;
+      if (acted) this.clearOffer(step.id);
+      else told = this.offerToOwner(s, step, 'its deploy failed, and the orchestrator did not fix it') || told;
     }
     // a turn that started nothing and leaves nothing running ended with words for the owner (a
     // question, or what went wrong): they are told, unless its next events start it again at once
@@ -1396,9 +1398,70 @@ export class Orchestrator {
     this.sessions.inputBackToOwner(inputId);
   }
 
+  /** What the orchestrator had (its batches' questions, and its offers) is the owner's now: they are told. */
   private handOverAll(orchestrationId: number, why: string) {
     for (const input of this.store.delegatedInputs(orchestrationId)) this.handOver(input.id, why);
-    this.deploysToOwner(orchestrationId);
+    const own = this.store.session(orchestrationId);
+    for (const step of this.store.orchestration(orchestrationId)?.steps ?? []) {
+      if (step.offer) this.offerToOwner(own, step, 'its deploy failed, and the orchestrator cannot fix it now');
+    }
+  }
+
+  /**
+   * An offer the orchestrator did not take up is cleared, and the owner is told if the step still
+   * needs them: its merge still stopped and no message sent to its batch, its turn still ended with
+   * no pull request and no message since, or its deploy still failed. True: they were told.
+   */
+  private offerToOwner(own: Pick<Session, 'id' | 'title' | 'started_by'> | undefined, step: OrchestrationStep, deployWhy = 'its deploy failed'): boolean {
+    this.clearOffer(step.id);
+    if (!own || !step.child_session_id) return false;
+    if (step.offer === 'fix_merge' && step.state === 'review' && step.messages_sent === 0) this.needsOwner(own, step, step.note ?? 'its merge stopped');
+    else if (step.offer === 'no_pr' && step.state === 'running' && step.note === 'turn ended, no PR yet' && step.messages_sent === step.offer_messages) {
+      const child = this.store.session(step.child_session_id);
+      this.tellOwner(own.id, { title: `${own.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}` });
+    } else if (step.offer === 'deploy' && deployFailed(step)) this.needsOwner(own, step, deployWhy);
+    else return false;
+    return true;
+  }
+
+  /** Offers that waited for their orchestrator too long (it works, or its worker is away) go to the owner (DISP-166). */
+  checkOffers() {
+    const now = this.now().getTime();
+    for (const o of this.store.orchestrations()) {
+      if (o.phase === 'done' || o.phase === 'stopped') continue;
+      const own = this.store.session(o.session_id);
+      for (const step of o.steps) {
+        if (step.offer && step.offered_at && now - Date.parse(step.offered_at) >= this.delegateTimeoutMs) {
+          this.safely(() => this.offerToOwner(own, step, 'its deploy failed, and the orchestrator did not fix it in time'));
+        }
+      }
+    }
+  }
+
+  /**
+   * Deploys of a step that ran too long with no result (the worker restarted, or the deploy killed
+   * it) are failed: the step takes the failed-deploy path (DISP-166). A late result still counts.
+   */
+  checkDeploys() {
+    const now = this.now();
+    for (const o of this.store.orchestrations()) {
+      if (o.phase === 'done' || o.phase === 'stopped') continue;
+      for (const step of o.steps) {
+        const running = Object.keys(step.deploys).filter((repo) => step.deploys[repo] === 'running');
+        if (!running.length) continue;
+        const deploys = { ...step.deploys };
+        const started = { ...step.deploys_started };
+        let lost = false;
+        for (const repo of running) {
+          // a deploy that ran before its start was stored ages from now
+          if (!started[repo]) started[repo] = now.toISOString();
+          else if (now.getTime() - Date.parse(started[repo]) >= DEPLOY_TIMEOUT_MS) [deploys[repo], lost] = ['failed', true];
+        }
+        if (!lost && running.every((repo) => step.deploys_started[repo])) continue;
+        this.store.updateStep(step.id, { deploys, deploys_started: started });
+        if (lost) this.safely(() => this.sync(step.id));
+      }
+    }
   }
 
   /** Questions that waited for their orchestrator too long (it works, or its worker is away) go to the owner. */
@@ -1450,7 +1513,11 @@ export class Orchestrator {
   onDeploy(child: Session, repo: Repo, state: DeployState): boolean {
     const step = this.store.stepOfChild(child.id);
     if (!step) return false;
-    this.store.updateStep(step.id, { deploys: { ...step.deploys, [repo.id]: state } });
+    // its start is kept until its result comes (DISP-166)
+    const started = { ...step.deploys_started };
+    if (state === 'running') started[repo.id] = this.now().toISOString();
+    else delete started[repo.id];
+    this.store.updateStep(step.id, { deploys: { ...step.deploys, [repo.id]: state }, deploys_started: started });
     const phase = this.store.orchestration(step.orchestration_id)?.phase;
     const followed = !!phase && phase !== 'done' && phase !== 'stopped' && ['running', 'review', 'failed'].includes(step.state);
     this.safely(() => this.sync(step.id));
@@ -1466,15 +1533,6 @@ export class Orchestrator {
     const own = this.store.session(o.session_id);
     if (o.phase !== 'run' || !o.answer_children || !own || FINAL_STATUSES.includes(own.status)) return false;
     return !o.steps.some((s) => s.id !== step.id && Object.values(s.deploys).includes('failed'));
-  }
-
-  /** The failed deploys the orchestrator had are the owner's now: they are told. */
-  private deploysToOwner(orchestrationId: number) {
-    const own = this.store.session(orchestrationId);
-    for (const step of this.offered(orchestrationId, 'deploy')) {
-      this.clearOffer(step.id);
-      if (own && step.state === 'failed' && step.note === 'deploy failed') this.needsOwner(own, step, 'its deploy failed, and the orchestrator cannot fix it now');
-    }
   }
 
   /** The pending steps that cannot start because `failed` is before them, directly or through others. */
@@ -1536,7 +1594,11 @@ export class Orchestrator {
     let stoppedMerge = false;
     if (child.status === 'failed') [state, note] = ['failed', failureReason(child, this.store.lastError(child.id))];
     else if (child.status === 'stopped') [state, note] = ['failed', 'stopped'];
-    else if (deploys.includes('failed')) [state, note] = ['failed', 'deploy failed'];
+    else if (deploys.includes('failed')) {
+      // failed with its start still kept: no result came in time
+      const lost = Object.keys(step.deploys).filter((r) => step.deploys[r] === 'failed').every((r) => step.deploys_started[r]);
+      [state, note] = ['failed', lost ? NO_DEPLOY_RESULT : 'deploy failed'];
+    }
     else if (prs.length && !open.length && merged) [state, note] = deploys.includes('running') || deployComing ? ['running', 'deploying'] : ['done', null];
     else if (child.status === 'completed') [state, note] = open.length ? ['review', 'its session is closed, but its pull request is still open'] : ['done', 'closed by the owner'];
     else if (child.status === 'idle') {
@@ -1559,7 +1621,7 @@ export class Orchestrator {
       const held = this.heldBy(o, step).map((s) => s.position);
       const heldText = this.heldText(o, step);
       // a failed deploy: the orchestrator may deal with it once before the owner is told (DISP-103)
-      const tryFirst = note === 'deploy failed' && this.canFixDeploy(o, step);
+      const tryFirst = (note === 'deploy failed' || note === NO_DEPLOY_RESULT) && this.canFixDeploy(o, step);
       const more = tryFirst ? ' Its change is merged: do not run the step again. You may fix the deploy once (a step that repairs it). If you cannot, say so to the owner.' : '';
       events.push(`${name}: failed: ${note}${held.length ? ` Do not start the steps that wait for it (${held.join(', ')}).` : ''}${more}`);
       if (tryFirst) this.offer(step, 'deploy');
