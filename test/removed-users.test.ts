@@ -1,7 +1,13 @@
 // DISP-132: a person taken off AUTH_USERS loses every way in, not only the proxy's user header:
-// their paired devices, their dsp_ tokens and their Claude connectors are refused too.
+// their paired devices, their dsp_ tokens and their Claude connectors are refused too; and (DISP-173)
+// their workers' dsw_ tokens and their schedules.
 import { createHash } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { startMultiUser } from './helpers.ts';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -46,6 +52,44 @@ describe('a user removed from AUTH_USERS', () => {
       expect(await me()).toMatchObject({ authed: false, user: null });
       expect(await withToken()).toBe(401);
       expect(await mcp()).toBe(401);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('loses their workers at /worker and /git, and their schedules start nothing (DISP-173)', async () => {
+    const s = await startMultiUser({ DATA_DIR: mkdtempSync(join(tmpdir(), 'dsp-removed-')) });
+    try {
+      const p = s.ctx.store.createProject({ key: 'RM', name: 'Removed', description: '', default_force_plan: false, importance_scale: ['a', 'b', 'c', 'd'], effort_scale: ['S'] });
+      const repo = s.ctx.store.addRepo(p.id, { github_owner: 'hosted', github_name: 'app', default_branch: 'main', check_command: null, kind: 'hosted' });
+      await s.ctx.hosted.create(repo, 'main');
+      const { secret } = s.ctx.workers.create('bobs-laptop', '', 'bob');
+      const sched = s.ctx.store.createSchedule(p.id, { name: 'nightly', at_time: '02:00', days: [0, 1, 2, 3, 4, 5, 6], scope_md: '', max_batches: 1, options: DEFAULT_RUN_OPTIONS, enabled: true, last_slot: null, owner: 'bob' });
+
+      const attach = () => new Promise<number | 'open'>((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${s.port}/worker`, { headers: { 'x-worker-token': secret } });
+        ws.once('close', (code) => resolve(code));
+        // the server closes a refused worker at once; one still open after a moment was let in
+        ws.once('open', () => setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            resolve('open');
+          }
+        }, 300));
+      });
+      const git = async () => (await fetch(`${s.base}/git/r${repo.id}.git/info/refs?service=git-upload-pack`, { headers: { authorization: `Bearer ${secret}` } })).status;
+
+      // while bob is on the list, his worker attaches and reads the hosted repo
+      expect(await attach()).toBe('open');
+      expect(await git()).toBe(200);
+
+      // the owner takes bob off the list
+      s.ctx.cfg.authUsers = ['alice'];
+      expect(await attach()).toBe(4001);
+      expect(await git()).toBe(401);
+      expect(() => s.ctx.scheduler.run(sched.id)).toThrow(/no longer use this install/);
+      expect(s.ctx.store.schedule(sched.id)!.last_error).toMatch(/bob/);
+      expect(s.ctx.store.sessions({ kind: 'planner' })).toHaveLength(0);
     } finally {
       await s.app.close();
     }

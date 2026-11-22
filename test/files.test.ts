@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { joinPath, slug } from '../src/shared/paths.ts';
+import { Db } from '../src/server/db.ts';
 import { safeRelPath } from '../src/server/routes/files.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 import { OWNER, startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
@@ -108,8 +110,26 @@ describe('discuss chats and files from a source folder', () => {
     };
     const titled = s.ctx.store.createSource(project.id, { kind: 'manual', title: join(srcDir, 'backlog.md'), body_md: 'x', reporter: null, version_tag: null, skill_name: null });
     expect(await readDirs(titled.id)).not.toContain(srcDir);
-    const imported = s.ctx.store.createSource(project.id, { kind: 'manual', title: 'Slides backlog', body_md: 'x', reporter: null, version_tag: null, skill_name: null, base_dir: srcDir });
+    const imported = s.ctx.store.createSource(project.id, { kind: 'manual', title: 'Slides backlog', body_md: 'x', reporter: null, version_tag: null, skill_name: null, base_dir: srcDir, base_dir_worker_id: s.ctx.store.defaultWorkerId() });
     expect(await readDirs(imported.id)).toContain(srcDir);
+  }, 40_000);
+
+  it("never reads a folder another person's worker imported on the project's worker (DISP-174)", async () => {
+    // bob's Assistant runs on bob's own worker; it names a folder that is on the owner's machine
+    const bobs = s.ctx.workers.create('bobs-laptop', '', 'bob').worker;
+    const chat = s.ctx.store.createSession({ started_by: 'bob', worker_id: bobs.id, project_id: null, kind: 'assistant', title: 'A', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const imported = (await s.ctx.sessions.rpc(chat.id, 'import_sections', {
+      project_key: 'SLD', source: { title: 'Owner secrets', body_md: 'y', dir: srcDir }, sections: [{ title: 'S2', body: '', ancestors: [] }],
+    })) as { source: { id: number } };
+    const src = s.ctx.store.source(imported.source.id)!;
+    expect(src).toMatchObject({ base_dir: srcDir, base_dir_worker_id: bobs.id });
+    // the project's worker (the owner's, which may read srcDir) is never asked; bob's is not connected
+    expect((await fetch(`${s.base}/api/projects/SLD/file?path=docs/triage.md&source=${src.id}`)).status).toBe(404);
+    // nor does a discuss chat on the project's worker get that folder
+    const [item] = s.ctx.store.createProposedItems(s.ctx.store.projectByKey('SLD')!.id, [{ type: 'backlog', title: 'From bob', body_md: '', importance: 2, effort: null, labels: [], modules: [] }], src.id);
+    const discuss = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'which folders?' })).data;
+    const answer = await waitFor(async () => (await s.call('GET', `/sessions/${discuss.id}`)).data.events.find((e: { body: { text?: string } }) => e.body.text?.startsWith('(fake) I may read'))?.body.text as string | undefined, 'discuss answer', 20_000);
+    expect(answer).not.toContain(srcDir);
   }, 40_000);
 
   it('runs a read-only discuss chat per item, outside the agent lists and slots', async () => {
@@ -128,5 +148,29 @@ describe('discuss chats and files from a source folder', () => {
     await expect(s.ctx.sessions.rpc(chat.id, 'get_item', { key: item.key })).resolves.toMatchObject({ title: 'Charts overlap' });
     await s.call('POST', `/items/${item.id}/discuss/new`);
     expect((await s.call('GET', `/items/${item.id}/discuss`)).data.session_id).toBeNull();
+  });
+});
+
+describe('migration 051 (DISP-174)', () => {
+  it('clears the source folders kept before, which say no worker (046 took some from titles)', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'dispatch-m051-')), 'd.db');
+    const dir = join(import.meta.dirname, '../src/server/migrations');
+    const old = new DatabaseSync(file);
+    old.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
+    for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < '051').sort()) {
+      old.exec(readFileSync(join(dir, name), 'utf8'));
+      old.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
+    }
+    old.exec(`
+      INSERT INTO projects (id, key, name, importance_scale, effort_scale) VALUES (1, 'MS', 'MS', '[]', '[]');
+      INSERT INTO sources (id, project_id, kind, title, body_md, base_dir) VALUES (1, 1, 'manual', '/srv/other/backlog.md', '', '/srv/other');
+      INSERT INTO sources (id, project_id, kind, title, body_md, base_dir) VALUES (2, 1, 'manual', 'Slides', '', '/srv/slides');
+    `);
+    old.close();
+    const db = new Db(file);
+    expect(db.all('SELECT id, base_dir, base_dir_worker_id FROM sources ORDER BY id')).toEqual([
+      { id: 1, base_dir: null, base_dir_worker_id: null },
+      { id: 2, base_dir: null, base_dir_worker_id: null },
+    ]);
   });
 });

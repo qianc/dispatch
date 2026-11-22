@@ -83,6 +83,9 @@ both are the same Dispatch install. So each server address has its own token fil
 `DISPATCH_TOKEN` is used only for a server from `--url`, `DISPATCH_URL` or this machine's default.
 For a server from `url:` in a repo's `.dispatch.md`, only that host's token file is used, so a
 cloned repo cannot send your token elsewhere; `dispatch config` says when it ignores the variable.
+No token at all goes to a `url:` from `.dispatch.md` over plain `http://`, unless the host is this
+machine (`localhost`, `127.x.x.x`, `[::1]`): it would cross the network in clear text. Use
+`https://` there, or choose the server with `--url` or `DISPATCH_URL`.
 
 When a token is refused (`token: rejected`, "not signed in", or "redirected to …"):
 
