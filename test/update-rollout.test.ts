@@ -703,10 +703,10 @@ describe('the rollout of an update: the server first, then the workers, each in 
       const src = fakeSource([A, B, C, D]);
       // as GitHub when more than a page behind: only the newest commits come back
       const compare = src.compare;
-      src.compare = async (base, head) => {
+      src.compare = (async (base: string, head: string) => {
         const r = await compare(base, head);
         return { ...r, commits: r.commits.slice(-1) };
-      };
+      }) as typeof compare;
       s.ctx.updates.source = src;
       await s.call('POST', '/update/check');
       // B is past the server's A although the look listed only D; e is on no branch
