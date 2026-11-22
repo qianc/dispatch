@@ -40,7 +40,7 @@ describe('live session events after a reconnect (DISP-140)', () => {
 
     // opening the session refetches after the last seq it has, so 11 comes back
     const fetch = vi.fn(async (url: string) => {
-      expect(url).toBe('/api/sessions/7?after=10');
+      expect(url).toBe('/api/sessions/7?after=10&limit=300');
       return new Response(JSON.stringify(detail([ev(11), ev(12)])), { headers: { 'content-type': 'application/json' } });
     });
     vi.stubGlobal('fetch', fetch);

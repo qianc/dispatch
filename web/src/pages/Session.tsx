@@ -56,15 +56,16 @@ export const EVENT_PAGE = 300;
 /**
  * A session's detail: the last events first; after that, ask only for new events and keep the ones we have.
  * The cache is read again after the request, so a "Show earlier" or live event that landed meanwhile stays (DISP-185).
- * More than a page of new events (a long sleep, a gap refetch) replaces the cache with their last page (DISP-184).
+ * More than a page of new events (a long sleep, a gap refetch) replaces the cache with their last page (DISP-184); the
+ * server sends only that page, with `earlier` set (DISP-220).
  */
 export async function fetchSession(qc: QueryClient, id: number): Promise<SessionDetail> {
   const prev = qc.getQueryData<SessionDetail>(['session', id]);
   const after = prev?.events.at(-1)?.seq ?? 0;
-  const d = await api.get<SessionDetail>(`/sessions/${id}?${after ? `after=${after}` : `limit=${EVENT_PAGE}`}`);
+  const d = await api.get<SessionDetail>(`/sessions/${id}?${after ? `after=${after}&` : ''}limit=${EVENT_PAGE}`);
   if (!prev || !after) return withLive(d);
   const fresh = d.events.filter((e) => e.seq > after);
-  if (fresh.length > EVENT_PAGE) return withLive({ ...d, events: fresh.slice(-EVENT_PAGE), earlier: true });
+  if (d.earlier) return withLive({ ...d, events: fresh, earlier: true });
   const now = qc.getQueryData<SessionDetail>(['session', id]) ?? prev;
   const last = now.events.at(-1)?.seq ?? after;
   return withLive({ ...d, events: [...now.events, ...fresh.filter((e) => e.seq > last)], earlier: now.earlier });

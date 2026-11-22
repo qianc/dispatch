@@ -42,10 +42,17 @@ describe('GET /api/sessions/:id pages its events (DISP-162)', () => {
     expect(first.earlier).toBe(false);
   });
 
-  it('?after=<seq> still gives every newer event, whatever the limit (the poll and the gap refetch, DISP-140)', async () => {
+  it('?after=<seq> gives the newer events; with a limit only the last N, and says when some were left out (DISP-140, DISP-220)', async () => {
     expect(seqs((await get('?after=4990')).data)).toEqual([4991, 4992, 4993, 4994, 4995, 4996, 4997, 4998, 4999, 5000]);
-    expect((await get('?after=10&limit=5')).data.events).toHaveLength(4990);
+    const few = (await get('?after=4990&limit=300')).data;
+    expect(seqs(few)).toEqual([4991, 4992, 4993, 4994, 4995, 4996, 4997, 4998, 4999, 5000]);
+    expect(few.earlier).toBe(false);
+    const many = (await get('?after=10&limit=5')).data;
+    expect(seqs(many)).toEqual([4996, 4997, 4998, 4999, 5000]);
+    expect(many.earlier).toBe(true);
+    expect((await get('?after=4995&limit=5')).data.earlier).toBe(false);
     // no paging asked for: all of them, as before
+    expect((await get('?after=10')).data.events).toHaveLength(4990);
     expect((await get('')).data.events).toHaveLength(5000);
   });
 
@@ -76,7 +83,7 @@ describe('the session page loads the last events (DISP-162)', () => {
 
     reply.mockReturnValueOnce(detail([ev(5001)], { earlier: false }));
     let d = await qc.fetchQuery({ queryKey: ['session', 7], queryFn: () => fetchSession(qc, 7) });
-    expect(urls.at(-1)).toBe('/api/sessions/7?after=5000');
+    expect(urls.at(-1)).toBe(`/api/sessions/7?after=5000&limit=${EVENT_PAGE}`);
     expect(d.events.map((e) => e.seq)).toEqual([4999, 5000, 5001]);
     expect(d.earlier).toBe(true); // a poll does not know about earlier events: the first page's word stands
 
@@ -94,11 +101,12 @@ describe('the session page loads the last events (DISP-162)', () => {
     const first = Array.from({ length: EVENT_PAGE }, (_, i) => ev(i + 1));
     qc.setQueryData(['session', 7], detail(first, { earlier: false }));
     const urls: string[] = [];
-    const chunk = Array.from({ length: 4000 }, (_, i) => ev(EVENT_PAGE + i + 1));
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(url); return json(detail(chunk, { earlier: false })); }));
+    // 4000 new events: the server sends only the last page, and says some were left out (DISP-220)
+    const page = Array.from({ length: EVENT_PAGE }, (_, i) => ev(4000 + i + 1));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(url); return json(detail(page, { earlier: true })); }));
 
     const d = await qc.fetchQuery({ queryKey: ['session', 7], queryFn: () => fetchSession(qc, 7) });
-    expect(urls).toEqual([`/api/sessions/7?after=${EVENT_PAGE}`]);
+    expect(urls).toEqual([`/api/sessions/7?after=${EVENT_PAGE}&limit=${EVENT_PAGE}`]);
     expect(d.events).toHaveLength(EVENT_PAGE);
     expect(d.events[0].seq).toBe(EVENT_PAGE + 4000 - EVENT_PAGE + 1);
     expect(d.events.at(-1)!.seq).toBe(EVENT_PAGE + 4000);
