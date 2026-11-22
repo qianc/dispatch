@@ -118,6 +118,7 @@ export class OAuth {
       'SELECT g.id, g.scopes, g.access_expires_at, g.revoked_at, g.user, c.name FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id WHERE g.access_hash = ?', sha256(token),
     );
     if (!r || r.revoked_at || r.access_expires_at < new Date().toISOString()) return null;
+    if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(r.user)) return null;
     this.db.run('UPDATE oauth_grants SET last_used_at = ? WHERE id = ?', new Date().toISOString(), r.id);
     return { kind: 'oauth', name: r.name, scopes: new Set(JSON.parse(r.scopes)), local: false, user: r.user };
   }

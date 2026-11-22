@@ -323,7 +323,11 @@ export class Access {
   browserUser(req: FastifyRequest, { devices = true } = {}): string | null {
     if (this.cfg.authMode === 'off') return this.installOwner;
     const f = this.from(req);
-    const paired = () => (devices ? this.device(req)?.user ?? null : null);
+    const paired = () => {
+      const user = devices ? this.device(req)?.user ?? null : null;
+      // a person taken off AUTH_USERS loses their paired devices too (DISP-132)
+      return user && this.cfg.authUsers.length && !this.cfg.authUsers.includes(user) ? null : user;
+    };
     if (this.cfg.authMode === 'proxy') {
       if (f.proxy) {
         // A device cookie means the proxy let the request through on that cookie, around its
@@ -365,6 +369,7 @@ export class Access {
       'SELECT id, name, scopes, user, expires_at, revoked_at FROM api_tokens WHERE hash = ?', sha256(secret),
     );
     if (!row || row.revoked_at || (row.expires_at && row.expires_at < now())) return null;
+    if (row.user && this.cfg.authUsers.length && !this.cfg.authUsers.includes(row.user)) return null;
     this.db.run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), row.id);
     return { kind: 'token', name: row.name, scopes: this.limit(JSON.parse(row.scopes), local), local, token_id: row.id, user: row.user };
   }
