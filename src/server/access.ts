@@ -244,17 +244,30 @@ export function ipInList(ip: string | undefined, list: string[]) {
 }
 
 /**
- * The address the login limiter and the pairing limit count (DISP-136, DISP-155): behind a proxy on
+ * The /64 an IPv6 address is in, e.g. "2001:db8:0:1::/64": one home or VPS line has a whole /64, so
+ * its addresses count as one client (DISP-189). IPv4 (also IPv4-mapped IPv6) and anything else: as is.
+ */
+export function clientKey(ip: string): string {
+  const p = plainIp(ip).split('%')[0];
+  if (isIP(p) !== 6) return p;
+  const groups = (part: string) => (part ? part.split(':').flatMap((g) => (g.includes('.') ? ['0', '0'] : [g])) : []);
+  const [head, tail] = p.split('::');
+  const all = tail === undefined ? groups(head) : [...groups(head), ...Array(8 - groups(head).length - groups(tail).length).fill('0'), ...groups(tail)];
+  return `${all.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+}
+
+/**
+ * The client the login limiter and the pairing limit count (DISP-136, DISP-155): behind a proxy on
  * this machine or in TRUSTED_PROXIES, the client's own, the last X-Forwarded-For entry no trusted
- * proxy added.
+ * proxy added. An IPv6 client is its /64 (see clientKey).
  */
 export function clientIp(req: Pick<FastifyRequest, 'socket' | 'headers'>, trustedProxies: string[]) {
   const ip = req.socket.remoteAddress ?? 'unknown';
   const trusted = (a: string) => isLoopback(a) || ipInList(a, trustedProxies);
-  if (!trusted(ip)) return ip;
+  if (!trusted(ip)) return clientKey(ip);
   const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => h.trim()).filter(Boolean);
   while (hops.length > 1 && trusted(hops.at(-1)!)) hops.pop();
-  return hops.at(-1) ?? ip;
+  return clientKey(hops.at(-1) ?? ip);
 }
 
 // ---------- browsers ----------
