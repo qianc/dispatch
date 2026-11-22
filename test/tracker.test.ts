@@ -122,6 +122,29 @@ describe('static files', () => {
   });
 });
 
+describe("an item links only a source of its own project (DISP-218)", () => {
+  it("refuses another project's source on create and on edit, through the REST routes", async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'SA', name: 'A' });
+    await s.call('POST', '/projects', { key: 'SB', name: 'B' });
+    const ours = (await s.call('POST', '/projects/SA/sources', { kind: 'manual', title: 'Ours', body_md: 'a' })).data;
+    const theirs = (await s.call('POST', '/projects/SB/sources', { kind: 'manual', title: 'Theirs', body_md: 'secret' })).data;
+    const made = await s.call('POST', '/projects/SA/items', { title: 'T', source_id: theirs.id });
+    expect(made.status).toBe(404);
+    expect(made.data.error ?? made.data.message).toMatch(`No source ${theirs.id} in project SA`);
+    expect((await s.call('GET', '/projects/SA/items')).data).toEqual([]);
+    const it = (await s.call('POST', '/projects/SA/items', { title: 'T', source_id: ours.id })).data;
+    expect(it.source_id).toBe(ours.id);
+    const patched = await s.call('PATCH', `/items/${it.id}`, { source_id: theirs.id });
+    expect(patched.status).toBe(404);
+    expect((await s.call('GET', `/items/${it.id}`)).data.source_id).toBe(ours.id);
+    // a missing source is refused too; clearing it is fine
+    expect((await s.call('PATCH', `/items/${it.id}`, { source_id: 999999 })).status).toBe(404);
+    expect((await s.call('PATCH', `/items/${it.id}`, { source_id: null })).data.source_id).toBeNull();
+    await s.app.close();
+  });
+});
+
 describe('partial updates leave other fields alone', () => {
   it('marking an item, editing a project/repo/source changes only what was sent', async () => {
     const s = await startServer();
