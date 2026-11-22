@@ -213,15 +213,20 @@ export function expectedFrom(history: { duration_ms: number; units: number }[]):
   return { duration_ms: Math.round(median(recent.map((h) => h.duration_ms))), units: Math.round(median(recent.map((h) => h.units))) };
 }
 
+/** How many results this run should have: the announced number, or the usual one of earlier runs. */
+export function expectedTotal(p: Pick<CheckProgress, 'total' | 'total_open'>, expected: CheckRun['expected']): number | null {
+  const usual = expected && expected.units > 0 ? expected.units : null;
+  // a total that can still grow is at least what it says, and earlier runs may know it is more
+  return p.total !== null && p.total_open && usual !== null ? Math.max(p.total, usual) : p.total ?? usual;
+}
+
 /**
  * Milliseconds left, or null when nothing says. Earlier runs give the usual duration; the results
  * seen so far against the usual (or announced) number of results say how far this run is. The
  * further it is, the more the second counts.
  */
 export function timeLeft(p: Pick<CheckProgress, 'units' | 'total' | 'total_open'>, elapsedMs: number, expected: CheckRun['expected']): number | null {
-  const usual = expected && expected.units > 0 ? expected.units : null;
-  // a total that can still grow is at least what it says, and earlier runs may know it is more
-  const of = p.total !== null && p.total_open && usual !== null ? Math.max(p.total, usual) : p.total ?? usual;
+  const of = expectedTotal(p, expected);
   const f = of && p.units > 0 ? Math.min(p.units / of, 0.99) : 0;
   const byUnits = f > 0 ? elapsedMs / f - elapsedMs : null;
   const byTime = expected ? expected.duration_ms - elapsedMs : null;

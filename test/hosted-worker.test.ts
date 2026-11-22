@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
-import { hostedGitBase, Workspaces } from '../src/worker/workspace.ts';
+import { serverAppUrl } from '../src/worker/config.ts';
+import { Workspaces } from '../src/worker/workspace.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import { startServer, OWNER } from './helpers.ts';
 
@@ -30,13 +31,8 @@ describe('a worker on a hosted repo', () => {
   });
   afterAll(() => s.app.close());
 
-  it('the git address comes from the worker socket address', () => {
-    expect(hostedGitBase('ws://127.0.0.1:3000/worker')).toBe('http://127.0.0.1:3000/git');
-    expect(hostedGitBase('wss://dispatch.example.com/worker')).toBe('https://dispatch.example.com/git');
-  });
-
   it('prepares a session worktree from the server, and pushes the branch back to it', async () => {
-    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-hws-')), 'https://github.com', () => ({}), { base: hostedGitBase(`ws://127.0.0.1:${s.port}/worker`), token: secret });
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-hws-')), 'https://github.com', () => ({}), { base: `${serverAppUrl(`ws://127.0.0.1:${s.port}/worker`)}/git`, token: secret });
     const spec = { session_id: 7, kind: 'work' as const, project_key: 'HW', project_name: 'HW', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/hw-7-x', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: DEFAULT_RUN_OPTIONS, claude_account: null, github_account: null, resume: null, resume_note: null };
     const wt = await ws.prepare(spec);
     expect(git(wt, 'log', '--oneline', '-1')).toContain('one');
@@ -51,7 +47,7 @@ describe('a worker on a hosted repo', () => {
 
   it('a merge on the worker (a repo with a check command) runs the check and pushes the result to the server', async () => {
     const checked = { ...repo, check_command: 'test -f b.txt' };
-    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-hwm-')), 'https://github.com', () => ({}), { base: hostedGitBase(`ws://127.0.0.1:${s.port}/worker`), token: secret });
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-hwm-')), 'https://github.com', () => ({}), { base: `${serverAppUrl(`ws://127.0.0.1:${s.port}/worker`)}/git`, token: secret });
     // the branch from the test above is on the server; merge it as the worker would
     const res = await ws.mergeLocal(checked, 'dispatch/hw-7-x', 'Merge dispatch/hw-7-x');
     expect(res).toMatchObject({ ok: true });

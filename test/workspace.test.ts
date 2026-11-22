@@ -69,7 +69,7 @@ describe('Workspaces (git)', () => {
     git(cwd, 'add', '.');
     git(cwd, 'commit', '-m', 'add b');
     await ws.pushBranch(repo, 1, 'dispatch/hc-1-x');
-    await ws.cleanup(1, [repo]);
+    await ws.tidy(1, [repo], null, { deleteMerged: false, force: true });
     const again = await ws.prepare(spec('dispatch/hc-1-x', 2));
     expect(git(again, 'log', '-1', '--format=%s')).toBe('add b');
   });
@@ -213,7 +213,7 @@ describe('Workspaces edge cases', () => {
     writeFileSync(join(dirs[0], 'local.txt'), 'unpushed\n');
     git(dirs[0], 'add', '.');
     git(dirs[0], 'commit', '-m', 'unpushed work');
-    await ws.cleanup(1, [repo]);
+    await ws.tidy(1, [repo], null, { deleteMerged: false, force: true });
     const again = await ws.prepare(spec('b1', 1));
     expect(git(again, 'log', '-1', '--format=%s')).toBe('unpushed work');
   });

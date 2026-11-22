@@ -58,7 +58,7 @@ describe('worktrees of the owner\'s repo (local repos, default)', () => {
     expect(await ws.branchStatus(repo, 'dispatch/t-1')).toMatchObject({ merged: true });
     expect((await ws.readRepoFile(repo, 'b.txt')).toString()).toBe('two\n'); // files come from the owner's current main
 
-    await ws.cleanup(1, [repo]);
+    await ws.tidy(1, [repo], null, { deleteMerged: false, force: true });
     expect(existsSync(wt)).toBe(false);
     expect(git(dir, 'worktree', 'list')).not.toContain(wt);
   });

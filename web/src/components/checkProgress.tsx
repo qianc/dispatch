@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatLeft, timeLeft, type CheckRun } from '../../../src/shared/checkProgress.ts';
+import { expectedTotal, formatLeft, timeLeft, type CheckRun } from '../../../src/shared/checkProgress.ts';
 
 function clock(ms: number) {
   const s = Math.floor(ms / 1000);
@@ -21,7 +21,7 @@ export function CheckProgressCard({ run }: { run: CheckRun }) {
   // between reports the run goes on: count from its start, not from the last report
   const elapsed = Math.max(p.elapsed_ms, now - Date.parse(run.started_at));
   const left = timeLeft(p, elapsed, run.expected);
-  const of = p.total !== null && p.total_open && run.expected ? Math.max(p.total, run.expected.units) : p.total ?? run.expected?.units ?? null;
+  const of = expectedTotal(p, run.expected);
   const share = left !== null && elapsed + left > 0 ? elapsed / (elapsed + left) : of ? Math.min(p.units / of, 1) : null;
   return (
     <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]" role="status" aria-label={`Tests running in ${run.repo}`}>

@@ -2,6 +2,7 @@ import type {
   Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, Orchestration, PendingInput, Project, PullRequest, Repo, Schedule, Session, SessionEvent, Source,
 } from '../../src/shared/types.ts';
 import type { SessionAccess } from './access.ts';
+import type { ClaudeAccountInfo } from '../../src/shared/accounts.ts';
 import type { CheckRun } from '../../src/shared/checkProgress.ts';
 
 export type { Attention, FailedSession, GithubAccess, GithubAccessAccount, GithubPermission, InputAnswer, ItemImage, Item, PendingInput, Project, PullRequest, Repo, Session, SessionEvent, Source };
@@ -189,7 +190,7 @@ export interface MyGithub {
 }
 
 export interface Accounts {
-  claude: { name: string; label: string; kind: string; logged_in: boolean | null; config_dir: string | null }[];
+  claude: ClaudeAccountInfo[];
   github: { name: string; login: string | null; git_name: string | null; git_email: string | null }[];
   assistant_claude_account: string | null;
 }

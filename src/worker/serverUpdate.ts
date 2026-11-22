@@ -6,49 +6,17 @@
 // DISPATCH_UPDATE_PREV and the release branch in DISPATCH_UPDATE_BRANCH. The update holds when the
 // command ends well and the server then says it runs that commit. When not, the same command runs
 // again with the commit from before in DISPATCH_UPDATE_SHA, and DISPATCH_UPDATE_ROLLBACK=1.
-import { spawn } from 'node:child_process';
 import { SHA_RE, sameVersion } from '../update/version.ts';
+import { runCheck } from './workspace.ts';
 
 export interface CommandRun { code: number | null; out: string; timed_out: boolean }
 export type RunCommand = (command: string, env: NodeJS.ProcessEnv, timeoutMs: number) => Promise<CommandRun>;
 
 /** Run a shell command in its own process group; at the time limit the whole group is killed. */
-export const runShell: RunCommand = (command, env, timeoutMs) =>
-  new Promise((resolve) => {
-    let out = '';
-    let timedOut = false;
-    const child = spawn('sh', ['-c', command], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const add = (d: Buffer) => {
-      out = (out + String(d)).slice(-16_000);
-    };
-    child.stdout.on('data', add);
-    child.stderr.on('data', add);
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        process.kill(-child.pid!, 'SIGKILL');
-      } catch {
-        child.kill('SIGKILL');
-      }
-    }, timeoutMs);
-    let done = false;
-    const end = (code: number | null, more = '') => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      child.stdout.destroy();
-      child.stderr.destroy();
-      resolve({ code, out: out + more, timed_out: timedOut });
-    };
-    child.on('error', (e) => end(null, e.message));
-    // the command has ended. What it started and left running may hold its output open: wait a
-    // moment for the last lines, not for that
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      setTimeout(() => end(code), 500);
-    });
-    child.on('close', (code) => end(code));
-  });
+export const runShell: RunCommand = async (command, env, timeoutMs) => {
+  const r = await runCheck(command, process.cwd(), timeoutMs, undefined, undefined, env);
+  return { code: r.code, out: r.out, timed_out: r.timed_out };
+};
 
 export interface ServerUpdateOptions {
   /** the release branch, as the command gets it */
