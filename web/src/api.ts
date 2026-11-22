@@ -195,6 +195,8 @@ export interface Accounts {
 /** A connected worker that can release one of the project's repos (from its own config). */
 /** A scheduled planner run, with its next run and its last run's session. */
 export type ScheduleView = Schedule & {
+  /** the server's time zone: at_time and the runs are in it */
+  time_zone: string;
   next_run: string | null;
   last_session: Pick<Session, 'id' | 'status' | 'title' | 'last_text' | 'created_at'> | null;
 };

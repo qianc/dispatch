@@ -19,15 +19,28 @@ export function daysLabel(days: number[]) {
   return WEEK.filter((d) => days.includes(d)).map((d) => DAYS[d]).join(', ');
 }
 
-/** "today 02:00", "tomorrow 02:00", "Mon 02:00" */
-function when(iso: string) {
-  const d = new Date(iso);
-  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const today = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  if (day === today) return `today ${time}`;
-  if (day === today + 86_400_000) return `tomorrow ${time}`;
-  return `${DAYS[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1} ${time}`;
+/** calendar date and clock time of a moment in a time zone (the browser's when none) */
+function parts(d: Date, timeZone?: string) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const p = Object.fromEntries(f.formatToParts(d).map((x) => [x.type, x.value]));
+  return { day: Date.UTC(+p.year, +p.month - 1, +p.day), time: `${p.hour}:${p.minute}` };
+}
+
+/** "today 02:00", "tomorrow 02:00", "Mon 2/3 02:00", in timeZone. DISP-160: compares calendar
+ *  dates, as a day is 23 or 25 hours long on a DST change day. */
+export function when(iso: string, timeZone?: string, now = new Date()) {
+  const t = parts(new Date(iso), timeZone);
+  const today = parts(now, timeZone).day;
+  const day = new Date(t.day);
+  if (t.day === today) return `today ${t.time}`;
+  if (t.day === new Date(today).setUTCDate(new Date(today).getUTCDate() + 1)) return `tomorrow ${t.time}`;
+  return `${DAYS[day.getUTCDay()]} ${day.getUTCDate()}/${day.getUTCMonth() + 1} ${t.time}`;
+}
+
+/** the next run in the server's zone, and in the browser's when that is another one */
+function nextRun(iso: string, serverZone: string) {
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return `Next: ${when(iso, serverZone)}${local !== serverZone ? ` (${when(iso)} your time)` : ''}`;
 }
 
 export function Schedules({ project }: { project: ProjectSummary }) {
@@ -41,11 +54,11 @@ export function Schedules({ project }: { project: ProjectSummary }) {
             <button key={s.id} type="button" onClick={() => setEditing(s)} className="block w-full text-left px-3 py-2.5 border-b border-line last:border-b-0 active:bg-raised" aria-label={`Schedule ${s.name}`}>
               <div className="flex items-center gap-2">
                 <span className={cx('flex-1 min-w-0 truncate font-medium', !s.enabled && 'text-muted')}>{s.name}</span>
-                <span className="text-[13px] text-muted shrink-0">{s.at_time} · {daysLabel(s.days)}</span>
+                <span className="text-[13px] text-muted shrink-0">{s.at_time} {s.time_zone} · {daysLabel(s.days)}</span>
               </div>
               <div className="text-[13px] text-muted mt-0.5 truncate">
                 {s.owner && <>{s.owner} · </>}
-                {s.enabled ? (s.next_run ? `Next: ${when(s.next_run)}` : '') : s.paused_by_disable ? 'Paused: project disabled' : 'Off'}
+                {s.enabled ? (s.next_run ? nextRun(s.next_run, s.time_zone) : '') : s.paused_by_disable ? 'Paused: project disabled' : 'Off'}
                 {s.last_error ? <span className="text-bad"> · Last run failed: {s.last_error}</span>
                   : s.last_session ? <> · Last: {s.last_session.last_text ?? s.last_session.status}</> : null}
               </div>
@@ -56,13 +69,13 @@ export function Schedules({ project }: { project: ProjectSummary }) {
         <p className="px-4 text-[13px] text-muted">A planner can run here at set times, e.g. every night, and start the work it picks within a scope you write. Each run shows below with its result.</p>
       )}
       <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing === 'new' ? 'New schedule' : editing ? editing.name : 'Schedule'}>
-        {editing && <ScheduleForm key={editing === 'new' ? 'new' : editing.id} project={project} schedule={editing === 'new' ? null : editing} onDone={() => setEditing(null)} />}
+        {editing && <ScheduleForm key={editing === 'new' ? 'new' : editing.id} project={project} timeZone={data[0]?.time_zone} schedule={editing === 'new' ? null : editing} onDone={() => setEditing(null)} />}
       </Sheet>
     </Section>
   );
 }
 
-function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; onDone: () => void }) {
+function ScheduleForm({ project, schedule, timeZone, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; timeZone?: string; onDone: () => void }) {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
   // someone else's schedule: read it; the install owner may switch it off and delete it
@@ -95,7 +108,7 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
       <fieldset disabled={!rights.edit} className="min-w-0">
       <p className="text-[13px] text-muted mb-3">At this time a planner looks at the backlog within the scope and starts the batches it picks, with the options below. It asks nothing; starting nothing is fine. It never starts items on hold.</p>
       <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Schedule name" /></Field>
-      <Field label="Time" hint="The server's local time.">
+      <Field label="Time" hint={timeZone ? `The server's time zone: ${timeZone}.` : "The server's local time."}>
         {/* DISP-41: mobile browsers give native time inputs a min intrinsic width that w-full alone does not cap */}
         <input type="time" className={cx(inputCls, 'block min-w-0 max-w-full appearance-none')} value={f.at_time} onChange={(e) => setF({ ...f, at_time: e.target.value })} aria-label="Time" required />
       </Field>
