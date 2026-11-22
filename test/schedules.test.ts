@@ -23,6 +23,9 @@ describe('scheduled planner runs', () => {
   const idle = (sessionId: number) => s.ctx.sessions.onWorkerMessage(s.ctx.store.session(sessionId)!.worker_id!, { t: 'status', session_id: sessionId, status: 'idle' });
 
   it('creates, lists, edits and deletes schedules', async () => {
+    // DISP-190: the zone is known before the first schedule, for the New schedule form
+    expect((await s.call('GET', '/me')).data.time_zone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect((await s.call('GET', '/projects/SC/schedules')).data).toEqual([]);
     const made = await schedule({ days: [1, 3, 1], options: { auto_merge: 'github' } });
     expect(made).toMatchObject({ name: 'Nightly', at_time: '02:00', days: [1, 3], max_batches: 1, enabled: true, options: { auto_merge: 'github' } });
     expect((await s.call('POST', '/projects/SC/schedules', { name: 'x', at_time: '25:00' })).status).toBe(400);

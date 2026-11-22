@@ -172,6 +172,8 @@ export interface Me {
   auth_disabled: boolean;
   password_login: boolean;
   vapid_public_key: string;
+  /** the server's time zone, which schedule times are in (DISP-190) */
+  time_zone: string | null;
 }
 
 /** The signed-in person's own GitHub connection (never its token). */
