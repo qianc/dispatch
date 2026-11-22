@@ -11,7 +11,9 @@ export function deviceRoutes(app: FastifyInstance, { access, cfg, devices, users
   // the phone, not signed in: start a pairing and show its code
   app.post('/api/devices/pair', async (req) => {
     if (access.device(req)) return { authed: true };
-    return devices.start(deviceName(req.headers['user-agent']), clientIp(req, cfg.trustedProxies));
+    const pairing = devices.start(deviceName(req.headers['user-agent']), clientIp(req, cfg.trustedProxies));
+    if (!pairing) throw new HttpError(429, 'Too many phones are pairing right now. Try again in a few minutes.');
+    return pairing;
   });
 
   // the phone polls; once approved it gets its cookie, once

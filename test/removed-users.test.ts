@@ -17,7 +17,7 @@ describe('a user removed from AUTH_USERS', () => {
     const s = await startMultiUser();
     try {
       // bob's phone, paired
-      const { pair_id, code } = s.ctx.devices.start('iPhone', '127.0.0.1');
+      const { pair_id, code } = s.ctx.devices.start('iPhone', '127.0.0.1')!;
       expect(s.ctx.devices.approve(code, 'bob')).toBeTruthy();
       const collected = s.ctx.devices.collect(pair_id);
       if (collected.status !== 'approved') throw new Error('not approved');

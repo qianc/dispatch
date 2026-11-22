@@ -185,7 +185,7 @@ describe('several users', () => {
     const s = await startMultiUser();
     try {
       const pair = (user: string) => {
-        const { code } = s.ctx.devices.start('iPhone', '127.0.0.1');
+        const { code } = s.ctx.devices.start('iPhone', '127.0.0.1')!;
         return s.ctx.devices.approve(code, user)!;
       };
       const ad = pair('alice');

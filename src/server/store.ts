@@ -1042,6 +1042,13 @@ export class Store {
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
   }
 
+  /** Only the proposal cards and their outcomes: what a planner's open proposals are read from (DISP-191). */
+  proposalEvents(sessionId: number): SessionEvent[] {
+    return this.db
+      .all("SELECT * FROM session_events WHERE session_id = ? AND json_extract(body, '$.kind') IN ('proposal', 'proposal_done') ORDER BY seq", sessionId)
+      .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
+  }
+
   /** The last `limit` events before seq `before` (default: the newest), and whether there are earlier ones (DISP-162). */
   eventsPage(sessionId: number, limit: number, before = Number.MAX_SAFE_INTEGER): { events: SessionEvent[]; earlier: boolean } {
     const rows = this.db
