@@ -316,7 +316,7 @@ export class ServerLink {
     const kept = new Set(now.map((r) => `${r.id}:${repoFolder(r)}`));
     const gone = before.filter((r) => !kept.has(`${r.id}:${repoFolder(r)}`));
     if (!gone.length) return;
-    await this.workspaces.tidy(id, gone, null, { deleteMerged: false, force: true }).catch((e) => console.warn(`removing old checkouts of session ${id} failed:`, (e as Error).message));
+    await this.workspaces.tidy(id, gone, null, { deleteMerged: false, force: true, keepDir: true }).catch((e) => console.warn(`removing old checkouts of session ${id} failed:`, (e as Error).message));
   }
 
   /** Before a turn: fetch hosted repos, so the agent can merge origin/<base> without network access. */
@@ -361,7 +361,8 @@ export class ServerLink {
       live.close();
       if (slot) this.shared.slots.set(this.slotKey(id), true);
       await this.dropCheckouts(id, this.launched.get(id) ?? [], spec.repos);
-      return this.launch(spec, text, true);
+      // not a new start: with all slots taken it would be refused, and the owner's text lost (DISP-175)
+      return this.launch(spec, text, false);
     }
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();

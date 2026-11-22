@@ -99,6 +99,8 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
       clearInterval(tick);
       clearTimeout(kill);
       signal?.removeEventListener('abort', killAll);
+      // what the command left running goes too: a server in the background must not outlive it (DISP-176)
+      killAll();
       child.stdout.destroy();
       child.stderr.destroy();
       parser.write('\n');
@@ -759,7 +761,7 @@ export class Workspaces {
    * Remove what a finished session left: its worktrees (a worktree with uncommitted changes only
    * when `force`), and its branch where it is merged (`deleteMerged`). Unmerged branches stay.
    */
-  async tidy(sessionId: number, repos: Repo[], branch: string | null, opts: { deleteMerged: boolean; force: boolean; mergedHint?: number[] }): Promise<TidyResult[]> {
+  async tidy(sessionId: number, repos: Repo[], branch: string | null, opts: { deleteMerged: boolean; force: boolean; mergedHint?: number[]; keepDir?: boolean }): Promise<TidyResult[]> {
     const found = await this.leftovers(sessionId, repos, branch, opts.mergedHint);
     const out: TidyResult[] = [];
     for (const l of found) {
@@ -789,9 +791,9 @@ export class Workspaces {
       });
       out.push(r);
     }
-    // the session folder goes once nothing is left in it
+    // the session folder goes once nothing is left in it; keepDir: other checkouts of the session stay in it (DISP-177)
     const dir = this.sessionDir(sessionId);
-    if (existsSync(dir) && out.every((r) => r.worktree !== 'kept (uncommitted changes)')) await rm(dir, { recursive: true, force: true });
+    if (!opts.keepDir && existsSync(dir) && out.every((r) => r.worktree !== 'kept (uncommitted changes)')) await rm(dir, { recursive: true, force: true });
     return out;
   }
 }
