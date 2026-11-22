@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { itemInput, itemPatch } from '../../shared/types.ts';
-import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
+import { intParam, notFound, type Ctx } from './ctx.ts';
 
 export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ctx) {
   const project = (key: unknown) => {
@@ -24,7 +24,6 @@ export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ct
   app.post('/api/projects/:key/items', async (req) => {
     const p = project((req.params as { key: string }).key);
     const input = itemInput.parse(req.body);
-    if (input.effort !== null && input.effort >= p.effort_scale.length) throw new HttpError(400, 'Effort is outside the project scale');
     const created = store.createItem(p.id, input);
     bus.emit({ t: 'item', item: created });
     return created;
