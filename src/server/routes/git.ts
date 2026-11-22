@@ -2,9 +2,9 @@
 // token (Authorization: Bearer …). git http-backend does the protocol; this only lets the right
 // requests through and streams them.
 import { spawn } from 'node:child_process';
-import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Ctx } from './ctx.ts';
+import { workerFromToken } from '../workers.ts';
 
 /** The smart-HTTP endpoints git uses; nothing else in the repo folder is served. */
 const ENDPOINTS = new Set(['info/refs', 'git-upload-pack', 'git-receive-pack']);
@@ -17,9 +17,7 @@ export function gitRoutes(app: FastifyInstance, { cfg, store, workers, hosted }:
   /** The worker this request comes from, or null. Personal tokens and browser sessions do not count. */
   const workerOf = (req: FastifyRequest) => {
     const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
-    if (!token) return null;
-    if (cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken))) return workers.legacy();
-    return workers.verify(token);
+    return token ? workerFromToken(workers, cfg, token) : null;
   };
 
   const handler = async (req: FastifyRequest, reply: FastifyReply) => {

@@ -1,6 +1,7 @@
 // Worker records and their tokens. A worker connects to /worker with its secret (dsw_…); only a
 // SHA-256 of the secret is kept. The legacy worker (no hash) connects with the server's WORKER_TOKEN.
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import type { Config } from './config.ts';
 import type { Db, Row } from './db.ts';
 import { now } from './db.ts';
 import { sha256 } from './access.ts';
@@ -107,4 +108,17 @@ export class Workers {
     if (facts) this.db.run('UPDATE workers SET last_seen_at = ?, facts = ? WHERE id = ?', now(), JSON.stringify(facts), id);
     else this.db.run('UPDATE workers SET last_seen_at = ? WHERE id = ?', now(), id);
   }
+}
+
+/**
+ * The worker a token belongs to, or null: the server's WORKER_TOKEN for the legacy worker, else a
+ * live worker's own dsw_ token. A worker of a person taken off AUTH_USERS is refused, as their
+ * other tokens are (DISP-173).
+ */
+export function workerFromToken(workers: Workers, cfg: Pick<Config, 'workerToken' | 'authUsers'>, token: string): WorkerRecord | null {
+  if (!token) return null;
+  const legacy = !!cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
+  const w = legacy ? workers.legacy() : workers.verify(token);
+  if (w && cfg.authUsers.length && w.owner && !cfg.authUsers.includes(w.owner)) return null;
+  return w;
 }
