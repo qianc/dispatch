@@ -44,6 +44,40 @@ describe('requests from other sites', () => {
   });
 });
 
+// DISP-155: the public routes that change something (sign in, sign out, start a pairing) are held to
+// this too: a sibling subdomain is the same site, so the lax cookie comes along.
+describe('public routes from other sites', () => {
+  it('refuses a sign-out from a sibling subdomain: the session and the paired device stay', async () => {
+    const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD: 'pw' });
+    try {
+      const inject = (method: 'GET' | 'POST', url: string, headers: Record<string, string> = {}, payload?: object) =>
+        s.app.inject({ method, url, remoteAddress: '127.0.0.1', headers, payload });
+      const session = String((await inject('POST', '/api/login', {}, { password: 'pw' })).headers['set-cookie']).split(';')[0];
+      const { pair_id, code } = (await inject('POST', '/api/devices/pair')).json();
+      expect((await inject('POST', '/api/devices/approve', { cookie: session }, { code })).statusCode).toBe(200);
+      const device = String((await inject('GET', `/api/devices/pair/${pair_id}`)).headers['set-cookie']).split(';')[0];
+      const cookie = `${session}; ${device}`;
+
+      for (const headers of [{ 'sec-fetch-site': 'same-site' }, { origin: 'https://other.example', host: 'd.example' }] as Record<string, string>[]) {
+        expect((await inject('POST', '/api/logout', { cookie, ...headers })).statusCode).toBe(403);
+        expect((await inject('POST', '/api/login', headers, { password: 'pw' })).statusCode).toBe(403);
+        expect((await inject('POST', '/api/devices/pair', headers)).statusCode).toBe(403);
+      }
+      expect(s.ctx.store.db.all('SELECT * FROM web_sessions')).toHaveLength(1);
+      expect(s.ctx.store.db.all('SELECT * FROM devices WHERE revoked_at IS NULL')).toHaveLength(1);
+      expect((await inject('GET', '/api/me', { cookie: device })).json()).toMatchObject({ authed: true });
+      // reads stay public, whatever site asks
+      expect((await inject('GET', '/api/me', { 'sec-fetch-site': 'cross-site' })).statusCode).toBe(200);
+      // from Dispatch's own page the sign-out works
+      expect((await inject('POST', '/api/logout', { cookie, 'sec-fetch-site': 'same-origin' })).statusCode).toBe(200);
+      expect(s.ctx.store.db.all('SELECT * FROM web_sessions')).toEqual([]);
+      expect(s.ctx.store.db.all('SELECT * FROM devices WHERE revoked_at IS NULL')).toEqual([]);
+    } finally {
+      await s.app.close();
+    }
+  });
+});
+
 // The proxy routes a request with the device cookie around its sign-in, so a user header on such a
 // request is the client's own. Dispatch believes the device alone.
 describe('a paired device behind the proxy', () => {
