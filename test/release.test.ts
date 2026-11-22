@@ -22,6 +22,20 @@ describe('release versions', () => {
     expect(maxVersion([])).toBeNull();
   });
 
+  it('orders pre-releases the semver way: numbers as numbers, below words, fewer parts first (DISP-215)', () => {
+    expect(compareVersions('v1.0.0-rc.9', 'v1.0.0-rc.10')).toBeLessThan(0);
+    expect(compareVersions('v1.0.0-rc.10', 'v1.0.0-rc.9')).toBeGreaterThan(0);
+    expect(compareVersions('1.0.0-alpha', '1.0.0-beta')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-rc.1', '1.0.0')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-alpha.1', '1.0.0-alpha.beta')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-rc.1', 'v1.0.0-rc.1')).toBe(0);
+    const order = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta', '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0'];
+    expect([...order].reverse().sort(compareVersions)).toEqual(order);
+    expect(maxVersion(['v1.0.0-rc.9', 'v1.0.0-rc.10', 'v1.0.0-rc.8'])).toBe('v1.0.0-rc.10');
+    expect(highestLabelVersion([item('A-1', { labels: ['rel:v1.0.0-rc.9'] }), item('A-2', { labels: ['rel:v1.0.0-rc.10'] })], 'rel:')).toBe('v1.0.0-rc.10');
+  });
+
   it('bumps minor or patch and keeps the v', () => {
     expect(bump('v1.4.2', 'minor')).toBe('v1.5.0');
     expect(bump('1.4.2', 'patch')).toBe('1.4.3');

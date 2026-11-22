@@ -7,6 +7,8 @@
 services:
   worker:
     build: { context: ., dockerfile: docker/Dockerfile.worker, args: { DISPATCH_VERSION: "${DISPATCH_VERSION:-}" } }
+    # an init as PID 1 reaps the background children a check or Claude leaves behind (DISP-211)
+    init: true
     # worker.env (docker/worker.env.example): SERVER_WS_URL and the worker's dsw_… token
     env_file: [worker.env]
     volumes:
