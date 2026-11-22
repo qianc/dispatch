@@ -928,6 +928,13 @@ export class Store {
   setNoPrWoken(stepId: number, seen: string) {
     this.db.run('UPDATE orchestration_steps SET no_pr_woken = ? WHERE id = ?', seen, stepId);
   }
+  /** Timers it set one after the other while nothing else happened (DISP-199): kept across a restart. */
+  timerStreak(sessionId: number): number {
+    return Number(this.db.get<{ n: number }>('SELECT timer_streak AS n FROM orchestrations WHERE session_id = ?', sessionId)?.n ?? 0);
+  }
+  setTimerStreak(sessionId: number, n: number) {
+    this.db.run('UPDATE orchestrations SET timer_streak = ? WHERE session_id = ?', n, sessionId);
+  }
   /** A message of the orchestrator for a step's batch that works: it waits for the batch's turn end (DISP-105). */
   queueOrchMessage(stepId: number, sessionId: number, text: string) {
     this.db.run('INSERT INTO orchestration_messages (step_id, session_id, text) VALUES (?, ?, ?)', stepId, sessionId, text);

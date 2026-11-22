@@ -612,7 +612,7 @@ export class Orchestrator {
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
     this.tookUpDeploys(o.session_id);
-    this.timerStreak.delete(o.session_id);
+    this.store.setTimerStreak(o.session_id, 0);
     this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
     this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
     this.emit(o.session_id);
@@ -913,7 +913,7 @@ export class Orchestrator {
     if (!pending.length) return;
     const ids = pending.map((e) => e.id);
     this.store.markOrchEventsDelivered(ids);
-    if (pending.some((e) => !e.text.startsWith('Your timer: '))) this.timerStreak.delete(sessionId);
+    if (pending.some((e) => !e.text.startsWith('Your timer: '))) this.store.setTimerStreak(sessionId, 0);
     const text = ['(From Dispatch, not the owner.)', 'Events:', ...pending.map((e) => `- ${e.text}`), '', this.statusText(o)].join('\n');
     try {
       this.sessions.sendFromDispatch(sessionId, text);
@@ -1090,7 +1090,6 @@ export class Orchestrator {
   static readonly MAX_TIMERS = 3;
   /** Timers it may set one after the other while nothing else happens (no step starts, no news): then it must say what it waits for. */
   static readonly MAX_TIMER_STREAK = 12;
-  private timerStreak = new Map<number, number>();
 
   /** The orchestrator asks to be woken later: a queued event with a due time. */
   private wakeMeIn(s: Session, o: Orchestration, p: Record<string, unknown>): string {
@@ -1100,9 +1099,9 @@ export class Orchestrator {
     const reason = String(p.reason ?? '').trim();
     if (!reason) throw new Error('Say what the timer is for.');
     if (this.timersOf(o).length >= Orchestrator.MAX_TIMERS) throw new Error(`${Orchestrator.MAX_TIMERS} timers wait already: that is the most.`);
-    const streak = this.timerStreak.get(o.session_id) ?? 0;
+    const streak = this.store.timerStreak(o.session_id);
     if (streak >= Orchestrator.MAX_TIMER_STREAK) throw new Error(`You set ${Orchestrator.MAX_TIMER_STREAK} timers in a row and nothing else happened: tell the owner what you wait for instead.`);
-    this.timerStreak.set(o.session_id, streak + 1);
+    this.store.setTimerStreak(o.session_id, streak + 1);
     const at = new Date(this.now().getTime() + Math.round(minutes) * 60_000).toISOString();
     this.store.addOrchEvent(o.session_id, `Your timer: ${reason.replace(/\s+/g, ' ').slice(0, 300)}`, at);
     // while it plans it waits for the owner, timer or not; in a run the timer is what it waits for

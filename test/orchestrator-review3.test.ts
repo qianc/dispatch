@@ -78,6 +78,21 @@ describe('orchestrator part 3: review findings', () => {
     await t.rpc(p.id, 'wake_me_in', { minutes: 5, reason: 'Again.' });
   });
 
+  it('a restart does not reset the timer streak (DISP-199)', async () => {
+    const p = await ready();
+    for (let i = 0; i < 12; i++) {
+      t.status(p.id, 'running');
+      await t.rpc(p.id, 'wake_me_in', { minutes: 5, reason: 'Again.' });
+      t.status(p.id, 'idle');
+      clock += 5 * 60_000;
+      t.s.ctx.orchestrator.tick();
+    }
+    t.restart();
+    t.status(p.id, 'running');
+    await expect(t.rpc(p.id, 'wake_me_in', { minutes: 5, reason: 'Again.' })).rejects.toThrow('You set 12 timers in a row');
+    t.status(p.id, 'idle');
+  });
+
   it('a closed orchestration has no timers left, and shows none', async () => {
     const p = await ready();
     await t.rpc(p.id, 'wake_me_in', { minutes: 60, reason: 'Later.' });
