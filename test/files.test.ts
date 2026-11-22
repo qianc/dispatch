@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
@@ -9,7 +8,7 @@ import { joinPath, slug } from '../src/shared/paths.ts';
 import { Db } from '../src/server/db.ts';
 import { safeRelPath } from '../src/server/routes/files.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
-import { OWNER, startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { dbBeforeMigration, OWNER, startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
 describe('link helpers', () => {
   it('makes GitHub-style anchors from item titles', () => {
@@ -153,14 +152,7 @@ describe('discuss chats and files from a source folder', () => {
 
 describe('migration 051 (DISP-174)', () => {
   it('clears the source folders kept before, which say no worker (046 took some from titles)', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'dispatch-m051-')), 'd.db');
-    const dir = join(import.meta.dirname, '../src/server/migrations');
-    const old = new DatabaseSync(file);
-    old.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
-    for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < '051').sort()) {
-      old.exec(readFileSync(join(dir, name), 'utf8'));
-      old.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
-    }
+    const { file, raw: old } = dbBeforeMigration('051');
     old.exec(`
       INSERT INTO projects (id, key, name, importance_scale, effort_scale) VALUES (1, 'MS', 'MS', '[]', '[]');
       INSERT INTO sources (id, project_id, kind, title, body_md, base_dir) VALUES (1, 1, 'manual', '/srv/other/backlog.md', '', '/srv/other');

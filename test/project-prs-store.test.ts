@@ -1,11 +1,7 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { Db } from '../src/server/db.ts';
-import { startServer, OWNER } from './helpers.ts';
+import { dbBeforeMigration, startServer, OWNER } from './helpers.ts';
 
 /** A project with a GitHub repo, and a way to make sessions in it. */
 async function setup() {
@@ -78,14 +74,7 @@ describe('pull requests without a session (DISP-111)', () => {
   });
 
   it('migration 040 keeps existing pull requests and their merge events', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'dispatch-m040-')), 'd.db');
-    const dir = join(import.meta.dirname, '../src/server/migrations');
-    const old = new DatabaseSync(file);
-    old.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
-    for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < '040').sort()) {
-      old.exec(readFileSync(join(dir, name), 'utf8'));
-      old.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
-    }
+    const { file, raw: old } = dbBeforeMigration('040');
     old.exec(`
       INSERT INTO projects (id, key, name, importance_scale, effort_scale) VALUES (1, 'PP', 'PP', '[]', '[]');
       INSERT INTO repos (id, project_id, github_owner, github_name) VALUES (1, 1, 'me', 'app');

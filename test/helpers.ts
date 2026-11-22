@@ -1,9 +1,29 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/server/app.ts';
 import { loadConfig } from '../src/server/config.ts';
+
+/**
+ * A file database as Dispatch left it before migration `before` (e.g. '051'): every migration up to
+ * it, replayed and recorded. Not durable on purpose (DISP-196): each statement is its own transaction,
+ * and with the default journal and fsync a busy WSL can take over 20 s for the replay. The caller
+ * adds its rows and closes it; `new Db(file)` then runs the rest.
+ */
+export function dbBeforeMigration(before: string, prefix = 'dispatch-mig-'): { file: string; raw: DatabaseSync } {
+  const file = join(mkdtempSync(join(tmpdir(), prefix)), 'd.db');
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF');
+  raw.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
+  const dir = join(import.meta.dirname, '../src/server/migrations');
+  for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < before).sort()) {
+    raw.exec(readFileSync(join(dir, name), 'utf8'));
+    raw.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
+  }
+  return { file, raw };
+}
 
 export async function waitFor<T>(fn: () => T | Promise<T>, what: string, timeoutMs = 8000): Promise<NonNullable<T>> {
   const end = Date.now() + timeoutMs;
