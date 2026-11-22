@@ -1,12 +1,12 @@
 // A project's item lists in the React Query cache, patched in place: ['items', project id] holds
 // them all, ['items', project id, 'open' | 'closed'] one view of them (DISP-161).
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import type { ItemStatus } from '../../src/shared/types.ts';
+import { ITEM_STATUSES, type ItemStatus } from '../../src/shared/types.ts';
 import { api, type Item } from './api.ts';
 
 export type ItemView = 'open' | 'closed';
 export const CLOSED_STATUSES: readonly ItemStatus[] = ['done', 'canceled'];
-const OPEN_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold'] as const satisfies readonly ItemStatus[];
+const OPEN_STATUSES = ITEM_STATUSES.filter((s) => !CLOSED_STATUSES.includes(s));
 
 export const itemsKey = (projectId: number | undefined, view: ItemView) => ['items', projectId, view];
 /** The project page's lists: the open items at once, the closed ones only when shown. */

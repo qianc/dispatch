@@ -14,7 +14,7 @@ import { isIP } from 'node:net';
 import type { FastifyRequest } from 'fastify';
 import type { Auth } from './auth.ts';
 import type { Config } from './config.ts';
-import type { Db } from './db.ts';
+import { now, type Db } from './db.ts';
 import { DEVICE_COOKIE, type Devices } from './devices.ts';
 import type { Users } from './users.ts';
 
@@ -215,7 +215,6 @@ export interface ApiToken {
 }
 
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
-const now = () => new Date().toISOString();
 
 // ---------- addresses ----------
 

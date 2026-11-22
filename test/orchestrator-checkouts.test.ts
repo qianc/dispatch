@@ -131,7 +131,7 @@ describe("an orchestrator's checkouts on the worker", () => {
     expect(sent.find((m) => m.t === 'status' && m.session_id === 10)).toMatchObject({ status: 'failed', error: expect.stringContaining('"other" (of web)') });
 
     // (1) the janitor's tidy, forced: the detached checkouts and the session folder go
-    await onMessage({ t: 'close', session_id: 9, repos: [] });
+    await onMessage({ t: 'close', session_id: 9 });
     const res = await link.command({ c: 'tidy', session_id: 9, repos: [...two, api], branch: null, merged_repo_ids: [], delete_merged: false, force: true });
     expect(res).toEqual([{ repo: 'web', worktree: 'removed', branch: 'none' }, { repo: 'web', worktree: 'none', branch: 'none' }, { repo: 'api', worktree: 'removed', branch: 'none' }]);
     expect(existsSync(ws.sessionDir(9))).toBe(false);

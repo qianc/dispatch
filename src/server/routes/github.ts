@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { GithubAccessChecker } from '../githubAccess.ts';
-import { safePath } from '../identity.ts';
+import { safePath } from '../../shared/safePath.ts';
 import { HttpError, notFound, type Ctx } from './ctx.ts';
 
 export const STATE_COOKIE = 'dsp_gh_state';
