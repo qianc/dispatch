@@ -1,6 +1,6 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
 import { failureReason } from '../shared/attention.ts';
-import type { GithubCred, StartSpec, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, StartSpec, StatusMsg, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
   ACTIVE_STATUSES,
@@ -1021,7 +1021,8 @@ export class Sessions {
 
   // ---------- worker events ----------
 
-  onWorkerHello(workerId: number, live: number[]) {
+  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = []) {
+    this.lostStatuses(workerId, live, statuses);
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
       const s = this.store.session(id);
@@ -1062,6 +1063,24 @@ export class Sessions {
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
+  }
+
+  /**
+   * A status the worker wrote on a half-open link was lost (DISP-197): its hello repeats the last
+   * one of each live session. A turn that ended over there while we still think it works is
+   * handled now, as if the status had come; a newer sdk session id is kept.
+   */
+  private lostStatuses(workerId: number, live: number[], statuses: StatusMsg[]) {
+    for (const msg of statuses) {
+      const s = this.store.session(msg.session_id);
+      if (!s || s.worker_id !== workerId || !live.includes(s.id)) continue;
+      if ((s.status === 'running' || s.status === 'waiting_input') && (msg.status === 'idle' || msg.status === 'failed')) {
+        console.warn(`session ${s.id}: its "${msg.status}" was lost on the link to worker ${workerId}; taken from its hello`);
+        this.onWorkerMessage(workerId, msg);
+      } else if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id && ['running', 'waiting_input', 'idle'].includes(s.status)) {
+        this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
+      }
+    }
   }
 
   /** Agent sessions with a runner (chats are not resumed). */
