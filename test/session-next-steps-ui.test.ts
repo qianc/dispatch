@@ -60,7 +60,7 @@ describe('Mark as complete on a session\'s own page (DISP-124)', () => {
       max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: null, proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '',
       steps: [1, 2].map((n) => ({
         id: n, orchestration_id: s.id, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-        state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, child: null,
+        state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, child: null,
       })),
     };
     qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], attention: finishedAttention(orchestration), repos: [], source: null, project: null, failure: null, orchestration } satisfies SessionDetail);
