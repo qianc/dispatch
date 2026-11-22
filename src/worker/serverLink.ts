@@ -16,7 +16,7 @@ import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { runServerUpdate, type ServerUpdateOptions } from './serverUpdate.ts';
 import { checkRetries, TurnCheck } from './turnCheck.ts';
-import { checkTimeoutMs, hostedGitBase, run, Workspaces } from './workspace.ts';
+import { checkTimeoutMs, run, Workspaces } from './workspace.ts';
 
 /** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
 async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
@@ -129,7 +129,7 @@ export class ServerLink {
     // this server's hosted repos are at its own address, with this worker's token for it
     // git for a repo of this server: the project's GitHub account, else the first this server is allowed here
     const gitEnv = (repo: Repo) => shared.gitEnv?.({ ...repo, github_account: serverGithubAccount(entry, repo.github_account) }) ?? {};
-    this.workspaces = new Workspaces(root, shared.remoteBase, gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
+    this.workspaces = new Workspaces(root, shared.remoteBase, gitEnv, { base: `${serverAppUrl(entry.url)}/git`, token: entry.token }, entry.repo_env_dir);
     // agents get no git access to hosted repos: they commit, and the worker pushes hosted branches
     // (pushHostedBranches). Their env is the worker's own, so a WORKER_TOKEN set there reaches them
     // too; the README accepts that (an agent can read what the worker process can).
@@ -549,7 +549,6 @@ export class ServerLink {
         const r = this.runners.get(msg.session_id);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);
-        if (msg.cleanup && !this.shared.fake) await this.job(`session ${msg.session_id} is tidied`, () => this.workspaces.cleanup(msg.session_id, msg.repos)).catch((e) => console.warn('cleanup failed', e));
         return;
       }
       case 'rpc_result': {

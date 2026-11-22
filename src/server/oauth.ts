@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { sha256, type Access, type Principal, type Scope } from './access.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
+import type { Users } from './users.ts';
 
 /** What an MCP client may ever get: reading and editing the tracker, never agent sessions. */
 export const OAUTH_SCOPES: Scope[] = ['read', 'tracker'];
@@ -139,7 +140,7 @@ export class OAuth {
     if (g) this.db.run('UPDATE oauth_grants SET revoked_at = ? WHERE client_id = ? AND user = ? AND revoked_at IS NULL', new Date().toISOString(), g.client_id, g.user);
   }
 
-  routes(app: FastifyInstance) {
+  routes(app: FastifyInstance, users: Pick<Users, 'manages'>) {
     const fail = (reply: FastifyReply, status: number, error: string, description: string) => reply.status(status).send({ error, error_description: description });
 
     app.get('/.well-known/oauth-authorization-server', async () => this.metadata());
@@ -252,7 +253,7 @@ export class OAuth {
     });
 
     // Settings → Connected apps: your own; the install owner sees and revokes all
-    const mine = (req: FastifyRequest) => (req.principal!.user === this.access.installOwner ? undefined : req.principal!.user ?? '');
+    const mine = (req: FastifyRequest) => users.manages(req.principal!.user);
     app.get('/api/oauth/grants', async (req) => this.grants(mine(req)));
     app.delete('/api/oauth/grants/:id', async (req, reply) => {
       const id = Number((req.params as { id: string }).id);

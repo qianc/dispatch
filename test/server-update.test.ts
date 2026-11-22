@@ -134,10 +134,10 @@ test('the way back is also only to a commit of the release branch', async () => 
 
 test('the shell command gets the commit in its environment, and is killed at the time limit', async () => {
   const ok = await runShell('echo "to $DISPATCH_UPDATE_SHA"; exit 4', { PATH: process.env.PATH, DISPATCH_UPDATE_SHA: B }, 10_000);
-  expect(ok).toEqual({ code: 4, out: `to ${B}\n`, timed_out: false });
+  expect(ok).toEqual({ code: 4, out: `to ${B}`, timed_out: false });
   const slow = await runShell('echo start; sleep 30', { PATH: process.env.PATH }, 200);
   expect(slow.timed_out).toBe(true);
-  expect(slow.out).toBe('start\n');
+  expect(slow.out).toBe('start');
 });
 
 // --- through the link, with a server that restarts -----------------------------------------

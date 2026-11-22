@@ -981,7 +981,7 @@ export class Sessions {
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
-    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -1009,7 +1009,7 @@ export class Sessions {
         continue;
       }
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
-        this.hub.send(workerId, { t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
+        this.hub.send(workerId, { t: 'close', session_id: id, repos: s ? this.reposOf(s) : [] });
       }
     }
     // still running over there: no longer waiting for it
@@ -1052,7 +1052,7 @@ export class Sessions {
     if (msg.t === 'session_check') return this.onSessionCheck(s, msg); // a stopped check's last word ends its run (DISP-149)
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
-      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
       return;
     }
     switch (msg.t) {
@@ -1944,7 +1944,7 @@ export class Sessions {
       worker_id: workerId, moved_from: s.id, started_by: s.started_by,
     });
     for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);
-    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
     this.addEvent(s.id, { kind: 'system', text: `Moved to worker ${target.name}: continued in session #${next.id}.` });
     this.setStatus(s.id, 'stopped', { ended_at: new Date().toISOString(), waiting_reason: null });
