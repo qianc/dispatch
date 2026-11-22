@@ -130,7 +130,9 @@ export class ServerLink {
     // git for a repo of this server: the project's GitHub account, else the first this server is allowed here
     const gitEnv = (repo: Repo) => shared.gitEnv?.({ ...repo, github_account: serverGithubAccount(entry, repo.github_account) }) ?? {};
     this.workspaces = new Workspaces(root, shared.remoteBase, gitEnv, { base: hostedGitBase(entry.url), token: entry.token }, entry.repo_env_dir);
-    // agents get no worker token: they commit, and the worker pushes hosted branches (pushHostedBranches)
+    // agents get no git access to hosted repos: they commit, and the worker pushes hosted branches
+    // (pushHostedBranches). Their env is the worker's own, so a WORKER_TOKEN set there reaches them
+    // too; the README accepts that (an agent can read what the worker process can).
     // agents report to the server that started them (DISPATCH_URL beats a repo's or machine's default)
     const appUrl = serverAppUrl(entry.url);
     const sessionEnv = shared.opts.sessionEnv;
