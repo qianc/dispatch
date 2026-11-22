@@ -95,6 +95,8 @@ export type SourceSummary = Source & { item_count: number };
 export interface SessionDetail {
   session: Session;
   events: SessionEvent[];
+  /** there are events before the first one here: the page loads the last ones, "Show earlier" the rest (DISP-162) */
+  earlier?: boolean;
   inputs: PendingInput[];
   items: Item[];
   prs: PullRequest[];

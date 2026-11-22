@@ -58,6 +58,7 @@ describe('live session events after a reconnect (DISP-140)', () => {
     const { connectLive, withLive } = await import('../web/src/live.ts');
     const qc = new QueryClient();
     const stop = connectLive(qc);
+    qc.setQueryData(['session', 7], detail([ev(20)])); // the session is open: its live events are kept (DISP-162)
     stream.onmessage!({ data: JSON.stringify({ t: 'session_event', event: ev(22) }) });
     expect(withLive(detail([ev(20)])).events.map((e) => e.seq)).toEqual([20]);
     expect(withLive(detail([ev(21)])).events.map((e) => e.seq)).toEqual([21, 22]);

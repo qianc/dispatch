@@ -5,11 +5,26 @@ import type { AssistantChat, PrDetail, SessionDetail, SessionEvent } from './api
 import { prPageStale } from './prs.ts';
 import { patchItemList } from './itemsCache.ts';
 
-/** Recent live events per session, so a refetch that raced with them can't drop them. */
-const recent = new Map<number, SessionEvent[]>();
+/** Recent live events per session, so a refetch that raced with them can't drop them. Only for sessions
+ * whose query is in the cache, and only for a few minutes: a race is over long before that (DISP-162). */
+const recent = new Map<number, { e: SessionEvent; at: number }[]>();
+const RECENT_MS = 3 * 60_000;
+
+/** Forget events older than RECENT_MS, and sessions left with none. */
+function pruneRecent(now = Date.now()) {
+  for (const [id, list] of recent) {
+    const keep = list.filter((x) => now - x.at < RECENT_MS);
+    if (keep.length) recent.set(id, keep);
+    else recent.delete(id);
+  }
+}
+
+/** Sessions with live events kept (for tests). */
+export const recentSessions = () => [...recent.keys()];
 
 export function withLive(d: SessionDetail): SessionDetail {
-  const extra = recent.get(d.session.id) ?? [];
+  const now = Date.now();
+  const extra = (recent.get(d.session.id) ?? []).flatMap((x) => (now - x.at < RECENT_MS ? [x.e] : []));
   const max = d.events.at(-1)?.seq ?? 0;
   // only the ones that continue the list: a gap would hide the missing events from `?after=` (DISP-140)
   const missing: SessionEvent[] = [];
@@ -48,6 +63,11 @@ export function connectLive(qc: QueryClient): () => void {
     };
   };
   open();
+  // a session's query gone from the cache (closed long enough ago): its live events are of no use
+  const unwatch = qc.getQueryCache().subscribe((ev) => {
+    const key = ev.query.queryKey;
+    if (ev.type === 'removed' && key[0] === 'session') recent.delete(Number(key[1]));
+  });
 
   // iOS freezes a backgrounded app and kills its stream, yet the EventSource can still say OPEN.
   // Coming back: reconnect, and refetch what is on screen.
@@ -71,6 +91,7 @@ export function connectLive(qc: QueryClient): () => void {
   };
   // the server sends something at least every 25 s; a minute of silence means the stream is dead
   const watchdog = window.setInterval(() => {
+    pruneRecent();
     if (document.visibilityState === 'visible' && Date.now() - last > 60_000) open();
   }, 15_000);
   document.addEventListener('visibilitychange', onVisibility);
@@ -79,6 +100,8 @@ export function connectLive(qc: QueryClient): () => void {
   return () => {
     stopped = true;
     liveHealthy = false;
+    unwatch();
+    recent.clear();
     clearTimeout(retry);
     clearInterval(watchdog);
     es?.close();
@@ -93,10 +116,13 @@ function apply(qc: QueryClient, e: LiveEvent) {
     case 'hello':
       return;
     case 'session_event': {
-      const list = recent.get(e.event.session_id) ?? [];
-      list.push(e.event);
-      if (list.length > 300) list.shift();
-      recent.set(e.event.session_id, list);
+      // kept only while the session's query is cached: a tab open for days would keep every session's
+      if (qc.getQueryCache().find({ queryKey: ['session', e.event.session_id], exact: true })) {
+        const list = recent.get(e.event.session_id) ?? [];
+        list.push({ e: e.event, at: Date.now() });
+        if (list.length > 300) list.shift();
+        recent.set(e.event.session_id, list);
+      }
       // seq is contiguous per session: after a gap (events sent while the stream was down) refetch,
       // since the session's query asks only for events after the last one it has (DISP-140)
       let gap = false;

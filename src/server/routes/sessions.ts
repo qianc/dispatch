@@ -149,12 +149,19 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.get('/api/sessions/:id', async (req) => {
     const s = session((req.params as { id: string }).id);
-    // ?after=<seq>: only newer events (the phone polls this while live updates are held back)
-    const after = Number((req.query as { after?: string }).after ?? 0) || 0;
+    // ?after=<seq>: all newer events (the phone polls this while live updates are held back, and a gap refetches, DISP-140).
+    // Otherwise ?limit=N: the last N events, or with ?before=<seq> the N before it ("Show earlier", DISP-162); without: all.
+    const q = z.object({
+      after: z.coerce.number().int().min(0).default(0),
+      before: z.coerce.number().int().min(1).optional(),
+      limit: z.coerce.number().int().min(1).max(1000).optional(),
+    }).parse(Object.fromEntries(Object.entries(req.query as Record<string, string>).filter(([, v]) => v !== '')));
+    const page = q.after || !q.limit ? { events: store.events(s.id, q.after), earlier: false } : store.eventsPage(s.id, q.limit, q.before);
     const prs = store.prs({ session_id: s.id });
     return {
       session: s,
-      events: store.events(s.id, after),
+      events: page.events,
+      earlier: page.earlier,
       inputs: store.inputs(s.id),
       items: store.itemsByIds(s.item_ids),
       prs,
