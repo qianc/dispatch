@@ -1025,6 +1025,14 @@ export class Store {
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
   }
 
+  /** The last `limit` events before seq `before` (default: the newest), and whether there are earlier ones (DISP-162). */
+  eventsPage(sessionId: number, limit: number, before = Number.MAX_SAFE_INTEGER): { events: SessionEvent[]; earlier: boolean } {
+    const rows = this.db
+      .all('SELECT * FROM session_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?', sessionId, before, limit + 1)
+      .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }) as SessionEvent);
+    return { events: rows.slice(0, limit).reverse(), earlier: rows.length > limit };
+  }
+
   /** The owner's message with this client id in the session, if it was stored (DISP-83). */
   hasUserMessage(sessionId: number, clientId: string): boolean {
     return !!this.db.get("SELECT 1 FROM session_events WHERE session_id = ? AND json_extract(body, '$.kind') = 'user' AND json_extract(body, '$.client_id') = ?", sessionId, clientId);

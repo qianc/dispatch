@@ -86,7 +86,8 @@ function MessageTime({ at }: { at: string }) {
 }
 
 /** `readOnly`: someone else's session (DISP-63): no answers, approvals or proposal buttons. */
-export function Transcript({ session, events, inputs, project, readOnly = false }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null; readOnly?: boolean }) {
+/** `partial`: only the last events are loaded (DISP-162); an open question asked before them still shows, at the end. */
+export function Transcript({ session, events, inputs, project, readOnly = false, partial = false }: { session: Session; events: SessionEvent[]; inputs: PendingInput[]; project: Project | null; readOnly?: boolean; partial?: boolean }) {
   const results = useMemo(() => {
     const m = new Map<string, ToolResult>();
     for (const e of events) if (e.body.kind === 'tool_result') m.set(e.body.tool_use_id, e.body);
@@ -158,8 +159,15 @@ export function Transcript({ session, events, inputs, project, readOnly = false 
         u.t === 'event' ? render(u.e)
         : u.t === 'pending_proposal' ? <p key={`p-${u.key}`} className="text-[13px] text-accent animate-pulse">Claude is writing up a proposal…</p>
         : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} render={render} results={results} />)}
+      {partial && openNotShown(events, inputs).map((i) => <InputCard key={`i-${i.id}`} input={i} readOnly={readOnly} />)}
     </div>
   );
+}
+
+/** Open questions whose request is not among the loaded events. */
+function openNotShown(events: SessionEvent[], inputs: PendingInput[]) {
+  const asked = new Set(events.flatMap((e) => (e.body.kind === 'input_request' ? [e.body.input_id] : [])));
+  return inputs.filter((i) => !i.answered_at && !i.expired && !asked.has(i.id));
 }
 
 // ---------- questions & plan approval ----------

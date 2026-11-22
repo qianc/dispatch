@@ -50,12 +50,28 @@ export interface ChatMode {
   projects?: MentionProject[];
 }
 
-/** A session's detail: after the first load, ask only for new events and keep the ones we have. */
+/** How many events a session page loads at first, and with each "Show earlier" (DISP-162). */
+export const EVENT_PAGE = 300;
+
+/** A session's detail: the last events first; after that, ask only for new events and keep the ones we have. */
 export async function fetchSession(qc: QueryClient, id: number): Promise<SessionDetail> {
   const prev = qc.getQueryData<SessionDetail>(['session', id]);
   const after = prev?.events.at(-1)?.seq ?? 0;
-  const d = await api.get<SessionDetail>(`/sessions/${id}${after ? `?after=${after}` : ''}`);
-  return withLive(prev && after ? { ...d, events: [...prev.events, ...d.events.filter((e) => e.seq > after)] } : d);
+  const d = await api.get<SessionDetail>(`/sessions/${id}?${after ? `after=${after}` : `limit=${EVENT_PAGE}`}`);
+  return withLive(prev && after ? { ...d, events: [...prev.events, ...d.events.filter((e) => e.seq > after)], earlier: prev.earlier } : d);
+}
+
+/** "Show earlier": the events before the first one loaded, put in front of them. */
+export async function fetchEarlier(qc: QueryClient, id: number, beforeAdd?: () => void): Promise<void> {
+  const first = qc.getQueryData<SessionDetail>(['session', id])?.events[0]?.seq;
+  if (!first) return;
+  const page = await api.get<SessionDetail>(`/sessions/${id}?before=${first}&limit=${EVENT_PAGE}`);
+  beforeAdd?.();
+  qc.setQueryData<SessionDetail>(['session', id], (d) => {
+    if (!d) return d;
+    const start = d.events[0]?.seq ?? Infinity;
+    return { ...d, events: [...page.events.filter((e) => e.seq < start), ...d.events], earlier: page.earlier };
+  });
 }
 
 /** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
@@ -106,6 +122,11 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   // keep the view pinned to the bottom while new events arrive, unless the user scrolled up
   const endRef = useRef<HTMLDivElement>(null);
+  // "Show earlier" puts events above the ones you read: the chat's height before, to keep them where they are
+  const heightBefore = useRef<number | null>(null);
+  const earlier = useMutation({
+    mutationFn: () => fetchEarlier(qc, id, () => { heightBefore.current = endRef.current?.closest('.scroll-area')?.scrollHeight ?? null; }),
+  });
   const pinned = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [unseen, setUnseen] = useState(false);
@@ -144,6 +165,11 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     // which shifts the layout so taps on the tab bar land in the wrong place
     const el = endRef.current?.closest('.scroll-area');
     if (!el) return;
+    if (heightBefore.current !== null) {
+      el.scrollTop += el.scrollHeight - heightBefore.current;
+      heightBefore.current = null;
+      return;
+    }
     if (!placed.current) {
       placed.current = true;
       const top = navType === 'POP' ? chatScroll.get(id) : undefined;
@@ -348,7 +374,13 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
       {!drive && (
         <div role="status" className="mx-4 mt-3 rounded-xl border border-wait/40 bg-wait/5 px-3 py-2.5 text-[14px]">{readOnlyText(s)}</div>
       )}
-      <Transcript session={s} events={data.events} inputs={data.inputs} project={project} readOnly={!drive} />
+      {data.earlier && (
+        <div className="px-4 pt-3 text-center">
+          <Button small disabled={earlier.isPending} onClick={() => earlier.mutate()}>{earlier.isPending ? 'Loading…' : 'Show earlier'}</Button>
+          <ErrorText error={earlier.error} />
+        </div>
+      )}
+      <Transcript session={s} events={data.events} inputs={data.inputs} project={project} readOnly={!drive} partial={!!data.earlier} />
       <PendingMessages pending={pending} onEdit={editAgain} />
       {s.status === 'queued' && (
         <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]">
