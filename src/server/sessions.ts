@@ -1951,10 +1951,11 @@ export class Sessions {
    * After an await: stop, without writing, when the session changed meanwhile: its status, its
    * worker, or its chat (`seq`: its last event before the await). A short turn sent from another
    * tab can start and end idle again while Dispatch waits; only its events show it (DISP-198).
+   * A running session writes events all the time: for it only the status counts (DISP-204).
    */
   private unchangedSince(s: Session, seq: number, action: 'move' | 'retry') {
     const now = this.mustGet(s.id);
-    if (now.status !== s.status || now.worker_id !== s.worker_id || this.store.unread(s.id).last_seq !== seq) {
+    if (now.status !== s.status || now.worker_id !== s.worker_id || (s.status !== 'running' && this.store.unread(s.id).last_seq !== seq)) {
       throw new SessionError(`Session #${s.id} changed while Dispatch was waiting for its worker (it is ${now.status} now): press ${action === 'move' ? 'Move' : 'Retry'} again if it still applies.`, 409);
     }
   }
