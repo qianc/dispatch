@@ -796,6 +796,19 @@ export class Sessions {
    * from the owner; if not, nothing runs and the answer says what is still missing.
    */
   async retryLogin(sessionId: number): Promise<{ resumed: boolean; account: ClaudeAccountInfo; session: Session }> {
+    // a double tap, or two tabs, would send two resume turns (DISP-156)
+    if (this.retrying.has(sessionId)) throw new SessionError('This session is already retrying.', 409);
+    this.retrying.add(sessionId);
+    try {
+      return await this.retryLoginNow(sessionId);
+    } finally {
+      this.retrying.delete(sessionId);
+    }
+  }
+
+  private retrying = new Set<number>();
+
+  private async retryLoginNow(sessionId: number): Promise<{ resumed: boolean; account: ClaudeAccountInfo; session: Session }> {
     const s = this.mustGet(sessionId);
     if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
     const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
@@ -806,6 +819,7 @@ export class Sessions {
     if (isRefusal(identity)) throw refusalError(identity);
     const account = await this.hub.cmd<ClaudeAccountInfo>(s.worker_id, { c: 'check_login', account: s.claude_account }, 20_000);
     this.accountChecked(s.worker_id!, account);
+    this.unchangedSince(s, 'retry');
     if (account.logged_in === false) return { resumed: false, account, session: s };
     this.addEvent(s.id, { kind: 'system', text: `${account.label} account is signed in on ${name}. The session resumes where it stopped.` });
     // a conversation that exists goes on; one that never got going starts from its first message
@@ -1865,6 +1879,27 @@ export class Sessions {
    * lives in that worker's copy.
    */
   async move(sessionId: number, workerId: number): Promise<Session> {
+    // a double tap, or phone and desktop, would make two continuation sessions (DISP-156)
+    if (this.moving.has(sessionId)) throw new SessionError('This session is already moving.', 409);
+    this.moving.add(sessionId);
+    try {
+      return await this.moveNow(sessionId, workerId);
+    } finally {
+      this.moving.delete(sessionId);
+    }
+  }
+
+  private moving = new Set<number>();
+
+  /** After an await: stop, without writing, when the session's status or worker changed meanwhile. */
+  private unchangedSince(s: Session, action: 'move' | 'retry') {
+    const now = this.mustGet(s.id);
+    if (now.status !== s.status || now.worker_id !== s.worker_id) {
+      throw new SessionError(`Session #${s.id} changed while Dispatch was waiting for its worker (it is ${now.status} now): press ${action === 'move' ? 'Move' : 'Retry'} again if it still applies.`, 409);
+    }
+  }
+
+  private async moveNow(sessionId: number, workerId: number): Promise<Session> {
     const s = this.mustGet(sessionId);
     const target = this.workers.get(workerId);
     if (!target || target.revoked_at) throw new SessionError('Unknown worker');
@@ -1898,6 +1933,7 @@ export class Sessions {
         } catch {
           pushed = false; // nothing to push in that repo, or it failed: say so below
         }
+        this.unchangedSince(s, 'move');
       }
     }
     const where = pushed ? 'and pushed' : `but ${from} was not reachable, so commits it had not pushed may be missing`;
