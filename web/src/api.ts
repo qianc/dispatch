@@ -97,6 +97,8 @@ export interface SessionDetail {
   inputs: PendingInput[];
   items: Item[];
   prs: PullRequest[];
+  /** what it needs from you, as the inbox says it (DISP-159): the server knows which PRs it merges now */
+  attention: Attention;
   repos: Repo[];
   source: Source | null;
   project: Project | null;

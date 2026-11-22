@@ -21,7 +21,7 @@ import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { OrchestrationPanel } from '../components/orchestration.tsx';
 import { orchBusyLabel, planLink } from '../orchestration.ts';
-import { LIMIT_WAIT_LABEL, attentionOf, finishedAttention, limitWaitText } from '../../../src/shared/attention.ts';
+import { LIMIT_WAIT_LABEL, limitWaitText } from '../../../src/shared/attention.ts';
 import { PrStateChip } from '../components/PrState.tsx';
 import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
@@ -185,8 +185,8 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
 
   if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
   const { session: s, project } = data;
-  // a finished orchestrator waits for its owner to mark it complete or re-plan (DISP-121)
-  const attention = data.orchestration?.phase === 'done' ? finishedAttention(data.orchestration) : attentionOf(s, data.prs, data.events);
+  // from the server, as the inbox has it: a PR it merges now is no PR to review (DISP-159)
+  const { attention } = data;
   if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   // the request the session waits on: the reply box points to it

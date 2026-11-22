@@ -124,7 +124,7 @@ describe('the chat screen while a message is pending (DISP-83)', () => {
       closed_at: null, closed_reason: null, retry_of: null, about_session: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null,
     };
     const qc = new QueryClient();
-    qc.setQueryData(['session', 7], { session: s, events: [userEvent(1, 'one', 'c-1')], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, access: { drive: true, stop: true } });
+    qc.setQueryData(['session', 7], { session: s, events: [userEvent(1, 'one', 'c-1')], inputs: [], items: [], prs: [], attention: { kind: 'turn', text: '' }, repos: [], source: null, project: null, failure: null, access: { drive: true, stop: true } });
     P.sendPending('session:7', { text: 'two' }, () => new Promise(() => {}));
     const html = renderPage(createElement(() => SessionView({ chat: { id: 7, title: 'Assistant', subtitle: '', onNew: () => {} } })), { qc });
     expect(textOf(html)).toMatch(/one .*two Sending…/);
