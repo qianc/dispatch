@@ -100,6 +100,33 @@ describe('orchestrator: pushes and wakes survive a restart (DISP-165)', () => {
     expect(t.pushes.filter((x) => x.title === 'Rework auth: step 1 needs you')).toEqual([{ title: 'Rework auth: step 1 needs you', body: 'Its deploy failed, and the orchestrator did not fix it.', url: `/s/${p.child}` }]);
   });
 
+  it('a failed deploy it fixed with a repair step, then a restart mid-turn: no "did not fix it" push (DISP-187)', async () => {
+    const p = await running();
+    const child = t.store.session(p.child)!;
+    const repo = t.store.repos(child.project_id!)[0];
+    turn(p.child);
+    t.s.ctx.orchestrator.onDeploy(child, repo, 'running');
+    t.pr(p.child, 'merged');
+    turn(p.id);
+    t.s.ctx.sessions.onWorkerMessage(child.worker_id!, { t: 'deploy_result', session_id: p.child, repo_id: repo.id, ok: false, sha: 'abc1234', output: 'boom', duration_ms: 1000 });
+    expect(t.store.step(p.first.id)).toMatchObject({ state: 'failed', offer: 'deploy' });
+    t.status(p.id, 'running');
+    const fixItem = await t.rpc(p.id, 'create_item', { project_key: 'AA', type: 'bug', title: 'Repair the deploy', body_md: 'Fix it.' }) as { key: string };
+    const keep = (x: typeof p.first, after: number[] = []) => ({ id: x.id, title: x.title, project_key: x.project_key, prompt: x.prompt_md, item_keys: x.item_keys, after });
+    await t.rpc(p.id, 'amend_plan', {
+      steps: [keep(p.first), keep(p.second, [1]), keep(p.third), { title: 'Repair the deploy', project_key: 'AA', prompt: 'Fix the deploy.', item_keys: [fixItem.key] }],
+      change: { kind: 'fix_blocker', reason: 'The deploy of step 1 failed.', verification: 'the deploy passes', touches: ['ci_config'], unblocks: p.first.id },
+    });
+    const repair = t.s.ctx.orchestrator.view(p.id).steps[3];
+    await t.startStep(p.id, repair.id);
+    expect(t.store.step(p.first.id)).toMatchObject({ offer: null });
+    t.pushes.length = 0;
+    t.restart();
+    t.status(p.id, 'idle');
+    turn(p.id);
+    expect(titles()).not.toContain('Rework auth: step 1 needs you');
+  });
+
   it('a turn that ended with no pull request, told to it before the restart: the owner is told once', async () => {
     const p = await running();
     t.s.ctx.orchestrator.settleMs = 0;

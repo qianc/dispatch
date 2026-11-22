@@ -504,6 +504,7 @@ export class Orchestrator {
     if (o.phase === 'paused') throw new Error('The orchestration is paused: the owner resumes it first.');
     const plan = this.buildPlan(o, raw);
     this.acted.add(s.id);
+    this.tookUpDeploys(o.session_id);
     if (o.phase === 'run') {
       const proposal: PlanProposal = {
         plan_md: plan.plan_md || o.plan_md, steps: plan.input.steps, summary: describeChange(o.steps, plan.steps),
@@ -558,6 +559,7 @@ export class Orchestrator {
     this.store.addPlanChange(o.session_id, { kind: change.kind, decided_by: 'orchestrator', summary, reason: change.reason, verification: change.verification || null, step_id: fixStep });
     this.sessions.systemNote(s.id, `Plan changed without approval (${CHANGE_WORDS[change.kind]}): ${summary}. Why: ${change.reason}${change.verification ? ` Verified by: ${change.verification}` : ''}`);
     this.acted.add(s.id);
+    this.tookUpDeploys(o.session_id);
     this.emit(o.session_id);
     const after = this.must(o.session_id);
     return `Changed: ${summary}. It is in the plan's history for the owner. Ready to start: ${this.readySteps(after).map((x) => x.id).join(', ') || 'none'}.`;
@@ -609,6 +611,7 @@ export class Orchestrator {
     const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
+    this.tookUpDeploys(o.session_id);
     this.timerStreak.delete(o.session_id);
     this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
     this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
@@ -654,6 +657,15 @@ export class Orchestrator {
 
   /** orchestrator sessions that proposed a plan or started a step this turn: that turn's end needs no "waiting for you" */
   private acted = new Set<number>();
+
+  /**
+   * The orchestrator acted on its failed deploys (a plan change, a repair step, a message): their
+   * offers are cleared now, in the store, so a restart before the turn ends does not tell the owner
+   * it did nothing (DISP-187).
+   */
+  private tookUpDeploys(orchestrationId: number) {
+    for (const step of this.offered(orchestrationId, 'deploy')) this.clearOffer(step.id);
+  }
 
   /**
    * The orchestrator is done: the result is its last word. The session stays open for the owner,
@@ -933,12 +945,12 @@ export class Orchestrator {
       if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}) ended its turn with no pull request`))) continue;
       this.offerToOwner(s, step);
     }
-    // a failed deploy it was told about and did nothing for: the owner is told (this push, not the one below)
+    // a failed deploy it was told about and did nothing for: the owner is told (this push, not the one
+    // below). One it acted on has no offer left: tookUpDeploys cleared it (DISP-187)
     let told = false;
     for (const step of this.offered(s.id, 'deploy')) {
       if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}): failed: ${step.note}`))) continue;
-      if (acted) this.clearOffer(step.id);
-      else told = this.offerToOwner(s, step, 'its deploy failed, and the orchestrator did not fix it') || told;
+      told = this.offerToOwner(s, step, 'its deploy failed, and the orchestrator did not fix it') || told;
     }
     // a turn that started nothing and leaves nothing running ended with words for the owner (a
     // question, or what went wrong): they are told, unless its next events start it again at once
@@ -1332,6 +1344,7 @@ export class Orchestrator {
     else this.sessions.sendFromDispatch(child.id, message);
     this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
     this.acted.add(s.id);
+    this.tookUpDeploys(o.session_id);
     this.emit(o.session_id);
     if (!queue) return `Sent to session #${child.id} (${count}). End your turn: Dispatch wakes you when it changes.`;
     if (child.status === 'idle') this.deliverQueued(child.id);
