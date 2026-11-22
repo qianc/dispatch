@@ -1,5 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { expect, test } from './fixtures.ts';
+import { E2E_REPOS } from './setup.ts';
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
 
 test('phone flow: project → items → batch → answer → planner card → start', async ({ page }) => {
   await page.goto('/');
@@ -256,10 +262,18 @@ test('item links open files, images and other items; Discuss this chats about th
   // seed through the API with the browser's cookie
   const api = (path: string, data: unknown) => page.request.post(`/api${path}`, { data });
   await api('/projects', { key: 'LNK', name: 'Links' });
-  const src = await (await api('/projects/LNK/sources', { kind: 'manual', title: '/tmp/dispatch-e2e-src/backlog.md', body_md: 'x' })).json();
+  // the files come from the project's repo: a source's title is never a folder to read (DISP-131)
+  const dir = `${E2E_REPOS}/lnk`;
+  mkdirSync(`${dir}/docs`, { recursive: true });
+  writeFileSync(`${dir}/docs/triage.md`, '# Triage notes\n\nSee [the pic](pic.png).\n\n![diagram](pic.png)\n');
+  writeFileSync(`${dir}/docs/pic.png`, Buffer.from(PNG, 'base64'));
+  git(dir, 'init', '--quiet', '-b', 'main');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '--quiet', '-m', 'docs');
+  expect((await api('/projects/LNK/repos', { local_path: dir })).ok()).toBe(true);
   await api('/projects/LNK/items', { title: 'B9 — The plan builds the deck' });
   const item = await (await api('/projects/LNK/items', {
-    title: 'X1 — Linked item', source_id: src.id,
+    title: 'X1 — Linked item',
     body_md: 'Read [the triage](docs/triage.md) and see [B9](#b9--the-plan-builds-the-deck).',
   })).json();
 
@@ -718,7 +732,7 @@ test('a schedule on the project page: add it, run it now, see what it started (D
   await d.getByLabel('Scope').fill('Small fixes only.');
   await d.getByRole('button', { name: 'Add schedule' }).click();
   const row = page.getByRole('button', { name: 'Schedule Night run' });
-  await expect(row).toContainText('03:30 · weekdays');
+  await expect(row).toContainText(/03:30 \S+ · weekdays/); // the server's time zone (DISP-160)
   await expect(row).toContainText('Next:');
 
   await row.click();

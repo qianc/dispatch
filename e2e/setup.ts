@@ -1,7 +1,7 @@
 // The folders every e2e server and worker share. Each spec file gets its own server and worker (fixtures.ts).
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 
-/** A folder the e2e source file 'lives' in, with linked docs. */
+/** A folder the e2e worker may read for chats (ASSISTANT_READ_DIRS). */
 export const E2E_SRC = '/tmp/dispatch-e2e-src';
 
 /** The first server's port; each Playwright worker adds its index. */
@@ -23,13 +23,13 @@ export function baseEnv(): Record<string, string> {
 }
 
 export default function setup() {
+  // the e2e server serves the built web app: without one, every sign-in only times out (DISP-171)
+  const web = process.env.E2E_WEB_DIST ?? './dist/web';
+  if (!existsSync(`${web}/index.html`)) throw new Error(`No web build in ${web}: run npm run build first (or set E2E_WEB_DIST).`);
   rmSync('/tmp/dispatch-e2e', { recursive: true, force: true });
   rmSync(E2E_SRC, { recursive: true, force: true });
   rmSync(E2E_REPOS, { recursive: true, force: true });
   rmSync('/tmp/dispatch-e2e-work', { recursive: true, force: true }); // the Work account starts signed out
   mkdirSync(E2E_REPOS, { recursive: true });
-  mkdirSync(`${E2E_SRC}/docs`, { recursive: true });
-  writeFileSync(`${E2E_SRC}/docs/triage.md`, '# Triage notes\n\nSee [the pic](pic.png).\n\n![diagram](pic.png)\n');
-  // a 1x1 png
-  writeFileSync(`${E2E_SRC}/docs/pic.png`, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+  mkdirSync(E2E_SRC, { recursive: true });
 }

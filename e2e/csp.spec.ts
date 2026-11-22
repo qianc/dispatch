@@ -25,12 +25,11 @@ test('the main pages run under the full policy without a violation', async ({ pa
   // the service worker registers under worker-src 'self'
   await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
 
-  // a project whose item shows an image from another https host
-  await page.context().route('https://images.example/pic.png', (r) => r.fulfill({ contentType: 'image/png', body: PNG }));
+  // a project whose item has an image from another https host, and an inline one
   await page.request.post('/api/projects', { data: { key: 'CSP', name: 'Policy' } });
   await page.request.post('/api/projects/CSP/repos', { data: { github_owner: 'me', github_name: 'policy', default_branch: 'main' } });
   const item = await (await page.request.post('/api/projects/CSP/items', {
-    data: { title: 'With pictures', body_md: '![far](https://images.example/pic.png)' },
+    data: { title: 'With pictures', body_md: `![far](https://images.example/pic.png) ![near](data:image/png;base64,${PNG.toString('base64')})` },
   })).json();
   for (const tab of ['backlog', 'bugs', 'sessions', 'sources', 'settings']) {
     await page.goto(`/p/CSP?tab=${tab}`);
@@ -38,7 +37,9 @@ test('the main pages run under the full policy without a violation', async ({ pa
   }
   await expect(page.getByText('Changes are saved automatically')).toBeVisible();
   await page.goto(`/items/${item.id}`);
-  await expect.poll(() => page.getByAltText('far').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
+  // the far one is a link, not a fetch (DISP-144); the inline one loads under img-src data:
+  await expect(page.getByRole('link', { name: 'far' })).toHaveAttribute('href', 'https://images.example/pic.png');
+  await expect.poll(() => page.getByAltText('near').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
 
   // a session: the live stream (connect-src 'self') brings the agent's messages
   await page.goto('/p/CSP');
