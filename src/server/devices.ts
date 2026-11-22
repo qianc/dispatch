@@ -12,8 +12,9 @@ import type { Db } from './db.ts';
 export const DEVICE_COOKIE = 'dispatch_device';
 export const DEVICE_DAYS = 90;
 const PAIR_TTL_MS = 10 * 60_000;
+/** live pairings in all: when full, a new one is refused, not made by pushing out another client's (DISP-189) */
 const MAX_PENDING = 20;
-/** live pairings one client address may hold: a flood from one address replaces its own, not others' */
+/** live pairings one client (an IPv4 address, an IPv6 /64) may hold: a flood from one replaces its own, not others' */
 const MAX_PENDING_PER_ADDRESS = 3;
 /** no 0/O, 1/I/L: read off a phone and typed on a desktop */
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -57,13 +58,13 @@ export class Devices {
       const own = [...this.pending].filter(([, p]) => p.ip === ip && !p.secret);
       for (const [id] of own.slice(0, Math.max(0, own.length - MAX_PENDING_PER_ADDRESS + 1))) this.pending.delete(id);
     }
-    // nobody can approve without signing in, but keep a flood of requests from growing the map
-    while (this.pending.size >= MAX_PENDING) this.pending.delete(this.pending.keys().next().value!);
   }
 
-  /** A new pairing for the phone at client address `ip`. */
-  start(name: string, ip: string): { pair_id: string; code: string; expires_at: string } {
+  /** A new pairing for the phone at client `ip` (see clientIp), or null when too many are waiting. */
+  start(name: string, ip: string): { pair_id: string; code: string; expires_at: string } | null {
     this.prune(ip);
+    // nobody can approve without signing in, but keep a flood of requests from growing the map
+    if ([...this.pending.values()].filter((p) => !p.secret).length >= MAX_PENDING) return null;
     const raw = Array.from({ length: 8 }, () => ALPHABET[randomInt(ALPHABET.length)]).join('');
     const pairId = randomBytes(24).toString('base64url');
     const expires = Date.now() + PAIR_TTL_MS;

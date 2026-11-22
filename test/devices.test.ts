@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { clientKey } from '../src/server/access.ts';
 import { startServer } from './helpers.ts';
 
 // A phone's home-screen app cannot use the proxy's SSO (e.g. a managed-browser-only Entra policy on
@@ -125,5 +126,47 @@ describe('device pairing', () => {
     } finally {
       await s.app.close();
     }
+  });
+  // DISP-189: one IPv6 line has a whole /64; a full queue refuses new pairings instead of pushing out others'
+  it('two addresses in one IPv6 /64 share one pairing limit', async () => {
+    const { s, call } = await proxyServer();
+    try {
+      const from = (ip: string) => ({ headers: { 'x-forwarded-for': ip } });
+      const first = (await call('POST', '/api/devices/pair', from('2001:db8:5:6::1'))).json();
+      for (let i = 0; i < 3; i++) await call('POST', '/api/devices/pair', from(`2001:db8:5:6:${i + 1}::7`));
+      expect((await call('GET', `/api/devices/pair/${first.pair_id}`)).json()).toEqual({ status: 'expired' });
+      // another /64 keeps its own
+      const other = (await call('POST', '/api/devices/pair', from('2001:db8:5:7::1'))).json();
+      for (let i = 0; i < 3; i++) await call('POST', '/api/devices/pair', from(`2001:db8:5:6::${i + 10}`));
+      expect((await call('GET', `/api/devices/pair/${other.pair_id}`)).json()).toEqual({ status: 'pending' });
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a full pairing queue refuses new pairings and keeps the waiting ones', async () => {
+    const { s, call } = await proxyServer();
+    try {
+      const from = (ip: string) => ({ headers: { 'x-forwarded-for': ip } });
+      const phone = (await call('POST', '/api/devices/pair', from('192.0.2.10'))).json();
+      // many clients, each within its own limit, fill the queue
+      for (let i = 0; i < 19; i++) expect((await call('POST', '/api/devices/pair', from(`2001:db8:${i}::1`))).statusCode).toBe(200);
+      const full = await call('POST', '/api/devices/pair', from('2001:db8:99::1'));
+      expect(full.statusCode).toBe(429);
+      expect(full.json().error).toMatch(/Too many phones are pairing/);
+      expect((await call('GET', `/api/devices/pair/${phone.pair_id}`)).json()).toEqual({ status: 'pending' });
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('keys IPv6 clients by their /64 and IPv4 by its address', () => {
+    expect(clientKey('2001:db8:1:2:3:4:5:6')).toBe('2001:db8:1:2::/64');
+    expect(clientKey('2001:DB8:0:0001::1')).toBe('2001:db8:0:1::/64');
+    expect(clientKey('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(clientKey('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(clientKey('64:ff9b::192.0.2.1')).toBe('64:ff9b:0:0::/64');
+    expect(clientKey('::ffff:192.0.2.1')).toBe('192.0.2.1');
+    expect(clientKey('192.0.2.1')).toBe('192.0.2.1');
   });
 });

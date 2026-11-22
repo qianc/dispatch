@@ -69,15 +69,17 @@ export function Schedules({ project }: { project: ProjectSummary }) {
         <p className="px-4 text-[13px] text-muted">A planner can run here at set times, e.g. every night, and start the work it picks within a scope you write. Each run shows below with its result.</p>
       )}
       <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing === 'new' ? 'New schedule' : editing ? editing.name : 'Schedule'}>
-        {editing && <ScheduleForm key={editing === 'new' ? 'new' : editing.id} project={project} timeZone={data[0]?.time_zone} schedule={editing === 'new' ? null : editing} onDone={() => setEditing(null)} />}
+        {editing && <ScheduleForm key={editing === 'new' ? 'new' : editing.id} project={project} schedule={editing === 'new' ? null : editing} onDone={() => setEditing(null)} />}
       </Sheet>
     </Section>
   );
 }
 
-function ScheduleForm({ project, schedule, timeZone, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; timeZone?: string; onDone: () => void }) {
+function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; onDone: () => void }) {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  // from /api/me, so a project's first schedule names it too (DISP-190)
+  const timeZone = schedule?.time_zone ?? me?.time_zone;
   // someone else's schedule: read it; the install owner may switch it off and delete it
   const rights = schedule ? scheduleRights(schedule, me?.user ?? null, !!me?.is_owner) : { edit: true, run: false, toggle: true, remove: false };
   const [f, setF] = useState({

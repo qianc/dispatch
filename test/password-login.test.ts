@@ -133,6 +133,25 @@ describe('password sessions', () => {
     }
   });
 
+  // DISP-189: an IPv6 line has a whole /64, so its addresses share one limit
+  it('addresses in one IPv6 /64 share one limit; IPv4 addresses do not', async () => {
+    const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD: 'pw' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      for (let i = 1; i <= 5; i++) expect((await login(s, 'nope', `2001:db8:1:2::${i}`)).r.statusCode).toBe(401);
+      expect((await login(s, 'pw', '2001:db8:1:2:abcd:ef01:2345:6789')).r.statusCode).toBe(429);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('2001:db8:1:2::/64'))).toBe(true);
+      // the next /64 is another client
+      expect((await login(s, 'pw', '2001:db8:1:3::1')).r.statusCode).toBe(200);
+      // IPv4 (also as IPv4-mapped IPv6) stays per address
+      for (let i = 1; i <= 5; i++) await login(s, 'nope', '::ffff:203.0.113.5');
+      expect((await login(s, 'pw', '203.0.113.5')).r.statusCode).toBe(429);
+      expect((await login(s, 'pw', '::ffff:203.0.113.6')).r.statusCode).toBe(200);
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('a flood of wrong passwords does not delay other requests', async () => {
     const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD_HASH: hashPassword('pw') });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);

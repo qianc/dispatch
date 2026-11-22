@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startServer, OWNER } from './helpers.ts';
 
 const items = (title: string) => ({ type: 'items', source_id: null, items: [{ type: 'backlog', title, body_md: '', importance: 2, effort: null }] });
@@ -88,5 +88,43 @@ describe('proposal cards that were revised', () => {
     const st = await state(p.id);
     expect(st.find((c) => c.id === old.id)!.done).toBe('Not used: a later version was started');
     expect(st.find((c) => c.id === now.id)!.done).toMatch(/^Created VER-\d+$/);
+  });
+  it("refuses to file the items under another project's source (DISP-188)", async () => {
+    const p = planner();
+    const ev = s.ctx.store.addEvent(p.id, { kind: 'proposal', proposal: items('Cross') as never });
+    const other = (await s.call('POST', '/projects', { key: 'OTH', name: 'Other' })).data;
+    const theirs = s.ctx.store.createSource(other.id, { kind: 'manual', title: 'Their retro', body_md: '', reporter: null, version_tag: null, skill_name: null });
+    const r = await s.call('POST', `/sessions/${p.id}/accept-items`, { items: items('Cross').items, source_id: theirs.id, event_id: ev.id });
+    expect(r.status).toBe(404);
+    expect(s.ctx.store.items(other.id, { source_id: theirs.id })).toEqual([]);
+    expect((await state(p.id))[0].done).toBeNull();
+    // a source of the chat's own project is fine
+    const ours = s.ctx.store.createSource(s.ctx.store.projectByKey('VER')!.id, { kind: 'manual', title: 'Our retro', body_md: '', reporter: null, version_tag: null, skill_name: null });
+    const ok = await s.call('POST', `/sessions/${p.id}/accept-items`, { items: items('Cross').items, source_id: ours.id, event_id: ev.id });
+    expect(ok.status).toBe(200);
+    expect(ok.data[0].source_id).toBe(ours.id);
+  });
+
+  it("a planner's page and the inbox read only the proposal events, not the whole transcript (DISP-191)", async () => {
+    const p = planner();
+    s.ctx.store.addEvent(p.id, { kind: 'user', text: 'plan it' });
+    for (let i = 0; i < 20; i++) s.ctx.store.addEvent(p.id, { kind: 'assistant', text: `thinking ${i}` });
+    await s.ctx.sessions.rpc(p.id, 'propose', items('Only this'));
+    const events = vi.spyOn(s.ctx.store, 'events');
+    try {
+      const page = (await s.call('GET', `/sessions/${p.id}?limit=5`)).data;
+      expect(page.attention).toMatchObject({ kind: 'proposal' });
+      expect(events).not.toHaveBeenCalled();
+      const inbox = (await s.call('GET', '/inbox')).data;
+      expect(inbox.idle.find((x: { id: number }) => x.id === p.id)?.attention).toMatchObject({ kind: 'proposal' });
+      expect(events).not.toHaveBeenCalled();
+      // a poll reads only the new events
+      const last = page.events.at(-1).seq;
+      await s.call('GET', `/sessions/${p.id}?after=${last}`);
+      expect(events.mock.calls).toEqual([[p.id, last]]);
+    } finally {
+      events.mockRestore();
+    }
+    expect(s.ctx.store.proposalEvents(p.id).map((e) => e.body.kind)).toEqual(['proposal']);
   });
 });
