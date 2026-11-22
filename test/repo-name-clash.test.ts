@@ -30,6 +30,8 @@ describe('setup timeout (DISP-138)', () => {
     expect(Date.now() - started).toBeLessThan(5000);
     const pid = Number(readFileSync(join(wt, 'child.pid'), 'utf8'));
     const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    // SIGKILL arrives, and the orphan is reaped, asynchronously: give it a moment (DISP-172)
+    for (let i = 0; i < 40 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
     const survived = alive();
     if (survived) process.kill(pid, 'SIGKILL'); // no stray sleep after a failed run
     expect(survived).toBe(false);
