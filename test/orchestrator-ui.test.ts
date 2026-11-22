@@ -23,11 +23,11 @@ afterEach(() => vi.unstubAllGlobals());
 
 const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationStep => ({
   id, orchestration_id: 5, position: id, title: `Step ${id}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [`AA-${id}`],
-  depends_on: [], state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null, ...over,
+  depends_on: [], state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, child: null, ...over,
 });
 const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1, 2], project_keys: ['AA', 'BB'], phase: 'run', paused_from: null,
-  plan_md: 'Store first.', plan_approved: true, plan_version: 1, answer_children: true, notify_owner: 'needs_you', quiet_log: [], cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default', max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (checking, then auto-merge) in AA',
+  plan_md: 'Store first.', plan_approved: true, plan_version: 1, plan_notified_version: 1, finish_notified: false, answer_children: true, notify_owner: 'needs_you', quiet_log: [], cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default', max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (checking, then auto-merge) in AA',
   proposal: null, changes: [], started_by: null, status: 'idle', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   steps: [
     step(1, { title: 'Token store', state: 'done', child_session_id: 11, child: { id: 11, status: 'completed', title: 'Token store', waiting_reason: null } }),

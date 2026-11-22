@@ -1,3 +1,4 @@
+import { Orchestrator } from '../src/server/orchestrator.ts';
 import { DEFAULT_RUN_OPTIONS, type PullRequest } from '../src/shared/types.ts';
 import { OWNER, startServer } from './helpers.ts';
 
@@ -66,6 +67,33 @@ export async function setup(env: Record<string, string> = {}) {
     await rpc(id, 'start_step', { step_id: stepId });
     return store.step(stepId)!.child_session_id!;
   };
-  return { s, store, pushes, item, start, rpc, status, events, pr, approved, startStep };
+  /**
+   * A server restart: a new Orchestrator on the same store takes over, wired as app.ts wires it,
+   * and resumes. What the old one held only in memory is gone. `before`: set up the new one before
+   * it resumes (its timers, say).
+   */
+  const restart = (before: (o: Orchestrator) => void = () => {}) => {
+    const old = s.ctx.orchestrator;
+    old.stop();
+    const o = new Orchestrator({ store, bus: s.ctx.bus, sessions: s.ctx.sessions, notifier: s.ctx.notifier, merging: () => s.ctx.github.mergingNow });
+    // as startServer sets them for tests
+    o.batchMs = old.batchMs;
+    o.now = old.now;
+    const { sessions, github } = s.ctx;
+    sessions.onOrchestratorIdle = (x) => o.onIdle(x);
+    sessions.delegateInput = (x, input) => o.delegate(x, input);
+    sessions.childNotice = (x, n, kind) => o.childNotice(x, n, kind);
+    github.childNotice = (x, n, kind) => o.childNotice(x, n, kind);
+    sessions.onDeployed = (x, repo, ok) => o.onDeploy(x, repo, ok ? 'ok' : 'failed');
+    github.onDeployStarted = (x, repo) => o.onDeploy(x, repo, 'running');
+    github.onDeployFailed = (x, repo) => o.onDeploy(x, repo, 'failed');
+    sessions.orchestratorRpc = (x, method, params) => o.rpc(x, method, params);
+    sessions.orchestrationOf = (x) => o.spans(x);
+    s.ctx.orchestrator = o;
+    before(o);
+    o.resume();
+    return o;
+  };
+  return { s, store, pushes, item, start, rpc, status, events, pr, approved, startStep, restart };
 }
 export type Setup = Awaited<ReturnType<typeof setup>>;
