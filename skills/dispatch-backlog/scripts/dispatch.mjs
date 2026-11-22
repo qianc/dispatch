@@ -6,6 +6,8 @@
 // else http://localhost:3000. `config` says which one won, and names a url: it overrides.
 // Token: DISPATCH_TOKEN, else ~/.config/dispatch/tokens/<host> (host with ':' as '_', e.g.
 // localhost_3000), holding the API token from that server's Settings. Tokens never go in a repo.
+// A server from a repo's .dispatch.md gets only its token file, never DISPATCH_TOKEN: a cloned repo
+// must not send your token to an address it names.
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
 // (searched from the current folder upwards). Run `dispatch.mjs help` for the commands.
 
@@ -146,7 +148,10 @@ const host = (() => {
   }
 })();
 const tokenFile = join(homedir(), '.config', 'dispatch', 'tokens', host);
-const TOKEN = process.env.DISPATCH_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
+// DISPATCH_TOKEN only for a server you chose (--url, DISPATCH_URL, the machine default), never for a repo's url:
+const envTokenIgnored = SERVER[1] === '.dispatch.md' && !!process.env.DISPATCH_TOKEN;
+const ENV_TOKEN = SERVER[1] === '.dispatch.md' ? '' : process.env.DISPATCH_TOKEN || '';
+const TOKEN = ENV_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
 const PROJECT = (flags.project || process.env.DISPATCH_PROJECT || cfg.meta.project || '').toUpperCase();
 const RELEASE_PREFIX = cfg.meta.release_label_prefix || 'rel:';
 // when Claude should attach example images: always | when_possible (default) | off
@@ -172,7 +177,7 @@ async function send(url, init = {}) {
     const where = to ? new URL(to, url).host : 'another page';
     throw new Error(
       `redirected to ${where}: a login proxy is in front of the API at ${URL_BASE}. Is the token valid for this host? ` +
-        `Tokens are per server; this one is read from ${process.env.DISPATCH_TOKEN ? 'DISPATCH_TOKEN' : tokenFile}.`,
+        `Tokens are per server; this one is read from ${ENV_TOKEN ? 'DISPATCH_TOKEN' : tokenFile}.`,
     );
   }
   return res;
@@ -190,7 +195,7 @@ async function api(method, path, body) {
     die(e.message);
   }
   const data = await res.json().catch(() => null);
-  if (res.status === 401) die(`not signed in to ${URL_BASE}: make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${tokenFile} (chmod 600), or set DISPATCH_TOKEN.`);
+  if (res.status === 401) die(`not signed in to ${URL_BASE}: make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${tokenFile} (chmod 600)${SERVER[1] === '.dispatch.md' ? '' : ', or set DISPATCH_TOKEN'}.`);
   if (res.status === 403 && data?.error) die(`${method} ${path}: ${data.error}`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
   return data;
@@ -354,10 +359,11 @@ switch (cmd) {
     const repoUrl = cfg.meta.url ? trimUrl(cfg.meta.url) : '';
     const beaten = repoUrl && SERVER[1] !== '.dispatch.md' && repoUrl !== URL_BASE ? `, overrides url: ${repoUrl} in .dispatch.md` : '';
     console.log(`server:   ${URL_BASE} (${from}${beaten})`);
-    const tokenFrom = process.env.DISPATCH_TOKEN ? 'from DISPATCH_TOKEN' : tokenFile;
+    const tokenFrom = ENV_TOKEN ? 'from DISPATCH_TOKEN' : tokenFile;
     const t = await checkToken();
     if (t.state === 'missing') console.log(`token:    missing (expected in ${tokenFile})`);
     else console.log(`token:    ${t.state === 'unknown' ? 'not checked' : t.state} (${tokenFrom})${t.why ? `: ${t.why}` : ''}`);
+    if (envTokenIgnored) console.log(`          DISPATCH_TOKEN is ignored: the server comes from .dispatch.md, so only ${tokenFile} is used`);
     console.log(`config:   ${cfgFile ?? '(no .dispatch.md found)'}`);
     console.log(`project:  ${PROJECT || '(none)'}`);
     for (const [k, v] of Object.entries(cfg.meta)) if (!['project', 'url', 'images'].includes(k)) console.log(`${(k + ':').padEnd(10)}${v}`);

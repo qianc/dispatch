@@ -140,7 +140,7 @@ export function claudeEnv(account: ClaudeAccount | undefined, base: Env, fallbac
 /** Git and gh environment for a GitHub account: token for pushes and gh, and the commit identity. */
 export function githubEnv(account: GithubAccount | undefined): Env {
   if (!account) return {};
-  const env: Env = { DISPATCH_GH_TOKEN: account.token, GH_TOKEN: account.token };
+  const env: Env = { DISPATCH_GH_TOKEN: account.token, GH_TOKEN: account.token, GITHUB_TOKEN: account.token };
   if (account.git_name) env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = account.git_name;
   if (account.git_email) env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = account.git_email;
   return env;
@@ -161,6 +161,16 @@ export function githubCredEnv(c: GithubCred): Env {
 /** A session's GitHub environment: its starter's own credential when it has one, else the project's env account. */
 export function sessionGithubEnv(spec: Pick<StartSpec, 'github_account'> & { github?: GithubCred | null }, envAccounts: GithubAccount[]): Env {
   return spec.github ? githubCredEnv(spec.github) : githubEnv(pick(envAccounts, spec.github_account));
+}
+
+/**
+ * A session's whole environment from the worker's: no env account's own token variable stays in
+ * it, only the session's token in the variables git, gh and other tools read (DISP-134).
+ */
+export function sessionAgentEnv(base: Env, spec: Pick<StartSpec, 'github_account'> & { github?: GithubCred | null }, envAccounts: GithubAccount[]): Env {
+  const env: Env = { ...base };
+  for (const k of Object.keys(env)) if (/^GITHUB_ACCOUNT_.+_TOKEN$/.test(k)) delete env[k];
+  return { ...env, ...sessionGithubEnv(spec, envAccounts) };
 }
 
 /** The account a session or repo uses: the named one, else the first. */

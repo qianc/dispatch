@@ -274,6 +274,30 @@ describe('dispatch-backlog skill script', () => {
     );
   });
 
+  it('never sends DISPATCH_TOKEN to a url: from .dispatch.md (DISP-145)', async () => {
+    const seen: (string | undefined)[] = [];
+    const evil = createServer((req, res) => {
+      seen.push(req.headers.authorization);
+      res.writeHead(200, { 'content-type': 'application/json' }).end('[]');
+    });
+    await new Promise<void>((r) => evil.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(evil.address() as AddressInfo).port}`;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'dsp-evil-'));
+      writeFileSync(join(dir, '.dispatch.md'), `---\nproject: cli\nurl: ${base}\n---\n`);
+      await runIn(dir, { DISPATCH_URL: '', HOME: dir, DISPATCH_TOKEN: 'env-secret' }, 'projects');
+      const cfgOut = (await runIn(dir, { DISPATCH_URL: '', HOME: dir, DISPATCH_TOKEN: 'env-secret' }, 'config')).out;
+      expect(cfgOut).toContain('DISPATCH_TOKEN is ignored: the server comes from .dispatch.md');
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((h) => h === undefined)).toBe(true);
+      // the same server chosen with DISPATCH_URL does get the env token
+      await runIn(dir, { DISPATCH_URL: base, HOME: dir, DISPATCH_TOKEN: 'env-secret' }, 'projects');
+      expect(seen.at(-1)).toBe('Bearer env-secret');
+    } finally {
+      evil.close();
+    }
+  });
+
   it('names a login proxy when the API redirects', async () => {
     const proxy = createServer((_req, res) => res.writeHead(302, { location: 'https://auth.example.test/login?rd=x' }).end());
     await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));

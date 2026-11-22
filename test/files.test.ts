@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { joinPath, slug } from '../src/shared/paths.ts';
 import { safeRelPath } from '../src/server/routes/files.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
-import { startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
+import { OWNER, startServer, startWorker, stopWorker, waitFor } from './helpers.ts';
 
 describe('link helpers', () => {
   it('makes GitHub-style anchors from item titles', () => {
@@ -72,7 +72,11 @@ describe('discuss chats and files from a source folder', () => {
   });
 
   it('serves linked files from the folder of an imported source, and nothing outside it', async () => {
-    const src = (await s.call('POST', '/projects/SLD/sources', { kind: 'manual', title: join(srcDir, 'backlog.md'), body_md: 'x' })).data;
+    const chat = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id: null, kind: 'assistant', title: 'A', status: 'idle', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [] });
+    const imported = (await s.ctx.sessions.rpc(chat.id, 'import_sections', {
+      project_key: 'SLD', source: { title: 'Slides backlog', body_md: 'x', dir: srcDir }, sections: [{ title: 'S1', body: '', ancestors: [] }],
+    })) as { source: { id: number } };
+    const src = { id: imported.source.id };
     const ok = await fetch(`${s.base}/api/projects/SLD/file?path=docs/triage.md&source=${src.id}`);
     expect(ok.status).toBe(200);
     expect(ok.headers.get('content-type')).toMatch(/text\/markdown/);
@@ -82,20 +86,30 @@ describe('discuss chats and files from a source folder', () => {
     expect((await fetch(`${s.base}/api/projects/SLD/file?path=docs/triage.md`)).status).toBe(404); // no repo, no source
   });
 
+  it('never reads the folder of a source title a tracker caller set (DISP-131)', async () => {
+    const tracker = (await s.call('POST', '/tokens', { name: 'skill', scopes: ['tracker'] })).data.secret;
+    const auth = { authorization: `Bearer ${tracker}`, 'content-type': 'application/json' };
+    const res = await fetch(`${s.base}/api/projects/SLD/sources`, { method: 'POST', headers: auth, body: JSON.stringify({ kind: 'manual', title: join(srcDir, 'backlog.md'), body_md: 'x' }) });
+    expect(res.status).toBe(200);
+    const src = await res.json();
+    expect(src.base_dir).toBeNull();
+    expect((await fetch(`${s.base}/api/projects/SLD/file?path=docs/triage.md&source=${src.id}`, { headers: auth })).status).toBe(404);
+  });
+
   it('runs a read-only discuss chat per item, outside the agent lists and slots', async () => {
     const item = (await s.call('POST', '/projects/SLD/items', { title: 'Charts overlap' })).data;
     const chat = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'what is this?' })).data;
     expect(chat).toMatchObject({ kind: 'discuss', item_ids: [item.id] });
     await waitFor(async () => (await s.call('GET', `/sessions/${chat.id}`)).data.session.status === 'idle', 'reply');
     const d = (await s.call('GET', `/sessions/${chat.id}`)).data;
-    expect(d.events.some((e: { body: { text?: string } }) => e.body.text?.includes('About SLD-1'))).toBe(true);
+    expect(d.events.some((e: { body: { text?: string } }) => e.body.text?.includes(`About ${item.key}`))).toBe(true);
     expect((await s.call('GET', `/items/${item.id}/discuss`)).data.session_id).toBe(chat.id);
     expect((await s.call('POST', `/items/${item.id}/discuss`, { text: 'more' })).data.id).toBe(chat.id);
     expect((await s.call('GET', '/sessions')).data).toHaveLength(0);
     expect((await s.call('GET', `/items/${item.id}`)).data.sessions).toHaveLength(0);
     expect(s.ctx.hub.facts(s.ctx.workers.legacy().id)?.free_slots).toBe(3); // chats take no worker slot
-    await expect(s.ctx.sessions.rpc(chat.id, 'add_comment', { key: 'SLD-1', body: 'x' })).rejects.toThrow(/read-only/);
-    await expect(s.ctx.sessions.rpc(chat.id, 'get_item', { key: 'SLD-1' })).resolves.toMatchObject({ title: 'Charts overlap' });
+    await expect(s.ctx.sessions.rpc(chat.id, 'add_comment', { key: item.key, body: 'x' })).rejects.toThrow(/read-only/);
+    await expect(s.ctx.sessions.rpc(chat.id, 'get_item', { key: item.key })).resolves.toMatchObject({ title: 'Charts overlap' });
     await s.call('POST', `/items/${item.id}/discuss/new`);
     expect((await s.call('GET', `/items/${item.id}/discuss`)).data.session_id).toBeNull();
   });

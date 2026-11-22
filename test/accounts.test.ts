@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick } from '../src/shared/accounts.ts';
+import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, sessionAgentEnv } from '../src/shared/accounts.ts';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { rateLimitNotice } from '../src/worker/runner.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
@@ -41,10 +41,18 @@ describe('accounts from env', () => {
     expect(claudeEnv({ name: 'private', label: '', kind: 'oauth_token', oauth_token: 'p' }, base, (n) => `/c/${n}`))
       .toEqual({ PATH: '/bin', CLAUDE_CONFIG_DIR: '/c/private', CLAUDE_CODE_OAUTH_TOKEN: 'p' });
     expect(githubEnv({ name: 'work', token: 'b', git_name: 'Me', git_email: 'me@work.example' })).toEqual({
-      DISPATCH_GH_TOKEN: 'b', GH_TOKEN: 'b', GIT_AUTHOR_NAME: 'Me', GIT_COMMITTER_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@work.example', GIT_COMMITTER_EMAIL: 'me@work.example',
+      DISPATCH_GH_TOKEN: 'b', GH_TOKEN: 'b', GITHUB_TOKEN: 'b', GIT_AUTHOR_NAME: 'Me', GIT_COMMITTER_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@work.example', GIT_COMMITTER_EMAIL: 'me@work.example',
     });
     expect(pick([{ name: 'a' }, { name: 'b' }], 'b')?.name).toBe('b');
     expect(pick([{ name: 'a' }, { name: 'b' }], null)?.name).toBe('a');
+  });
+
+  it('gives a work session only the work token (DISP-134)', () => {
+    const base = { PATH: '/bin', GITHUB_ACCOUNTS: 'personal,work', GITHUB_ACCOUNT_PERSONAL_TOKEN: 'tok-p', GITHUB_ACCOUNT_WORK_TOKEN: 'tok-w', GITHUB_TOKEN: 'tok-p', GH_TOKEN: 'tok-p' };
+    const env = sessionAgentEnv(base, { github_account: 'work' }, githubAccounts(base));
+    expect(env).toMatchObject({ PATH: '/bin', GITHUB_TOKEN: 'tok-w', GH_TOKEN: 'tok-w', DISPATCH_GH_TOKEN: 'tok-w' });
+    expect(Object.values(env)).not.toContain('tok-p');
+    expect(Object.keys(env).filter((k) => k.startsWith('GITHUB_ACCOUNT_') && k.endsWith('_TOKEN'))).toEqual([]);
   });
 
   it('runs a repo\'s git work with its project\'s GitHub account', async () => {

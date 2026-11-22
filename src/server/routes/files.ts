@@ -1,6 +1,6 @@
 // Files linked from item text: read from the project's repos (default branch) or the folder an
 // imported source file came from. The worker does the reading; this route picks where to look.
-import { dirname, extname, isAbsolute, normalize } from 'node:path';
+import { extname, isAbsolute, normalize } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { readRepoFile } from '../projectRules.ts';
@@ -30,7 +30,8 @@ export function fileRoutes(app: FastifyInstance, { store, hub, hosted }: Ctx) {
     const repos = store.repos(project.id);
     for (const repo of repos) tries.push({ repo });
     const source = q.source ? store.source(q.source) : undefined;
-    if (source && source.project_id === project.id && isAbsolute(source.title)) tries.push({ base_dir: dirname(source.title) });
+    // only the folder an import recorded; a source title is free text anyone with tracker scope sets (DISP-131)
+    if (source && source.project_id === project.id && source.base_dir) tries.push({ base_dir: source.base_dir });
     if (!tries.length) throw new HttpError(404, 'This project has no repo or source folder to read files from');
     for (const t of tries) {
       try {

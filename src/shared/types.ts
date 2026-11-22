@@ -126,6 +126,8 @@ export interface Source {
   version_tag: string | null;
   skill_name: string | null;
   session_id: number | null;
+  /** Folder linked files are read from; set only by the Assistant's markdown import (DISP-131). */
+  base_dir: string | null;
   created_at: string;
 }
 

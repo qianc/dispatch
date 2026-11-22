@@ -113,6 +113,7 @@ function toSource(r: Row): Source {
     version_tag: (r.version_tag as string | null) ?? null,
     skill_name: (r.skill_name as string | null) ?? null,
     session_id: numOrNull(r.session_id),
+    base_dir: (r.base_dir as string | null) ?? null,
     created_at: String(r.created_at),
   };
 }
@@ -380,10 +381,10 @@ export class Store {
     const r = this.db.get('SELECT * FROM sources WHERE id = ?', id);
     return r && toSource(r);
   }
-  createSource(projectId: number, s: { kind: SourceKind; title: string; body_md: string; reporter: string | null; version_tag: string | null; skill_name: string | null; session_id?: number | null }): Source {
+  createSource(projectId: number, s: { kind: SourceKind; title: string; body_md: string; reporter: string | null; version_tag: string | null; skill_name: string | null; session_id?: number | null; base_dir?: string | null }): Source {
     const { lastId } = this.db.run(
-      'INSERT INTO sources (project_id, kind, title, body_md, reporter, version_tag, skill_name, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      projectId, s.kind, s.title, s.body_md, s.reporter, s.version_tag, s.skill_name, s.session_id ?? null,
+      'INSERT INTO sources (project_id, kind, title, body_md, reporter, version_tag, skill_name, session_id, base_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      projectId, s.kind, s.title, s.body_md, s.reporter, s.version_tag, s.skill_name, s.session_id ?? null, s.base_dir ?? null,
     );
     return this.source(lastId)!;
   }
