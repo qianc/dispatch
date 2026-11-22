@@ -120,6 +120,27 @@ describe('OAuth for MCP clients', () => {
     await s.app.close();
   });
 
+  // DISP-139: a call on one project does not reach another project's items or sources
+  it('release_items and add_item refuse another project\'s item or source', async () => {
+    const { s, cookie } = await setup();
+    try {
+      const { client_id, verifier, code } = await connect(s, cookie);
+      const t = (await s.app.inject({ method: 'POST', url: '/token', ...form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id, code_verifier: verifier }) })).json();
+      await s.app.inject({ method: 'POST', url: '/api/projects', headers: { cookie }, payload: { key: 'OT', name: 'Other' } });
+      const other = s.ctx.store.projectByKey('OT')!;
+      const foreign = s.ctx.store.createItem(other.id, { title: 'Theirs', type: 'bug', body_md: '', status: 'done', importance: 2, effort: null, source_id: null, labels: [] });
+      const source = s.ctx.store.createSource(other.id, { kind: 'manual', title: 'Their retro', body_md: '', reporter: null, version_tag: null, skill_name: null });
+      const call = async (name: string, args: object) => (await mcp(s, t.access_token, 'tools/call', { name, arguments: args })).body.result;
+
+      expect(await call('release_items', { project: 'MC', version: 'v1', keys: [foreign.key] })).toMatchObject({ isError: true, content: [{ text: expect.stringContaining(`${foreign.key} is not in project MC`) }] });
+      expect(s.ctx.store.item(foreign.id)!.labels).toEqual([]);
+      expect(await call('add_item', { project: 'MC', title: 'x', source_id: source.id })).toMatchObject({ isError: true, content: [{ text: expect.stringContaining(`No source ${source.id} in project MC`) }] });
+      expect(s.ctx.store.items(s.ctx.store.projectByKey('MC')!.id, {})).toEqual([]);
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('refuses what an attacker would try', async () => {
     const { s, cookie } = await setup();
     try {
