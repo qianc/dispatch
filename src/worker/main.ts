@@ -8,7 +8,7 @@ import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
 import { makeTitle } from './title.ts';
-import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionGithubEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
+import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionAgentEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 import { APP_DIR, runningVersion } from '../update/version.ts';
 import { onReleaseBranch } from '../update/apply.ts';
@@ -28,9 +28,8 @@ const opts: RunnerOptions = {
   // (DISP-63) or else the project's env account
   sessionEnv: (spec) => {
     const base = claudeEnv(spec.claude_account ? pick(clAccounts, spec.claude_account) : undefined, process.env, (name) => join(configRoot, name));
-    // a user's session gets no token of this machine's env accounts (theirs replaces GH_TOKEN and co.)
-    if (spec.github) for (const k of Object.keys(base)) if (/^GITHUB_ACCOUNT_.+_TOKEN$/.test(k)) delete base[k];
-    return { ...base, ...sessionGithubEnv(spec, ghAccounts) };
+    // no session keeps the env accounts' token variables; its own token replaces GH_TOKEN and co.
+    return sessionAgentEnv(base, spec, ghAccounts);
   },
   accountLabel: (name) => (name ? pick(clAccounts, name) : undefined)?.label ?? name ?? 'default',
   // how to sign in again, and noted for the login check (DISP-60)
@@ -50,7 +49,8 @@ const configRoot = resolve(env.WORKSPACES_DIR ?? './data/workspaces', 'claude-co
 const logins = new Logins(clAccounts, process.env, configRoot);
 
 // Let git and gh (ours and the agent's) authenticate to GitHub without writing a token to disk.
-// Each repo's / session's account sets DISPATCH_GH_TOKEN; the first account is the fallback. Also
+// Each repo's / session's account sets DISPATCH_GH_TOKEN; the first account is the fallback for the
+// worker's own processes only: every session's env sets GITHUB_TOKEN and co. to its own (DISP-134). Also
 // with no env account: a user's session brings its own token (DISP-63). No token: no answer, so git
 // asks no one rather than sending an empty password.
 if (ghAccounts.length) {
