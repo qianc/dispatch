@@ -7,7 +7,8 @@
 // Token: DISPATCH_TOKEN, else ~/.config/dispatch/tokens/<host> (host with ':' as '_', e.g.
 // localhost_3000), holding the API token from that server's Settings. Tokens never go in a repo.
 // A server from a repo's .dispatch.md gets only its token file, never DISPATCH_TOKEN: a cloned repo
-// must not send your token to an address it names.
+// must not send your token to an address it names. Nor does it get any token over plain http,
+// unless the host is this machine: anyone on the network path would read it.
 // Project: --project KEY, else DISPATCH_PROJECT, else `project:` in the nearest .dispatch.md
 // (searched from the current folder upwards). Run `dispatch.mjs help` for the commands.
 
@@ -140,18 +141,22 @@ const SERVER = [
 ].find(([u]) => typeof u === 'string' && u);
 const URL_BASE = trimUrl(SERVER[0]);
 // one token file per server, named after its host: ~/.config/dispatch/tokens/localhost_3000
-const host = (() => {
+const parsedUrl = (() => {
   try {
-    return new URL(URL_BASE).host.replace(/:/g, '_');
+    return new URL(URL_BASE);
   } catch {
     return die(`"${URL_BASE}" is not a valid Dispatch URL`);
   }
 })();
+const host = parsedUrl.host.replace(/:/g, '_');
+const loopback = (h) => h === 'localhost' || h === '[::1]' || /^127(\.\d{1,3}){3}$/.test(h);
+// a repo's url: over http to another machine: the token would cross the network in clear text
+const plainHttpFromRepo = SERVER[1] === '.dispatch.md' && parsedUrl.protocol !== 'https:' && !loopback(parsedUrl.hostname);
 const tokenFile = join(homedir(), '.config', 'dispatch', 'tokens', host);
 // DISPATCH_TOKEN only for a server you chose (--url, DISPATCH_URL, the machine default), never for a repo's url:
 const envTokenIgnored = SERVER[1] === '.dispatch.md' && !!process.env.DISPATCH_TOKEN;
 const ENV_TOKEN = SERVER[1] === '.dispatch.md' ? '' : process.env.DISPATCH_TOKEN || '';
-const TOKEN = ENV_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
+const TOKEN = plainHttpFromRepo ? '' : ENV_TOKEN || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
 const PROJECT = (flags.project || process.env.DISPATCH_PROJECT || cfg.meta.project || '').toUpperCase();
 const RELEASE_PREFIX = cfg.meta.release_label_prefix || 'rel:';
 // when Claude should attach example images: always | when_possible (default) | off
@@ -195,6 +200,7 @@ async function api(method, path, body) {
     die(e.message);
   }
   const data = await res.json().catch(() => null);
+  if (res.status === 401 && plainHttpFromRepo) die(`not signed in to ${URL_BASE}: no token is sent over plain http to a url: from .dispatch.md. Use https there, or choose this server with --url or DISPATCH_URL.`);
   if (res.status === 401) die(`not signed in to ${URL_BASE}: make a token in Dispatch → Settings → Tokens (scope "tracker") and put it in ${tokenFile} (chmod 600)${SERVER[1] === '.dispatch.md' ? '' : ', or set DISPATCH_TOKEN'}.`);
   if (res.status === 403 && data?.error) die(`${method} ${path}: ${data.error}`);
   if (!res.ok) die(`${method} ${path}: ${data?.error ?? res.statusText}`);
@@ -361,7 +367,8 @@ switch (cmd) {
     console.log(`server:   ${URL_BASE} (${from}${beaten})`);
     const tokenFrom = ENV_TOKEN ? 'from DISPATCH_TOKEN' : tokenFile;
     const t = await checkToken();
-    if (t.state === 'missing') console.log(`token:    missing (expected in ${tokenFile})`);
+    if (plainHttpFromRepo) console.log(`token:    not sent: the url: from .dispatch.md is plain http to another machine (use https, or --url / DISPATCH_URL)`);
+    else if (t.state === 'missing') console.log(`token:    missing (expected in ${tokenFile})`);
     else console.log(`token:    ${t.state === 'unknown' ? 'not checked' : t.state} (${tokenFrom})${t.why ? `: ${t.why}` : ''}`);
     if (envTokenIgnored) console.log(`          DISPATCH_TOKEN is ignored: the server comes from .dispatch.md, so only ${tokenFile} is used`);
     console.log(`config:   ${cfgFile ?? '(no .dispatch.md found)'}`);
