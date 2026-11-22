@@ -353,7 +353,14 @@ export class ServerLink {
       if (this.ws?.readyState === WebSocket.OPEN) this.write(this.ws, { t: 'refused', session_id: id, reason: 'busy' });
       return;
     }
-    this.starting.set(id, []);
+    const queued: string[] = [];
+    this.starting.set(id, queued);
+    // a close while the workspace is prepared ends the start: nothing more runs for it (DISP-146)
+    const stopped = new Error('closed while starting');
+    const goOn = <T>(v: T) => {
+      if (this.starting.get(id) !== queued) throw stopped;
+      return v;
+    };
     // the slot is taken from the moment the start is accepted: setup (clone, npm ci) can take minutes
     const holdsSlot = isStart && !CHAT_KINDS.includes(spec.kind);
     if (holdsSlot) this.shared.slots.set(this.slotKey(id), true);
@@ -362,29 +369,29 @@ export class ServerLink {
       let extra: Pick<RunnerDeps, 'readDirs' | 'context'> = {};
       // the fake runner cannot clone GitHub repos, but local ones are real git (as for work sessions)
       if (spec.kind === 'discuss' && (!this.shared.fake || spec.repos.every((r) => r.local_path))) {
-        const c = await this.discussContext(spec);
+        const c = goOn(await this.discussContext(spec));
         cwd = c.cwd;
         extra = { readDirs: c.dirs, context: c.context };
       } else if (spec.kind === 'release' && (!this.shared.fake || spec.repos.every((r) => r.local_path))) {
-        cwd = await this.workspaces.prepareRelease(spec);
-        extra = { context: await ruleFiles([cwd], ['AGENTS.md', '.dispatch.md']) };
+        cwd = goOn(await this.workspaces.prepareRelease(spec));
+        extra = { context: goOn(await ruleFiles([cwd], ['AGENTS.md', '.dispatch.md'])) };
       } else if (this.shared.fake) cwd = process.cwd();
       else if (spec.kind === 'assistant') {
         // the assistant reads only allow-listed folders; give it an empty working dir
         cwd = join(this.workspaces.root, 'assistant');
-        await mkdir(cwd, { recursive: true });
+        goOn(await mkdir(cwd, { recursive: true }));
       } else {
         const created: { repo: StartSpec['repos'][number]; wt: string }[] = [];
-        cwd = await this.workspaces.prepare(spec, created);
+        cwd = goOn(await this.workspaces.prepare(spec, created));
         // a planner files items: it gets the project's own rules for them (CLAUDE.md of every repo, not only the cwd's)
-        if (spec.kind === 'planner' || spec.kind === 'orchestrator') extra = { context: await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r))) };
+        if (spec.kind === 'planner' || spec.kind === 'orchestrator') extra = { context: goOn(await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r)))) };
         // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
         spec = { ...spec, repos: spec.repos.map((r) => ({ ...r, attached: Workspaces.isAttached(this.workspaces.repoDir(spec.session_id, r), r) })) };
         // per-repo setup for new worktrees, before the agent starts: this machine's env files
         // (DISP-44), then the setup command (venv, npm ci, ...)
         for (const { repo, wt } of created.filter((c) => c.repo.setup_command || this.workspaces.overlayDir(c.repo))) {
           if (repo.setup_command) this.send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
-          const res = await this.workspaces.prepareTree(repo, wt, spec.github);
+          const res = goOn(await this.workspaces.prepareTree(repo, wt, spec.github));
           const files = res.copied.length ? ` Env files from this worker: ${res.copied.join(', ')}.` : '';
           this.send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.${files}` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
           if (!res.ok) text = `Note from Dispatch: setting up the worktree of ${repo.github_name} failed:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
@@ -407,12 +414,17 @@ export class ServerLink {
         ...extra,
       };
       const runner: AgentRunner = this.shared.fake ? new FakeRunner(spec, deps, this.opts) : new ClaudeRunner(spec, deps, this.opts);
-      const queued = this.starting.get(id) ?? [];
+      goOn(null);
       this.starting.delete(id);
       this.runners.set(id, runner);
       runner.start(text);
       for (const t of queued) runner.push(t);
     } catch (e) {
+      // closed meanwhile: close has freed the slot and tidied; a new start of the session owns what is left
+      if (this.starting.get(id) !== queued) {
+        if (holdsSlot && !this.starting.has(id) && !this.runners.has(id)) this.shared.slots.set(this.slotKey(id), false);
+        return;
+      }
       this.starting.delete(id);
       if (holdsSlot) this.shared.slots.set(this.slotKey(id), false);
       console.error(`[${this.entry.name}] session ${id} failed to start`, e);
@@ -641,11 +653,14 @@ export class ServerLink {
     sock.on('open', async () => {
       if (epoch !== this.epoch) return void sock.close(1000);
       heard();
-      this.ws = sock;
       delay = 1000;
       console.log(`worker connected to ${url}${name === 'default' ? '' : ` (${name})`}${this.shared.fake ? ' (fake runner)' : ''}`);
+      // the link is used only from the hello on: what is said while the facts are gathered goes to
+      // the outbox, behind what already waits there (DISP-141)
       const facts = await this.facts();
-      if (this.ws !== sock) return;
+      if (epoch !== this.epoch) return void sock.close(1000);
+      if (sock.readyState !== WebSocket.OPEN) return; // closed meanwhile: its close handler reconnects
+      this.ws = sock;
       // the worker's token goes in the connection's header, never in a message: every message is scrubbed
       this.write(sock, { t: 'hello', live: [...this.runners.keys(), ...this.starting.keys()], claude_accounts: facts.claude_accounts, facts });
       for (const m of this.outbox.splice(0)) this.write(sock, m);
