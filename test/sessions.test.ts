@@ -125,6 +125,24 @@ describe('sessions with the fake runner', () => {
     expect((await s.call('GET', `/items/${r.id}`)).data.comments[0]).toMatchObject({ author: 'claude', body_md: 'Seen in logs' });
   });
 
+  it('refuses an effort outside the project scale on every write path (DISP-158)', async () => {
+    const outside = /Effort 99 is outside the project scale/;
+    const created = await s.call('POST', '/projects/HC/items', { title: 'Too big', effort: 99 });
+    expect(created.status).toBe(400);
+    expect(created.data.error).toMatch(outside);
+    const it = (await s.call('POST', '/projects/HC/items', { title: 'Sized', effort: 1 })).data;
+    const patched = await s.call('PATCH', `/items/${it.id}`, { effort: 99 });
+    expect(patched.status).toBe(400);
+    expect(patched.data.error).toMatch(outside);
+    expect((await s.call('GET', `/items/${it.id}`)).data.effort).toBe(1);
+    const work = (await s.call('POST', '/projects/HC/batches', { prompt: 'x' })).data;
+    const before = (await s.call('GET', '/projects/HC/items')).data.length;
+    await expect(s.ctx.sessions.rpc(work.id, 'create_item', { type: 'bug', title: 'Huge', body_md: '', effort: 99 })).rejects.toThrow(outside);
+    const batch = await s.call('POST', '/projects/HC/batches', { item_ids: [], new_items: [{ type: 'task', title: 'Fine' }, { type: 'task', title: 'Huge', effort: 99 }], prompt: '' });
+    expect(batch.status).toBe(400);
+    expect((await s.call('GET', '/projects/HC/items')).data.length).toBe(before);
+  });
+
   it('lets the agent add items to its batch when the owner asks, so the merge closes them too', async () => {
     const a = (await s.call('POST', '/projects/HC/items', { title: 'Started with this' })).data;
     const b = (await s.call('POST', '/projects/HC/items', { title: 'Asked for later', status: 'backlog' })).data;

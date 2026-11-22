@@ -2,6 +2,7 @@
 import type { Db, Row } from './db.ts';
 import { now } from './db.ts';
 import { Workers } from './workers.ts';
+import { HttpError } from './routes/ctx.ts';
 import {
   itemKey,
   type AllCosts,
@@ -418,7 +419,15 @@ export class Store {
     if (!ids.length) return [];
     return this.db.all(`${ITEM_SELECT} WHERE i.id IN (${ids.map(() => '?').join(',')}) ORDER BY i.number`, ...ids).map(toItem);
   }
+  /** Every write path lands here, so the scales are checked here (DISP-158). */
+  private checkScales(projectId: number, it: { importance: number; effort: number | null }) {
+    if (!Number.isInteger(it.importance) || it.importance < 1 || it.importance > 4) throw new HttpError(400, `Importance must be 1 to 4, not ${it.importance}`);
+    if (it.effort === null) return;
+    const scale = this.project(projectId)!.effort_scale;
+    if (!Number.isInteger(it.effort) || it.effort < 0 || it.effort >= scale.length) throw new HttpError(400, `Effort ${it.effort} is outside the project scale (0 to ${scale.length - 1}: ${scale.join(', ')})`);
+  }
   createItem(projectId: number, it: { type: Item['type']; title: string; body_md: string; status: ItemStatus; importance: number; effort: number | null; source_id: number | null; labels: string[]; modules?: string[] }): Item {
+    this.checkScales(projectId, it);
     return this.db.tx(() => {
       const { n } = this.db.get<{ n: number }>('SELECT next_item_number AS n FROM projects WHERE id = ?', projectId)!;
       this.db.run('UPDATE projects SET next_item_number = next_item_number + 1 WHERE id = ?', projectId);
@@ -431,13 +440,15 @@ export class Store {
     });
   }
   createProposedItems(projectId: number, items: ProposedItem[], sourceId: number | null): Item[] {
-    return items.map((p) =>
+    // all or none: one item outside the scales files none of them
+    return this.db.tx(() => items.map((p) =>
       this.createItem(projectId, { ...p, status: p.type === 'bug' ? 'triage' : 'backlog', source_id: sourceId, labels: p.labels ?? [], modules: p.modules ?? [] }),
-    );
+    ));
   }
   updateItem(id: number, patch: Partial<Omit<Item, 'id' | 'project_id' | 'number' | 'key' | 'created_at' | 'updated_at' | 'done_at'>>): Item {
     const old = this.item(id)!;
     const n = { ...old, ...patch };
+    if ('importance' in patch || 'effort' in patch) this.checkScales(old.project_id, n);
     // stays when an item that is done is edited; a reopened item is done again on its new date
     const doneAt = n.status !== 'done' ? null : old.status === 'done' ? old.done_at : now();
     this.db.run(
