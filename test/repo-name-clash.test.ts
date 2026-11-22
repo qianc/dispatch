@@ -16,6 +16,20 @@ describe('two repos with one name in a project (DISP-142)', () => {
     expect(JSON.stringify(again.data)).toContain('This project already has a repo named app.');
     await s.app.close();
   });
+
+  it('refuses a rename to the name of another repo of the project, not a save under its own name (DISP-178)', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'NC', name: 'NC' });
+    await s.call('POST', '/projects/NC/repos', { github_owner: 'alice', github_name: 'app' });
+    const lib = (await s.call('POST', '/projects/NC/repos', { github_owner: 'acme', github_name: 'lib' })).data as Repo;
+    const clash = await s.call('PATCH', `/repos/${lib.id}`, { github_name: 'app' });
+    expect(clash.status).toBe(409);
+    expect(JSON.stringify(clash.data)).toContain('This project already has a repo named app.');
+    expect(s.ctx.store.repo(lib.id)!.github_name).toBe('lib');
+    expect((await s.call('PATCH', `/repos/${lib.id}`, { github_name: 'lib' })).status).toBe(200);
+    expect((await s.call('PATCH', `/repos/${lib.id}`, { github_name: 'core' })).status).toBe(200);
+    await s.app.close();
+  });
 });
 
 describe('setup timeout (DISP-138)', () => {

@@ -120,6 +120,8 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
     const repo = store.repo(id);
     if (!repo) throw notFound('Repo');
     const { upstream, ...patch } = repoPatch.extend({ upstream: z.string().nullable().optional() }).parse(req.body) as ReturnType<typeof repoPatch.parse> & { upstream?: string | null };
+    // the new name must be free among the project's other repos (DISP-178)
+    if (patch.github_name !== undefined && patch.github_name !== repo.github_name) assertNameFree(store, repo.project_id, patch.github_name, repo.id);
     if (upstream !== undefined) {
       if (repo.kind !== 'hosted') throw new HttpError(400, 'Only a repo hosted by Dispatch has an upstream.');
       const up = upstream ? ownerName(upstream) : null;
