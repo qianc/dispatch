@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { asksOrchestrator } from '../../shared/attention.ts';
 import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { assertWritable, setDisabled } from '../projectLock.ts';
@@ -27,7 +28,8 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
           active_sessions: sessions.length,
           running: sessions.filter((s) => s.status === 'running').length,
           queued: sessions.filter((s) => s.status === 'queued').length,
-          waiting: sessions.filter((s) => s.status === 'waiting_input' || s.status === 'idle').length,
+          // a question its orchestrator has does not wait on the owner yet (DISP-164)
+          waiting: sessions.filter((s) => (s.status === 'waiting_input' && !asksOrchestrator(s)) || s.status === 'idle').length,
         },
       };
     }),

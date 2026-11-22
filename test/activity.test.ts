@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
+import { asksOrchestrator, attentionOf, waitsOnOwner } from '../src/shared/attention.ts';
 import { markTerms, searchTerms, snippetOf } from '../src/shared/search.ts';
 import { DEFAULT_RUN_OPTIONS, type Attention, type PullRequest, type Session, type SessionSearch } from '../src/shared/types.ts';
 import { NO_FILTER, OPEN_STATUSES, busyStatus, filtering, liveGroups, recentDiscussions, searchQuery, sessionLink, swipeOffset, waitingCount } from '../web/src/activity.ts';
@@ -51,6 +51,45 @@ describe('Activity grouping (DISP-31)', () => {
     expect(busyStatus(merging, merging.attention)).toEqual({ label: 'Merging', text: 'Merging PR #8.' });
     expect(busyStatus(review, review.attention)).toBeNull();
     expect(busyStatus(session(1, 'running'))).toBeNull();
+  });
+});
+
+describe('a batch whose question is with its orchestrator (DISP-164)', () => {
+  const asking = (reason: string) => ({ ...session(6, 'waiting_input'), waiting_reason: reason }) as Session;
+  const delegated = asking('Asked the orchestrator: which port?');
+  const handedOver = asking('Waiting for your answer: which port?');
+
+  it('is at work: "With orchestrator" in its chip and in the menu\'s Running group', () => {
+    expect(asksOrchestrator(delegated)).toBe(true);
+    expect(busyStatus(delegated)).toEqual({ label: 'With orchestrator', text: 'Asked the orchestrator: which port?' });
+    const g = liveGroups([session(1, 'running'), delegated], inbox([]));
+    expect(g.running.map((r) => r.session.id)).toEqual([1, 6]);
+    expect(g.needs).toEqual([]);
+  });
+
+  it('after a hand-over it needs the owner again', () => {
+    expect(asksOrchestrator(handedOver)).toBe(false);
+    expect(busyStatus(handedOver)).toBeNull();
+    const g = liveGroups([handedOver], { ...inbox([]), inputs: [{ session_id: 6 }] as Inbox['inputs'] });
+    expect(g.running).toEqual([]);
+    expect(g.needs.map((n) => n.id)).toEqual([6]);
+  });
+
+  it('is not in its project\'s waiting count until it is handed over', async () => {
+    const s = await startServer();
+    try {
+      await s.call('POST', '/projects', { key: 'OW', name: 'OW' });
+      const project_id = (await s.call('GET', '/projects/OW')).data.id;
+      const made = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(), project_id, kind: 'work', title: 't',
+        status: 'waiting_input', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [], options: DEFAULT_RUN_OPTIONS });
+      const counts = async () => (await s.call('GET', '/projects')).data.find((p: { key: string }) => p.key === 'OW').counts;
+      s.ctx.store.updateSession(made.id, { waiting_reason: 'Asked the orchestrator: which port?' });
+      expect((await counts()).waiting).toBe(0);
+      s.ctx.store.updateSession(made.id, { waiting_reason: 'Waiting for your answer: which port?' });
+      expect((await counts()).waiting).toBe(1);
+    } finally {
+      await s.app.close();
+    }
   });
 });
 

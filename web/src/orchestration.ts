@@ -1,5 +1,5 @@
 // What the orchestration panel shows for a plan and its steps (no React here, so tests can call it).
-import { waitsOnOwner } from '../../src/shared/attention.ts';
+import { asksOrchestrator, waitsOnOwner } from '../../src/shared/attention.ts';
 import { sessionStatusWords, type Attention, type PendingInput, type Orchestration, type Session, type OrchestrationStep, type PlanChange, type SessionStatus, type StepState } from '../../src/shared/types.ts';
 
 export const STEP_MARK: Record<StepState, string> = { done: '✓', running: '●', review: '◐', failed: '✕', skipped: '–', pending: '○' };
@@ -168,7 +168,7 @@ export function foldLive(live: Session[], attention: ReadonlyMap<number, Attenti
     const parent = s.orchestrator_id ? rows.get(s.orchestrator_id) : undefined;
     if (!parent || !here.has(s.orchestrator_id!)) continue;
     const a = attention.get(s.id);
-    const asksOwner = s.status === 'waiting_input' && !s.waiting_reason?.startsWith('Asked the orchestrator');
+    const asksOwner = s.status === 'waiting_input' && !asksOrchestrator(s);
     (asksOwner || (a && waitsOnOwner(a)) ? parent.needs : parent.children).push(s);
   }
   return out;
