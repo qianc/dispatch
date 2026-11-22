@@ -380,11 +380,19 @@ export class ServerLink {
       const slot = this.shared.slots.has(this.slotKey(id));
       live.close();
       if (slot) this.shared.slots.set(this.slotKey(id), true);
+      // messages that come during the tidy wait for this one, in order (DISP-220)
+      const held: string[] = [];
+      this.starting.set(id, held);
       await this.dropCheckouts(id, this.launched.get(id) ?? [], spec.repos);
-      // closed during the tidy: close found no runner to stop, so nothing may start again (DISP-193)
-      if (!this.scopes.has(id)) return;
-      // not a new start: with all slots taken it would be refused, and the owner's text lost (DISP-175)
-      return this.launch(spec, text, false);
+      // closed during the tidy (DISP-193), maybe started again since (DISP-220): close found no
+      // runner to stop, so this text starts nothing, in the old session or the new one
+      if (this.starting.get(id) !== held) return;
+      this.starting.delete(id);
+      // not a new start: with all slots taken it would be refused, and the owner's text lost (DISP-175).
+      // The launch takes its queue before its first await: the held messages go into it
+      const started = this.launch(spec, text, false);
+      this.starting.get(id)?.push(...held);
+      return started;
     }
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();
