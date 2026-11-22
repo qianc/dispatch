@@ -4,7 +4,7 @@ import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { assertWritable, setDisabled } from '../projectLock.ts';
 import { principalName } from '../access.ts';
-import { addHostedRepo, addLocalRepo, mergeNote, ownerName, setPlacement } from '../repos.ts';
+import { addHostedRepo, addLocalRepo, assertNameFree, mergeNote, ownerName, setPlacement } from '../repos.ts';
 
 export function projectRoutes(app: FastifyInstance, { store, hub, github, workers, users, bus, hosted, sessions }: Ctx) {
   const project = (key: unknown) => {
@@ -107,6 +107,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
       return { ...repo, note: mergeNote(info) };
     }
     const input = repoInput.parse(req.body);
+    assertNameFree(store, p.id, input.github_name);
     const repo = store.addRepo(p.id, input);
     bus.emit({ t: 'project', key: p.key });
     return repo;

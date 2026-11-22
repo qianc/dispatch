@@ -45,6 +45,7 @@ export async function addLocalRepo(store: Store, hub: WorkerHub, project: Projec
     if (there) throw new HttpError(409, `${same.github_name} already has its copy on worker ${workerName(store, workerId)} at ${there.local_path}. Change that path in the repo's settings.`);
     return { repo: store.setPlacement(same.id, workerId, info.path, info.root_sha ?? null), info, already: false, copy: true };
   }
+  assertNameFree(store, project.id, info.name);
   const repo: Repo = store.addRepo(project.id, {
     github_owner: 'local', github_name: info.name, default_branch: opts.default_branch ?? info.default_branch,
     check_command: opts.check_command ?? null, local_path: info.path, worker_id: workerId, root_sha: info.root_sha ?? null,
@@ -114,13 +115,18 @@ export function ownerName(v: string): { owner: string; name: string } {
   return { owner: m[1], name: m[2] };
 }
 
+/** A session's worktree folder is the repo's name, so a project's repos need distinct names (DISP-142). */
+export function assertNameFree(store: Store, projectId: number, name: string) {
+  if (store.repos(projectId).some((r) => r.github_name === name)) throw new HttpError(409, `This project already has a repo named ${name}.`);
+}
+
 /**
  * A repo the server keeps itself: empty, or a copy of a GitHub repo (with the project's GitHub
  * account). `upstream` links a GitHub repo that merges are pushed to.
  */
 export async function addHostedRepo(store: Store, hosted: HostedGit, github: GitHub, project: Project, input: { name: string; default_branch?: string; import?: string; upstream?: string; check_command?: string | null }) {
   if (!REPO_NAME.test(input.name)) throw new HttpError(400, 'A repo name is letters, digits, dots, dashes and underscores.');
-  if (store.repos(project.id).some((r) => r.github_name === input.name)) throw new HttpError(409, `This project already has a repo named ${input.name}.`);
+  assertNameFree(store, project.id, input.name);
   const from = input.import ? ownerName(input.import) : null;
   const up = input.upstream ? ownerName(input.upstream) : null;
   const repo = store.addRepo(project.id, {

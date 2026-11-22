@@ -335,7 +335,7 @@ export class Workspaces {
   readRepoFile(repo: Repo, path: string): Promise<Buffer> {
     if (repo.local_path) return this.withRepo(repo, () => gitBytes(['show', `refs/heads/${repo.default_branch}:${path}`], repo.local_path!));
     return this.withRepo(repo, async () => {
-      const key = `${repo.github_owner}/${repo.github_name}`;
+      const key = `${repo.id}:${repo.github_owner}/${repo.github_name}`; // per repo: two hosted repos can share a name (DISP-142)
       const dir = this.cacheDir(repo);
       if (!existsSync(join(dir, '.git')) || Date.now() - (this.fetchedAt.get(key) ?? 0) > 5 * 60_000) {
         await this.ensureCache(repo);
