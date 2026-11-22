@@ -167,6 +167,22 @@ describe('orchestrator: pushes and wakes survive a restart (DISP-165)', () => {
     expect(armed).toBe(0);
   });
 
+  it('two turns with no pull request, the restart in the second: the second wake comes after resume (DISP-206)', async () => {
+    const p = await running();
+    t.s.ctx.orchestrator.settleMs = 0;
+    turn(p.child);
+    expect(told(p.id).filter((m) => m.includes('ended its turn with no pull request'))).toHaveLength(1);
+    turn(p.id); // the orchestrator tells the batch what is missing
+    t.s.ctx.orchestrator.later = () => {}; // the server stops before the second timer runs
+    turn(p.child);
+    expect(t.store.step(p.first.id)).toMatchObject({ note: 'turn ended, no PR yet' });
+    const wakes: (() => void)[] = [];
+    t.restart((o) => { o.later = (_ms, fn) => void wakes.push(fn); });
+    expect(wakes).toHaveLength(1);
+    wakes[0]();
+    expect(told(p.id).filter((m) => m.includes('ended its turn with no pull request'))).toHaveLength(2);
+  });
+
   it('a turn that ended with no pull request just before the restart: its wake comes after resume', async () => {
     const p = await running();
     t.s.ctx.orchestrator.later = () => {}; // the server stops before the timer runs
