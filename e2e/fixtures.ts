@@ -30,7 +30,9 @@ export const test = base.extend<object, { server: string }>({
         await new Promise((r) => setTimeout(r, 100));
       }
       procs.push(spawn(process.execPath, ['src/worker/main.ts'], {
-        env: { ...common, SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, RUNNER: 'fake', FAKE_DELAY_MS: '150', FAKE_COST_USD: '0.5', WINDOWS_PATH: 'off', ASSISTANT_READ_DIRS: E2E_SRC, LOCAL_REPO_DIRS: E2E_REPOS,
+        // its own workspaces, cleared with the rest (setup.ts): a worktree kept from an earlier run
+        // points at a local repo that run made, and this run makes again
+        env: { ...common, SERVER_WS_URL: `ws://127.0.0.1:${port}/worker`, WORKSPACES_DIR: `/tmp/dispatch-e2e/ws-${info.workerIndex}`, RUNNER: 'fake', FAKE_DELAY_MS: '150', FAKE_COST_USD: '0.5', WINDOWS_PATH: 'off', ASSISTANT_READ_DIRS: E2E_SRC, LOCAL_REPO_DIRS: E2E_REPOS,
           CLAUDE_ACCOUNTS: 'private,work', CLAUDE_ACCOUNT_PRIVATE_OAUTH_TOKEN: 'e2e', CLAUDE_ACCOUNT_WORK_CONFIG_DIR: '/tmp/dispatch-e2e-work', CLAUDE_ACCOUNT_WORK_LABEL: 'Work',
           RELEASES: JSON.stringify([{ repo: 'me/e2e-rel', label_prefix: 'rel:', command: './release.sh {version} --yes' }]) },
         stdio: 'inherit',

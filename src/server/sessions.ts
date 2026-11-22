@@ -1129,8 +1129,9 @@ export class Sessions {
         }
         // an orchestrator's turn end is not "waiting for you": it waits for its steps. The orchestration
         // says what the owner must know (a plan to approve, the result), and takes its queued events
+        // a repeated idle report (a worker that reconnects) is no new turn end: it is not handled again (DISP-170)
         if (s.kind === 'orchestrator' && msg.status === 'idle') {
-          this.onOrchestratorIdle?.(this.store.session(s.id)!);
+          if (was !== 'idle') this.onOrchestratorIdle?.(this.store.session(s.id)!);
           this.dispatch();
           return;
         }

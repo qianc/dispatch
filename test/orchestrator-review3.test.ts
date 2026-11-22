@@ -49,6 +49,15 @@ describe('orchestrator part 3: review findings', () => {
     expect(t.s.ctx.orchestrator.attention(id)).toEqual({ kind: 'plan', text: 'It waits for your reply before it can plan.' });
   });
 
+  it('a repeated idle report does not send "waiting for you" again (DISP-170)', async () => {
+    const id = t.start().session_id;
+    t.status(id, 'running');
+    t.status(id, 'idle');
+    expect(t.pushes.map((x) => x.title)).toEqual(['Rework auth: waiting for you']);
+    t.status(id, 'idle'); // the worker reconnects and reports idle again
+    expect(t.pushes.map((x) => x.title)).toEqual(['Rework auth: waiting for you']);
+  });
+
   it('timer after timer with nothing else happening stops after a while, and the owner is told', async () => {
     const p = await ready();
     t.pushes.length = 0; // its turn after the approval started nothing: that push is not this test's

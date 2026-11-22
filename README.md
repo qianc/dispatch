@@ -845,7 +845,9 @@ npm run e2e                   # Playwright, iPhone viewport, against dist/web + 
 npm run typecheck
 ```
 
-Set `CHROMIUM_PATH` if Playwright's own browser isn't installed.
+The e2e serves the built web app: run `npm run build` first (it stops with a message when
+`dist/web` is missing), or set `E2E_WEB_DIST` to another build. Set `CHROMIUM_PATH` if
+Playwright's own browser isn't installed.
 
 **No private data in commits.** `git config core.hooksPath .githooks` turns on hooks that run
 `scripts/check-private.mjs` on each commit and push. It refuses tokens, private keys, home-folder
