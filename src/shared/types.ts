@@ -135,6 +135,8 @@ export interface Source {
   session_id: number | null;
   /** Folder linked files are read from; set only by the Assistant's markdown import (DISP-131). */
   base_dir: string | null;
+  /** The worker base_dir is on: the one whose session imported it. Read nowhere else (DISP-174). */
+  base_dir_worker_id: number | null;
   created_at: string;
 }
 
