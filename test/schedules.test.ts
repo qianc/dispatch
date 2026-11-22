@@ -29,6 +29,8 @@ describe('scheduled planner runs', () => {
     const list = (await s.call('GET', '/projects/SC/schedules')).data;
     expect(list).toHaveLength(1);
     expect(list[0].next_run).toBeTruthy();
+    // DISP-160: at_time is the server's local time, and the list names its zone
+    expect(list[0].time_zone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect((await s.call('PATCH', `/schedules/${made.id}`, { enabled: false, max_batches: 2 })).data).toMatchObject({ enabled: false, max_batches: 2, name: 'Nightly' });
     expect((await s.call('DELETE', `/schedules/${made.id}`)).status).toBe(200);
     expect((await s.call('GET', '/projects/SC/schedules')).data).toHaveLength(0);

@@ -12,11 +12,13 @@ export function scheduleRoutes(app: FastifyInstance, { store, bus, scheduler, us
     if (!s) throw notFound('Schedule');
     return s;
   };
-  /** With its next run, and its last run's session (status and result line). */
+  /** With its next run, and its last run's session (status and result line). at_time is in the
+   *  server's zone, named by time_zone (DISP-160). */
   const view = (s: Schedule) => {
     const last = s.last_session_id ? store.session(s.last_session_id) : undefined;
     return {
       ...s,
+      time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       next_run: s.enabled ? nextSlot(s, new Date())?.toISOString() ?? null : null,
       last_session: last ? { id: last.id, status: last.status, title: last.title, last_text: last.last_text, created_at: last.created_at } : null,
     };
