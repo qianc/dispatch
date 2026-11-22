@@ -13,7 +13,7 @@ export function parseVersion(s: string): ParsedVersion | null {
   return { v: m[1] === 'v', nums: [Number(m[2]), Number(m[3]), Number(m[4])], pre: m[5] ?? null };
 }
 
-/** Numeric, field by field; a pre-release sorts before its release. Unparsable sorts lowest. */
+/** Numeric, field by field; a pre-release sorts before its release (semver order, DISP-215). Unparsable sorts lowest. */
 export function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a), pb = parseVersion(b);
   if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
@@ -21,7 +21,21 @@ export function compareVersions(a: string, b: string): number {
   if (pa.pre === pb.pre) return 0;
   if (pa.pre === null) return 1;
   if (pb.pre === null) return -1;
-  return pa.pre < pb.pre ? -1 : 1;
+  return comparePre(pa.pre, pb.pre);
+}
+
+/** Semver pre-release order: dot by dot, numbers as numbers and below words, fewer parts first when equal so far. */
+function comparePre(a: string, b: string): number {
+  const pa = a.split('.'), pb = b.split('.');
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i], y = pb[i];
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
+    if (nx && ny) return Number(x) - Number(y) || (x < y ? -1 : 1);
+    if (nx !== ny) return nx ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return pa.length - pb.length;
 }
 
 export function maxVersion(list: (string | null | undefined)[]): string | null {

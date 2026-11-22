@@ -8,6 +8,7 @@ import { Page } from '../components/Layout.tsx';
 import { RichMd } from '../components/RichMd.tsx';
 import { BatchForm } from '../components/batch.tsx';
 import { ItemFields, SessionRow, StatusPicker, effortLabel } from '../components/items.tsx';
+import { dropDeletedItem } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { Discuss } from './Discuss.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, ImportanceIcon, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
@@ -40,7 +41,11 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   // same key and shape as the project page's query: the cache holds the whole project
   const { data: projectFull } = useQuery({ queryKey: ['project', it?.project.key], queryFn: () => api.get<ProjectSummary>(`/projects/${it!.project.key}`), enabled: !!it });
   const repos: Repo[] = projectFull?.repos ?? [];
-  const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => (onClose ? onClose() : nav(`/p/${it!.project.key}`)) });
+  const remove = useMutation({ mutationFn: () => api.del(`/items/${id}`), onSuccess: () => {
+    dropDeletedItem(qc, it!);
+    if (onClose) onClose();
+    else nav(`/p/${it!.project.key}`);
+  } });
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       for (const f of files) await uploadImage(id, f);

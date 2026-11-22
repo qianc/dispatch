@@ -431,8 +431,14 @@ export class Store {
     const scale = this.project(projectId)!.effort_scale;
     if (!Number.isInteger(it.effort) || it.effort < 0 || it.effort >= scale.length) throw new HttpError(400, `Effort ${it.effort} is outside the project scale (0 to ${scale.length - 1}: ${scale.join(', ')})`);
   }
+  /** Only a source of the item's own project: another's would hand its text to this project's chats (DISP-188, DISP-218). */
+  private checkSource(projectId: number, sourceId: number | null | undefined) {
+    if (sourceId == null || this.source(sourceId)?.project_id === projectId) return;
+    throw new HttpError(404, `No source ${sourceId} in project ${this.project(projectId)!.key}`);
+  }
   createItem(projectId: number, it: { type: Item['type']; title: string; body_md: string; status: ItemStatus; importance: number; effort: number | null; source_id: number | null; labels: string[]; modules?: string[] }): Item {
     this.checkScales(projectId, it);
+    this.checkSource(projectId, it.source_id);
     return this.db.tx(() => {
       const { n } = this.db.get<{ n: number }>('SELECT next_item_number AS n FROM projects WHERE id = ?', projectId)!;
       this.db.run('UPDATE projects SET next_item_number = next_item_number + 1 WHERE id = ?', projectId);
@@ -456,6 +462,7 @@ export class Store {
     // only a value that changes is checked: an item kept from a longer scale still saves (DISP-183)
     const changed = <K extends 'importance' | 'effort'>(k: K) => (patch[k] !== undefined && patch[k] !== old[k] ? n[k] : undefined);
     this.checkScales(old.project_id, { importance: changed('importance'), effort: changed('effort') });
+    if (patch.source_id !== undefined && patch.source_id !== old.source_id) this.checkSource(old.project_id, patch.source_id);
     // stays when an item that is done is edited; a reopened item is done again on its new date
     const doneAt = n.status !== 'done' ? null : old.status === 'done' ? old.done_at : now();
     this.db.run(

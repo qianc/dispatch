@@ -56,3 +56,10 @@ export function toggleMarked(qc: QueryClient) {
     },
   };
 }
+
+/** A deleted item: out of its project's cached lists at once, then the lists and project counts refetched (DISP-213). */
+export function dropDeletedItem(qc: QueryClient, item: Pick<Item, 'id' | 'project_id'>) {
+  qc.setQueriesData<Item[]>({ queryKey: ['items', item.project_id] }, (list) => list?.filter((i) => i.id !== item.id));
+  void qc.invalidateQueries({ queryKey: ['items', item.project_id] });
+  void qc.invalidateQueries({ queryKey: ['projects'] });
+}
