@@ -28,6 +28,7 @@ export class Db {
   }
 
   tx<T>(fn: () => T): T {
+    if (this.raw.isTransaction) return fn(); // nested: part of the outer transaction
     this.raw.exec('BEGIN IMMEDIATE');
     try {
       const out = fn();

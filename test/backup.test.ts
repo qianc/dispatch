@@ -13,15 +13,18 @@ describe('nightly backup', () => {
     db.exec("PRAGMA journal_mode=WAL; CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('kept')"); // open, as the server keeps it
     mkdirSync(join(data, 'attachments', 'items', '1'), { recursive: true });
     writeFileSync(join(data, 'attachments', 'items', '1', 'a.png'), 'png');
-    const old = join(out, 'dispatch-db-20200101-000000.db');
-    writeFileSync(old, 'old');
-    utimesSync(old, new Date('2020-01-01'), new Date('2020-01-01'));
+    const old = ['01', '02', '03'].map((d) => {
+      const f = join(out, `dispatch-db-202001${d}-000000.db`);
+      writeFileSync(f, 'old');
+      utimesSync(f, new Date(`2020-01-${d}`), new Date(`2020-01-${d}`));
+      return f;
+    });
 
     const made = await backupOnce(data, out, 14, new Date('2026-10-19T01:15:00Z'));
     expect(made.map((f) => f.replace(/\d{8}-\d{6}/, 'STAMP')).sort()).toEqual(['dispatch-attachments-STAMP.tgz', 'dispatch-db-STAMP.db']);
     const copy = new DatabaseSync(join(out, made.find((f) => f.endsWith('.db'))!), { readOnly: true });
     expect(copy.prepare('SELECT v FROM t').all()).toEqual([{ v: 'kept' }]);
-    expect(existsSync(old)).toBe(false);
+    expect(old.map((f) => existsSync(f))).toEqual([false, true, true]); // the newest 3 db copies stay, whatever their age
     expect(readdirSync(out).some((f) => f.endsWith('.tmp'))).toBe(false);
     db.close();
   });
@@ -37,6 +40,17 @@ describe('backup errors', () => {
     const data = mkdtempSync(join(tmpdir(), 'dsp-bk-data-'));
     new DatabaseSync(join(data, 'dispatch.db')).exec('CREATE TABLE t (v TEXT)');
     await expect(backupOnce(data, '/nonexistent/backups', 14)).rejects.toThrow(/cannot write the copy into \/nonexistent\/backups/);
+  });
+
+  it('fails on a data folder without a database, creates none there, and keeps the old backups (DISP-135)', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'dsp-bk-data-'));
+    const out = mkdtempSync(join(tmpdir(), 'dsp-bk-out-'));
+    const old = join(out, 'dispatch-db-20200101-000000.db');
+    writeFileSync(old, 'old');
+    utimesSync(old, new Date('2020-01-01'), new Date('2020-01-01'));
+    await expect(backupOnce(data, out, 14)).rejects.toThrow(/no database at .*dispatch\.db/);
+    expect(existsSync(join(data, 'dispatch.db'))).toBe(false);
+    expect(readdirSync(out)).toEqual(['dispatch-db-20200101-000000.db']);
   });
 });
 
