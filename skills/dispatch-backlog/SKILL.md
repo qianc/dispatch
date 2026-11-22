@@ -80,6 +80,10 @@ A token works only on the server that made it. A token from the LAN address (e.g
 both are the same Dispatch install. So each server address has its own token file,
 `~/.config/dispatch/tokens/<host>`.
 
+`DISPATCH_TOKEN` is used only for a server from `--url`, `DISPATCH_URL` or this machine's default.
+For a server from `url:` in a repo's `.dispatch.md`, only that host's token file is used, so a
+cloned repo cannot send your token elsewhere; `dispatch config` says when it ignores the variable.
+
 When a token is refused (`token: rejected`, "not signed in", or "redirected to …"):
 
 1. Run `dispatch config` and check the server. Is it the address the user means? A wrong
