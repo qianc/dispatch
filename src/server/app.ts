@@ -4,7 +4,6 @@ import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
 import { ZodError } from 'zod';
 import { Auth } from './auth.ts';
 import { Bus } from './bus.ts';
@@ -38,7 +37,7 @@ import { streamRoutes } from './routes/stream.ts';
 import { fileRoutes } from './routes/files.ts';
 import { workerRoutes } from './routes/workers.ts';
 import { releaseRoutes } from './routes/releases.ts';
-import { Workers } from './workers.ts';
+import { Workers, workerFromToken } from './workers.ts';
 import { Users } from './users.ts';
 import { Identities } from './identities.ts';
 import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
@@ -200,7 +199,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const devices = new Devices(db);
   const access = new Access(cfg, db, auth, devices, users);
-  const scheduler = new Scheduler(store, sessions, bus);
+  const scheduler = new Scheduler(store, sessions, bus, cfg);
   const orchestrator = new Orchestrator({
     store, bus, sessions, notifier, merging: () => github.mergingNow,
     // only a worker can ask Claude: the orchestrator's own, on its account. Short: a title is not worth a long wait (DISP-110)
@@ -333,9 +332,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
 
   app.get('/worker', { websocket: true }, (socket, req) => {
     // a worker's own token (dsw_…), or the server's WORKER_TOKEN for the legacy worker
-    const token = String(req.headers['x-worker-token'] ?? '');
-    const legacy = !!cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
-    const worker = legacy ? workers.legacy() : workers.verify(token);
+    const worker = workerFromToken(workers, cfg, String(req.headers['x-worker-token'] ?? ''));
     if (!worker) return socket.close(4001, 'bad worker token');
     // just started after its own update: the launcher still watches whether this version holds, and
     // puts the old one back when it does not. No work starts before that; the worker tries again.

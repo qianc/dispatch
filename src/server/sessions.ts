@@ -27,6 +27,7 @@ import {
   type Schedule,
   type Session,
   type SessionStatus,
+  type Source,
 } from '../shared/types.ts';
 import { z } from 'zod';
 import { CHAT_IMAGE_FILE, MAX_IMAGE_BYTES, chatImageType, sniffImage, withImageMarkers } from '../shared/chatImages.ts';
@@ -1815,6 +1816,12 @@ export class Sessions {
    * credential (`github`) and no env account; one that may not act on GitHub now is refused
    * (SessionError with the link to connect). `identity`: already resolved by the caller.
    */
+  /** A session's source; its folder only for a session on the worker that folder is on (DISP-174). */
+  private sourceFor(s: Session): Source | null {
+    const source = s.source_id ? this.store.source(s.source_id) ?? null : null;
+    return source && source.base_dir_worker_id !== s.worker_id ? { ...source, base_dir: null } : source;
+  }
+
   spec(s: Session, prompt: string, resume: string | null, resumeNote: string | null, identity: GithubIdentity | IdentityRefusal | null = this.identityOf(s)): StartSpec {
     const project = s.project_id ? this.store.project(s.project_id) : undefined;
     const schedule = s.kind === 'planner' && s.schedule_id ? this.store.schedule(s.schedule_id) : undefined;
@@ -1839,7 +1846,7 @@ export class Sessions {
         image_count: this.store.itemImages(i.id).length,
         comments: this.store.comments(i.id).map((c) => ({ author: c.author, body_md: c.body_md, created_at: c.created_at })),
       })),
-      source: s.source_id ? this.store.source(s.source_id) ?? null : null,
+      source: this.sourceFor(s),
       prompt: prompt || 'Work on the items in your instructions.',
       force_plan: s.force_plan,
       // 'default' is the server's default model and effort, so a worker always gets a named model

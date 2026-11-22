@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -272,6 +272,38 @@ describe('dispatch-backlog skill script', () => {
     expect((await runIn(dir, { DISPATCH_URL: s.base, HOME: dir }, 'config')).out).toContain(
       `server:   ${s.base} (from DISPATCH_URL, overrides url: https://dispatch.example.test in .dispatch.md)`,
     );
+  });
+
+  it('sends no token over plain http to a url: from .dispatch.md on another machine (DISP-181)', async () => {
+    // an http proxy stands in for the network path: it sees what would cross it in clear text
+    const seen: { host?: string; auth?: string }[] = [];
+    const path = createServer((req, res) => {
+      seen.push({ host: req.headers.host, auth: req.headers.authorization });
+      res.writeHead(200, { 'content-type': 'application/json' }).end('[]');
+    });
+    // Node's proxy support tunnels plain http too: answer the tunnel ourselves, as that server
+    path.on('connect', (_req, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      path.emit('connection', socket);
+    });
+    await new Promise<void>((r) => path.listen(0, '127.0.0.1', r));
+    const proxy = `http://127.0.0.1:${(path.address() as AddressInfo).port}`;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'dsp-plain-'));
+      writeFileSync(join(dir, '.dispatch.md'), '---\nproject: cli\nurl: http://dispatch.example.test\n---\n');
+      mkdirSync(join(dir, '.config/dispatch/tokens'), { recursive: true });
+      writeFileSync(join(dir, '.config/dispatch/tokens/dispatch.example.test'), 'file-secret\n');
+      const env = { DISPATCH_URL: '', HOME: dir, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: proxy, http_proxy: proxy, NO_PROXY: '', no_proxy: '' };
+      await runIn(dir, env, 'projects');
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((x) => x.host === 'dispatch.example.test' && x.auth === undefined)).toBe(true);
+      expect((await runIn(dir, env, 'config')).out).toContain('token:    not sent: the url: from .dispatch.md is plain http');
+      // the same server chosen with DISPATCH_URL does get its token: the choice is the user's own
+      await runIn(dir, { ...env, DISPATCH_URL: 'http://dispatch.example.test' }, 'projects');
+      expect(seen.at(-1)?.auth).toBe('Bearer file-secret');
+    } finally {
+      path.close();
+    }
   });
 
   it('never sends DISPATCH_TOKEN to a url: from .dispatch.md (DISP-145)', async () => {

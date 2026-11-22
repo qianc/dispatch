@@ -26,18 +26,18 @@ export function fileRoutes(app: FastifyInstance, { store, hub, hosted }: Ctx) {
     if (!project) throw notFound('Project');
     const q = z.object({ path: z.string().min(1), source: z.coerce.number().int().optional() }).parse(req.query);
     const path = safeRelPath(q.path.split('#')[0]);
-    const tries: { repo?: (typeof repos)[number]; base_dir?: string }[] = [];
+    const tries: { repo?: (typeof repos)[number]; base_dir?: string; worker?: number }[] = [];
     const repos = store.repos(project.id);
     for (const repo of repos) tries.push({ repo });
     const source = q.source ? store.source(q.source) : undefined;
     // only the folder an import recorded; a source title is free text anyone with tracker scope sets (DISP-131)
-    if (source && source.project_id === project.id && source.base_dir) tries.push({ base_dir: source.base_dir });
+    // read on the worker that imported it, never the project's: another person's worker may name any folder (DISP-174)
+    if (source && source.project_id === project.id && source.base_dir && source.base_dir_worker_id) tries.push({ base_dir: source.base_dir, worker: source.base_dir_worker_id });
     if (!tries.length) throw new HttpError(404, 'This project has no repo or source folder to read files from');
     for (const t of tries) {
       try {
-        // a source folder is read on the project's worker
         const bytes = t.repo ? await readRepoFile({ store, hub, hosted }, project, t.repo, path)
-          : Buffer.from((await hub.cmd<{ base64: string }>(project.worker_id ?? store.defaultWorkerId(), { c: 'read_file', ...t, path }, 60_000)).base64, 'base64');
+          : Buffer.from((await hub.cmd<{ base64: string }>(t.worker!, { c: 'read_file', base_dir: t.base_dir, path }, 60_000)).base64, 'base64');
         reply.header('cache-control', 'private, max-age=300');
         const type = mime(path);
         // an SVG from a repo may carry a script: opened in a tab, it must not run as Dispatch itself
