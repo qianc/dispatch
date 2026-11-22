@@ -246,6 +246,8 @@ export const runOptions = z.object({
   claude_account: z.string().nullable().default(null),
   /** worker to run on; null = the project's (or the global) default */
   worker_id: z.number().int().nullable().default(null),
+  /** the worker's optional plugins (AGENT_OPTIONAL_PLUGINS) this batch turns on, by short name, e.g. 'ponytail' (DISP-222) */
+  plugins: z.array(z.string()).default([]),
 });
 export type RunOptions = z.infer<typeof runOptions>;
 export const DEFAULT_RUN_OPTIONS: RunOptions = runOptions.parse({});
@@ -385,6 +387,8 @@ export interface WorkerFacts {
   releases?: ReleaseCapability[];
   /** repos with env files on this worker, as <owner>/<name> (DISP-44; missing from older workers) */
   repo_envs?: string[];
+  /** the short names of its optional plugins, which a batch can turn on (DISP-222; missing from older workers) */
+  optional_plugins?: string[];
   /**
    * what it can do; 'github_cred': runs a session as its user's own GitHub account (DISP-63);
    * 'self_update': knows the update messages (DISP-112). Missing from older workers.

@@ -38,8 +38,32 @@ export function useRunOptions(projectKey: string) {
   return [o, update] as const;
 }
 
-export function RunOptionsFields({ value, set, project }: { value: RunOptions; set: (p: Partial<RunOptions>) => void; project?: Pick<Project, 'claude_account' | 'claude_allowed'> }) {
+/**
+ * The optional plugins a batch can turn on (DISP-222): those of the worker it runs on, or, with no
+ * worker chosen yet (an orchestrator's or schedule's batches), those of any worker.
+ */
+export function useOptionalPlugins(workerId: number | null | undefined): string[] {
+  const { data } = useWorkers();
+  const workers = data?.workers ?? [];
+  const of = (w: (typeof workers)[number] | undefined) => w?.facts?.optional_plugins ?? [];
+  return workerId != null ? of(workers.find((w) => w.id === workerId)) : [...new Set(workers.flatMap(of))];
+}
+
+/** The options a form sends for a batch on this worker: without plugins the worker does not have. */
+export function useSentOptions(options: RunOptions, workerId: number | null): RunOptions {
+  const plugins = useOptionalPlugins(workerId);
+  return { ...options, worker_id: workerId, plugins: options.plugins.filter((p) => plugins.includes(p)) };
+}
+
+export function RunOptionsFields({ value, set, project, workerId }: {
+  value: RunOptions;
+  set: (p: Partial<RunOptions>) => void;
+  project?: Pick<Project, 'claude_account' | 'claude_allowed'>;
+  /** the worker the form sends, if it has a worker field */
+  workerId?: number | null;
+}) {
   const { data: accounts } = useAccounts();
+  const plugins = useOptionalPlugins(workerId ?? value.worker_id);
   const { allowed, def } = project ? projectClaude(accounts, project) : { allowed: [], def: undefined };
   const chosen = value.claude_account && allowed.some((a) => a.name === value.claude_account) ? value.claude_account : '';
   const { data: defaults } = useModelDefaults();
@@ -67,6 +91,14 @@ export function RunOptionsFields({ value, set, project }: { value: RunOptions; s
         <input type="checkbox" checked={value.turn_check} onChange={(e) => set({ turn_check: e.target.checked })} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
         <span>Run the repo’s check before done<span className="block text-[12px] text-muted">When a turn ends, the repo’s check command runs in the session. If it fails, the agent gets the output to fix it, for up to 3 fix turns.</span></span>
       </label>
+      {plugins.map((name) => (
+        <label key={name} className="flex items-start gap-2 mb-3 text-[14px]">
+          <input type="checkbox" checked={value.plugins.includes(name)} aria-label={`Plugin ${name}`}
+            onChange={(e) => set({ plugins: e.target.checked ? [...value.plugins.filter((p) => p !== name), name] : value.plugins.filter((p) => p !== name) })}
+            className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
+          <span>Use {name}<span className="block text-[12px] text-muted">Turns on the worker’s optional plugin {name}, with its skills and mode, in this batch only.</span></span>
+        </label>
+      ))}
       {value.auto_merge !== 'off' && (
         <label className="flex items-start gap-2 mb-3 text-[14px]">
           <input type="checkbox" checked={value.base_check} onChange={(e) => set({ base_check: e.target.checked })} className="mt-0.5 size-4 accent-[var(--color-accent-strong)]" />
@@ -149,6 +181,7 @@ export function runOptionsSummary(o: SessionOptions, runModel?: string | null): 
   if (o.start === 'after') out.push('after running ones');
   if (o.auto_merge !== 'off') out.push(o.auto_merge === 'github' ? 'auto-merge' : 'auto-merge locally');
   if (o.turn_check === false) out.push('no check before done');
+  for (const p of o.plugins ?? []) out.push(`+${p}`);
   return out;
 }
 
@@ -159,8 +192,9 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
   const [forcePlan, setForcePlan] = useState(project.default_force_plan);
   const [options, setOptions] = useRunOptions(project.key);
   const [workerId, setWorkerId] = useChosenWorker(project);
+  const sent = useSentOptions(options, workerId);
   const start = useMutation({
-    mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan, options: { ...options, worker_id: workerId } }),
+    mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan, options: sent }),
     onSuccess: onStarted,
   });
   return (
@@ -176,7 +210,7 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
         Plan first (Claude writes a plan and waits for approval)
       </label>
       <WorkerField value={workerId} onChange={setWorkerId} project={project} />
-      <RunOptionsFields value={options} set={setOptions} project={project} />
+      <RunOptionsFields value={options} set={setOptions} project={project} workerId={workerId} />
       {!project.repos.length && <p className="text-wait text-sm mb-2">Add a repo in Settings first.</p>}
       <ErrorText error={start.error} />
       <Button variant="primary" className="w-full" disabled={start.isPending || !project.repos.length}>Start session</Button>

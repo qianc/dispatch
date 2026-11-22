@@ -212,6 +212,7 @@ export class ServerLink {
       local_repo_dirs: this.entry.local_repo_dirs,
       releases: this.entry.releases,
       repo_envs: await this.workspaces.overlays().catch(() => []),
+      optional_plugins: (this.shared.opts.optionalPlugins ?? []).map((p) => p.name),
       // runs a session as its user's own GitHub account (DISP-63); knows the update messages (DISP-112)
       caps: ['github_cred', 'self_update'],
       ...(this.version() ? { version: this.version() } : {}),

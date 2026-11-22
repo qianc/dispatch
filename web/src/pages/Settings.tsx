@@ -330,6 +330,7 @@ function WorkersSection({ me }: { me: Me | undefined }) {
                   {w.facts?.os ? ` · ${w.facts.os}` : ''}
                   {w.facts?.slots ? ` · ${w.facts.free_slots}/${w.facts.slots} slots free` : ''}
                   {w.facts?.repo_envs?.length ? ` · env files for ${w.facts.repo_envs.join(', ')}` : ''}
+                  {w.facts?.optional_plugins?.length ? ` · optional plugins ${w.facts.optional_plugins.join(', ')}` : ''}
                   {w.legacy ? ' · connects with WORKER_TOKEN' : ''}
                 </div>
               </div>

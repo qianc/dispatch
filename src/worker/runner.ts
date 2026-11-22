@@ -12,6 +12,7 @@ import { existsSync, globSync, mkdirSync, readdirSync, readFileSync, realpathSyn
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { z } from 'zod';
 
 export interface RunnerDeps {
   emit(msg: WorkerToServer): void;
@@ -42,6 +43,8 @@ export interface AgentRunner {
 export interface RunnerOptions {
   /** AGENT_PLUGIN_DIRS as configured; see resolvePluginDirs. */
   pluginDirs: string[];
+  /** AGENT_OPTIONAL_PLUGINS: plugins a batch turns on with its run options (DISP-222); see parseOptionalPlugins. */
+  optionalPlugins?: OptionalPlugin[];
   settingSources: ('user' | 'project' | 'local')[];
   idleCloseMs: number;
   assistantModel: string;
@@ -111,6 +114,49 @@ export function resolvePluginDirs(entries: string[], configDir = process.env.CLA
     console.warn(`AGENT_PLUGIN_DIRS: skipping ${entry}: ${path ? `${path} does not exist` : 'it is not installed'}`);
     return [];
   });
+}
+
+const optionalPluginsSchema = z.array(z.object({
+  /** short name, shown on the run options card and stored in `RunOptions.plugins` */
+  name: z.string().regex(/^[\w.-]+$/),
+  /** a Claude plugin name or a folder, as in AGENT_PLUGIN_DIRS */
+  plugin: z.string().min(1),
+  /** env for a session that turns it on */
+  env: z.record(z.string(), z.string()).default({}),
+  /** env for every other session, e.g. to keep a mode off that a config file on the host turns on */
+  off_env: z.record(z.string(), z.string()).default({}),
+}));
+/** A plugin a batch can turn on (DISP-222). */
+export type OptionalPlugin = z.infer<typeof optionalPluginsSchema>[number];
+
+/**
+ * Reads AGENT_OPTIONAL_PLUGINS, a JSON list, e.g.
+ * `[{"name":"ponytail","plugin":"ponytail@ponytail","env":{"PONYTAIL_DEFAULT_MODE":"full"},"off_env":{"PONYTAIL_DEFAULT_MODE":"off"}}]`.
+ * A broken value gives no optional plugins, with a warning.
+ */
+export function parseOptionalPlugins(value: string): OptionalPlugin[] {
+  if (!value.trim()) return [];
+  try {
+    return optionalPluginsSchema.parse(JSON.parse(value));
+  } catch (e) {
+    console.warn(`AGENT_OPTIONAL_PLUGINS: ignored, it is not a valid list: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/**
+ * What a session gets from the optional plugins: only a batch (kind 'work') turns them on, by
+ * `chosen` names. `dirs`: the plugins to load; `env`: their on or off env; `disabled`: the Claude
+ * plugin names to switch off in the user settings, so one enabled there does not load anyway.
+ */
+export function optionalPluginsFor(list: OptionalPlugin[], kind: StartSpec['kind'], chosen: string[]) {
+  const picked = kind === 'work' ? list.filter((p) => chosen.includes(p.name)) : [];
+  const rest = list.filter((p) => !picked.includes(p));
+  return {
+    dirs: resolvePluginDirs(picked.map((p) => p.plugin)),
+    env: Object.assign({}, ...rest.map((p) => p.off_env), ...picked.map((p) => p.env)) as Record<string, string>,
+    disabled: rest.map((p) => p.plugin).filter((id) => !id.includes('/') && id.includes('@')),
+  };
 }
 
 /** True if `path` (after resolving symlinks) is inside one of `dirs`. */
@@ -379,6 +425,10 @@ export class ClaudeRunner implements AgentRunner {
       : discuss ? discussPrompt(this.spec, this.deps.context ?? [])
       : planner ? plannerPrompt(this.spec, this.deps.context ?? [])
       : this.spec.kind === 'release' ? releasePrompt(this.spec, this.deps.context ?? []) : workPrompt(this.spec);
+    const optional = chat ? { dirs: [], env: {}, disabled: [] } : optionalPluginsFor(this.opts.optionalPlugins ?? [], this.spec.kind, this.spec.options.plugins ?? []);
+    const settingSources = chat ? [] : this.opts.settingSources;
+    const env = this.opts.sessionEnv || Object.keys(optional.env).length
+      ? { ...(this.opts.sessionEnv ? this.opts.sessionEnv(this.spec) : process.env), ...optional.env } : undefined;
     this.q = query({
       prompt: this.input,
       options: {
@@ -389,8 +439,10 @@ export class ClaudeRunner implements AgentRunner {
           : this.spec.options.model,
         ...(this.spec.options.effort !== 'default' && !chat ? { effort: this.spec.options.effort } : {}),
         // chats are small helpers: no project settings or hooks, no plugins, only read tools
-        settingSources: chat ? [] : this.opts.settingSources,
-        plugins: chat ? [] : resolvePluginDirs(this.opts.pluginDirs).map((path) => ({ type: 'local' as const, path })),
+        settingSources,
+        plugins: chat ? [] : [...resolvePluginDirs(this.opts.pluginDirs), ...optional.dirs].map((path) => ({ type: 'local' as const, path })),
+        // an optional plugin the user settings enable stays off where the batch did not turn it on (DISP-222)
+        ...(settingSources.includes('user') && optional.disabled.length ? { settings: { enabledPlugins: Object.fromEntries(optional.disabled.map((id) => [id, false])) } } : {}),
         ...(this.opts.agentSkillsDir && !chat ? { additionalDirectories: [this.opts.agentSkillsDir] } : {}),
         ...(chat ? { tools: ASSISTANT_TOOLS } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
@@ -401,7 +453,7 @@ export class ClaudeRunner implements AgentRunner {
         mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }, this.deps.cwd, !!this.spec.agents_edit_items, this.spec.neighbours ?? []) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
-        ...(this.opts.sessionEnv ? { env: this.opts.sessionEnv(this.spec) } : {}),
+        ...(env ? { env } : {}),
         stderr: (d) => process.stderr.write(`[session ${this.sessionId}] ${d}`),
       },
     });
