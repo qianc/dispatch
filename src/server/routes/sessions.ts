@@ -38,7 +38,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   };
   /** what a session needs from you, for the inbox and its page alike (DISP-159): a PR being merged shows as merging */
   const attention = (s: Session, prs: PullRequest[]) => (s.kind === 'orchestrator' ? orchestrator.attention(s.id)
-    : attentionOf(s, prs, s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow));
+    : attentionOf(s, prs, s.kind === 'planner' ? store.proposalEvents(s.id) : [], github.mergingNow));
 
   /** Everything waiting on you, across projects: only sessions you can act on (DISP-63). */
   app.get('/api/inbox', async (req) => {
@@ -282,6 +282,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const ref = event_id === undefined ? undefined : { session_id: s.id, event_id };
     sessions.assertProposalOpen(ref);
     if (!s.project_id) throw new HttpError(400, 'This session has no project');
+    // only a source of this chat's project (DISP-188), as MCP add_item does
+    if (source_id !== null && store.source(source_id)?.project_id !== s.project_id) throw notFound('Source');
     const created = store.createProposedItems(s.project_id, items, source_id ?? s.source_id);
     sessions.markProposalDone(ref, `Created ${created.map((i) => i.key).join(', ')}`);
     for (const item of created) bus.emit({ t: 'item', item });
