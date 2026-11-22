@@ -73,8 +73,13 @@ export interface PlannerWorker {
 }
 
 export type ServerToWorker =
-  | { t: 'start'; spec: StartSpec }
-  | { t: 'send'; session_id: number; text: string; spec: StartSpec }
+  /**
+   * `turn_id` (start, send): names this write. The worker repeats the last one it got per session
+   * in its statuses (`ack`) and hello (`acks`): the server sees which turn a status speaks for, and
+   * whether a write was lost (DISP-202, DISP-203). An older server sends none.
+   */
+  | { t: 'start'; spec: StartSpec; turn_id?: string }
+  | { t: 'send'; session_id: number; text: string; spec: StartSpec; turn_id?: string }
   | { t: 'answer'; session_id: number; local_id: string; answer: InputAnswer }
   | { t: 'interrupt'; session_id: number }
   | { t: 'close'; session_id: number }
@@ -134,15 +139,17 @@ export type SelfUpdateAnswer =
   /** it cannot, or the commit is not one of its release branch */
   | { state: 'refused'; reason: string };
 
-export type StatusMsg = { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string };
+/** `ack`: the `turn_id` of the last start or send the worker had got for this session when it wrote this */
+export type StatusMsg = { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string; ack?: string };
 
 export type WorkerToServer =
   /**
    * `statuses`: per live session, the last status this worker wrote to a link (with the newest
    * sdk_session_id it reported). A write on a half-open link is lost: the server corrects what it
    * missed from these (DISP-197). An older worker sends none; an older server ignores them.
+   * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
    */
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[] }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string> }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */

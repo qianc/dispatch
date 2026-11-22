@@ -176,13 +176,13 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, users, dbFile });
   updates.restoreNote = restored;
   hub.handlers = {
-    onHello: (workerId, live, facts, statuses) => {
+    onHello: (workerId, live, facts, statuses, acks) => {
       workers.seen(workerId, facts);
       // the server's commit: how a worker sees that an update of the server took
       hub.send(workerId, { t: 'welcome', version: version.sha });
       // before its sessions are looked at: a worker back from its update takes work again
       updates.onWorkerHello(workerId, facts);
-      sessions.onWorkerHello(workerId, live, statuses);
+      sessions.onWorkerHello(workerId, live, statuses, acks);
       // are its local repo copies still there? (sessions only go to workers whose copies are ok)
       void checkPlacements(store, hub, workerId)
         .then(() => !closing && store.placementsOn(workerId).forEach(({ repo }) => bus.emit({ t: 'project', key: store.project(repo.project_id)!.key })))
