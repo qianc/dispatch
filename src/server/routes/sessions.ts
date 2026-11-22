@@ -282,8 +282,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const ref = event_id === undefined ? undefined : { session_id: s.id, event_id };
     sessions.assertProposalOpen(ref);
     if (!s.project_id) throw new HttpError(400, 'This session has no project');
-    // only a source of this chat's project (DISP-188), as MCP add_item does
-    if (source_id !== null && store.source(source_id)?.project_id !== s.project_id) throw notFound('Source');
+    // only a source of this chat's project (DISP-188): store.createItem refuses another's with a 404
     const created = store.createProposedItems(s.project_id, items, source_id ?? s.source_id);
     sessions.markProposalDone(ref, `Created ${created.map((i) => i.key).join(', ')}`);
     for (const item of created) bus.emit({ t: 'item', item });

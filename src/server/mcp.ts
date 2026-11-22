@@ -149,7 +149,6 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     },
   }, guard(true, (a: { project: string; title: string; type: 'backlog' | 'bug'; description: string; importance?: number | string; effort?: number | string | null; tags: string[]; modules: string[]; status?: Item['status']; source_id?: number | null }) => {
     const p = writable(project(a.project));
-    if (a.source_id != null && store.source(a.source_id)?.project_id !== p.id) throw new Error(`No source ${a.source_id} in project ${p.key}`);
     const it = store.createItem(p.id, {
       type: a.type, title: a.title, body_md: a.description, status: a.status ?? (a.type === 'bug' ? 'triage' : 'backlog'),
       importance: scaled(p, 'importance', a.importance) ?? 2, effort: scaled(p, 'effort', a.effort) ?? null,
