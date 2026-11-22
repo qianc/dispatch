@@ -151,13 +151,13 @@ describe('discuss chats and files from a source folder', () => {
   });
 });
 
-describe('migration 050 (DISP-174)', () => {
+describe('migration 051 (DISP-174)', () => {
   it('clears the source folders kept before, which say no worker (046 took some from titles)', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'dispatch-m050-')), 'd.db');
+    const file = join(mkdtempSync(join(tmpdir(), 'dispatch-m051-')), 'd.db');
     const dir = join(import.meta.dirname, '../src/server/migrations');
     const old = new DatabaseSync(file);
     old.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
-    for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < '050').sort()) {
+    for (const name of readdirSync(dir).filter((f) => f.endsWith('.sql') && f < '051').sort()) {
       old.exec(readFileSync(join(dir, name), 'utf8'));
       old.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
     }
