@@ -25,8 +25,10 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       throw new HttpError(429, `Too many wrong passwords. Try again in ${wait > 90 ? `${Math.ceil(wait / 60)} minutes` : `${wait} seconds`}.`);
     }
     const { password } = z.object({ password: z.string() }).parse(req.body);
+    // counted before the check (DISP-201): a scrypt hash takes a while, and parallel guesses that all
+    // passed wait() before any of them failed would each get a check. A right password clears it again
+    limiter.failed(ip);
     if (!(await auth.checkPassword(password))) {
-      limiter.failed(ip);
       console.warn(`login failed from ${ip}: wrong password`);
       await new Promise((r) => setTimeout(r, 500));
       throw new HttpError(401, 'Wrong password');
