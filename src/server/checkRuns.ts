@@ -38,6 +38,14 @@ export class CheckRuns {
     else this.end(key, sessionId, repo, msg.done);
   }
 
+  /** The session ended: its turn checks are off the page (the worker's last report may never come, DISP-149). */
+  endTurns(sessionId: number) {
+    const prefix = `turn:${sessionId}:`;
+    let dropped = false;
+    for (const key of this.live.keys()) if (key.startsWith(prefix)) dropped = this.live.delete(key) || dropped;
+    if (dropped) this.emit(sessionId);
+  }
+
   private update(key: string, sessionId: number, prId: number | null, repo: Repo, p: CheckProgress) {
     if (!repo.check_command) return;
     let run = this.live.get(key);

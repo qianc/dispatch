@@ -166,6 +166,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onPrChange = () => sessions.dispatch();
   sessions.onFinished = (s, status, removeAll) => janitor.onFinished(s, status, removeAll);
   sessions.onTurnCheck = (s, repo, msg) => github.checks.turn(s.id, repo, msg);
+  sessions.onTurnChecksEnded = (id) => github.checks.endTurns(id);
   sessions.onWorkIdle = async (s) => {
     const before = github.toldCount(s.id);
     await github.syncSession(s).catch((e) => console.warn('PR sync failed:', (e as Error).message));
