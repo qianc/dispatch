@@ -152,6 +152,35 @@ describe('password sessions', () => {
     }
   });
 
+  it('parallel guesses against a hash get only the free attempts checked (DISP-201)', async () => {
+    const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD_HASH: hashPassword('pw') });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const checked = vi.spyOn(s.ctx.auth, 'checkPassword');
+    try {
+      // all sent before any check is done: each one is counted before its hash check
+      const guesses = await Promise.all(Array.from({ length: 10 }, (_, i) => login(s, `guess${i}`, '203.0.113.9')));
+      expect(checked).toHaveBeenCalledTimes(5);
+      expect(guesses.map((g) => g.r.statusCode).sort()).toEqual([401, 401, 401, 401, 401, 429, 429, 429, 429, 429]);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a right password after wrong ones clears the count', async () => {
+    const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD_HASH: hashPassword('pw') });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const wrong = async (n: number) => (await Promise.all(Array.from({ length: n }, () => login(s, 'nope', '203.0.113.10')))).map((g) => g.r.statusCode);
+      expect(await wrong(4)).toEqual([401, 401, 401, 401]);
+      expect((await login(s, 'pw', '203.0.113.10')).r.statusCode).toBe(200);
+      // five more wrong ones are free again
+      expect(await wrong(5)).toEqual([401, 401, 401, 401, 401]);
+      expect((await login(s, 'nope', '203.0.113.10')).r.statusCode).toBe(429);
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('a flood of wrong passwords does not delay other requests', async () => {
     const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD_HASH: hashPassword('pw') });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);

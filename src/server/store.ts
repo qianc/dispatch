@@ -917,6 +917,8 @@ export class Store {
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
         ...entries.map(([k, v]) => (k === 'deploys' || k === 'deploys_started' ? JSON.stringify(v) : (v as string | number | null))), id);
+      // a new `seen` is a new turn end: a no-pull-request wake stored for the last one is not for it (DISP-206)
+      if ('seen' in patch) this.db.run('UPDATE orchestration_steps SET no_pr_woken = NULL WHERE id = ?', id);
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = (SELECT orchestration_id FROM orchestration_steps WHERE id = ?)', now(), id);
     }
     return this.step(id)!;

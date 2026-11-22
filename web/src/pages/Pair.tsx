@@ -6,7 +6,17 @@ import { Button } from '../components/ui.tsx';
 // signed in on another device approves it in Settings, and this device gets its own session.
 // Plain fetch, outside the app's sign-in gate: nothing here needs a session.
 
-type Start = { authed: true } | { pair_id: string; code: string; expires_at: string };
+type PairState = 'checking' | 'waiting' | 'expired' | 'error';
+export type StartResult = { authed: true } | { pair_id: string; code: string } | { error: string };
+
+/** The answer to `POST /api/devices/pair`. A refusal (429: the queue is full, or too many from this address) is an error with its message (DISP-214). */
+export async function readStart(r: Response): Promise<StartResult> {
+  const body = (await r.json().catch(() => ({}))) as { authed?: true; pair_id?: string; code?: string; error?: string };
+  if (!r.ok) return { error: body.error || `Dispatch answered ${r.status}.` };
+  if (body.authed) return { authed: true };
+  if (!body.code || !body.pair_id) return { error: 'Dispatch gave no pairing code.' };
+  return { pair_id: body.pair_id, code: body.code };
+}
 
 async function signedIn() {
   try {
@@ -20,8 +30,9 @@ async function signedIn() {
 export function Pair() {
   const [code, setCode] = useState<string | null>(null);
   const [pairId, setPairId] = useState<string | null>(null);
-  const [state, setState] = useState<'checking' | 'waiting' | 'expired' | 'error'>('checking');
+  const [state, setState] = useState<PairState>('checking');
   const [attempt, setAttempt] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -29,9 +40,14 @@ export function Pair() {
       if (await signedIn()) return location.replace('/');
       try {
         const r = await fetch('/api/devices/pair', { method: 'POST', credentials: 'same-origin' });
-        const body = (await r.json()) as Start;
+        const body = await readStart(r);
         if (stop) return;
         if ('authed' in body) return location.replace('/');
+        if ('error' in body) {
+          setError(body.error);
+          setState('error');
+          return;
+        }
         setCode(body.code);
         setPairId(body.pair_id);
         setState('waiting');
@@ -55,7 +71,11 @@ export function Pair() {
     return () => clearInterval(t);
   }, [state, pairId]);
 
-  const again = () => { setCode(null); setPairId(null); setState('checking'); setAttempt((n) => n + 1); };
+  const again = () => { setCode(null); setPairId(null); setError(null); setState('checking'); setAttempt((n) => n + 1); };
+  return <PairScreen state={state} code={code} error={error} onAgain={again} />;
+}
+
+export function PairScreen({ state, code, error, onAgain: again }: { state: PairState; code: string | null; error: string | null; onAgain: () => void }) {
   return (
     <div className="flex-1 flex items-center justify-center p-6 pt-safe">
       <div className="w-full max-w-xs text-center">
@@ -77,7 +97,7 @@ export function Pair() {
         )}
         {state === 'error' && (
           <>
-            <p className="text-sm text-muted mb-5">Could not reach Dispatch.</p>
+            <p className="text-sm text-muted mb-5">{error ?? 'Could not reach Dispatch.'}</p>
             <Button variant="primary" className="w-full" onClick={again}>Try again</Button>
           </>
         )}

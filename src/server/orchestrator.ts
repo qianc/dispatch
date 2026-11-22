@@ -700,8 +700,13 @@ export class Orchestrator {
     this.emit(sessionId);
   }
 
-  /** The owner wrote to a finished orchestration: it runs again, to re-plan or answer them (DISP-121). */
+  /**
+   * The owner wrote to the orchestrator. A finished orchestration runs again, to re-plan or answer
+   * them (DISP-121).
+   */
   ownerWrote(sessionId: number) {
+    // the owner answered what it waits for: its timers may go on (DISP-217)
+    this.store.setTimerStreak(sessionId, 0);
     const o = this.store.orchestration(sessionId);
     if (o?.phase !== 'done') return;
     this.store.updateOrchestration(sessionId, { phase: 'run', finish_notified: false });

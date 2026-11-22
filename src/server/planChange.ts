@@ -148,11 +148,17 @@ export function minorProblem(old: OrchestrationStep[], next: NextStep[], change:
       : change.kind === 'fix_blocker' && change.unblocks !== undefined && (o.id === change.unblocks || before.get(`s${o.id}`)!.has(`s${change.unblocks}`));
     if (!allowed) return `${name(o)} would wait for the new step: it does not wait for ${change.kind === 'fix_blocker' ? 'the step the fix unblocks' : 'that work'} now, so this would hold independent work`;
   }
+  // DISP-205: each part waits for what the split step waited for, and each step that waited for
+  // the split step waits for every part
   if (split) {
     const own = before.get(`s${split.id}`)!;
     for (const a of added) {
       const outside = [...after.get(a.key)!].filter((k) => !isNew(k));
-      if (outside.some((k) => !own.has(k))) return `a part of ${name(split)} waits for a step it did not wait for`;
+      if (!sameSet(outside, own)) return `a part of ${name(split)} must wait for the steps it waited for, and no others`;
+    }
+    for (const n of kept) {
+      if (!before.get(`s${n.id}`)!.has(`s${split.id}`)) continue;
+      if (!added.every((a) => after.get(`s${n.id}`)!.has(a.key))) return `${name(byId.get(n.id!)!)} waited for ${name(split)}: it must wait for all of its parts`;
     }
   }
   return null;

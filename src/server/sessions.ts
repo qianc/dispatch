@@ -46,7 +46,7 @@ import type { Workers } from './workers.ts';
 import type { Users } from './users.ts';
 import type { Config } from './config.ts';
 import { getModelDefaults, withModelDefaults } from './modelDefaults.ts';
-import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
+import { isRefusal, needsGithub, removedStarter, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 
 /** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
 export type IdentityResolver = (startedBy: string | null, project: Project | null, workerId?: number) => GithubIdentity | IdentityRefusal;
@@ -343,9 +343,16 @@ export class Sessions {
    * without GitHub, so a queued or idle one does not run on as them later.
    */
   private removedStarter(startedBy: string | null): IdentityRefusal | null {
-    const { authUsers } = this.cfg;
-    if (!startedBy || !authUsers.length || authUsers.includes(startedBy)) return null;
-    return { refused: true, code: 'user_removed', user: startedBy, message: `${startedBy} may no longer use this install (not in AUTH_USERS), so their sessions do not run.`, connect_url: '/settings' };
+    return removedStarter(this.cfg.authUsers, startedBy);
+  }
+
+  /** Stop a session whose starter was taken off AUTH_USERS (DISP-208), saying why; false while they may use the install. */
+  private stopRemoved(s: Session): boolean {
+    const removed = this.removedStarter(s.started_by);
+    if (!removed) return false;
+    this.addEvent(s.id, { kind: 'error', text: removed.message });
+    this.finish(s.id, 'stopped');
+    return true;
   }
 
   /**
@@ -1028,6 +1035,8 @@ export class Sessions {
   // ---------- worker events ----------
 
   onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = [], acks: Record<string, string> | null = null) {
+    // a removed starter's sessions that wait for the usage limit over there end now, not at the reset (DISP-208)
+    for (const s of this.liveSessions()) if (s.worker_id === workerId && s.limit_wait && live.includes(s.id)) this.stopRemoved(s);
     // first the lost turns: a repeated idle of the turn before one is no turn end (DISP-203)
     this.lostTurns(workerId, live, acks);
     this.lostStatuses(workerId, live, statuses);
@@ -1182,6 +1191,9 @@ export class Sessions {
         return;
       }
       case 'status': {
+        // its starter was taken off AUTH_USERS (DISP-208): a session that waits for the usage limit, or
+        // comes back from that wait, does not go on as them after the reset
+        if (msg.status === 'running' && (msg.limit || s.limit_wait) && this.stopRemoved(s)) return;
         const turn = this.turns.get(s.id);
         if (msg.status === 'idle' && msg.ack && turn && msg.ack !== turn.id) {
           // the end of the turn before the last message, which is on its way: its turn runs next (DISP-202)
