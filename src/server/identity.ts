@@ -11,7 +11,7 @@ export type GithubIdentity =
   | ({ source: 'user'; user: string } & GithubCredential)
   | { source: 'owner-env' | 'shared'; account: string | null };
 
-export type RefusalCode = 'github_not_connected' | 'github_token_unreadable' | 'github_shared_missing' | 'worker_too_old';
+export type RefusalCode = 'github_not_connected' | 'github_token_unreadable' | 'github_shared_missing' | 'worker_too_old' | 'user_removed';
 
 /** No identity may act: the session must not start (403 with `code` and `connect_url`). */
 export interface IdentityRefusal {

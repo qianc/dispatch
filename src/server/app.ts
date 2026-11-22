@@ -117,7 +117,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus, users);
-  const sessions = new Sessions(store, bus, hub, notifier, workers, users);
+  const sessions = new Sessions(store, bus, hub, notifier, workers, users, cfg);
   // as whom each session acts on GitHub (DISP-63): its starter, the owner's env accounts, or the shared one
   const identityDeps: IdentityDeps = {
     identities,
