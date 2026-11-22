@@ -12,6 +12,8 @@ export const DEVICE_COOKIE = 'dispatch_device';
 export const DEVICE_DAYS = 90;
 const PAIR_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 20;
+/** live pairings one client address may hold: a flood from one address replaces its own, not others' */
+const MAX_PENDING_PER_ADDRESS = 3;
 /** no 0/O, 1/I/L: read off a phone and typed on a desktop */
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -24,7 +26,7 @@ export interface Device {
   last_used_at: string | null;
 }
 
-interface Pending { code: string; name: string; expires: number; secret: string | null }
+interface Pending { code: string; name: string; expires: number; secret: string | null; ip: string }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => new Date().toISOString();
@@ -48,19 +50,24 @@ export class Devices {
     this.db = db;
   }
 
-  private prune() {
+  private prune(ip?: string) {
     const t = Date.now();
     for (const [id, p] of this.pending) if (p.expires < t) this.pending.delete(id);
+    if (ip !== undefined) {
+      const own = [...this.pending].filter(([, p]) => p.ip === ip && !p.secret);
+      for (const [id] of own.slice(0, Math.max(0, own.length - MAX_PENDING_PER_ADDRESS + 1))) this.pending.delete(id);
+    }
     // nobody can approve without signing in, but keep a flood of requests from growing the map
     while (this.pending.size >= MAX_PENDING) this.pending.delete(this.pending.keys().next().value!);
   }
 
-  start(name: string): { pair_id: string; code: string; expires_at: string } {
-    this.prune();
+  /** A new pairing for the phone at client address `ip`. */
+  start(name: string, ip: string): { pair_id: string; code: string; expires_at: string } {
+    this.prune(ip);
     const raw = Array.from({ length: 8 }, () => ALPHABET[randomInt(ALPHABET.length)]).join('');
     const pairId = randomBytes(24).toString('base64url');
     const expires = Date.now() + PAIR_TTL_MS;
-    this.pending.set(pairId, { code: raw, name, expires, secret: null });
+    this.pending.set(pairId, { code: raw, name, expires, secret: null, ip });
     return { pair_id: pairId, code: `${raw.slice(0, 4)}-${raw.slice(4)}`, expires_at: new Date(expires).toISOString() };
   }
 

@@ -243,6 +243,20 @@ export function ipInList(ip: string | undefined, list: string[]) {
   });
 }
 
+/**
+ * The address the login limiter and the pairing limit count (DISP-136, DISP-155): behind a proxy on
+ * this machine or in TRUSTED_PROXIES, the client's own, the last X-Forwarded-For entry no trusted
+ * proxy added.
+ */
+export function clientIp(req: Pick<FastifyRequest, 'socket' | 'headers'>, trustedProxies: string[]) {
+  const ip = req.socket.remoteAddress ?? 'unknown';
+  const trusted = (a: string) => isLoopback(a) || ipInList(a, trustedProxies);
+  if (!trusted(ip)) return ip;
+  const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+  while (hops.length > 1 && trusted(hops.at(-1)!)) hops.pop();
+  return hops.at(-1) ?? ip;
+}
+
 // ---------- browsers ----------
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { clientIp } from '../access.ts';
 import { DEVICE_COOKIE, DEVICE_DAYS, deviceName } from '../devices.ts';
 import { HttpError, type Ctx } from './ctx.ts';
 
@@ -10,7 +11,7 @@ export function deviceRoutes(app: FastifyInstance, { access, cfg, devices, users
   // the phone, not signed in: start a pairing and show its code
   app.post('/api/devices/pair', async (req) => {
     if (access.device(req)) return { authed: true };
-    return devices.start(deviceName(req.headers['user-agent']));
+    return devices.start(deviceName(req.headers['user-agent']), clientIp(req, cfg.trustedProxies));
   });
 
   // the phone polls; once approved it gets its cookie, once
