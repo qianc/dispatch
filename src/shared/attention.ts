@@ -44,6 +44,14 @@ function proposalText(open: OpenProposal[]): string {
   return 'Claude proposes a batch. Start it, or open the chat to change it.';
 }
 
+/**
+ * A step's batch whose question is with its orchestrator: it does not need the owner yet (DISP-164).
+ * When the orchestrator hands the question over, its `waiting_reason` changes and it needs them again.
+ */
+export function asksOrchestrator(s: Pick<Session, 'status' | 'waiting_reason'>): boolean {
+  return s.status === 'waiting_input' && !!s.waiting_reason?.startsWith('Asked the orchestrator');
+}
+
 /** Whether a session with this attention waits on the owner: not while Dispatch checks or merges it (DISP-31). */
 export function waitsOnOwner(a: Attention): boolean {
   return a.kind !== 'checking' && a.kind !== 'merging';

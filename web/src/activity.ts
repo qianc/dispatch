@@ -1,4 +1,4 @@
-import { LIMIT_WAIT_LABEL, limitWaitText, waitsOnOwner } from '../../src/shared/attention.ts';
+import { LIMIT_WAIT_LABEL, asksOrchestrator, limitWaitText, waitsOnOwner } from '../../src/shared/attention.ts';
 import type { Attention, Inbox, Session } from './api.ts';
 
 export interface NeedsEntry { id: number; key: string | null; title: string; tone: 'wait' | 'bad' | 'ok'; /** a failed session: why (DISP-81) */ reason?: string }
@@ -7,7 +7,7 @@ export interface RunningEntry { session: Session; attention?: Attention }
 /**
  * The live sessions in groups, as the menu shows them: what needs you (open questions, idle
  * sessions that wait on you, failed sessions not yet ignored or retried, DISP-81), what runs (including idle sessions that Dispatch checks or merges,
- * DISP-31), and what is queued.
+ * DISP-31, and batches whose question is with their orchestrator, DISP-164), and what is queued.
  */
 export function liveGroups(live: Session[], inbox?: Inbox): { needs: NeedsEntry[]; running: RunningEntry[]; queued: Session[] } {
   const sessions = new Map((inbox?.sessions ?? []).map((s) => [s.id, s]));
@@ -18,7 +18,8 @@ export function liveGroups(live: Session[], inbox?: Inbox): { needs: NeedsEntry[
     ...(inbox?.failed ?? []).map((s) => ({ id: s.id, key: s.project_key, title: s.title, tone: 'bad' as const, reason: s.reason })),
   ];
   const running: RunningEntry[] = [
-    ...live.filter((s) => s.status === 'running').map((session) => ({ session })),
+    // a batch whose question is with its orchestrator is at work, not yours yet (DISP-164)
+    ...live.filter((s) => s.status === 'running' || asksOrchestrator(s)).map((session) => ({ session })),
     ...idle.filter((s) => !waitsOnOwner(s.attention)).map((s) => ({ session: s as Session, attention: s.attention })),
   ];
   return { needs, running, queued: live.filter((s) => s.status === 'queued') };
@@ -31,11 +32,14 @@ export function waitingCount(inbox?: Inbox): number {
 
 /**
  * A session's status in a list: an idle session that Dispatch checks or merges shows that, not
- * "Your turn" (DISP-31). Null: its plain session status.
+ * "Your turn" (DISP-31); a batch whose question is with its orchestrator shows that, not "Needs you"
+ * (DISP-164). Null: its plain session status.
  */
-export function busyStatus(s: Pick<Session, 'status'> & Partial<Pick<Session, 'limit_wait'>>, attention?: Attention): { label: string; text: string } | null {
+export function busyStatus(s: Pick<Session, 'status'> & Partial<Pick<Session, 'limit_wait' | 'waiting_reason'>>, attention?: Attention): { label: string; text: string } | null {
   // it stopped on the usage limit and goes on after the reset: not at work, and not your turn (DISP-108)
   if (s.status === 'running' && s.limit_wait) return { label: LIMIT_WAIT_LABEL, text: limitWaitText(s.limit_wait) };
+  // its question is with its orchestrator: not your turn yet (DISP-164)
+  if (asksOrchestrator({ status: s.status, waiting_reason: s.waiting_reason ?? null })) return { label: 'With orchestrator', text: s.waiting_reason! };
   if (s.status !== 'idle' || !attention || waitsOnOwner(attention)) return null;
   return { label: attention.kind === 'merging' ? 'Merging' : 'Checking', text: attention.text };
 }
