@@ -261,12 +261,12 @@ export class Workspaces {
    * Make a new worktree ready to work, check or deploy in (DISP-44): the env overlay, then the
    * repo's setup command. Not ok when a file was refused or the setup failed.
    */
-  async prepareTree(repo: Repo, wt: string, cred?: GithubCred | null): Promise<{ ok: boolean; output: string; copied: string[] }> {
+  async prepareTree(repo: Repo, wt: string, cred?: GithubCred | null, signal?: AbortSignal): Promise<{ ok: boolean; output: string; copied: string[] }> {
     const { copied, refused } = await this.applyOverlay(repo, wt);
     const notes: string[] = [];
     if (refused.length) notes.push(`Env files not copied, because git would track them in ${repo.github_name} (add them to .gitignore): ${refused.join(', ')}`);
     if (!repo.setup_command) return { ok: !refused.length, output: notes.join('\n'), copied };
-    const r = await this.setup(repo, wt, cred);
+    const r = await this.setup(repo, wt, cred, undefined, signal);
     if (!r.ok) notes.push(`Setup command \`${repo.setup_command}\` failed:\n${r.output}`);
     return { ok: r.ok && !refused.length, output: notes.join('\n\n'), copied };
   }
@@ -475,10 +475,10 @@ export class Workspaces {
     });
   }
 
-  /** Run a repo's setup command in a new worktree. */
-  async setup(repo: Repo, wt: string, cred?: GithubCred | null, timeoutMs = 20 * 60_000): Promise<{ ok: boolean; output: string }> {
+  /** Run a repo's setup command in a new worktree; `signal` stops it (the session was closed, DISP-186). */
+  async setup(repo: Repo, wt: string, cred?: GithubCred | null, timeoutMs = 20 * 60_000, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
     // runCheck kills the whole process group at the timeout: a child holding the output pipe must not hang the session (DISP-138)
-    const r = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.setup_command!, wt, timeoutMs));
+    const r = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.setup_command!, wt, timeoutMs, undefined, signal));
     return { ok: r.code === 0, output: r.out.slice(-3000) };
   }
 

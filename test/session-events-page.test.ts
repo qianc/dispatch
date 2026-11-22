@@ -87,6 +87,43 @@ describe('the session page loads the last events (DISP-162)', () => {
     expect(d.events.map((e) => e.seq)).toEqual([4997, 4998, 4999, 5000, 5001]);
     expect(d.earlier).toBe(false);
   });
+
+  it('a reconnect with more than a page of new events keeps only the last page (DISP-184)', async () => {
+    const { fetchSession, EVENT_PAGE } = await import('../web/src/pages/Session.tsx');
+    const qc = new QueryClient();
+    const first = Array.from({ length: EVENT_PAGE }, (_, i) => ev(i + 1));
+    qc.setQueryData(['session', 7], detail(first, { earlier: false }));
+    const urls: string[] = [];
+    const chunk = Array.from({ length: 4000 }, (_, i) => ev(EVENT_PAGE + i + 1));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(url); return json(detail(chunk, { earlier: false })); }));
+
+    const d = await qc.fetchQuery({ queryKey: ['session', 7], queryFn: () => fetchSession(qc, 7) });
+    expect(urls).toEqual([`/api/sessions/7?after=${EVENT_PAGE}`]);
+    expect(d.events).toHaveLength(EVENT_PAGE);
+    expect(d.events[0].seq).toBe(EVENT_PAGE + 4000 - EVENT_PAGE + 1);
+    expect(d.events.at(-1)!.seq).toBe(EVENT_PAGE + 4000);
+    expect(d.earlier).toBe(true); // Show earlier fetches before the first one kept: the chunk is contiguous
+  });
+
+  it('a refetch that was running when Show earlier resolved keeps the earlier events (DISP-185)', async () => {
+    const { fetchSession, fetchEarlier } = await import('../web/src/pages/Session.tsx');
+    const qc = new QueryClient();
+    qc.setQueryData(['session', 7], detail([ev(4999), ev(5000)], { earlier: true }));
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('after=')) { await held; return json(detail([ev(5000), ev(5001)], { earlier: false })); }
+      return json(detail([ev(4997), ev(4998)], { earlier: false }));
+    }));
+
+    const refetch = qc.fetchQuery({ queryKey: ['session', 7], queryFn: () => fetchSession(qc, 7) });
+    await fetchEarlier(qc, 7);
+    release();
+    const d = await refetch;
+    expect(d.events.map((e) => e.seq)).toEqual([4997, 4998, 4999, 5000, 5001]);
+    expect(d.earlier).toBe(false);
+    expect(qc.getQueryData<SessionDetail>(['session', 7])!.events.map((e) => e.seq)).toEqual([4997, 4998, 4999, 5000, 5001]);
+  });
 });
 
 describe('the live buffer keeps events only for cached sessions (DISP-162)', () => {

@@ -103,6 +103,8 @@ export class ServerLink {
   private runners = new Map<number, AgentRunner>();
   /** sessions whose workspace is still being prepared; messages for them wait here */
   private starting = new Map<number, string[]>();
+  /** Stops a starting session's setup command when it is closed (DISP-186). */
+  private startAborts = new Map<number, AbortController>();
   private kinds = new Map<number, StartSpec['kind']>();
   /** work sessions' checks before a turn is reported done (DISP-15); kept across runner restarts */
   private turnChecks = new Map<number, TurnCheck>();
@@ -387,6 +389,8 @@ export class ServerLink {
     }
     const queued: string[] = [];
     this.starting.set(id, queued);
+    const abort = new AbortController();
+    this.startAborts.set(id, abort);
     // a close while the workspace is prepared ends the start: nothing more runs for it (DISP-146)
     const stopped = new Error('closed while starting');
     const goOn = <T>(v: T) => {
@@ -423,7 +427,7 @@ export class ServerLink {
         // (DISP-44), then the setup command (venv, npm ci, ...)
         for (const { repo, wt } of created.filter((c) => c.repo.setup_command || this.workspaces.overlayDir(c.repo))) {
           if (repo.setup_command) this.send({ t: 'event', session_id: id, body: { kind: 'system', text: `Setting up ${repo.github_name}: ${repo.setup_command}` } });
-          const res = goOn(await this.workspaces.prepareTree(repo, wt, spec.github));
+          const res = goOn(await this.workspaces.prepareTree(repo, wt, spec.github, abort.signal));
           const files = res.copied.length ? ` Env files from this worker: ${res.copied.join(', ')}.` : '';
           this.send({ t: 'event', session_id: id, body: { kind: res.ok ? 'system' : 'error', text: res.ok ? `Setup of ${repo.github_name} done.${files}` : `Setup of ${repo.github_name} failed:\n${res.output}` } });
           if (!res.ok) text = `Note from Dispatch: setting up the worktree of ${repo.github_name} failed:\n\n${res.output}\n\nFix the environment first if your work needs it.\n\n${text}`;
@@ -465,6 +469,8 @@ export class ServerLink {
       if (holdsSlot) this.shared.slots.set(this.slotKey(id), false);
       console.error(`[${this.entry.name}] session ${id} failed to start`, e);
       this.send({ t: 'status', session_id: id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
+    } finally {
+      if (this.startAborts.get(id) === abort) this.startAborts.delete(id);
     }
   }
 
@@ -576,6 +582,9 @@ export class ServerLink {
         return this.runners.get(msg.session_id)?.interrupt();
       case 'close': {
         this.starting.delete(msg.session_id);
+        // a setup command still running (npm ci) goes too: the janitor may remove its worktree (DISP-186)
+        this.startAborts.get(msg.session_id)?.abort();
+        this.startAborts.delete(msg.session_id);
         this.turnChecks.get(msg.session_id)?.cancel();
         this.turnChecks.delete(msg.session_id);
         this.creds.delete(msg.session_id);
