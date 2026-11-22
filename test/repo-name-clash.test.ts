@@ -14,6 +14,9 @@ describe('two repos with one name in a project (DISP-142)', () => {
     const again = await s.call('POST', '/projects/NC/repos', { github_owner: 'acme', github_name: 'app' });
     expect(again.status).toBe(409);
     expect(JSON.stringify(again.data)).toContain('This project already has a repo named app.');
+    // case does not count: a Windows or macOS worker has one folder for both (DISP-220)
+    const upper = await s.call('POST', '/projects/NC/repos', { github_owner: 'acme', github_name: 'App' });
+    expect(upper.status).toBe(409);
     await s.app.close();
   });
 

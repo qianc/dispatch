@@ -29,6 +29,11 @@ describe('folders of a session with repos of the same name', () => {
     // the same GitHub repo in two projects: owner-name collides too
     expect(withFolders([repo(1, 'acme', 'web'), repo(2, 'acme', 'web')]).map((r) => r.dir)).toEqual(['web-1', 'web-2']);
   });
+
+  it('names differing only in case collide: one folder on a Windows or macOS worker (DISP-220)', () => {
+    expect(withFolders([repo(1, 'acme', 'decks'), repo(2, 'bolt', 'Decks')]).map((r) => r.dir)).toEqual(['acme-decks', 'bolt-Decks']);
+    expect(withFolders([repo(1, 'acme', 'decks'), repo(2, 'Acme', 'Decks')]).map((r) => r.dir)).toEqual(['decks-1', 'Decks-2']);
+  });
 });
 
 describe("an orchestrator's checkouts on the worker", () => {
