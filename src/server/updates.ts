@@ -290,6 +290,7 @@ export class Updates {
           ahead_shas: onBranch ? toBranch!.commits.map((c) => c.sha) : [],
           error: null,
         };
+        if (onBranch && toBranch!.ahead_by > toBranch!.commits.length) state.ahead_shas.push(...await this.workersPast(sha!, state.ahead_shas));
         if (this.settings().follow === 'commits') behindTarget = state.behind_by ?? 0;
       } catch (e) {
         state = { ...before, error: `Could not read ${this.repo ?? 'the repo'} on GitHub: ${(e as Error).message}` };
@@ -763,6 +764,20 @@ export class Updates {
       if (here) this.serverEnded(r, 'ok', null);
       else this.serverEnded(r, 'failed', [`The server runs ${short(this.version.sha)}, not ${short(r.to_sha)}, and no result of the update came.`, this.restoreNote].filter(Boolean).join('\n\n'));
     });
+  }
+
+  /**
+   * Far behind, one look reads only some of the commits past the server's (DISP-220): a worker on
+   * another one is asked about on its own, so it is not called behind.
+   */
+  private async workersPast(sha: string, known: string[]): Promise<string[]> {
+    const shas = new Set(this.d.workers.list().map((w) => (this.d.hub.facts(w.id) ?? w.facts)?.version?.sha).filter((v): v is string => !!v));
+    const past: string[] = [];
+    for (const v of shas) {
+      if (sameVersion(v, sha) || known.some((k) => sameVersion(v, k))) continue;
+      if ((await this.source!.compare(sha, v)).status === 'ahead') past.push(v);
+    }
+    return past;
   }
 
   private workerList(): UpdateWorker[] {

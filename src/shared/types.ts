@@ -1105,7 +1105,7 @@ export interface UpdateState {
   on_branch: boolean;
   /** the first lines of those commits, newest first (at most 20) */
   commits: { sha: string; subject: string }[];
-  /** the commits past the server's on the release branch, as far as one look at GitHub reads them (DISP-194): a worker on one of them is newer than the server */
+  /** the commits past the server's on the release branch, as far as one look at GitHub reads them, and the workers' commits past it when far behind (DISP-194, DISP-220): a worker on one of them is newer than the server */
   ahead_shas: string[];
   error: string | null;
 }
