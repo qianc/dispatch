@@ -77,9 +77,9 @@ export async function fetchEarlier(qc: QueryClient, id: number, beforeAdd?: () =
   const page = await api.get<SessionDetail>(`/sessions/${id}?before=${first}&limit=${EVENT_PAGE}`);
   beforeAdd?.();
   qc.setQueryData<SessionDetail>(['session', id], (d) => {
-    if (!d) return d;
-    const start = d.events[0]?.seq ?? Infinity;
-    return { ...d, events: [...page.events.filter((e) => e.seq < start), ...d.events], earlier: page.earlier };
+    // the cache was replaced meanwhile (a DISP-184 refetch): the page no longer joins it, drop it (DISP-216)
+    if (!d || d.events[0]?.seq !== first) return d;
+    return { ...d, events: [...page.events.filter((e) => e.seq < first), ...d.events], earlier: page.earlier };
   });
 }
 
