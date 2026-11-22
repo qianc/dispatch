@@ -421,9 +421,10 @@ export class Store {
     return this.db.all(`${ITEM_SELECT} WHERE i.id IN (${ids.map(() => '?').join(',')}) ORDER BY i.number`, ...ids).map(toItem);
   }
   /** Every write path lands here, so the scales are checked here (DISP-158). */
-  private checkScales(projectId: number, it: { importance: number; effort: number | null }) {
-    if (!Number.isInteger(it.importance) || it.importance < 1 || it.importance > 4) throw new HttpError(400, `Importance must be 1 to 4, not ${it.importance}`);
-    if (it.effort === null) return;
+  /** An undefined value is not checked. */
+  private checkScales(projectId: number, it: { importance?: number; effort?: number | null }) {
+    if (it.importance !== undefined && (!Number.isInteger(it.importance) || it.importance < 1 || it.importance > 4)) throw new HttpError(400, `Importance must be 1 to 4, not ${it.importance}`);
+    if (it.effort === undefined || it.effort === null) return;
     const scale = this.project(projectId)!.effort_scale;
     if (!Number.isInteger(it.effort) || it.effort < 0 || it.effort >= scale.length) throw new HttpError(400, `Effort ${it.effort} is outside the project scale (0 to ${scale.length - 1}: ${scale.join(', ')})`);
   }
@@ -449,7 +450,9 @@ export class Store {
   updateItem(id: number, patch: Partial<Omit<Item, 'id' | 'project_id' | 'number' | 'key' | 'created_at' | 'updated_at' | 'done_at'>>): Item {
     const old = this.item(id)!;
     const n = { ...old, ...patch };
-    if ('importance' in patch || 'effort' in patch) this.checkScales(old.project_id, n);
+    // only a value that changes is checked: an item kept from a longer scale still saves (DISP-183)
+    const changed = <K extends 'importance' | 'effort'>(k: K) => (patch[k] !== undefined && patch[k] !== old[k] ? n[k] : undefined);
+    this.checkScales(old.project_id, { importance: changed('importance'), effort: changed('effort') });
     // stays when an item that is done is edited; a reopened item is done again on its new date
     const doneAt = n.status !== 'done' ? null : old.status === 'done' ? old.done_at : now();
     this.db.run(
@@ -839,6 +842,10 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
+  /** All that are not done or stopped, however old: their timers and offers still run (DISP-182). */
+  liveOrchestrations(): Orchestration[] {
+    return this.db.all(`${ORCH_SELECT} WHERE o.phase NOT IN ('done', 'stopped') ORDER BY o.session_id DESC`).map((r) => this.toOrchestration(r));
+  }
   updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'plan_notified_version' | 'finish_notified' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
@@ -910,6 +917,13 @@ export class Store {
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = (SELECT orchestration_id FROM orchestration_steps WHERE id = ?)', now(), id);
     }
     return this.step(id)!;
+  }
+  /** The `seen` of a step's batch that its no-pull-request wake went out for (DISP-180). */
+  noPrWoken(stepId: number): string | null {
+    return (this.db.get<{ v: string | null }>('SELECT no_pr_woken AS v FROM orchestration_steps WHERE id = ?', stepId)?.v as string | null) ?? null;
+  }
+  setNoPrWoken(stepId: number, seen: string) {
+    this.db.run('UPDATE orchestration_steps SET no_pr_woken = ? WHERE id = ?', seen, stepId);
   }
   /** A message of the orchestrator for a step's batch that works: it waits for the batch's turn end (DISP-105). */
   queueOrchMessage(stepId: number, sessionId: number, text: string) {
@@ -1077,6 +1091,10 @@ export class Store {
   /** How many questions of a step's batches the orchestrator answered (an overruled answer counts too). */
   orchestratorAnswers(stepId: number): number {
     return Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pending_inputs WHERE step_id = ? AND answered_by IN ('orchestrator', 'overruled')", stepId)?.n ?? 0);
+  }
+  /** Marks an approved cross-project request used. False: it was used before (DISP-179). */
+  useInput(id: number): boolean {
+    return this.db.run('UPDATE pending_inputs SET used_at = ? WHERE id = ? AND used_at IS NULL', now(), id).changes === 1;
   }
   setInputAnsweredBy(id: number, by: NonNullable<PendingInput['answered_by']>) {
     this.db.run('UPDATE pending_inputs SET answered_by = ? WHERE id = ?', by, id);

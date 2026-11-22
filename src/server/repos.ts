@@ -140,8 +140,9 @@ export function ownerName(v: string): { owner: string; name: string } {
 }
 
 /** A session's worktree folder is the repo's name, so a project's repos need distinct names (DISP-142). */
-export function assertNameFree(store: Store, projectId: number, name: string) {
-  if (store.repos(projectId).some((r) => r.github_name === name)) throw new HttpError(409, `This project already has a repo named ${name}.`);
+/** `exceptId`: the repo being renamed. */
+export function assertNameFree(store: Store, projectId: number, name: string, exceptId?: number) {
+  if (store.repos(projectId).some((r) => r.github_name === name && r.id !== exceptId)) throw new HttpError(409, `This project already has a repo named ${name}.`);
 }
 
 /**

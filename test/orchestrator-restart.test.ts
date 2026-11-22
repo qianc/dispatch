@@ -115,6 +115,31 @@ describe('orchestrator: pushes and wakes survive a restart (DISP-165)', () => {
     expect(told(p.id).filter((m) => m.includes('ended its turn with no pull request'))).toHaveLength(1);
   });
 
+  it('a turn that ended with no pull request, its offer cleared before the restart: no second wake or push (DISP-180)', async () => {
+    const p = await running();
+    t.s.ctx.orchestrator.settleMs = 0;
+    turn(p.child);
+    turn(p.id); // it did nothing: the offer is cleared and the owner told
+    expect(t.store.step(p.first.id)).toMatchObject({ offer: null });
+    expect(count('Rework auth: step 1 waits for you')).toBe(1);
+    let armed = 0;
+    t.restart((o) => { o.later = () => void armed++; });
+    expect(armed).toBe(0);
+    turn(p.id);
+    expect(count('Rework auth: step 1 waits for you')).toBe(1);
+    expect(told(p.id).filter((m) => m.includes('ended its turn with no pull request'))).toHaveLength(1);
+  });
+
+  it('a turn that ended with no pull request, owner told of everything (no offer): no second wake after a restart (DISP-180)', async () => {
+    const p = await running({ notify_owner: 'all' });
+    t.s.ctx.orchestrator.settleMs = 0;
+    turn(p.child);
+    expect(told(p.id).filter((m) => m.includes('ended its turn with no pull request'))).toHaveLength(1);
+    let armed = 0;
+    t.restart((o) => { o.later = () => void armed++; });
+    expect(armed).toBe(0);
+  });
+
   it('a turn that ended with no pull request just before the restart: its wake comes after resume', async () => {
     const p = await running();
     t.s.ctx.orchestrator.later = () => {}; // the server stops before the timer runs

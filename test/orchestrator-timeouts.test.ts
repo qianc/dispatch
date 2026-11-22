@@ -98,6 +98,20 @@ describe('orchestrator: timeouts of deploys and offers (DISP-166)', () => {
     });
   });
 
+  it('a live orchestration with 100 newer ones still has its deploy timed out (DISP-182)', async () => {
+    const p = await deploying();
+    const aa = t.store.projectByKey('AA')!;
+    for (let i = 0; i < 100; i++) {
+      const own = t.store.createSession({ started_by: null, project_id: aa.id, kind: 'orchestrator', title: `Old ${i}`, status: 'completed', force_plan: false, branch: null, initial_prompt: '', source_id: null, item_ids: [], worker_id: t.store.session(p.id)!.worker_id! });
+      t.store.createOrchestration({ session_id: own.id, goal: 'g', project_ids: [aa.id], max_children: 1, options: t.store.orchestration(p.id)!.options });
+      t.store.updateOrchestration(own.id, { phase: 'done' });
+    }
+    expect(t.store.orchestrations().map((o) => o.session_id)).not.toContain(p.id);
+    minutes(30);
+    t.s.ctx.orchestrator.tick();
+    expect(t.store.step(p.first.id)).toMatchObject({ state: 'failed', note: 'no deploy result in 30 min' });
+  });
+
   describe('offers', () => {
     /** step 1's merge is stopped: the orchestrator was offered to fix it */
     const stoppedMerge = async () => {
