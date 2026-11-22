@@ -145,7 +145,7 @@ describe('Settings → Updates (DISP-112)', () => {
   });
 
   it('is on the Settings page for the install owner only', () => {
-    const me = (is_owner: boolean): Me => ({ authed: true, user: is_owner ? 'ana' : 'ben', is_owner, install_owner: 'ana', secret_key_file: null, auth_mode: 'proxy', auth_disabled: false, password_login: false, vapid_public_key: 'k' });
+    const me = (is_owner: boolean): Me => ({ authed: true, user: is_owner ? 'ana' : 'ben', is_owner, install_owner: 'ana', secret_key_file: null, auth_mode: 'proxy', auth_disabled: false, password_login: false, vapid_public_key: 'k', time_zone: 'UTC' });
     const settings = (is_owner: boolean) => {
       const qc = new QueryClient();
       qc.setQueryData(['me'], me(is_owner));
