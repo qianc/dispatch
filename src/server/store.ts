@@ -1061,9 +1061,14 @@ export class Store {
     };
   }
   /** Give a question to an orchestration (the owner is not told meanwhile), or back to the owner (null). */
-  setInputDelegated(id: number, orchestrationId: number | null) {
-    this.db.run('UPDATE pending_inputs SET delegated_to = ? WHERE id = ?', orchestrationId, id);
+  /** `stepId`: the step whose batch asked, kept when the question is handed on (null). */
+  setInputDelegated(id: number, orchestrationId: number | null, stepId?: number) {
+    this.db.run('UPDATE pending_inputs SET delegated_to = ?, step_id = COALESCE(?, step_id) WHERE id = ?', orchestrationId, stepId ?? null, id);
     return this.input(id)!;
+  }
+  /** How many questions of a step's batches the orchestrator answered (an overruled answer counts too). */
+  orchestratorAnswers(stepId: number): number {
+    return Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pending_inputs WHERE step_id = ? AND answered_by IN ('orchestrator', 'overruled')", stepId)?.n ?? 0);
   }
   setInputAnsweredBy(id: number, by: NonNullable<PendingInput['answered_by']>) {
     this.db.run('UPDATE pending_inputs SET answered_by = ? WHERE id = ?', by, id);

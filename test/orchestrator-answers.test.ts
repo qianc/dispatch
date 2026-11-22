@@ -139,6 +139,34 @@ describe('orchestrator: its batches ask', () => {
       expect(questionPushes()).toHaveLength(1);
     });
 
+    it(`a step's batch that keeps asking: from the ${Orchestrator.MAX_ANSWERS + 1}th question on it is the owner's`, async () => {
+      const p = await running();
+      workerUp();
+      // its answers count over all the step's sessions: the first session asks some, the retry the rest
+      for (let i = 0; i < Orchestrator.MAX_ANSWERS; i++) {
+        if (i === 4) {
+          t.status(p.child, 'failed');
+          await t.s.call('POST', `/orchestration-steps/${p.first.id}/retry`);
+          turn(p.id);
+          p.child = await t.startStep(p.id, p.first.id);
+          t.status(p.child, 'running');
+          turn(p.id);
+        }
+        const input = ask(p.child);
+        expect(told(p.id).at(-1)).toContain(`You answered ${i} of this step's questions so far. You may answer ${Orchestrator.MAX_ANSWERS} (MAX_ANSWERS)`);
+        expect(await t.rpc(p.id, 'answer_session', { input_id: input.id, answer: 'Small fix' })).toMatch(/Answered/);
+        turn(p.id);
+      }
+      expect(questionPushes()).toEqual([]);
+      const last = ask(p.child);
+      expect(t.store.input(last.id)!.delegated_to).toBeNull();
+      expect(questionPushes()).toEqual([expect.objectContaining({ body: 'Which approach should I take?', url: `/s/${p.child}` })]);
+      expect(await inboxInputs()).toEqual([last.id]);
+      expect(t.events(p.child)).toContain(`system: The orchestrator answered ${Orchestrator.MAX_ANSWERS} questions of this step: this one is yours.`);
+      expect(told(p.id).at(-1)).toContain(`asked again (input_id ${last.id}). You answered ${Orchestrator.MAX_ANSWERS} questions of this step, which is the most you may (MAX_ANSWERS = ${Orchestrator.MAX_ANSWERS}): it goes to the owner`);
+      await expect(t.rpc(p.id, 'answer_session', { input_id: last.id, answer: 'Small fix' })).rejects.toThrow(`Question ${last.id} is not yours to answer.`);
+    });
+
     it('the owner answers a delegated question himself: the delegation ends', async () => {
       const p = await running();
       workerUp();

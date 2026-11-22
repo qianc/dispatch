@@ -1221,19 +1221,31 @@ export class Orchestrator {
     const step = this.store.stepOfChild(s.id);
     if (!o || !own || !step || o.phase !== 'run' || !o.answer_children || FINAL_STATUSES.includes(own.status)) return false;
     const name = `Step ${step.position} "${step.title}" (${step.project_key}, session #${s.id})`;
+    // a batch that keeps asking cannot loop with its orchestrator: from the cap on, its questions are the owner's
+    const answered = this.store.orchestratorAnswers(step.id);
+    if (answered >= Orchestrator.MAX_ANSWERS) {
+      this.sessions.systemNote(s.id, `The orchestrator answered ${Orchestrator.MAX_ANSWERS} questions of this step: this one is yours.`);
+      this.wake(o.session_id, `${name} asked again (input_id ${input.id}). You answered ${Orchestrator.MAX_ANSWERS} questions of this step, which is the most you may (MAX_ANSWERS = ${Orchestrator.MAX_ANSWERS}): it goes to the owner, as will the step's next questions.`);
+      return false;
+    }
+    const count = `    You answered ${answered} of this step's questions so far. You may answer ${Orchestrator.MAX_ANSWERS} (MAX_ANSWERS); after that they go to the owner.`;
     const p = input.payload;
     // the batch's own words are fenced, line by line: none of them can pass as an event or as the plan's status
     const text = p.kind === 'plan_approval'
-      ? [`${name} wants its plan approved (input_id ${input.id}):`, ...fenced(p.plan.slice(0, 3000)), '    Approve it with answer_session (approve: true) if it does what the step asks, or send it back (approve: false, feedback). If only the owner can judge it, hand it to them with hand_to_owner.']
+      ? [`${name} wants its plan approved (input_id ${input.id}):`, ...fenced(p.plan.slice(0, 3000)), '    Approve it with answer_session (approve: true) if it does what the step asks, or send it back (approve: false, feedback). If only the owner can judge it, hand it to them with hand_to_owner.', count]
       : [
         `${name} asks you (input_id ${input.id}):`,
         ...p.questions.flatMap((q) => fenced(`Q: ${q.question}${q.options?.length ? ` Options: ${q.options.map((op) => `${op.label}${op.description ? ` (${op.description})` : ''}`).join(' | ')}` : ''}`)),
         '    Answer it with answer_session if the plan, the items or what the owner told you settle it. If not, hand it to the owner with hand_to_owner.',
+        count,
       ];
-    this.store.setInputDelegated(input.id, o.session_id);
+    this.store.setInputDelegated(input.id, o.session_id, step.id);
     this.wake(o.session_id, text.join('\n'));
     return true;
   }
+
+  /** How many questions (and plan approvals) of one step's batches the orchestrator may answer; then they are the owner's. */
+  static readonly MAX_ANSWERS = 10;
 
   /** An open question that this orchestration has. */
   private ownInput(o: Orchestration, id: unknown) {
