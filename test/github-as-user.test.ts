@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Octokit } from '@octokit/rest';
 import WebSocket from 'ws';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { GitHub } from '../src/server/github.ts';
 import type { StartSpec } from '../src/shared/protocol.ts';
 import { fakeGithub } from './github.ts';
@@ -155,6 +156,32 @@ describe('acting on GitHub as the session starter', () => {
     expect(gh.calls.slice(n).map((c) => c.token)).toEqual(['shared']);
     await expect(s.ctx.github.deleteRemoteBranch(repo, job.branch, s.ctx.store.session(job.id)!)).rejects.toThrow(/bob has not connected GitHub/);
     expect(gh.by('shared').filter((m) => WRITES.includes(m))).toEqual([]);
+  });
+
+  it('auto-merge does not merge as a starter taken off AUTH_USERS (DISP-200)', async () => {
+    await setup();
+    const w = await bobsWorker();
+    const gh = github(s);
+    await connectBob();
+    const p = s.ctx.store.projectByKey('GH')!;
+    // bob's batch ended its turn with auto-merge on; the PR poller finds its PR ready to merge
+    const job = s.ctx.store.createSession({
+      project_id: p.id, kind: 'work', title: 'bob', status: 'idle', force_plan: false, branch: 'b', initial_prompt: 'go',
+      source_id: null, item_ids: [], worker_id: w.id, started_by: 'bob', options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'github' },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // the owner takes bob off the list: the poller reads with the shared account and merges nothing as bob
+    s.ctx.cfg.authUsers = ['alice'];
+    await s.ctx.github.syncSession(s.ctx.store.session(job.id)!);
+    expect(gh.by(BOB_TOKEN)).toEqual([]);
+    expect(gh.calls.map((c) => c.method)).not.toContain('pulls.merge');
+    expect(gh.by('shared')).toContain('pulls.list');
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/bob may no longer use this install/);
+    // bob back on the list: the same sync merges, as him
+    s.ctx.cfg.authUsers = ['alice', 'bob'];
+    await s.ctx.github.syncSession(s.ctx.store.session(job.id)!);
+    expect(gh.by(BOB_TOKEN)).toContain('pulls.merge');
+    warn.mockRestore();
   });
 
   it('GitHub turning the token away marks the connection, naming the account', async () => {
