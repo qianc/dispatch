@@ -23,7 +23,6 @@ import { ItemDetail } from './ItemDetail.tsx';
 import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'prs' | 'sources' | 'settings';
-const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 
 export function Project() {
   const { key = '' } = useParams();
@@ -286,15 +285,14 @@ function ItemList({ items, type, project, onToggle, selectMode, setSelectMode, w
   const active = f.tags.length + f.modules.length + f.importance.length;
   const sort = itemSortOption(f.sort);
   const shown = sortItems(items.filter((i) => matches(i, f)), sort.value);
-  const open = shown.filter((i) => OPEN.includes(i.status));
   const held = shown.filter((i) => i.status === 'hold');
   const closed = sortItems((closedItems ?? []).filter((i) => i.type === type && matches(i, f)), sort.value);
   const groups = [
-    { title: 'In review', items: open.filter((i) => i.status === 'in_review') },
-    { title: 'In progress', items: open.filter((i) => i.status === 'in_progress') },
-    { title: 'Todo', items: open.filter((i) => i.status === 'todo') },
-    { title: 'Triage', items: open.filter((i) => i.status === 'triage') },
-    { title: 'Backlog', items: open.filter((i) => i.status === 'backlog') },
+    { title: 'In review', items: shown.filter((i) => i.status === 'in_review') },
+    { title: 'In progress', items: shown.filter((i) => i.status === 'in_progress') },
+    { title: 'Todo', items: shown.filter((i) => i.status === 'todo') },
+    { title: 'Triage', items: shown.filter((i) => i.status === 'triage') },
+    { title: 'Backlog', items: shown.filter((i) => i.status === 'backlog') },
   ].filter((g) => g.items.length);
   const row = (it: Item, markable = true) => (
     <ItemRow
@@ -338,7 +336,7 @@ function ItemList({ items, type, project, onToggle, selectMode, setSelectMode, w
           <button className="text-accent" onClick={() => setF(NO_FILTER)}>Clear</button>
         </div>
       )}
-      {!open.length && !held.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
+      {!groups.length && !held.length && <Empty>{items.length ? 'Nothing matches.' : 'Nothing open. Tap + to add one.'}</Empty>}
       {groups.map((g) => (
         <Section key={g.title} title={`${g.title} · ${g.items.length}`}>
           <Card>{g.items.map((it) => row(it))}</Card>

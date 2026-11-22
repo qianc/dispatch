@@ -7,7 +7,7 @@
 // Device sessions last DEVICE_DAYS, are listed in Settings and can be revoked there.
 import { randomBytes, randomInt } from 'node:crypto';
 import { sha256 } from './access.ts';
-import type { Db } from './db.ts';
+import { now, type Db } from './db.ts';
 
 export const DEVICE_COOKIE = 'dispatch_device';
 export const DEVICE_DAYS = 90;
@@ -30,7 +30,6 @@ export interface Device {
 
 interface Pending { code: string; name: string; expires: number; secret: string | null; ip: string }
 
-const now = () => new Date().toISOString();
 const normalize = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /** A short name for the device from its user agent, e.g. "iPhone". */

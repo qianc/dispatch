@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/server/app.ts';
 import { loadConfig } from '../src/server/config.ts';
-import { safePath } from '../src/server/identity.ts';
+import { safePath } from '../src/shared/safePath.ts';
 import type { Session } from '../src/shared/types.ts';
 import { fakeGithub } from './github.ts';
 import { as, startMultiUser, waitFor } from './helpers.ts';

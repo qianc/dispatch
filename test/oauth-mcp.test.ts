@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { allowedRedirect } from '../src/server/oauth.ts';
+import { allowedRedirect, OAuth } from '../src/server/oauth.ts';
 import { startServer } from './helpers.ts';
 
 const REDIRECT = 'http://localhost:33418/callback';
@@ -274,6 +274,31 @@ describe('OAuth for MCP clients', () => {
       expect((await s.app.inject({ method: 'GET', url: '/api/oauth/grants', headers: { cookie } })).json()).toEqual([expect.objectContaining({ client_id: live })]);
       expect((await s.app.inject({ method: 'POST', url: '/register', payload: { client_name: 'again', redirect_uris: [REDIRECT] } })).statusCode).toBe(201);
     } finally {
+      await s.app.close();
+    }
+  });
+
+  it('sweeps approvals and codes that were never used once they expire (DISP-193)', async () => {
+    const sweep = vi.spyOn(OAuth.prototype, 'sweep');
+    const { s, cookie } = await setup();
+    try {
+      // connect's code is never exchanged here; three approvals are never decided
+      await connect(s, cookie);
+      const reg = (await s.app.inject({ method: 'POST', url: '/register', payload: { client_name: 'Loop', redirect_uris: [REDIRECT] } })).json();
+      const q = new URLSearchParams({ response_type: 'code', client_id: reg.client_id, redirect_uri: REDIRECT, code_challenge: 'c'.repeat(43), code_challenge_method: 'S256' });
+      const ask = () => s.app.inject({ method: 'GET', url: `/authorize?${q}`, headers: { cookie } });
+      for (let i = 0; i < 3; i++) expect((await ask()).statusCode).toBe(200);
+      const oauth = sweep.mock.contexts[0] as unknown as { pending: Map<string, unknown>; codes: Map<string, unknown> };
+      expect(oauth.pending.size).toBe(3);
+      expect(oauth.codes.size).toBe(1);
+      // 11 minutes later, the next approval finds only itself
+      const later = Date.now() + 11 * 60_000;
+      vi.spyOn(Date, 'now').mockReturnValue(later);
+      expect((await ask()).statusCode).toBe(200);
+      expect(oauth.pending.size).toBe(1);
+      expect(oauth.codes.size).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
       await s.app.close();
     }
   });

@@ -363,6 +363,8 @@ export class ServerLink {
       live.close();
       if (slot) this.shared.slots.set(this.slotKey(id), true);
       await this.dropCheckouts(id, this.launched.get(id) ?? [], spec.repos);
+      // closed during the tidy: close found no runner to stop, so nothing may start again (DISP-193)
+      if (!this.scopes.has(id)) return;
       // not a new start: with all slots taken it would be refused, and the owner's text lost (DISP-175)
       return this.launch(spec, text, false);
     }

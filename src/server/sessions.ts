@@ -43,6 +43,7 @@ import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
 import type { Workers } from './workers.ts';
 import type { Users } from './users.ts';
+import type { Config } from './config.ts';
 import { getModelDefaults, withModelDefaults } from './modelDefaults.ts';
 import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 
@@ -189,6 +190,8 @@ export class Sessions {
   private notifier: Notifier;
   private workers: Workers;
   private users: Users;
+  /** Who may use this install (DISP-195): a session whose starter is off a non-empty list does not run. */
+  private cfg: Pick<Config, 'authUsers'>;
   /** Where tool-result images are stored (set by app.ts). */
   attachments: Attachments | null = null;
   /** Tools for assistant chats (set by app.ts; see assistant.ts). */
@@ -209,7 +212,8 @@ export class Sessions {
   /** Secrets a session's worker messages must not carry: its starter's token, the env accounts' (set by app.ts; DISP-63). */
   secretsOf: ((s: Session) => string[]) | null = null;
 
-  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers, users: Users) {
+  constructor(store: Store, bus: Bus, hub: WorkerHub, notifier: Notifier, workers: Workers, users: Users, cfg: Pick<Config, 'authUsers'> = { authUsers: [] }) {
+    this.cfg = cfg;
     this.workers = workers;
     this.users = users;
     this.store = store;
@@ -316,6 +320,8 @@ export class Sessions {
    * the user (known only while it is connected: an offline one is checked again at dispatch).
    */
   private identityFor(startedBy: string | null, project: Project | null | undefined, workerId: number | null | undefined): GithubIdentity | IdentityRefusal | null {
+    const removed = this.removedStarter(startedBy);
+    if (removed) return removed;
     if (!project || !this.identity || !needsGithub(this.store, project)) return null;
     const id = this.identity(startedBy, project, workerId ?? undefined);
     if (isRefusal(id) || id.source !== 'user' || workerId == null) return id;
@@ -325,6 +331,16 @@ export class Sessions {
       return { refused: true, code: 'worker_too_old', user: startedBy, message: `Worker ${name} is too old to act as you on GitHub; update it.`, connect_url: '/settings#workers' };
     }
     return id;
+  }
+
+  /**
+   * A starter taken off AUTH_USERS (DISP-195): their sessions neither start nor resume, with or
+   * without GitHub, so a queued or idle one does not run on as them later.
+   */
+  private removedStarter(startedBy: string | null): IdentityRefusal | null {
+    const { authUsers } = this.cfg;
+    if (!startedBy || !authUsers.length || authUsers.includes(startedBy)) return null;
+    return { refused: true, code: 'user_removed', user: startedBy, message: `${startedBy} may no longer use this install (not in AUTH_USERS), so their sessions do not run.`, connect_url: '/settings' };
   }
 
   /**
@@ -342,7 +358,7 @@ export class Sessions {
     // an orchestrator: as for its first project. Its checkouts each use their own project's GitHub
     // account (Repo.github_account, DISP-167); a user's own credential is used for all of them
     if (s.kind === 'orchestrator') return this.identityFor(s.started_by, this.orchestrationOf?.(s)?.first, s.worker_id);
-    if (s.kind === 'assistant' || !s.project_id) return null;
+    if (s.kind === 'assistant' || !s.project_id) return this.removedStarter(s.started_by);
     return this.identityFor(s.started_by, this.store.project(s.project_id), s.worker_id);
   }
 
@@ -990,7 +1006,7 @@ export class Sessions {
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
-    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -1018,7 +1034,7 @@ export class Sessions {
         continue;
       }
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
-        this.hub.send(workerId, { t: 'close', session_id: id, repos: s ? this.reposOf(s) : [] });
+        this.hub.send(workerId, { t: 'close', session_id: id });
       }
     }
     // still running over there: no longer waiting for it
@@ -1061,7 +1077,7 @@ export class Sessions {
     if (msg.t === 'session_check') return this.onSessionCheck(s, msg); // a stopped check's last word ends its run (DISP-149)
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
-      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
+      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id });
       return;
     }
     switch (msg.t) {
@@ -1673,6 +1689,14 @@ export class Sessions {
       const wait = (reason: string) => {
         if (next.waiting_reason !== reason) this.emitSession(this.store.updateSession(next.id, { waiting_reason: reason }));
       };
+      // its starter was taken off AUTH_USERS (DISP-195): it may never start, so it fails with the reason instead of waiting
+      const removed = this.removedStarter(next.started_by);
+      if (removed) {
+        this.addEvent(next.id, { kind: 'error', text: removed.message });
+        this.setStatus(next.id, 'failed', { ended_at: new Date().toISOString(), waiting_reason: null, paused: false });
+        this.notify(next, `${next.project_key ?? 'Dispatch'}: session failed`, removed.message, `failed-${next.id}`, 'routine');
+        continue;
+      }
       if (next.paused) {
         wait('Paused');
         continue;
@@ -1956,7 +1980,7 @@ export class Sessions {
       worker_id: workerId, moved_from: s.id, started_by: s.started_by,
     });
     for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);
-    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: s.id });
     for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
     this.addEvent(s.id, { kind: 'system', text: `Moved to worker ${target.name}: continued in session #${next.id}.` });
     this.setStatus(s.id, 'stopped', { ended_at: new Date().toISOString(), waiting_reason: null });

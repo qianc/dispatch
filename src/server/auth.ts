@@ -6,7 +6,7 @@ import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { sha256 } from './access.ts';
 import type { Config } from './config.ts';
-import type { Db } from './db.ts';
+import { now, type Db } from './db.ts';
 
 export const COOKIE = 'dispatch_session';
 const MAX_AGE_S = 60 * 60 * 24 * 90;
@@ -29,8 +29,6 @@ function verifyHash(password: string, stored: string): Promise<boolean> {
     scrypt(password, Buffer.from(salt ?? '', 'base64'), KEY_LEN, (err, key) => (err ? reject(err) : resolve(eq(key, Buffer.from(hash ?? '', 'base64')))));
   });
 }
-
-const now = () => new Date().toISOString();
 
 export interface WebSession { id: number; name: string; created_at: string; expires_at: string; last_used_at: string | null }
 

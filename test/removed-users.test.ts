@@ -95,3 +95,57 @@ describe('a user removed from AUTH_USERS', () => {
     }
   });
 });
+
+describe('sessions started by a user later removed from AUTH_USERS (DISP-195)', () => {
+  const setup = async () => {
+    const s = await startMultiUser();
+    const p = s.ctx.store.createProject({ key: 'RS', name: 'Removed sessions', description: '', default_force_plan: false, importance_scale: ['a', 'b', 'c', 'd'], effort_scale: ['S'] });
+    const { worker } = s.ctx.workers.create('bobs-laptop', '', 'bob');
+    const session = (status: 'queued' | 'idle') => s.ctx.store.createSession({
+      project_id: p.id, kind: 'work', title: `bob ${status}`, status, force_plan: false, branch: null, initial_prompt: 'go',
+      source_id: null, item_ids: [], worker_id: worker.id, started_by: 'bob',
+    });
+    return { s, session };
+  };
+
+  it('a queued one fails with the reason instead of starting', async () => {
+    const { s, session } = await setup();
+    try {
+      const q = session('queued');
+      s.ctx.cfg.authUsers = ['alice'];
+      s.ctx.sessions.dispatch();
+      const after = s.ctx.store.session(q.id)!;
+      expect(after.status).toBe('failed');
+      const errors = s.ctx.store.events(q.id).filter((e) => e.body.kind === 'error');
+      expect(errors.map((e) => (e.body as { text: string }).text).join()).toMatch(/bob may no longer use this install/);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('an idle one does not resume on a new message', async () => {
+    const { s, session } = await setup();
+    try {
+      const idle = session('idle');
+      s.ctx.cfg.authUsers = ['alice'];
+      expect(() => s.ctx.sessions.send(idle.id, 'carry on')).toThrow(/bob may no longer use this install/);
+      expect(s.ctx.store.session(idle.id)!.status).toBe('idle');
+      expect(() => s.ctx.sessions.sendFromDispatch(idle.id, 'carry on')).toThrow(/no longer use this install/);
+      expect(s.ctx.store.session(idle.id)!.status).toBe('idle');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('runs as before while the starter is still on the list', async () => {
+    const { s, session } = await setup();
+    try {
+      const q = session('queued');
+      s.ctx.sessions.dispatch();
+      expect(s.ctx.store.session(q.id)!.status).toBe('queued');
+      expect(s.ctx.store.session(q.id)!.waiting_reason).toMatch(/Waiting for worker/);
+    } finally {
+      await s.app.close();
+    }
+  });
+});

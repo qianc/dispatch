@@ -1,12 +1,11 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Db } from '../src/server/db.ts';
 import { forUser } from '../src/server/routes/stream.ts';
 import type { LiveEvent } from '../src/shared/types.ts';
-import { as, startMultiUser } from './helpers.ts';
+import { as, dbBeforeMigration, startMultiUser } from './helpers.ts';
 
 const sub = (n: string) => ({ endpoint: `https://push.example/${n}`, keys: { p256dh: 'p', auth: 'a' } });
 const notice = { title: 'T', body: 'B', url: '/s/1' };
@@ -141,16 +140,8 @@ describe('migration 031: existing subscriptions are the install owner\'s', () =>
 
   /** A database as Dispatch left it before DISP-65: migrations up to 030, the owner on record, a subscription with no user. */
   function before031() {
-    const dir = mkdtempSync(join(tmpdir(), 'dispatch-push-'));
-    dirs.push(dir);
-    const file = join(dir, 'd.db');
-    const raw = new DatabaseSync(file);
-    raw.exec('CREATE TABLE _migrations (name TEXT PRIMARY KEY)');
-    const migrations = join(import.meta.dirname, '../src/server/migrations');
-    for (const name of readdirSync(migrations).filter((f) => f.endsWith('.sql') && f < '031').sort()) {
-      raw.exec(readFileSync(join(migrations, name), 'utf8'));
-      raw.prepare('INSERT INTO _migrations (name) VALUES (?)').run(name);
-    }
+    const { file, raw } = dbBeforeMigration('031', 'dispatch-push-');
+    dirs.push(dirname(file));
     raw.prepare("INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES ('https://push.example/old', 'p', 'a')").run();
     raw.close();
     return file;

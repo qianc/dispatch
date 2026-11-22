@@ -77,7 +77,7 @@ export type ServerToWorker =
   | { t: 'send'; session_id: number; text: string; spec: StartSpec }
   | { t: 'answer'; session_id: number; local_id: string; answer: InputAnswer }
   | { t: 'interrupt'; session_id: number }
-  | { t: 'close'; session_id: number; repos: Repo[] }
+  | { t: 'close'; session_id: number }
   | { t: 'rpc_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
   | { t: 'cmd'; req_id: string; cmd: WorkerCommand }
   /**

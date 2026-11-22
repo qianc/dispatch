@@ -11,7 +11,7 @@ export type GithubIdentity =
   | ({ source: 'user'; user: string } & GithubCredential)
   | { source: 'owner-env' | 'shared'; account: string | null };
 
-export type RefusalCode = 'github_not_connected' | 'github_token_unreadable' | 'github_shared_missing' | 'worker_too_old';
+export type RefusalCode = 'github_not_connected' | 'github_token_unreadable' | 'github_shared_missing' | 'worker_too_old' | 'user_removed';
 
 /** No identity may act: the session must not start (403 with `code` and `connect_url`). */
 export interface IdentityRefusal {
@@ -40,24 +40,6 @@ export const isRefusal = (r: GithubIdentity | IdentityRefusal | null | undefined
 export function needsGithub(store: Pick<Store, 'repos'>, project: Pick<Project, 'id'> | null | undefined): boolean {
   if (!project) return false;
   return store.repos(project.id).some((r) => (r.kind ?? (r.local_path ? 'local' : 'github')) === 'github' || (r.kind === 'hosted' && !!r.upstream_owner && !!r.upstream_name));
-}
-
-const BASE = 'http://x.invalid';
-
-/**
- * `to` when it is a path in Dispatch, else null. Not "//host", "/\host" or "/<tab>/host": browsers
- * read those as another site (they drop tabs and newlines, and take "\" for "/"), so any whitespace
- * or control character is refused and the path must resolve on Dispatch's own origin.
- */
-export function safePath(to: string | undefined | null): string | null {
-  if (!to || !to.startsWith('/') || /[\s\x00-\x1f\x7f]/.test(to)) return null;
-  let u: URL;
-  try {
-    u = new URL(to, BASE);
-  } catch {
-    return null;
-  }
-  return u.origin === BASE ? u.pathname + u.search + u.hash : null;
 }
 
 /** Where to connect GitHub: the OAuth sign-in (back to `to`), else Settings. */

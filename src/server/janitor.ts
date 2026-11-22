@@ -139,6 +139,8 @@ export class Janitor {
     this.expireRecords();
     if (!this.hub.connected) return;
     // every kind (chats keep checkouts too) and no row limit: older sessions' leftovers count as well (DISP-148)
+    // shortcut: only sessions updated in the last 90 days. Leftovers of older ones are never offered;
+    // a full scan would ask a worker about every session ever finished on each check (DISP-193)
     const since = new Date(Date.now() - 90 * DAY).toISOString();
     const finished = this.store.sessions({ statuses: ['completed', 'stopped', 'failed'], all_kinds: true, updated_after: since, limit: null });
     const offer: CleanupOffer = { sessions: [], worktrees: 0, branches: 0, checked_out: 0, checked_at: new Date().toISOString() };

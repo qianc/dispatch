@@ -72,7 +72,7 @@ describe("the worker's link to a server (DISP-63)", () => {
     // the credential is kept while the session lives, and forgotten when it closes
     const creds = (link as unknown as { creds: Map<number, GithubCred> }).creds;
     expect(creds.get(7)).toEqual(BOB);
-    await (link as unknown as { onMessage: (m: unknown) => Promise<void> }).onMessage({ t: 'close', session_id: 7, repos: [] });
+    await (link as unknown as { onMessage: (m: unknown) => Promise<void> }).onMessage({ t: 'close', session_id: 7 });
     expect(creds.has(7)).toBe(false);
     // its token stays a secret for the life of the worker
     link.send({ t: 'cmd_result', req_id: 'r2', ok: false, error: `late ${BOB_TOKEN}` });

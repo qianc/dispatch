@@ -42,7 +42,8 @@ import { Users } from './users.ts';
 import { Identities } from './identities.ts';
 import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
 import { githubRoutes } from './routes/github.ts';
-import { connectUrl, needsGithub, resolveGithubIdentity, safePath, type IdentityDeps } from './identity.ts';
+import { connectUrl, needsGithub, resolveGithubIdentity, type IdentityDeps } from './identity.ts';
+import { safePath } from '../shared/safePath.ts';
 import type { Session } from '../shared/types.ts';
 import { HostedGit } from './hosted.ts';
 import { gitRoutes } from './routes/git.ts';
@@ -117,7 +118,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   };
   const auth = new Auth(cfg, db);
   const notifier = new Notifier(cfg, db, store, bus, users);
-  const sessions = new Sessions(store, bus, hub, notifier, workers, users);
+  const sessions = new Sessions(store, bus, hub, notifier, workers, users, cfg);
   // as whom each session acts on GitHub (DISP-63): its starter, the owner's env accounts, or the shared one
   const identityDeps: IdentityDeps = {
     identities,

@@ -113,7 +113,7 @@ it('starts no runner when the session is closed during its setup (DISP-146)', as
   const started = onMessage({ t: 'start', spec });
   await waitFor(() => setupStarted, 'the setup runs');
   expect(slots.free).toBe(0);
-  await onMessage({ t: 'close', session_id: 9, cleanup: false, repos: [] });
+  await onMessage({ t: 'close', session_id: 9 });
   setup.resolve({ ok: true, copied: [], output: '' });
   await started;
   expect((link as unknown as { runners: Map<number, unknown> }).runners.size).toBe(0);
@@ -150,7 +150,7 @@ it('stops the setup command when the session is closed during its setup (DISP-18
     }
   };
   expect(pids.every(alive)).toBe(true);
-  await onMessage({ t: 'close', session_id: 9, cleanup: false, repos: [] });
+  await onMessage({ t: 'close', session_id: 9 });
   await started;
   await waitFor(() => !pids.some(alive), 'the setup processes are gone');
   expect((link as unknown as { runners: Map<number, unknown> }).runners.size).toBe(0);
