@@ -124,7 +124,7 @@ describe('phase 2 review fixes', () => {
     }
   });
 
-  it('#5 agents get no worker token: they commit, and the worker pushes the branch at the end of the turn', async () => {
+  it('#5 agents get no git access to hosted repos: they commit, and the worker pushes the branch at the end of the turn', async () => {
     const { s, repo, secret } = await hostedServer();
     try {
       const entry = { name: 'default', url: `ws://127.0.0.1:${s.port}/worker`, token: secret, local_repo_dirs: [], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' };
@@ -133,8 +133,24 @@ describe('phase 2 review fixes', () => {
         claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
       });
       const spec = { session_id: 3, kind: 'work' as const, project_key: 'PR2', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'dispatch/pr2-3-t', repos: [repo], items: [], source: null, prompt: '', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' as const }, claude_account: null, github_account: null, resume: null, resume_note: null };
-      const env = (link as unknown as { opts: { sessionEnv: (x: unknown) => Record<string, string> } }).opts.sessionEnv(spec);
+      const envOf = (l: ServerLink) => (l as unknown as { opts: { sessionEnv: (x: unknown) => Record<string, string> } }).opts.sessionEnv(spec);
+      // the link adds no git header with the worker token to what the worker's sessionEnv gives
+      const env = envOf(link);
       expect(JSON.stringify(env)).not.toContain(secret);
+      expect(Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG'))).toEqual([]);
+      // without a sessionEnv the agent's env is the worker's own: a WORKER_TOKEN there reaches it (accepted, see README)
+      const bare = new ServerLink(entry, {
+        fake: false, opts: { assistantReadDirs: [] } as never, workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-p2l-')), slots: new Slots(1),
+        claudeAccounts: () => [], githubAccounts: [], gitEnv: () => ({}), remoteBase: 'https://github.com',
+      });
+      const before = process.env.WORKER_TOKEN;
+      process.env.WORKER_TOKEN = secret;
+      try {
+        expect(envOf(bare).WORKER_TOKEN).toBe(secret);
+      } finally {
+        if (before === undefined) delete process.env.WORKER_TOKEN;
+        else process.env.WORKER_TOKEN = before;
+      }
       expect(workPrompt(spec)).toMatch(/Repos hosted by Dispatch: commit your work and stop; do not push/);
       // the agent's commit in its worktree, then the turn ends
       const wt = await link.workspaces.prepare(spec);
