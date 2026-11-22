@@ -1103,6 +1103,8 @@ export interface UpdateState {
   on_branch: boolean;
   /** the first lines of those commits, newest first (at most 20) */
   commits: { sha: string; subject: string }[];
+  /** the commits past the server's on the release branch, as far as one look at GitHub reads them (DISP-194): a worker on one of them is newer than the server */
+  ahead_shas: string[];
   error: string | null;
 }
 
@@ -1138,8 +1140,8 @@ export interface UpdateWorker {
   updatable: boolean;
   /** why it cannot update */
   why: string | null;
-  /** against the server's commit */
-  status: 'current' | 'behind' | 'updating' | 'failed' | 'newer' | 'unknown';
+  /** against the server's commit; `newest`: on the release branch's newest commit, which the server is not (DISP-194) */
+  status: 'current' | 'behind' | 'updating' | 'failed' | 'newer' | 'newest' | 'unknown';
 }
 
 /** GET /api/update: all the Updates section shows. */

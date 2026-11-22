@@ -49,7 +49,7 @@ const toRow = (r: Row): UpdateRow => ({
   state: r.state as UpdateRunState, detail: (r.detail as string | null) ?? null, created_at: String(r.created_at), ended_at: (r.ended_at as string | null) ?? null,
 });
 
-const NO_STATE: UpdateState = { checked_at: null, for_sha: null, commit: null, tag: null, behind_by: null, on_branch: false, commits: [], error: null };
+const NO_STATE: UpdateState = { checked_at: null, for_sha: null, commit: null, tag: null, behind_by: null, on_branch: false, commits: [], ahead_shas: [], error: null };
 const DEFAULT_SETTINGS: UpdateSettings = { auto: false, follow: 'commits' };
 
 export const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : 'unknown');
@@ -287,6 +287,7 @@ export class Updates {
           behind_by: onBranch ? toBranch!.ahead_by : null,
           on_branch: onBranch,
           commits: onBranch ? toBranch!.commits.slice(-MAX_COMMITS).reverse().map((c) => ({ sha: c.sha, subject: c.message.split('\n')[0].slice(0, 200) })) : [],
+          ahead_shas: onBranch ? toBranch!.commits.map((c) => c.sha) : [],
           error: null,
         };
         if (this.settings().follow === 'commits') behindTarget = state.behind_by ?? 0;
@@ -769,13 +770,19 @@ export class Updates {
     const { hub, workers } = this.d;
     const updating = new Set(this.running().filter((r) => r.target === 'worker').map((r) => r.worker_id));
     const blocked = this.blocked().workers;
+    // what the last look knows of the commits past the server's (DISP-194): a worker on one of them is not behind
+    const st = this.state();
+    const known = !!sha && st.for_sha === sha && st.on_branch;
+    const head = known && st.commit ? st.commit.sha : null;
+    const ahead = known ? st.ahead_shas : [];
     return workers.list().map((w) => {
       const v = (hub.facts(w.id) ?? w.facts)?.version;
       const status: UpdateWorker['status'] = updating.has(w.id) ? 'updating'
         : !v?.sha || !sha ? 'unknown'
         : sameVersion(v.sha, sha) ? 'current'
         : blocked[w.id] === sha ? 'failed'
-        : this.aheadOf.get(w.id) === sha ? 'newer'
+        : sameVersion(v.sha, head) ? 'newest'
+        : this.aheadOf.get(w.id) === sha || ahead.some((a) => sameVersion(v.sha, a)) ? 'newer'
         : 'behind';
       const seen = !!(hub.facts(w.id) ?? w.facts);
       return {

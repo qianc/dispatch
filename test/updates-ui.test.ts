@@ -12,10 +12,11 @@ vi.mock('../web/src/wide.ts', () => ({ useWide: () => true, useVeryWide: () => t
 let Settings: typeof import('../web/src/pages/Settings.tsx').Settings;
 let UpdatesSection: typeof import('../web/src/components/updates.tsx').UpdatesSection;
 let behindLine: typeof import('../web/src/components/updates.tsx').behindLine;
+let checkResult: typeof import('../web/src/components/updates.tsx').checkResult;
 beforeEach(async () => {
   stubBrowser();
   ({ Settings } = await import('../web/src/pages/Settings.tsx'));
-  ({ UpdatesSection, behindLine } = await import('../web/src/components/updates.tsx'));
+  ({ UpdatesSection, behindLine, checkResult } = await import('../web/src/components/updates.tsx'));
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,7 +27,7 @@ const info = (over: Partial<UpdateInfo> = {}): UpdateInfo => ({
   repo: 'you/dispatch', branch: 'main', version: { sha: A, tag: 'v1.2.0' }, mode: 'self', mode_why: null,
   state: {
     checked_at: NOW, for_sha: A, commit: { sha: B, date: NOW }, tag: { name: 'v1.3.0', sha: C, ahead: true }, behind_by: 2, on_branch: true,
-    commits: [{ sha: B, subject: 'fix the inbox count' }, { sha: C, subject: 'add the update log' }], error: null,
+    commits: [{ sha: B, subject: 'fix the inbox count' }, { sha: C, subject: 'add the update log' }], ahead_shas: [C, B], error: null,
   },
   settings: { auto: false, follow: 'commits' }, target: { sha: B, tag: null }, rollout: null, waiting: [], workers: [], log: [], ...over,
 });
@@ -43,22 +44,24 @@ const show = (i: UpdateInfo) => textOf(html(i));
 describe('Settings → Updates (DISP-112)', () => {
   it('shows the running version, what is new, and the update to the newest commit', () => {
     const text = show(info());
-    expect(text).toContain('Dispatch runs aaaaaaa (v1.2.0)');
+    expect(text).toContain('The server runs aaaaaaa (v1.2.0)');
     expect(text).toContain('Update available');
     expect(text).toMatch(/2 commits behind main · checked just now · you\/dispatch/);
-    expect(text).toContain('Newest commit bbbbbbb · newest version v1.3.0 ( ccccccc )');
+    expect(text).toContain('Newest on main: bbbbbbb “fix the inbox count” · just now · newest version v1.3.0 ( ccccccc )');
     expect(text).toContain('bbbbbbb fix the inbox count');
     expect(text).toContain('Update automatically');
     expect(text).toContain('Every commit');
     expect(text).toContain('Version tags only');
     expect(text).toContain('The server updates itself.');
-    expect(text).toContain('Update now to bbbbbbb');
+    // the button names the commit and what it updates; the line under it says which commit that is (DISP-194)
+    expect(text).toContain('Update the server and workers to bbbbbbb');
+    expect(text).toContain('Installs bbbbbbb , the newest commit on main (“fix the inbox count”), on the server first, then on each worker that can update itself. The server now runs aaaaaaa .');
     expect(text).toContain('No update yet.');
     expect(text).toContain('Check now');
   });
 
   it('names the version tag when tags are followed, and says when there is nothing newer', () => {
-    expect(show(info({ settings: { auto: true, follow: 'tags' }, target: { sha: C, tag: 'v1.3.0' } }))).toContain('Update now to v1.3.0');
+    expect(show(info({ settings: { auto: true, follow: 'tags' }, target: { sha: C, tag: 'v1.3.0' } }))).toContain('Update the server and workers to v1.3.0 (ccccccc)');
     const current = info({ state: { ...info().state, commit: { sha: A, date: NOW }, tag: null, behind_by: 0, commits: [] }, target: null });
     const page = html(current);
     expect(textOf(page)).toMatch(/Up to date.*Up to date with main/);
@@ -80,9 +83,9 @@ describe('Settings → Updates (DISP-112)', () => {
     const stuck = info({ mode: 'none', mode_why: 'It was not started through the launcher (node src/launch.ts server).' });
     const page = html(stuck);
     expect(page).toMatch(/<button[^>]*disabled=""[^>]*>Update now<\/button>/);
-    expect(textOf(page)).not.toContain('Update now to');
+    expect(textOf(page)).not.toContain('Update the server');
     const withWorker = html({ ...stuck, workers: [{ id: 2, name: 'nas', connected: true, sha: C, updatable: true, why: null, status: 'behind' }] });
-    expect(withWorker).toMatch(/<button(?![^>]*disabled="")[^>]*>Update the workers now<\/button>/);
+    expect(withWorker).toMatch(/<button(?![^>]*disabled="")[^>]*>Update the workers to aaaaaaa, the server&#x27;s commit<\/button>/);
   });
 
   it('has the anchor that a notice of an update opens', () => {
@@ -106,7 +109,7 @@ describe('Settings → Updates (DISP-112)', () => {
     const text = show(info({ rollout: { sha: B, tag: null, by: 'ana' }, waiting: [waiting] }));
     expect(text).toContain('Updating to bbbbbbb , started by ana.');
     expect(text).toContain('Cancel');
-    expect(text).not.toContain('Update now');
+    expect(text).not.toContain('Update the server and workers');
     expect(text).toContain(waiting);
   });
 
@@ -125,7 +128,33 @@ describe('Settings → Updates (DISP-112)', () => {
     expect(text).toMatch(/Worker nas · ccccccc Update failed/);
     expect(text).toMatch(/Worker pi · unknown · offline Cannot update itself\. It runs from an image\. Unknown/);
     // the server is current, a worker is not: the button updates the workers
-    expect(text).toContain('Update the workers now');
+    expect(text).toContain("Update the workers to aaaaaaa, the server's commit");
+  });
+
+  it('tells a worker on the newest commit or past the server from one behind, and why one is behind (DISP-194)', () => {
+    const D = 'd'.repeat(40);
+    const text = show(info({
+      workers: [
+        { id: 1, name: 'default', connected: true, sha: B, updatable: false, why: 'It was not started through the launcher.', status: 'newest' },
+        { id: 2, name: 'devbox', connected: true, sha: A, updatable: false, why: 'It was not started through the launcher.', status: 'current' },
+        { id: 3, name: 'nas', connected: true, sha: C, updatable: true, why: null, status: 'newer' },
+        { id: 4, name: 'pi', connected: true, sha: D, updatable: false, why: 'It was not started through the launcher.', status: 'behind' },
+      ],
+    }));
+    expect(text).toMatch(/Worker default · bbbbbbb Cannot update itself\. It was not started through the launcher\. On the newest commit/);
+    // on the server's commit, and the server is behind: not "Up to date"
+    expect(text).toMatch(/Worker devbox · aaaaaaa Cannot update itself\. It was not started through the launcher\. Same as server/);
+    expect(text).toMatch(/Worker nas · ccccccc Newer than the server/);
+    expect(text).toMatch(/Worker pi · ddddddd Behind the server · update it by hand, it cannot update itself\. It was not started through the launcher\. Behind/);
+  });
+
+  it('"Check now" says what it found, also when nothing changed, and when it failed (DISP-194)', () => {
+    const at = new Date(2026, 10, 22, 16, 5);
+    expect(checkResult(info(), info(), at).text).toMatch(/^No new commits as of 16[.:]05\. bbbbbbb is still the newest on main\.$/);
+    const moved = info({ state: { ...info().state, commit: { sha: C, date: NOW } } });
+    expect(checkResult(info(), moved, at)).toMatchObject({ text: expect.stringMatching(/^New on main as of 16[.:]05: ccccccc\.$/), tone: 'accent' });
+    const broken = info({ state: { ...info().state, error: 'GitHub answered 502' } });
+    expect(checkResult(info(), broken, at)).toMatchObject({ text: expect.stringMatching(/^The check at 16[.:]05 failed: GitHub answered 502$/), tone: 'bad' });
   });
 
   it('logs each update: what, from which version to which, who started it, and how it ended', () => {
@@ -141,7 +170,7 @@ describe('Settings → Updates (DISP-112)', () => {
     expect(text).toMatch(/Server aaaaaaa → bbbbbbb · automatic · just now Updated/);
     expect(text).not.toContain('No update yet.');
     // while an update runs, a second one cannot be started
-    expect(html(info({ log: [row({ state: 'running', ended_at: null })] }))).toMatch(/<button[^>]*disabled=""[^>]*>Update now to bbbbbbb<\/button>/);
+    expect(html(info({ log: [row({ state: 'running', ended_at: null })] }))).toMatch(/<button[^>]*disabled=""[^>]*>Update the server and workers to bbbbbbb<\/button>/);
   });
 
   it('is on the Settings page for the install owner only', () => {
@@ -152,9 +181,9 @@ describe('Settings → Updates (DISP-112)', () => {
       qc.setQueryData(['update'], info());
       return textOf(renderPage(createElement(Settings), { qc }));
     };
-    expect(settings(true)).toContain('Dispatch runs aaaaaaa');
+    expect(settings(true)).toContain('The server runs aaaaaaa');
     const other = settings(false);
-    expect(other).not.toContain('Dispatch runs');
+    expect(other).not.toContain('The server runs');
     expect(other).not.toContain('Update automatically');
   });
 });
