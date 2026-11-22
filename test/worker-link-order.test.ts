@@ -1,6 +1,6 @@
 // The worker's link keeps order on a reconnect (DISP-141) and lets a close during setup end the
-// start (DISP-146).
-import { mkdtempSync } from 'node:fs';
+// start (DISP-146) and its setup command (DISP-186).
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -123,3 +123,35 @@ it('starts no runner when the session is closed during its setup (DISP-146)', as
   expect(sent.filter((m) => m.t === 'event').map((m) => (m as { body: { text: string } }).body.text)).toEqual(['Setting up r: npm ci']);
   expect(sent.find((m) => m.t === 'status')).toBeUndefined();
 });
+
+it('stops the setup command when the session is closed during its setup (DISP-186)', async () => {
+  link = linkTo('ws://127.0.0.1:1/worker', false);
+  (link as unknown as { ws: unknown }).ws = { readyState: WebSocket.OPEN, send: () => {} };
+  const wt = mkdtempSync(join(tmpdir(), 'dsp-setup-'));
+  // a long setup (npm ci) and a child of its own: both must go
+  const repo = { id: 1, github_owner: 'o', github_name: 'r', setup_command: 'sleep 60 & echo $! > child.pid; echo $$ > setup.pid; wait' } as StartSpec['repos'][number];
+  const ws = link.workspaces as unknown as Record<string, unknown>;
+  ws.prepare = async (_spec: StartSpec, created: { repo: typeof repo; wt: string }[]) => {
+    created.push({ repo, wt });
+    return wt;
+  };
+  ws.repoDir = () => wt;
+  const spec: StartSpec = { session_id: 9, kind: 'work', project_key: 'OR', project_name: 'P', importance_scale: [], effort_scale: [], title: 't', branch: 'b', repos: [repo], items: [], source: null, prompt: 'go', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' }, claude_account: null, github_account: null, resume: null, resume_note: null };
+  const onMessage = (link as unknown as { onMessage: (m: unknown) => Promise<void> }).onMessage.bind(link);
+  const started = onMessage({ t: 'start', spec });
+  await waitFor(() => existsSync(join(wt, 'setup.pid')) && existsSync(join(wt, 'child.pid')), 'the setup runs');
+  const pids = ['setup.pid', 'child.pid'].map((f) => Number(readFileSync(join(wt, f), 'utf8')));
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  expect(pids.every(alive)).toBe(true);
+  await onMessage({ t: 'close', session_id: 9, cleanup: false, repos: [] });
+  await started;
+  await waitFor(() => !pids.some(alive), 'the setup processes are gone');
+  expect((link as unknown as { runners: Map<number, unknown> }).runners.size).toBe(0);
+}, 15_000);
