@@ -11,7 +11,9 @@ const recent = new Map<number, SessionEvent[]>();
 export function withLive(d: SessionDetail): SessionDetail {
   const extra = recent.get(d.session.id) ?? [];
   const max = d.events.at(-1)?.seq ?? 0;
-  const missing = extra.filter((e) => e.seq > max);
+  // only the ones that continue the list: a gap would hide the missing events from `?after=` (DISP-140)
+  const missing: SessionEvent[] = [];
+  for (const e of [...extra].sort((a, b) => a.seq - b.seq)) if (e.seq === max + missing.length + 1) missing.push(e);
   return missing.length ? { ...d, events: [...d.events, ...missing] } : d;
 }
 
@@ -95,9 +97,18 @@ function apply(qc: QueryClient, e: LiveEvent) {
       list.push(e.event);
       if (list.length > 300) list.shift();
       recent.set(e.event.session_id, list);
-      qc.setQueryData<SessionDetail>(['session', e.event.session_id], (d) =>
-        d && !d.events.some((x) => x.seq === e.event.seq) ? { ...d, events: [...d.events, e.event] } : d,
-      );
+      // seq is contiguous per session: after a gap (events sent while the stream was down) refetch,
+      // since the session's query asks only for events after the last one it has (DISP-140)
+      let gap = false;
+      qc.setQueryData<SessionDetail>(['session', e.event.session_id], (d) => {
+        if (!d || d.events.some((x) => x.seq === e.event.seq)) return d;
+        if (e.event.seq !== (d.events.at(-1)?.seq ?? 0) + 1) {
+          gap = true;
+          return d;
+        }
+        return { ...d, events: [...d.events, e.event] };
+      });
+      if (gap) qc.invalidateQueries({ queryKey: ['session', e.event.session_id] });
       // a reply in the assistant chat: update the unread badge
       if ((e.event.body.kind === 'assistant' || e.event.body.kind === 'proposal') && qc.getQueryData<AssistantChat>(['assistant'])?.session_id === e.event.session_id) {
         qc.invalidateQueries({ queryKey: ['assistant'] });

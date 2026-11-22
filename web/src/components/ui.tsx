@@ -38,12 +38,34 @@ export function CloseButton({ onClick, label }: { onClick: () => void; label: st
   );
 }
 
+/**
+ * An image from another origin. Agent output can carry one (a prompt injection), and loading it
+ * would send whatever its URL holds to that host, so it shows as a link instead (DISP-144).
+ */
+export function isExternalImage(src: string) {
+  try {
+    const u = new URL(src, location.origin);
+    return u.protocol !== 'data:' && u.origin !== location.origin;
+  } catch {
+    return true;
+  }
+}
+
+/** A markdown image: external ones as a link (its alt text, or the URL). */
+export function MdImage({ src, alt }: { src: string; alt?: string }) {
+  if (isExternalImage(src)) return <a href={src} target="_blank" rel="noreferrer">{alt || src}</a>;
+  return <img src={src} alt={alt ?? ''} className="max-w-full rounded-lg" loading="lazy" />;
+}
+
 export function Md({ children, className }: { children: string; className?: string }) {
   return (
     <div className={cx('md', className)}>
       <Markdown
         remarkPlugins={[remarkGfm]}
-        components={{ a: ({ href = '', children: c }) => (href.startsWith('/') ? <Link to={href}>{c}</Link> : <a href={href} target="_blank" rel="noreferrer">{c}</a>) }}
+        components={{
+          a: ({ href = '', children: c }) => (href.startsWith('/') ? <Link to={href}>{c}</Link> : <a href={href} target="_blank" rel="noreferrer">{c}</a>),
+          img: ({ src = '', alt }) => <MdImage src={String(src)} alt={alt} />,
+        }}
       >
         {children}
       </Markdown>

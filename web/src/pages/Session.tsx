@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from 'react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type PartOf, type SessionDetail } from '../api.ts';
 import { withLive } from '../live.ts';
@@ -49,6 +49,14 @@ export interface ChatMode {
   projects?: MentionProject[];
 }
 
+/** A session's detail: after the first load, ask only for new events and keep the ones we have. */
+export async function fetchSession(qc: QueryClient, id: number): Promise<SessionDetail> {
+  const prev = qc.getQueryData<SessionDetail>(['session', id]);
+  const after = prev?.events.at(-1)?.seq ?? 0;
+  const d = await api.get<SessionDetail>(`/sessions/${id}${after ? `?after=${after}` : ''}`);
+  return withLive(prev && after ? { ...d, events: [...prev.events, ...d.events.filter((e) => e.seq > after)] } : d);
+}
+
 /** A session screen. With `chat` it renders a chat (assistant, discuss) instead of an agent session. */
 export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const params = useParams();
@@ -60,13 +68,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const { data: accounts } = useAccounts();
   const { data } = useQuery({
     queryKey: ['session', id],
-    queryFn: async () => {
-      // after the first load, ask only for new events and keep the ones we have
-      const prev = qc.getQueryData<SessionDetail>(['session', id]);
-      const after = prev?.events.at(-1)?.seq ?? 0;
-      const d = await api.get<SessionDetail>(`/sessions/${id}${after ? `?after=${after}` : ''}`);
-      return withLive(prev && after ? { ...d, events: [...prev.events, ...d.events.filter((e) => e.seq > after)] } : d);
-    },
+    queryFn: () => fetchSession(qc, id),
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', id] });
   const images = useChatImages();

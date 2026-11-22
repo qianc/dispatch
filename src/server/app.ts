@@ -70,14 +70,14 @@ declare module 'fastify' {
 /**
  * What the app's page may load and do (DISP-72): scripts, styles, fonts, the manifest, the service
  * worker and requests (the API and /api/stream) from Dispatch's own origin only, and nothing inline.
- * Images also from any https host, data: and blob:, since item text may show an image from anywhere
- * and a pasted image is previewed from a blob.
+ * Images also from data: and blob: (a pasted image is previewed from a blob), but from no other
+ * host: an image URL in agent output could carry data out (DISP-144); markdown shows those as links.
  */
 export const APP_CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self'",
-  "img-src 'self' data: blob: https:",
+  "img-src 'self' data: blob:",
   "connect-src 'self'",
   "worker-src 'self'",
   "manifest-src 'self'",

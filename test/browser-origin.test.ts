@@ -93,7 +93,7 @@ describe('response headers', () => {
         const res = await fetch(`${s.base}${path}`);
         expect(res.headers.get('content-type')).toMatch(/^text\/html/);
         expect(res.headers.get('content-security-policy')).toBe(
-          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         );
       }
     } finally {

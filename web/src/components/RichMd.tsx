@@ -1,13 +1,13 @@
 // Markdown for item/source text, with links that work inside the app:
 //   #anchor        → the item whose title has that heading slug (backlog files link items this way)
 //   relative path  → the in-app file viewer (repo default branch, or the source file's folder)
-//   images         → served by the same file route
+//   images         → served by the same file route; one from another host shows as a link (DISP-144)
 import Markdown, { defaultUrlTransform, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Item, type Project } from '../api.ts';
-import { cx } from './ui.tsx';
+import { cx, MdImage } from './ui.tsx';
 import { dirOf, joinPath, slug } from '../../../src/shared/paths.ts';
 
 export { dirOf, joinPath, slug };
@@ -56,7 +56,7 @@ export function RichMd({ children, ctx, className }: { children: string; ctx: Li
           img: ({ src = '', alt }) => {
             const s = String(src);
             const url = /^(https?:|data:|\/)/.test(s) ? s : fileUrl(ctx, joinPath(ctx.baseDir ?? '', s));
-            return <img src={url} alt={alt ?? ''} className="max-w-full rounded-lg" loading="lazy" />;
+            return <MdImage src={url} alt={alt} />;
           },
         }}
       >
