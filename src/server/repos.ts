@@ -91,6 +91,30 @@ export function placementProblem(store: Store, repos: Repo[], workerId: number):
   return bad.length ? `Worker ${workerName(store, workerId)} has ${bad.join('; ')}.` : null;
 }
 
+/**
+ * An orchestrator's read-only checkouts on its worker (DISP-167): every repo of its span, a local
+ * repo only where that worker has an ok copy. The worker's checkouts and the janitor's tidy use the same list.
+ */
+export function orchestratorCheckouts(store: Store, repos: Repo[], workerId: number | null): Repo[] {
+  return repos.filter((r) => r.kind !== 'local' || (workerId != null && !placementProblem(store, [r], workerId)));
+}
+
+/**
+ * The repos of a session with their own folder each (DISP-167): repos whose names collide (two
+ * owners, two projects) get `<owner>-<name>` (GitHub) or `<name>-<id>` (hosted and local repos, or
+ * when that collides as well). The others keep their name, so no folder of a session without a
+ * collision moves.
+ */
+export function withFolders(repos: Repo[]): Repo[] {
+  const count = (names: string[], n: string) => names.filter((x) => x === n).length;
+  const names = repos.map((r) => r.github_name);
+  const first = repos.map((r) => (count(names, r.github_name) < 2 ? r.github_name : r.kind !== 'hosted' && !r.local_path ? `${r.github_owner}-${r.github_name}` : `${r.github_name}-${r.id}`));
+  return repos.map((r, i) => {
+    const dir = count(first, first[i]) < 2 ? first[i] : `${r.github_name}-${r.id}`;
+    return dir === r.github_name ? r : { ...r, dir };
+  });
+}
+
 /** A worker that can read a local repo now: a connected one with an ok copy, home first. */
 export function readerFor(hub: WorkerHub, repo: Repo): number | null {
   const ok = (repo.placements ?? []).filter((p) => p.status === 'ok').map((p) => p.worker_id);

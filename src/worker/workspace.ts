@@ -11,7 +11,7 @@ import type { GeneratorItem } from '../shared/generatorItems.ts';
 import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
 import { githubCredEnv } from '../shared/accounts.ts';
 import type { GithubCred, StartSpec } from '../shared/protocol.ts';
-import type { Repo } from '../shared/types.ts';
+import { repoFolder, type Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
 import { mergedRange } from '../shared/mergedRange.ts';
 
@@ -292,6 +292,11 @@ export class Workspaces {
     return repo.local_path ?? `${this.remoteBase}/${repo.github_owner}/${repo.github_name}.git`;
   }
 
+  /** Cloned without the network: a local repo, or a remote base that is a folder (tests). */
+  offline(repo: Repo) {
+    return !!repo.local_path || (repo.kind !== 'hosted' && !/^https?:/.test(this.remoteBase));
+  }
+
   cacheDir(repo: Repo) {
     if (repo.kind === 'hosted') return join(this.root, 'cache', 'hosted', `${repo.github_name}-${repo.id}`);
     if (repo.local_path) return join(this.root, 'cache', 'local', `${repo.github_name}-${repo.id}`);
@@ -302,8 +307,9 @@ export class Workspaces {
     return join(this.root, 'sessions', String(sessionId));
   }
 
+  /** A repo's folder in a session: its name, or the folder the server gave it when names collide (DISP-167). */
   repoDir(sessionId: number, repo: Repo) {
-    return join(this.sessionDir(sessionId), repo.github_name);
+    return join(this.sessionDir(sessionId), repoFolder(repo));
   }
 
   private fetchedAt = new Map<string, number>();

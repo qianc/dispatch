@@ -65,6 +65,11 @@ export interface Project {
   created_at: string;
 }
 
+/** A repo's folder in a session: its name, or its `dir` when names collide (DISP-167); a `dir` that is not one plain name is not used. */
+export function repoFolder(repo: Pick<Repo, 'github_name' | 'dir'>): string {
+  return repo.dir && /^[\w.-]+$/.test(repo.dir) && !/^\.\.?$/.test(repo.dir) ? repo.dir : repo.github_name;
+}
+
 export interface Repo {
   id: number;
   project_id: number;
@@ -90,6 +95,8 @@ export interface Repo {
   generated_paths?: string[];
   /** local repos: folders of the real checkout (relative, often not in git) that Discuss may read */
   read_dirs?: string[];
+  /** its folder in the session when not its name: repos of an orchestrator whose names collide (DISP-167) */
+  dir?: string;
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */
