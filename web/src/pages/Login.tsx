@@ -3,10 +3,18 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api.ts';
 import { Button, ErrorText, inputCls } from '../components/ui.tsx';
 
-/** Where to go after signing in: ?next= (same site only), e.g. back to an OAuth approval. */
-function nextPath() {
-  const next = new URLSearchParams(location.search).get('next');
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : null;
+/**
+ * Where to go after signing in: ?next= (same site only), e.g. back to an OAuth approval. The server's
+ * safePath rule: browsers read `/\evil.example` or `/<tab>/evil.example` as another site (DISP-137).
+ */
+export function nextPath(search = location.search, origin = location.origin) {
+  const next = new URLSearchParams(search).get('next');
+  if (!next || !next.startsWith('/') || /[\s\x00-\x1f\x7f]/.test(next)) return null;
+  try {
+    return new URL(next, origin).origin === origin ? next : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Signed out behind a sign-in proxy: its login opens on /signin (a server route, past the offline cache). */
