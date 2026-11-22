@@ -161,6 +161,37 @@ describe('auto-merge', () => {
     await merged.s.app.close();
   });
 
+  it('pins the merge to the head commit whose checks it read (DISP-210)', async () => {
+    const { s, session, merges } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+    await s.ctx.github.syncSession(session);
+    expect(merges).toEqual([expect.objectContaining({ pull_number: 7, sha: 'abc' })]);
+    await s.app.close();
+  });
+
+  it('a merge GitHub refuses (4xx) is told once and not tried again for the same head (DISP-209)', async () => {
+    const { s, session, fake } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+    let tries = 0;
+    (fake.pulls as Record<string, unknown>).merge = async () => { tries++; throw Object.assign(new Error('At least 1 approving review is required'), { status: 405, response: { status: 405 } }); };
+    await s.ctx.github.syncSession(session);
+    await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    expect(tries).toBe(1);
+    const pr = s.ctx.store.prs({ session_id: session.id })[0];
+    expect(pr.blocked).toBe('GitHub refused the merge: At least 1 approving review is required');
+    expect(s.ctx.notifier.sent.filter((n) => n.body.includes('GitHub refused the merge'))).toHaveLength(1);
+    await s.app.close();
+  });
+
+  it('a 5xx from GitHub\'s merge is tried again at the next sync (DISP-209)', async () => {
+    const { s, session, fake } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+    let tries = 0;
+    (fake.pulls as Record<string, unknown>).merge = async () => { tries++; throw Object.assign(new Error('Server Error'), { status: 502, response: { status: 502 } }); };
+    await s.ctx.github.syncSession(session);
+    await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    expect(tries).toBe(2);
+    expect(s.ctx.store.prs({ session_id: session.id })[0].blocked).toBeFalsy();
+    await s.app.close();
+  });
+
   it('merges once when two syncs of the same branch run at the same time', async () => {
     const { s, session, merges } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
     await Promise.all([s.ctx.github.syncSession(session), s.ctx.github.syncSession(session)]);

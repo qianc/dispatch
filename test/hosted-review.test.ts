@@ -262,6 +262,55 @@ describe('review and merge of hosted repos in Dispatch', () => {
       await s.app.close();
     }
   });
+
+  it('auto-merge of an upstream PR in a repo with a generate command merges here, pushes upstream, and deploys once (DISP-207)', async () => {
+    const { s, repo, session, upstream } = await setup({ upstream: true, options: { auto_merge: 'local' } });
+    try {
+      s.ctx.store.updateRepo(repo.id, { generate_command: 'npm run gen', deploy_command: 'npm run deploy' });
+      await s.ctx.hosted.pushUpstream(repo, upstream, ['refs/heads/main'], {});
+      const bare = s.ctx.hosted.dir(repo);
+      const head = git(bare, 'rev-parse', `refs/heads/${session.branch}`);
+      // GitHub closes the PR as merged once its head is on the upstream's main
+      const merged = () => { try { git(upstream, 'merge-base', '--is-ancestor', head, 'refs/heads/main'); return true; } catch { return false; } };
+      const pr = () => ({ number: 12, html_url: 'https://github.com/me/app/pull/12', title: 'Add b', state: merged() ? 'closed' : 'open', merged_at: merged() ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: session.branch, sha: head }, base: { ref: 'main' }, body: '' });
+      let opened = false;
+      fakeGithub(s.ctx, {
+        pulls: {
+          create: async () => { opened = true; return { data: pr() }; },
+          get: async () => ({ data: pr() }),
+          list: async () => ({ data: opened ? [pr()] : [] }),
+        },
+        checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
+        repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
+      });
+      // the worker's merge: into the hosted repo's main
+      const worker: string[] = [];
+      s.ctx.hub.cmd = (async (_w: unknown, cmd: { c: string; branch: string }) => {
+        worker.push(cmd.c);
+        const m = mkdtempSync(join(tmpdir(), 'dsp-hrm-'));
+        git(m, 'clone', '--quiet', bare, '.');
+        git(m, 'merge', '--quiet', '--no-ff', '-m', 'merge', `origin/${cmd.branch}`);
+        git(m, 'push', '--quiet', 'origin', 'main');
+        return { ok: true };
+      }) as typeof s.ctx.hub.cmd;
+      const deploys: unknown[] = [];
+      s.ctx.hub.send = ((_w: unknown, m: { t: string }) => { if (m.t === 'deploy') deploys.push(m); return true; }) as typeof s.ctx.hub.send;
+
+      // the review moves to GitHub while the agent still works (else it would be merged here first)
+      s.ctx.store.updateSession(session.id, { status: 'running' });
+      const [row] = await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect((await s.call('POST', `/prs/${row.id}/github-pr`)).status).toBe(200);
+      expect(worker).toEqual([]);
+      s.ctx.store.updateSession(session.id, { status: 'idle' });
+      for (let i = 0; i < 3; i++) await s.ctx.github.syncSession(s.ctx.store.session(session.id)!); // the poller
+      expect(worker).toEqual(['merge_local']);
+      expect(git(upstream, 'rev-parse', 'refs/heads/main')).toBe(git(bare, 'rev-parse', 'refs/heads/main'));
+      expect(s.ctx.store.prs({ session_id: session.id }).find((p) => p.number === 12)?.state).toBe('merged');
+      expect(deploys).toHaveLength(1);
+    } finally {
+      await s.app.close();
+    }
+  });
 });
 
 describe('hosted repos elsewhere in the app', () => {

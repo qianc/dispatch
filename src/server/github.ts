@@ -476,23 +476,27 @@ export class GitHub {
   /** Merges pushed to a hosted repo's upstream that failed, told once each. */
   private upstreamToldFor = new Set<string>();
 
-  /** After a merge into a hosted repo: push its default branch to the upstream, if there is one. */
-  private async pushUpstreamAfterMerge(repo: Repo, s: Session) {
+  /**
+   * After a merge into a hosted repo: push its default branch to the upstream, if there is one.
+   * Returns the failed push's output (null: pushed, or nothing to push to).
+   */
+  private async pushUpstreamAfterMerge(repo: Repo, s: Session): Promise<string | null> {
     const t = this.target(repo);
-    if (!t || !this.hosted) return;
+    if (!t || !this.hosted) return null;
     let res: { ok: boolean; output: string };
     try {
       res = await this.hosted.pushUpstream(repo, this.gitUrl(t.owner, t.repo), [`refs/heads/${repo.default_branch}`], this.as(s, repo, 'write').gitEnv);
     } catch (e) {
       res = { ok: false, output: (e as Error).message }; // the starter may not push to GitHub
     }
-    if (res.ok) return;
-    const key = `${repo.id}:${s.id}`;
-    if (this.upstreamToldFor.has(key)) return;
-    this.upstreamToldFor.add(key);
+    if (res.ok) return null;
     const why = res.output.split('\n').slice(-3).join(' ').slice(0, 300);
+    const key = `${repo.id}:${s.id}`;
+    if (this.upstreamToldFor.has(key)) return why;
+    this.upstreamToldFor.add(key);
     this.store.addEvent(s.id, { kind: 'error', text: `Merged in Dispatch, but pushing ${repo.default_branch} to ${t.owner}/${t.repo} failed: ${why}` });
     this.tellStarter(s, { title: `${s.project_key}: merged, but not pushed to GitHub`, body: `${t.owner}/${t.repo}: ${why}`, url: `/s/${s.id}`, tag: `upstream-${repo.id}`, project_id: s.project_id ?? undefined }, 'needs_owner');
+    return why;
   }
 
   /** A PR on the upstream was merged: bring the result into the hosted repo (fast-forward only). */
@@ -762,6 +766,9 @@ export class GitHub {
     }
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
+    // GitHub refused to merge this head already (DISP-209): no more calls until the head moves
+    const refusedKey = `${pr.id}:${pr.head_sha}:refused`;
+    if (this.autoMergeNoted.has(refusedKey)) return;
     const repo = this.store.repo(pr.repo_id)!;
     if (s.options.base_check) {
       // tested against an older default branch? have the agent bring the branch up to date first
@@ -785,7 +792,20 @@ export class GitHub {
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
-    const res = await this.merge(pr.id, how, 'squash');
+    let res: Awaited<ReturnType<GitHub['merge']>>;
+    try {
+      // pinned to the head whose checks were read (DISP-210): GitHub refuses it if the branch moved on
+      res = await this.merge(pr.id, how, 'squash', null, pr.local ? undefined : pr.head_sha ?? undefined);
+    } catch (e) {
+      // GitHub's 4xx (branch protection, a review it needs): told once, not tried again for this head.
+      // A 5xx, a network error, or Dispatch's own refusal (no `response`; e.g. a starter taken off
+      // AUTH_USERS, which can change without a new head) is tried again at the next sync.
+      const { status, response } = e as { status?: number; response?: unknown };
+      if (!response || !status || status < 400 || status >= 500) throw e;
+      if (status === 409) return; // the head moved since its checks were read: the next sync reads the new one
+      this.autoMergeNoted.add(refusedKey);
+      return note(`GitHub refused the merge: ${(e as Error).message.slice(0, 200)}`);
+    }
     if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
     this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged into ${repoName}: ${ref} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
     this.tell(s.id);
@@ -988,6 +1008,12 @@ export class GitHub {
     } else {
       const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
+      // a hosted repo's PR on its upstream, merged here: GitHub closes the PR only when it gets the merge (DISP-207)
+      const s = this.sessionOf(pr);
+      if (repo.kind === 'hosted' && s) {
+        const failed = await this.pushUpstreamAfterMerge(repo, s);
+        if (failed) return { ok: false as const, conflict: false, output: `Merged here, but pushing ${repo.default_branch} to GitHub failed: ${failed}` };
+      }
     }
     // GitHub needs a moment to register a pushed merge.
     for (let i = 0; i < 5; i++) {
