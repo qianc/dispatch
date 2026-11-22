@@ -740,6 +740,8 @@ file-provider config that does all of this with Authelia.
 **Password mode** (the default) needs none of that: put HTTPS in front
 ([Caddy example](docs/examples/Caddyfile)), on another host or in Docker. Use a long password, or
 `APP_PASSWORD_HASH`. Sessions last 90 days and can be ended in Settings → Signed-in browsers.
+If the proxy is not on this machine (e.g. Caddy in Docker), set `TRUSTED_PROXIES` to its address, so
+the wrong-password lockout counts each client by its `X-Forwarded-For` address, not the proxy's.
 
 **What you accept by design**
 

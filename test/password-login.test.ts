@@ -111,6 +111,28 @@ describe('password sessions', () => {
     }
   });
 
+  // DISP-136: behind a reverse proxy every client has the proxy's address
+  it('behind a proxy, only the client that guessed wrong is locked out', async () => {
+    const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD: 'pw', TRUSTED_PROXIES: '10.9.9.9' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      for (const proxy of ['127.0.0.1', '10.9.9.9']) {
+        const via = (client: string) => ({ 'x-forwarded-for': `198.51.100.1, ${client}` });
+        const attacker = proxy === '127.0.0.1' ? '203.0.113.7' : '203.0.113.8';
+        for (let i = 0; i < 5; i++) expect((await login(s, 'nope', proxy, via(attacker))).r.statusCode).toBe(401);
+        expect((await login(s, 'pw', proxy, via(attacker))).r.statusCode).toBe(429);
+        expect(warn.mock.calls.some((c) => String(c[0]).includes(`from ${attacker}`))).toBe(true);
+        // the owner through the same proxy gets in
+        expect((await login(s, 'pw', proxy, via('192.0.2.44'))).r.statusCode).toBe(200);
+      }
+      // an address that is no proxy is held to its own address, whatever it claims to forward
+      for (let i = 0; i < 5; i++) await login(s, 'nope', '192.0.2.99', { 'x-forwarded-for': `192.0.2.${i}` });
+      expect((await login(s, 'pw', '192.0.2.99', { 'x-forwarded-for': '192.0.2.200' })).r.statusCode).toBe(429);
+    } finally {
+      await s.app.close();
+    }
+  });
+
   it('a flood of wrong passwords does not delay other requests', async () => {
     const s = await startServer({ DISABLE_AUTH: '', APP_PASSWORD_HASH: hashPassword('pw') });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
