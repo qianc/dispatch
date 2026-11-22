@@ -10,7 +10,7 @@ import type { Sessions } from './sessions.ts';
 import type { Users } from './users.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
-import { addLocalRepo, looksLikePath, mergeNote } from './repos.ts';
+import { addLocalRepo, assertNameFree, looksLikePath, mergeNote } from './repos.ts';
 import { assertWritable, setDisabled } from './projectLock.ts';
 import { isRefusal } from './identity.ts';
 
@@ -367,6 +367,7 @@ export class AssistantTools {
     const default_branch = branch ?? ('default_branch' in info && info.default_branch ? info.default_branch : 'main');
     const exists = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === info.owner.toLowerCase() && r.github_name.toLowerCase() === info.name.toLowerCase());
     if (exists) return `${info.owner}/${info.name} is already in ${project.key}`;
+    assertNameFree(this.store, project.id, info.name);
     const repo = this.store.addRepo(project.id, { github_owner: info.owner, github_name: info.name, default_branch, check_command: check });
     this.bus.emit({ t: 'project', key: project.key });
     return { repo: `${repo.github_owner}/${repo.github_name}`, default_branch: repo.default_branch, verified_on_github: info.verified };
