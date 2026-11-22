@@ -132,8 +132,9 @@ export class Janitor {
   private async checkNow() {
     this.expireRecords();
     if (!this.hub.connected) return;
-    const since = Date.now() - 90 * DAY;
-    const finished = this.store.sessions({ statuses: ['completed', 'stopped', 'failed'] }).filter((s) => Date.parse(s.updated_at) > since);
+    // every kind (chats keep checkouts too) and no row limit: older sessions' leftovers count as well (DISP-148)
+    const since = new Date(Date.now() - 90 * DAY).toISOString();
+    const finished = this.store.sessions({ statuses: ['completed', 'stopped', 'failed'], all_kinds: true, updated_after: since, limit: null });
     const offer: CleanupOffer = { sessions: [], worktrees: 0, branches: 0, checked_out: 0, checked_at: new Date().toISOString() };
     for (const s of finished) {
       const repos = this.reposOf(s);
@@ -152,7 +153,8 @@ export class Janitor {
       }
     }
     // chats keep a read-only checkout while open; after a week unused it goes (a new message brings it back)
-    const stale = this.store.sessions({ statuses: ['idle'] }).filter((s) => s.kind !== 'work' && Date.parse(s.updated_at) < Date.now() - 7 * DAY);
+    const weekAgo = new Date(Date.now() - 7 * DAY).toISOString();
+    const stale = this.store.sessions({ statuses: ['idle'], all_kinds: true, updated_before: weekAgo, limit: null }).filter((s) => s.kind !== 'work');
     for (const s of stale) await this.tidy(s, { deleteMerged: false, force: true }).catch(() => undefined);
     this.checked = offer.sessions.length ? offer : null;
   }

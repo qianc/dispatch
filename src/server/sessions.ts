@@ -471,10 +471,11 @@ export class Sessions {
     const prompt = leftOut.length
       ? `The owner left ${leftOut.map((i) => i.key).join(', ')} out of this batch. Do not work on ${leftOut.length === 1 ? 'it' : 'them'} and do not add ${leftOut.length === 1 ? 'it' : 'them'} to the batch, even where the instructions below mention ${leftOut.length === 1 ? 'it' : 'them'}.\n\n${input.prompt}`.trim()
       : input.prompt;
+    // refuse before the card's new items are filed: a retry would file them again (DISP-143)
+    if (!items.length && !input.new_items.length && !input.prompt.trim()) throw new SessionError('Pick at least one item or write a prompt.');
+    if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
     const created = this.store.createProposedItems(project.id, input.new_items, input.source_id ?? null);
     const all = [...items, ...created];
-    if (!all.length && !input.prompt.trim()) throw new SessionError('Pick at least one item or write a prompt.');
-    if (!this.store.repos(project.id).length) throw new SessionError('Add a repo to this project first.');
     const title = input.title?.trim() || (all.length === 1 ? `${all[0].key} ${all[0].title}` : all.length ? `${all.map((i) => i.key).join(', ')}` : input.prompt.slice(0, 80));
     let session = this.store.createSession({
       project_id: project.id,
@@ -1034,6 +1035,7 @@ export class Sessions {
     // the worker scrubs what it sends; an old one does not: scrub again before anything is kept (DISP-63)
     if ((msg.t === 'event' || msg.t === 'notice' || msg.t === 'status') && this.secretsOf) msg = scrub(msg, this.secretsOf(s));
     if (msg.t === 'deploy_result') return this.onDeployResult(s, msg); // often after the session ended
+    if (msg.t === 'session_check') return this.onSessionCheck(s, msg); // a stopped check's last word ends its run (DISP-149)
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
       if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
@@ -1141,11 +1143,6 @@ export class Sessions {
         }
         if (msg.status === 'failed') this.notify(s, `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`, 'routine');
         if (msg.status !== 'running') this.dispatch();
-        return;
-      }
-      case 'session_check': {
-        const repo = this.store.repo(msg.repo_id);
-        if (repo && repo.project_id === s.project_id) this.onTurnCheck?.(s, repo, msg);
         return;
       }
       case 'input_request': {
@@ -1797,6 +1794,9 @@ export class Sessions {
   /** A work session's check before its turn is reported done (app.ts wires it to the check runs, DISP-15). */
   onTurnCheck: ((s: Session, repo: Repo, msg: Extract<WorkerEvent, { t: 'session_check' }>) => void) | null = null;
 
+  /** A session ended (stopped, completed, failed): its turn checks are off the page, whatever the worker still says. */
+  onTurnChecksEnded: ((sessionId: number) => void) | null = null;
+
   /**
    * What the worker needs to run the session. A session that acts as its user gets their GitHub
    * credential (`github`) and no env account; one that may not act on GitHub now is refused
@@ -1945,6 +1945,7 @@ export class Sessions {
     if (!('limit_wait' in patch)) patch = { ...patch, limit_wait: null };
     if (status === 'running' && !('unclean' in patch)) patch = { ...patch, unclean: null };
     this.emitSession(this.store.updateSession(id, { ...patch, status }));
+    if (FINAL_STATUSES.includes(status)) this.onTurnChecksEnded?.(id);
   }
 
   private addEvent(sessionId: number, body: Parameters<Store['addEvent']>[1]) {
@@ -1988,6 +1989,12 @@ export class Sessions {
   }
 
   /** A repo's deploy after a merge finished (DISP-37): told in the session and as a notice. */
+  private onSessionCheck(s: Session, msg: Extract<WorkerEvent, { t: 'session_check' }>) {
+    if (FINAL_STATUSES.includes(s.status) && msg.progress && !msg.done) return; // ended: no run comes back on the page
+    const repo = this.store.repo(msg.repo_id);
+    if (repo && repo.project_id === s.project_id) this.onTurnCheck?.(s, repo, msg);
+  }
+
   private onDeployResult(s: Session, msg: Extract<WorkerEvent, { t: 'deploy_result' }>) {
     const repo = this.store.repo(msg.repo_id);
     if (!repo || repo.project_id !== s.project_id) return;

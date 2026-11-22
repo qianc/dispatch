@@ -560,18 +560,23 @@ export class Store {
       ended_at: (r.ended_at as string | null) ?? null,
     };
   }
-  /** Chats (assistant, discuss) are left out unless asked for by `kind`; `started_by`: only those that user started. */
-  sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; started_by?: string | null; limit?: number } = {}): Session[] {
+  /**
+   * Chats (assistant, discuss) are left out unless asked for by `kind` or `all_kinds`; `started_by`: only
+   * those that user started. `updated_after` / `updated_before`: ISO times; `limit` null: no limit (default 200).
+   */
+  sessions(filter: { project_id?: number; statuses?: SessionStatus[]; kind?: SessionKind; all_kinds?: boolean; started_by?: string | null; updated_after?: string; updated_before?: string; limit?: number | null } = {}): Session[] {
     const where: string[] = [];
     const params: (string | number | null)[] = [];
     if (filter.project_id) { where.push('s.project_id = ?'); params.push(filter.project_id); }
     // null: started by no user
     if (filter.started_by !== undefined) { where.push('s.started_by IS ?'); params.push(filter.started_by); }
     if (filter.kind) { where.push('s.kind = ?'); params.push(filter.kind); }
-    else where.push("s.kind NOT IN ('assistant', 'discuss')");
+    else if (!filter.all_kinds) where.push("s.kind NOT IN ('assistant', 'discuss')");
+    if (filter.updated_after) { where.push('s.updated_at > ?'); params.push(filter.updated_after); }
+    if (filter.updated_before) { where.push('s.updated_at < ?'); params.push(filter.updated_before); }
     if (filter.statuses?.length) { where.push(`s.status IN (${filter.statuses.map(() => '?').join(',')})`); params.push(...filter.statuses); }
     const sql = `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC LIMIT ?`;
-    return this.db.all(sql, ...params, filter.limit ?? 200).map((r) => this.toSession(r));
+    return this.db.all(sql, ...params, filter.limit === null ? -1 : filter.limit ?? 200).map((r) => this.toSession(r));
   }
   /**
    * Activity's search over the full history (DISP-54), newest first. Every word of `q` must be in
