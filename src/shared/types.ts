@@ -843,6 +843,9 @@ export type OrchPhase = (typeof ORCH_PHASES)[number];
 export type StepState = (typeof STEP_STATES)[number];
 export type DeployState = 'running' | 'ok' | 'failed';
 
+/** What a step's orchestrator was offered to deal with before the owner is told (DISP-165). */
+export type StepOffer = 'fix_merge' | 'deploy' | 'no_pr';
+
 /** One step of an orchestration's plan: one batch (one work session, one branch, one PR per changed repo). */
 export interface OrchestrationStep {
   id: number;
@@ -867,6 +870,15 @@ export interface OrchestrationStep {
   deploys: Record<string, DeployState>;
   /** messages the orchestrator sent to this step's batch */
   messages_sent: number;
+  /**
+   * what the orchestrator was offered to deal with before the owner is told (DISP-165): a stopped
+   * merge, a failed deploy, or a turn that ended with no pull request; null: nothing
+   */
+  offer: StepOffer | null;
+  /** the messages it had sent to the batch when the offer was made */
+  offer_messages: number | null;
+  /** when the offer was made (ISO time) */
+  offered_at: string | null;
   /** the plan marks it optional: the orchestrator may skip it without asking (DISP-119) */
   optional: boolean;
   /** the batch it runs as (API views) */
@@ -889,6 +901,10 @@ export interface Orchestration {
   plan_approved: boolean;
   /** counts the plans proposed: an approval names the one the owner read */
   plan_version: number;
+  /** the plan version the owner was last told about, "plan ready" or "plan change to approve" (DISP-165) */
+  plan_notified_version: number;
+  /** the "finished" push went out (DISP-165); cleared when the owner writes to it again */
+  finish_notified: boolean;
   max_children: number;
   /** the model and effort the orchestrator itself runs on ('default': the server's default model); its batches have `options` */
   model: OrchestratorModel;

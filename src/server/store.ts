@@ -35,6 +35,7 @@ import {
   type Schedule,
   type Orchestration,
   type OrchestrationStep,
+  type StepOffer,
   type PlanChange,
   type NotifyOwner,
   type QuietLogEntry,
@@ -781,6 +782,9 @@ export class Store {
       seen: (r.seen as string | null) ?? null,
       deploys: json(r.deploys, {}),
       messages_sent: Number(r.messages_sent ?? 0),
+      offer: (r.offer as StepOffer | null) ?? null,
+      offer_messages: numOrNull(r.offer_messages),
+      offered_at: (r.offered_at as string | null) ?? null,
       optional: bool(r.optional),
     };
   }
@@ -798,6 +802,8 @@ export class Store {
       plan_md: String(r.plan_md),
       plan_approved: bool(r.plan_approved),
       plan_version: Number(r.plan_version),
+      plan_notified_version: Number(r.plan_notified_version ?? 0),
+      finish_notified: bool(r.finish_notified),
       max_children: Number(r.max_children),
       model: orchestratorModel(json<Partial<SessionOptions>>(r.session_options, {}).model),
       effort: json<Partial<RunOptions>>(r.session_options, {}).effort ?? 'default',
@@ -832,7 +838,7 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'plan_notified_version' | 'finish_notified' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -895,7 +901,7 @@ export class Store {
     const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
     return r && this.toStep(r);
   }
-  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'messages_sent'>>): OrchestrationStep {
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,

@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason, finishGaps, finishedAttention } from '../shared/attention.ts';
-import { FINAL_STATUSES, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type StepOffer, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import { cleanTitle, firstWordsTitle } from '../shared/orchestrationTitle.ts';
@@ -40,8 +40,6 @@ export class Orchestrator {
   private bus: Bus;
   private sessions: Sessions;
   private notifier: Notifier;
-  /** orchestrator sessions that proposed a plan (or a change of the running plan) this turn: the push goes out when the turn ends */
-  private planNotice = new Map<number, 'plan' | 'change'>();
 
   /** ids of the PRs Dispatch merges at this moment (a deploy may follow such a merge) */
   private merging: () => ReadonlySet<number>;
@@ -95,7 +93,15 @@ export class Orchestrator {
   resume() {
     for (const o of this.store.orchestrations()) {
       if (o.phase === 'done' || o.phase === 'stopped') continue;
-      for (const step of o.steps) this.safely(() => this.sync(step.id));
+      for (const step of o.steps) {
+        this.safely(() => {
+          this.sync(step.id);
+          // a batch whose turn ended with no pull request before the restart: its wake was a timer,
+          // armed again here unless sync just did (DISP-165)
+          const now = this.store.step(step.id);
+          if (now && now.seen === step.seen) this.noPullRequestLater(now, true);
+        });
+      }
       this.safely(() => this.flush(o.session_id));
     }
     // messages for batches whose turn ended, or that closed, while the server was down
@@ -485,7 +491,6 @@ export class Orchestrator {
       };
       this.store.updateOrchestration(o.session_id, { proposal, plan_version: o.plan_version + 1 });
       this.sessions.systemNote(s.id, `Plan change proposed: ${proposal.summary}`);
-      this.planNotice.set(s.id, 'change');
       this.emit(o.session_id);
       const after = this.must(o.session_id);
       return `The change is shown to the owner with an Approve button. ${this.proposalText(after, proposal)} Start what is ready now (${this.readySteps(after).map((x) => x.id).join(', ') || 'nothing is'}), explain the change briefly, then end your turn.`;
@@ -495,7 +500,6 @@ export class Orchestrator {
     // it takes its batches' questions only while an approved plan runs
     this.handOverAll(o.session_id, 'The orchestrator changed its plan and waits for your approval: this is yours.');
     this.sessions.systemNote(s.id, `Plan proposed: ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}`);
-    this.planNotice.set(s.id, 'plan');
     this.emit(o.session_id);
     return 'The plan is shown to the owner with an Approve button. Nothing starts before they approve. Explain the plan briefly, then stop and wait.';
   }
@@ -631,9 +635,6 @@ export class Orchestrator {
   /** orchestrator sessions that proposed a plan or started a step this turn: that turn's end needs no "waiting for you" */
   private acted = new Set<number>();
 
-  /** orchestrator sessions that called finish during a turn: the owner is told when that turn ends */
-  private finishWhenIdle = new Set<number>();
-
   /**
    * The orchestrator is done: the result is its last word. The session stays open for the owner,
    * who reads the summary and marks it complete, or writes to it to re-plan (DISP-121).
@@ -648,15 +649,15 @@ export class Orchestrator {
     // in the chat, whatever the summary says: whether the goal is met, from the steps themselves
     const gaps = finishGaps(o);
     this.sessions.systemNote(s.id, gaps ? `Finished, but the goal is not fully met: ${gaps}.` : 'Finished: every step is done.');
+    // else the turn's end tells the owner: finish_notified is still false (DISP-165)
     if (this.store.session(s.id)!.status === 'idle') this.finished(s.id);
-    else this.finishWhenIdle.add(s.id);
     this.emit(o.session_id);
     return 'Finished. End your turn now: the owner reads your summary and marks the orchestration complete, or writes to you to re-plan.';
   }
 
   /** A finished orchestration waits for its owner: one push with the result. */
   private finished(sessionId: number) {
-    this.finishWhenIdle.delete(sessionId);
+    this.store.updateOrchestration(sessionId, { finish_notified: true });
     const s = this.store.session(sessionId)!;
     this.flushOwner(sessionId);
     // the batches it completed without a push are counted here, the one push at the end (DISP-122)
@@ -671,7 +672,7 @@ export class Orchestrator {
   ownerWrote(sessionId: number) {
     const o = this.store.orchestration(sessionId);
     if (o?.phase !== 'done') return;
-    this.store.updateOrchestration(sessionId, { phase: 'run' });
+    this.store.updateOrchestration(sessionId, { phase: 'run', finish_notified: false });
     this.sessions.systemNote(sessionId, 'Opened again by the owner\'s message.');
     this.emit(sessionId);
   }
@@ -688,7 +689,6 @@ export class Orchestrator {
     if (!o.steps.length) throw new SessionError('There is no plan to approve yet.', 409);
     this.store.updateOrchestration(sessionId, { plan_approved: true, phase: 'run' });
     this.sessions.systemNote(sessionId, 'Plan approved.');
-    this.planNotice.delete(sessionId);
     this.emit(sessionId);
     this.wake(sessionId, 'The owner approved the plan.');
     return this.view(sessionId);
@@ -708,7 +708,6 @@ export class Orchestrator {
     this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, proposal: null });
     this.store.addPlanChange(o.session_id, { kind: 'approved', decided_by: 'owner', summary: p.summary, reason: '', verification: null, step_id: null });
     this.sessions.systemNote(o.session_id, 'Plan change approved.');
-    this.planNotice.delete(o.session_id);
     this.emit(o.session_id);
     this.wake(o.session_id, 'The owner approved your change of the plan.');
     return this.view(o.session_id);
@@ -721,7 +720,6 @@ export class Orchestrator {
     this.store.updateOrchestration(sessionId, { proposal: null });
     this.store.addPlanChange(sessionId, { kind: 'declined', decided_by: 'owner', summary: o.proposal.summary, reason: '', verification: null, step_id: null });
     this.sessions.systemNote(sessionId, 'Plan change declined by the owner.');
-    this.planNotice.delete(sessionId);
     this.emit(sessionId);
     this.wake(sessionId, 'The owner declined your change of the plan: the approved plan stays. Go on with it, or ask them what they want instead.');
     return this.view(sessionId);
@@ -885,14 +883,11 @@ export class Orchestrator {
 
   /** The orchestrator session's turn ended: tell the owner what needs them, close it if it finished, else give it its events. */
   onIdle(s: Session) {
-    const notice = this.planNotice.get(s.id);
-    const planned = this.planNotice.delete(s.id);
     const acted = this.acted.delete(s.id);
-    if (planned) {
-      const title = notice === 'change' ? `${s.title}: plan change to approve` : `${s.title}: plan ready to approve`;
-      void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
-    }
-    if (this.finishWhenIdle.has(s.id)) return this.finished(s.id);
+    const planned = this.notifyPlan(s);
+    const mine = this.store.orchestration(s.id);
+    // finish was called in this turn (or before a restart): the owner is told once (DISP-165)
+    if (mine?.phase === 'done' && !mine.finish_notified) return this.finished(s.id);
     this.emit(s.id);
     // a question it was told about and left open in the turn that just ended is the owner's
     const waiting = this.dueEvents(s.id);
@@ -901,31 +896,25 @@ export class Orchestrator {
     }
     // a stopped merge it was told about and did not write to its batch about: the owner is told
     if (!waiting.length) {
-      for (const stepId of [...this.fixOffered]) {
-        const step = this.store.step(stepId);
-        if (step && step.orchestration_id !== s.id) continue;
-        this.fixOffered.delete(stepId);
-        if (step?.state === 'review' && step.messages_sent === 0 && step.child_session_id) this.needsOwner(s, step, step.note ?? 'its merge stopped');
+      for (const step of this.offered(s.id, 'fix_merge')) {
+        this.clearOffer(step.id);
+        if (step.state === 'review' && step.messages_sent === 0 && step.child_session_id) this.needsOwner(s, step, step.note ?? 'its merge stopped');
       }
     }
     // a batch that ended its turn with no pull request, and the orchestrator did nothing for it: it waits for the owner (DISP-122)
-    for (const [stepId, sent] of [...this.noPrOffered]) {
-      const step = this.store.step(stepId);
-      if (step && step.orchestration_id !== s.id) continue;
-      if (step && waiting.some((e) => e.text.includes(`session #${step.child_session_id}) ended its turn with no pull request`))) continue;
-      this.noPrOffered.delete(stepId);
-      if (step?.state !== 'running' || step.note !== 'turn ended, no PR yet' || step.messages_sent !== sent || !step.child_session_id) continue;
+    for (const step of this.offered(s.id, 'no_pr')) {
+      if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}) ended its turn with no pull request`))) continue;
+      this.clearOffer(step.id);
+      if (step.state !== 'running' || step.note !== 'turn ended, no PR yet' || step.messages_sent !== step.offer_messages || !step.child_session_id) continue;
       const child = this.store.session(step.child_session_id);
       this.tellOwner(s.id, { title: `${s.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}` });
     }
     // a failed deploy it was told about and did nothing for: the owner is told (this push, not the one below)
     let told = false;
-    for (const stepId of [...this.deployOffered]) {
-      const step = this.store.step(stepId);
-      if (step && step.orchestration_id !== s.id) continue;
-      if (step && waiting.some((e) => e.text.includes(`session #${step.child_session_id}): failed: deploy failed`))) continue;
-      this.deployOffered.delete(stepId);
-      if (!acted && step?.state === 'failed' && step.note === 'deploy failed') {
+    for (const step of this.offered(s.id, 'deploy')) {
+      if (waiting.some((e) => e.text.includes(`session #${step.child_session_id}): failed: deploy failed`))) continue;
+      this.clearOffer(step.id);
+      if (!acted && step.state === 'failed' && step.note === 'deploy failed') {
         this.needsOwner(s, step, 'its deploy failed, and the orchestrator did not fix it');
         told = true;
       }
@@ -938,6 +927,23 @@ export class Orchestrator {
       void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}` }, s.started_by);
     }
     this.flush(s.id);
+  }
+
+  /**
+   * A plan, or a change of the running plan, that waits for the owner and that they were not told
+   * about yet: one push, kept in the store so a restart in the middle of the turn sends it still
+   * (DISP-165). True: it went out.
+   */
+  private notifyPlan(s: Session): boolean {
+    const o = this.store.orchestration(s.id);
+    if (!o || o.plan_version <= o.plan_notified_version) return false;
+    const plan = o.phase === 'plan' && o.steps.length > 0 && !o.plan_approved;
+    const change = o.phase === 'run' && !!o.proposal;
+    if (!plan && !change) return false;
+    this.store.updateOrchestration(s.id, { plan_notified_version: o.plan_version });
+    const title = change ? `${s.title}: plan change to approve` : `${s.title}: plan ready to approve`;
+    void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
+    return true;
   }
 
   /** The push for a step that only the owner can move on. */
@@ -1336,15 +1342,22 @@ export class Orchestrator {
     return saved;
   }
 
-  /** steps whose stopped merge the orchestrator was offered to fix: if it does not try, the owner is told */
-  private fixOffered = new Set<number>();
-  /** steps whose failed deploy the orchestrator was told to deal with: if it does nothing, the owner is told (DISP-103) */
-  private deployOffered = new Set<number>();
   /**
-   * steps whose batch ended its turn with no pull request, told to the orchestrator (with the
-   * messages it had sent then): if it does nothing for them, the owner is told (DISP-122)
+   * What the orchestrator is offered to deal with before the owner is told, kept on the step so a
+   * restart does not lose it (DISP-165): a stopped merge it may fix (fix_merge), a failed deploy
+   * (deploy, DISP-103), a batch that ended its turn with no pull request (no_pr, DISP-122). If it
+   * does nothing for it, the owner is told.
    */
-  private noPrOffered = new Map<number, number>();
+  private offer(step: OrchestrationStep, offer: StepOffer) {
+    this.store.updateStep(step.id, { offer, offer_messages: step.messages_sent, offered_at: this.now().toISOString() });
+  }
+  private clearOffer(stepId: number) {
+    this.store.updateStep(stepId, { offer: null, offer_messages: null, offered_at: null });
+  }
+  /** The steps of an orchestration with this offer. */
+  private offered(orchestrationId: number, offer: StepOffer): OrchestrationStep[] {
+    return this.store.orchestration(orchestrationId)?.steps.filter((x) => x.offer === offer) ?? [];
+  }
 
   /** How long a batch has to open its pull request after a turn, before "no pull request" is news. */
   settleMs = 30_000;
@@ -1371,7 +1384,7 @@ export class Orchestrator {
       `Step ${step.position} "${step.title}" (${step.project_key}, session #${child.id}) ended its turn with no pull request.${last ? ` Its last message: "${last}"` : ''}`,
       'If its work needs no merge, close the step (update_step, state done). If it stopped early, tell it what is missing (send_to_session). If it waits for the owner, do nothing: they are told.',
     ].join('\n'));
-    if (this.store.orchestration(step.orchestration_id)?.notify_owner === 'needs_you') this.noPrOffered.set(step.id, step.messages_sent);
+    if (this.store.orchestration(step.orchestration_id)?.notify_owner === 'needs_you') this.offer(step, 'no_pr');
   }
 
   /** A question the orchestrator had goes to the owner: said in the batch's chat, and they are told. */
@@ -1458,11 +1471,9 @@ export class Orchestrator {
   /** The failed deploys the orchestrator had are the owner's now: they are told. */
   private deploysToOwner(orchestrationId: number) {
     const own = this.store.session(orchestrationId);
-    for (const stepId of [...this.deployOffered]) {
-      const step = this.store.step(stepId);
-      if (step && step.orchestration_id !== orchestrationId) continue;
-      this.deployOffered.delete(stepId);
-      if (own && step?.state === 'failed' && step.note === 'deploy failed') this.needsOwner(own, step, 'its deploy failed, and the orchestrator cannot fix it now');
+    for (const step of this.offered(orchestrationId, 'deploy')) {
+      this.clearOffer(step.id);
+      if (own && step.state === 'failed' && step.note === 'deploy failed') this.needsOwner(own, step, 'its deploy failed, and the orchestrator cannot fix it now');
     }
   }
 
@@ -1551,7 +1562,7 @@ export class Orchestrator {
       const tryFirst = note === 'deploy failed' && this.canFixDeploy(o, step);
       const more = tryFirst ? ' Its change is merged: do not run the step again. You may fix the deploy once (a step that repairs it). If you cannot, say so to the owner.' : '';
       events.push(`${name}: failed: ${note}${held.length ? ` Do not start the steps that wait for it (${held.join(', ')}).` : ''}${more}`);
-      if (tryFirst) this.deployOffered.add(step.id);
+      if (tryFirst) this.offer(step, 'deploy');
       else this.tellOwner(orchId, { title: `${title}: step ${step.position} failed`, body: `${note}${/[.!?]$/.test(note ?? '') ? '' : '.'}${heldText}`.slice(0, 180), url: `/s/${orchId}`, tag: `orch-failed-${step.id}` });
     } else if (state === 'done' && step.state !== 'done') {
       const completed = merged && this.completeQuietly(o, step, child);
@@ -1562,7 +1573,7 @@ export class Orchestrator {
       const more = tryFirst ? ' You may tell its session once how to fix it (send_to_session). If you cannot, say so to the owner.'
         : stoppedMerge && o.answer_children ? ' Your message did not clear it: the owner is told.' : '';
       events.push(`${name}: ${note}.${more}`);
-      if (tryFirst) this.fixOffered.add(step.id);
+      if (tryFirst) this.offer(step, 'fix_merge');
       else if (note === "waits for the owner's review") {
         this.tellOwner(orchId, { title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` });
       } else {
@@ -1573,6 +1584,19 @@ export class Orchestrator {
     this.emit(orchId);
     if (events.length) this.wake(orchId, ...events);
     // no pull request after its turn: news only if it stays so (the batch often opens one a moment later)
-    if (note === 'turn ended, no PR yet' && o.phase === 'run' && o.answer_children) this.later(this.settleMs, () => this.noPullRequest(step.id, seen));
+    this.noPullRequestLater(this.store.step(step.id)!);
+  }
+
+  /**
+   * A step whose batch ended its turn with no pull request: the orchestrator is woken if it stays so.
+   * `resumed`: after a restart, the timer is armed again, unless the wake already went out (its offer is stored).
+   */
+  private noPullRequestLater(step: OrchestrationStep, resumed = false) {
+    if (step.state !== 'running' || step.note !== 'turn ended, no PR yet' || !step.seen) return;
+    if (resumed && step.offer === 'no_pr') return;
+    const o = this.store.orchestration(step.orchestration_id);
+    if (o?.phase !== 'run' || !o.answer_children) return;
+    const seen = step.seen;
+    this.later(this.settleMs, () => this.noPullRequest(step.id, seen));
   }
 }
