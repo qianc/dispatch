@@ -16,7 +16,7 @@ it('a close during the scope restart starts no runner', async () => {
   const link = new ServerLink(entry, {
     fake: true, opts: { assistantReadDirs: [] } as never,
     workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-osc-ws-')), slots: new Slots(2),
-    claudeAccounts: () => [], githubAccounts: [], secrets: new Secrets(),
+    claudeAccounts: () => [], githubAccounts: [], remoteBase: 'file:///nonexistent', secrets: new Secrets(), gitEnv: () => ({}),
   });
   const sent: WorkerToServer[] = [];
   const priv = link as unknown as {
