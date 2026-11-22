@@ -1,6 +1,6 @@
 // Session lifecycle: creating batches and planner chats, queueing, and applying worker events.
 import { failureReason } from '../shared/attention.ts';
-import type { GithubCred, StartSpec, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, StartSpec, StatusMsg, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
   ACTIVE_STATUSES,
@@ -835,6 +835,7 @@ export class Sessions {
 
   private async retryLoginNow(sessionId: number): Promise<{ resumed: boolean; account: ClaudeAccountInfo; session: Session }> {
     const s = this.mustGet(sessionId);
+    const seq = this.store.unread(s.id).last_seq;
     if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
     const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
     if (!this.hub.isConnected(s.worker_id ?? -1)) throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
@@ -844,7 +845,7 @@ export class Sessions {
     if (isRefusal(identity)) throw refusalError(identity);
     const account = await this.hub.cmd<ClaudeAccountInfo>(s.worker_id, { c: 'check_login', account: s.claude_account }, 20_000);
     this.accountChecked(s.worker_id!, account);
-    this.unchangedSince(s, 'retry');
+    this.unchangedSince(s, seq, 'retry');
     if (account.logged_in === false) return { resumed: false, account, session: s };
     this.addEvent(s.id, { kind: 'system', text: `${account.label} account is signed in on ${name}. The session resumes where it stopped.` });
     // a conversation that exists goes on; one that never got going starts from its first message
@@ -1020,7 +1021,8 @@ export class Sessions {
 
   // ---------- worker events ----------
 
-  onWorkerHello(workerId: number, live: number[]) {
+  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = []) {
+    this.lostStatuses(workerId, live, statuses);
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
       const s = this.store.session(id);
@@ -1061,6 +1063,24 @@ export class Sessions {
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
+  }
+
+  /**
+   * A status the worker wrote on a half-open link was lost (DISP-197): its hello repeats the last
+   * one of each live session. A turn that ended over there while we still think it works is
+   * handled now, as if the status had come; a newer sdk session id is kept.
+   */
+  private lostStatuses(workerId: number, live: number[], statuses: StatusMsg[]) {
+    for (const msg of statuses) {
+      const s = this.store.session(msg.session_id);
+      if (!s || s.worker_id !== workerId || !live.includes(s.id)) continue;
+      if ((s.status === 'running' || s.status === 'waiting_input') && (msg.status === 'idle' || msg.status === 'failed')) {
+        console.warn(`session ${s.id}: its "${msg.status}" was lost on the link to worker ${workerId}; taken from its hello`);
+        this.onWorkerMessage(workerId, msg);
+      } else if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id && ['running', 'waiting_input', 'idle'].includes(s.status)) {
+        this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
+      }
+    }
   }
 
   /** Agent sessions with a runner (chats are not resumed). */
@@ -1927,10 +1947,14 @@ export class Sessions {
 
   private moving = new Set<number>();
 
-  /** After an await: stop, without writing, when the session's status or worker changed meanwhile. */
-  private unchangedSince(s: Session, action: 'move' | 'retry') {
+  /**
+   * After an await: stop, without writing, when the session changed meanwhile: its status, its
+   * worker, or its chat (`seq`: its last event before the await). A short turn sent from another
+   * tab can start and end idle again while Dispatch waits; only its events show it (DISP-198).
+   */
+  private unchangedSince(s: Session, seq: number, action: 'move' | 'retry') {
     const now = this.mustGet(s.id);
-    if (now.status !== s.status || now.worker_id !== s.worker_id) {
+    if (now.status !== s.status || now.worker_id !== s.worker_id || this.store.unread(s.id).last_seq !== seq) {
       throw new SessionError(`Session #${s.id} changed while Dispatch was waiting for its worker (it is ${now.status} now): press ${action === 'move' ? 'Move' : 'Retry'} again if it still applies.`, 409);
     }
   }
@@ -1962,6 +1986,7 @@ export class Sessions {
     const from = this.workers.get(s.worker_id ?? -1)?.name ?? 'another worker';
     // the new worker starts from the pushed branch: push what the old one has, while it is there
     let pushed = this.hub.isConnected(s.worker_id);
+    const seq = this.store.unread(s.id).last_seq;
     if (pushed) {
       for (const repo of this.reposOf(s)) {
         try {
@@ -1969,7 +1994,7 @@ export class Sessions {
         } catch {
           pushed = false; // nothing to push in that repo, or it failed: say so below
         }
-        this.unchangedSince(s, 'move');
+        this.unchangedSince(s, seq, 'move');
       }
     }
     const where = pushed ? 'and pushed' : `but ${from} was not reachable, so commits it had not pushed may be missing`;

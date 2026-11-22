@@ -134,8 +134,15 @@ export type SelfUpdateAnswer =
   /** it cannot, or the commit is not one of its release branch */
   | { state: 'refused'; reason: string };
 
+export type StatusMsg = { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string };
+
 export type WorkerToServer =
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts }
+  /**
+   * `statuses`: per live session, the last status this worker wrote to a link (with the newest
+   * sdk_session_id it reported). A write on a half-open link is lost: the server corrects what it
+   * missed from these (DISP-197). An older worker sends none; an older server ignores them.
+   */
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[] }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */
@@ -150,7 +157,7 @@ export type WorkerToServer =
    * after the reset (DISP-108). `unclean` (with idle): why the turn did not end cleanly. `model`
    * (with running): the model Claude says the session runs on (DISP-117).
    */
-  | { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string }
+  | StatusMsg
   /** images: base64 images from a tool result (e.g. Read of a png); the server stores them as files */
   | { t: 'event'; session_id: number; body: SessionEventBody; images?: { media_type: string; data: string }[] }
   | { t: 'input_request'; session_id: number; local_id: string; payload: PendingInputPayload }

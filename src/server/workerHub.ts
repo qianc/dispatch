@@ -3,14 +3,14 @@
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
-import type { RpcMethod, ServerToWorker, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
+import type { RpcMethod, ServerToWorker, StatusMsg, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import type { Repo, WorkerFacts } from '../shared/types.ts';
 
 export type WorkerEvent = Exclude<WorkerToServer, { t: 'hello' } | { t: 'rpc' } | { t: 'cmd_result' } | { t: 'cmd_progress' } | { t: 'slots' } | { t: 'refused' } | { t: 'update_result' }>;
 export type UpdateResult = Extract<WorkerToServer, { t: 'update_result' }>;
 
 export interface HubHandlers {
-  onHello(workerId: number, live: number[], facts: WorkerFacts | null): void;
+  onHello(workerId: number, live: number[], facts: WorkerFacts | null, statuses: StatusMsg[]): void;
   onMessage(workerId: number, msg: WorkerEvent): void;
   onRpc(workerId: number, sessionId: number, method: RpcMethod, params: unknown): Promise<unknown>;
   /** the worker refused a start (full, or not allowed) */
@@ -211,7 +211,7 @@ export class WorkerHub {
         // older workers send only their Claude accounts
         link.facts = msg.facts ?? (msg.claude_accounts ? { os: '', hostname: '', slots: 0, free_slots: -1, claude_accounts: msg.claude_accounts, github_accounts: [], local_repo_dirs: [], releases: [] } : null);
         link.ready = true;
-        return this.handlers.onHello(link.workerId, msg.live, link.facts);
+        return this.handlers.onHello(link.workerId, msg.live, link.facts, msg.statuses ?? []);
       case 'cmd_result': {
         const p = link.pending.get(msg.req_id);
         if (!p) return;

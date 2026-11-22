@@ -7,7 +7,7 @@ import { hostname } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
-import type { GithubCred, RpcMethod, SelfUpdateAnswer, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
+import type { GithubCred, RpcMethod, SelfUpdateAnswer, ServerToWorker, StartSpec, StatusMsg, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
 import { CHAT_KINDS, repoFolder, type Repo, type WorkerFacts, type WorkerVersion } from '../shared/types.ts';
 import { serverAppUrl, serverGithubAccount, type ServerEntry } from './config.ts';
 import { FakeRunner } from './fakeRunner.ts';
@@ -116,6 +116,11 @@ export class ServerLink {
   private secrets: Secrets;
   /** messages produced while the server connection is down; flushed on reconnect so nothing is lost */
   private outbox: WorkerToServer[] = [];
+  /**
+   * Per session, the last status written to a link (not to the outbox): the next hello repeats it,
+   * as a write on a half-open link is lost (DISP-197).
+   */
+  private lastStatus = new Map<number, StatusMsg>();
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   /** what runs now for the server besides sessions (commands, deploys, pushes), by what it is (DISP-112) */
   private jobs = new Map<string, number>();
@@ -229,6 +234,12 @@ export class ServerLink {
       if (['idle', 'failed', 'completed', 'stopped'].includes(msg.status)) this.shared.slots.set(this.slotKey(msg.session_id), false);
     }
     msg = this.secrets.scrub(msg);
+    if (msg.t === 'status') {
+      // one in the outbox goes out after the hello: the hello does not repeat an older one
+      const sdk = msg.sdk_session_id ?? this.lastStatus.get(msg.session_id)?.sdk_session_id;
+      if (this.ws?.readyState === WebSocket.OPEN) this.lastStatus.set(msg.session_id, sdk ? { ...msg, sdk_session_id: sdk } : msg);
+      else this.lastStatus.delete(msg.session_id);
+    }
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
     // rpc calls time out on their own and are retried by the agent; old progress is of no use
     else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress' && !(msg.t === 'session_check' && msg.progress)) this.outbox.push(msg);
@@ -572,6 +583,8 @@ export class ServerLink {
     if (msg.t === 'cmd' && 'github' in msg.cmd) this.secrets.add(msg.cmd.github?.token);
     if (msg.t === 'deploy') this.secrets.add(msg.github?.token);
     if ((msg.t === 'start' || msg.t === 'send') && msg.spec.github) this.secrets.add(msg.spec.github.token);
+    // a new turn is on its way: the last status no longer says where the session is
+    if (msg.t === 'start' || msg.t === 'send') this.lastStatus.delete(msg.spec.session_id);
     switch (msg.t) {
       case 'start':
         return this.launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt, true);
@@ -710,7 +723,9 @@ export class ServerLink {
       if (sock.readyState !== WebSocket.OPEN) return; // closed meanwhile: its close handler reconnects
       this.ws = sock;
       // the worker's token goes in the connection's header, never in a message: every message is scrubbed
-      this.write(sock, { t: 'hello', live: [...this.runners.keys(), ...this.starting.keys()], claude_accounts: facts.claude_accounts, facts });
+      const live = [...this.runners.keys(), ...this.starting.keys()];
+      for (const id of this.lastStatus.keys()) if (!live.includes(id)) this.lastStatus.delete(id);
+      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values()] });
       for (const m of this.outbox.splice(0)) this.write(sock, m);
     });
     sock.on('message', (data) => {
