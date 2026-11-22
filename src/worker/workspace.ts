@@ -11,7 +11,7 @@ import type { GeneratorItem } from '../shared/generatorItems.ts';
 import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
 import { githubCredEnv } from '../shared/accounts.ts';
 import type { GithubCred, StartSpec } from '../shared/protocol.ts';
-import type { Repo } from '../shared/types.ts';
+import { repoFolder, type Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
 import { mergedRange } from '../shared/mergedRange.ts';
 
@@ -36,14 +36,6 @@ function withoutPrivateWords(message: string) {
   return existsSync(file) ? redactPrivate(message, readFileSync(file, 'utf8')) : message;
 }
 
-/** ws(s)://host/worker → http(s)://host/git: where a server serves its hosted repos. */
-export function hostedGitBase(workerUrl: string) {
-  const u = new URL(workerUrl);
-  u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-  u.pathname = u.pathname.replace(/\/worker\/?$/, '') + '/git';
-  return u.toString().replace(/\/$/, '');
-}
-
 export interface RunResult {
   code: number;
   out: string;
@@ -62,7 +54,7 @@ export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 
  * Run a shell command and read its output as it comes: `onProgress` gets the test progress read
  * from it (DISP-5), at most about once a second while it changes, and once at the end.
  */
-export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal): Promise<RunResult & { progress: CheckProgress; duration_ms: number; timed_out: boolean }> {
+export function runCheck(command: string, cwd: string, timeoutMs: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal, env: NodeJS.ProcessEnv = procEnv()): Promise<RunResult & { progress: CheckProgress; duration_ms: number; timed_out: boolean }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new CheckParser();
@@ -81,7 +73,7 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
       onProgress(parser.progress(Date.now() - started));
     };
     const tick = setInterval(() => report(), 1000);
-    const child = spawn('sh', ['-c', command], { cwd, env: procEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn('sh', ['-c', command], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const onData = (b: Buffer) => {
       const s = b.toString('utf8');
       out = (out + s).slice(-200_000);
@@ -100,16 +92,27 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
     }, timeoutMs);
     // stopped from outside (the owner sent a message or stopped the session while it ran)
     signal?.addEventListener('abort', killAll, { once: true });
+    let ended = false;
     const done = (code: number) => {
+      if (ended) return;
+      ended = true;
       clearInterval(tick);
       clearTimeout(kill);
       signal?.removeEventListener('abort', killAll);
+      child.stdout.destroy();
+      child.stderr.destroy();
       parser.write('\n');
       const progress = parser.progress(Date.now() - started);
       if (onProgress) onProgress(progress);
       resolve({ code, out: out.trim(), progress, duration_ms: progress.elapsed_ms, timed_out: timedOut });
     };
     child.on('error', (e) => { out += String(e); done(127); });
+    // the command has ended. What it started and left running may hold its output open: wait a
+    // moment for the last lines, not for that
+    child.on('exit', (code, signal) => {
+      clearTimeout(kill);
+      setTimeout(() => done(code ?? (signal ? 137 : 1)), 500);
+    });
     child.on('close', (code, signal) => done(code ?? (signal ? 137 : 1)));
   });
 }
@@ -289,6 +292,11 @@ export class Workspaces {
     return repo.local_path ?? `${this.remoteBase}/${repo.github_owner}/${repo.github_name}.git`;
   }
 
+  /** Cloned without the network: a local repo, or a remote base that is a folder (tests). */
+  offline(repo: Repo) {
+    return !!repo.local_path || (repo.kind !== 'hosted' && !/^https?:/.test(this.remoteBase));
+  }
+
   cacheDir(repo: Repo) {
     if (repo.kind === 'hosted') return join(this.root, 'cache', 'hosted', `${repo.github_name}-${repo.id}`);
     if (repo.local_path) return join(this.root, 'cache', 'local', `${repo.github_name}-${repo.id}`);
@@ -299,8 +307,9 @@ export class Workspaces {
     return join(this.root, 'sessions', String(sessionId));
   }
 
+  /** A repo's folder in a session: its name, or the folder the server gave it when names collide (DISP-167). */
   repoDir(sessionId: number, repo: Repo) {
-    return join(this.sessionDir(sessionId), repo.github_name);
+    return join(this.sessionDir(sessionId), repoFolder(repo));
   }
 
   private fetchedAt = new Map<string, number>();
@@ -784,15 +793,5 @@ export class Workspaces {
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir) && out.every((r) => r.worktree !== 'kept (uncommitted changes)')) await rm(dir, { recursive: true, force: true });
     return out;
-  }
-
-  async cleanup(sessionId: number, repos: Repo[]) {
-    for (const repo of repos) {
-      const wt = this.repoDir(sessionId, repo);
-      if (!existsSync(wt)) continue;
-      const owner = Workspaces.isAttached(wt, repo) ? repo.local_path! : this.cacheDir(repo);
-      await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', wt], owner));
-    }
-    await rm(this.sessionDir(sessionId), { recursive: true, force: true });
   }
 }

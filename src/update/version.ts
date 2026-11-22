@@ -1,9 +1,9 @@
 // Which commit of Dispatch runs here (DISP-112). Read once at start: a server and a worker may
 // share one checkout, and the files can move on while the process still runs the old code.
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { maxVersion } from '../shared/release.ts';
+import { isCheckout } from './apply.ts';
 
 /** A full commit id: the only thing an update is ever asked for by. */
 export const SHA_RE = /^[0-9a-f]{40}$/;
@@ -24,16 +24,6 @@ export function gitOut(dir: string, args: string[]): string | null {
     return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
   } catch {
     return null;
-  }
-}
-
-/** Is `dir` the top folder of a git checkout (not a folder inside some other repo)? */
-export function isCheckout(dir: string): boolean {
-  const top = gitOut(dir, ['rev-parse', '--show-toplevel']);
-  try {
-    return !!top && realpathSync(top) === realpathSync(dir);
-  } catch {
-    return false;
   }
 }
 

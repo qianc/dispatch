@@ -216,6 +216,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.onDeployFailed = (s, repo) => orchestrator.onDeploy(s, repo, 'failed');
   sessions.orchestratorRpc = (s, method, params) => orchestrator.rpc(s, method, params);
   sessions.orchestrationOf = (s) => orchestrator.spans(s);
+  janitor.orchestrationOf = (s) => orchestrator.spans(s);
   const ctx: Ctx = { cfg, store, auth, access, devices, users, identities, secretKeyFile: secretKey.generatedFile, bus, hub, workers, hosted, sessions, github, notifier, attachments, janitor, scheduler, orchestrator, version, updates };
   if (!opts.dbFile || opts.dbFile !== ':memory:') {
     janitor.start();
@@ -327,7 +328,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   });
   // MCP for Claude on other machines: OAuth (/authorize, /token, …) and the tracker tools at /mcp
   const oauth = new OAuth(cfg, db, access);
-  oauth.routes(app);
+  oauth.routes(app, users);
   mcpRoutes(app, { store, bus, attachments, oauth, publicUrl: cfg.publicUrl, rules: assistant.rules });
 
   app.get('/worker', { websocket: true }, (socket, req) => {

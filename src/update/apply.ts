@@ -5,7 +5,7 @@
 //
 // Only a full commit id is ever installed, and only one that is on the release branch of this
 // checkout's own `origin`. No address and no ref name from outside is fetched or run.
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -131,10 +131,10 @@ async function gitText(dir: string, args: string[]): Promise<string | null> {
   return r.code === 0 ? r.out.trim() : null;
 }
 
-/** Is `dir` the top folder of a git checkout? */
-export async function isCheckout(dir: string): Promise<boolean> {
-  const top = await gitText(dir, ['rev-parse', '--show-toplevel']);
+/** Is `dir` the top folder of a git checkout (not a folder inside some other repo)? Sync: readVersion needs it at start. */
+export function isCheckout(dir: string): boolean {
   try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, env: gitEnv() }).trim();
     return !!top && realpathSync(top) === realpathSync(dir);
   } catch {
     return false;
@@ -163,7 +163,7 @@ async function onBranch(dir: string, sha: string, branch: string) {
 export async function onReleaseBranch(dir: string, sha: string, branch: string, opts: { env?: NodeJS.ProcessEnv; gitMs?: number; abbrev?: boolean } = {}): Promise<void> {
   if (typeof sha !== 'string' || !(opts.abbrev ? /^[0-9a-f]{7,40}$/ : SHA).test(sha)) throw new Refusal('refused', 'An update needs a full commit id (40 hex characters).');
   if (typeof branch !== 'string' || !BRANCH.test(branch) || branch.startsWith('-') || branch.includes('..')) throw new Refusal('refused', 'The release branch is not a branch name.');
-  if (!(await isCheckout(dir))) throw new Refusal('refused', `${dir} is not a git checkout.`);
+  if (!(isCheckout(dir))) throw new Refusal('refused', `${dir} is not a git checkout.`);
   await fetchBranch(dir, branch, opts);
   await onBranch(dir, sha, branch);
 }
@@ -184,7 +184,7 @@ export async function verifyTarget(req: ApplyRequest, opts: { fetch?: boolean; e
   // the way back goes to this commit: nothing but a commit id, like the target
   if (req.from != null && (typeof req.from !== 'string' || !SHA.test(req.from))) throw refuse('The commit that runs now is not a full commit id.');
   if (req.from && req.from === req.sha) throw new Refusal('ahead', 'This version already runs.');
-  if (!(await isCheckout(req.dir))) throw refuse(`${req.dir} is not a git checkout.`);
+  if (!(isCheckout(req.dir))) throw refuse(`${req.dir} is not a git checkout.`);
   const changed = await gitText(req.dir, ['status', '--porcelain', '--untracked-files=no']);
   if (changed === null) throw refuse('git status failed in the checkout.');
   if (changed) throw refuse(`The checkout has changed files (${changed.split('\n').slice(0, 3).map((l) => l.trim().replace(/^\S+\s+/, '')).join(', ')}). Commit or undo them first.`);
@@ -465,7 +465,7 @@ const RECOVER_TRIES = 3;
  * again, not start the child on a checkout that is half one version and half the other.
  */
 export async function recoverJournal(dir: string, opts: ApplyOptions = {}): Promise<{ result: ApplyResult; ctx: unknown; retry?: boolean } | null> {
-  if (!(await isCheckout(dir))) return null;
+  if (!(isCheckout(dir))) return null;
   const gd = await gitDir(dir);
   if (!existsSync(journalFile(gd))) return null;
   // another launcher's update that still runs is not ours to undo

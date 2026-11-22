@@ -35,6 +35,7 @@ import {
   type Schedule,
   type Orchestration,
   type OrchestrationStep,
+  type StepOffer,
   type PlanChange,
   type NotifyOwner,
   type QuietLogEntry,
@@ -780,7 +781,11 @@ export class Store {
       child_session_id: numOrNull(r.child_session_id),
       seen: (r.seen as string | null) ?? null,
       deploys: json(r.deploys, {}),
+      deploys_started: json(r.deploys_started, {}),
       messages_sent: Number(r.messages_sent ?? 0),
+      offer: (r.offer as StepOffer | null) ?? null,
+      offer_messages: numOrNull(r.offer_messages),
+      offered_at: (r.offered_at as string | null) ?? null,
       optional: bool(r.optional),
     };
   }
@@ -798,6 +803,8 @@ export class Store {
       plan_md: String(r.plan_md),
       plan_approved: bool(r.plan_approved),
       plan_version: Number(r.plan_version),
+      plan_notified_version: Number(r.plan_notified_version ?? 0),
+      finish_notified: bool(r.finish_notified),
       max_children: Number(r.max_children),
       model: orchestratorModel(json<Partial<SessionOptions>>(r.session_options, {}).model),
       effort: json<Partial<RunOptions>>(r.session_options, {}).effort ?? 'default',
@@ -832,7 +839,7 @@ export class Store {
   orchestrations(): Orchestration[] {
     return this.db.all(`${ORCH_SELECT} ORDER BY o.session_id DESC LIMIT 100`).map((r) => this.toOrchestration(r));
   }
-  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
+  updateOrchestration(sessionId: number, patch: Partial<Pick<Orchestration, 'phase' | 'paused_from' | 'plan_md' | 'plan_approved' | 'plan_version' | 'plan_notified_version' | 'finish_notified' | 'max_children' | 'project_ids' | 'answer_children' | 'notify_owner' | 'cost_limit_usd' | 'paused_reason' | 'options' | 'proposal'>>) {
     const sets: string[] = ['updated_at = ?'];
     const params: (string | number | null)[] = [now()];
     for (const [k, v] of Object.entries(patch)) {
@@ -895,11 +902,11 @@ export class Store {
     const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
     return r && this.toStep(r);
   }
-  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'messages_sent'>>): OrchestrationStep {
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'deploys_started' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
-        ...entries.map(([k, v]) => (k === 'deploys' ? JSON.stringify(v) : (v as string | number | null))), id);
+        ...entries.map(([k, v]) => (k === 'deploys' || k === 'deploys_started' ? JSON.stringify(v) : (v as string | number | null))), id);
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = (SELECT orchestration_id FROM orchestration_steps WHERE id = ?)', now(), id);
     }
     return this.step(id)!;
@@ -924,9 +931,13 @@ export class Store {
     this.db.run('INSERT INTO orchestration_events (orchestration_id, text, due_at) VALUES (?, ?, ?)', sessionId, text, dueAt);
   }
   /** The events it can take now: not delivered yet, and due (a timer: from its time on). */
-  pendingOrchEvents(sessionId: number, nowIso = now()): { id: number; text: string }[] {
-    return this.db.all<{ id: number; text: string }>('SELECT id, text FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND (due_at IS NULL OR due_at <= ?) ORDER BY id', sessionId, nowIso)
-      .map((r) => ({ id: Number(r.id), text: String(r.text) }));
+  pendingOrchEvents(sessionId: number, nowIso = now()): { id: number; text: string; due_at: string | null }[] {
+    return this.db.all<{ id: number; text: string; due_at: string | null }>('SELECT id, text, due_at FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND (due_at IS NULL OR due_at <= ?) ORDER BY id', sessionId, nowIso)
+      .map((r) => ({ id: Number(r.id), text: String(r.text), due_at: r.due_at === null ? null : String(r.due_at) }));
+  }
+  /** An event's text, changed before it is delivered (a timer that came due late says so). */
+  setOrchEventText(id: number, text: string) {
+    this.db.run('UPDATE orchestration_events SET text = ? WHERE id = ? AND delivered_at IS NULL', text, id);
   }
   /** Its own timers that have not come due, soonest first. */
   waitingTimers(sessionId: number, nowIso = now()): { id: number; due_at: string }[] {
@@ -1050,9 +1061,14 @@ export class Store {
     };
   }
   /** Give a question to an orchestration (the owner is not told meanwhile), or back to the owner (null). */
-  setInputDelegated(id: number, orchestrationId: number | null) {
-    this.db.run('UPDATE pending_inputs SET delegated_to = ? WHERE id = ?', orchestrationId, id);
+  /** `stepId`: the step whose batch asked, kept when the question is handed on (null). */
+  setInputDelegated(id: number, orchestrationId: number | null, stepId?: number) {
+    this.db.run('UPDATE pending_inputs SET delegated_to = ?, step_id = COALESCE(?, step_id) WHERE id = ?', orchestrationId, stepId ?? null, id);
     return this.input(id)!;
+  }
+  /** How many questions of a step's batches the orchestrator answered (an overruled answer counts too). */
+  orchestratorAnswers(stepId: number): number {
+    return Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pending_inputs WHERE step_id = ? AND answered_by IN ('orchestrator', 'overruled')", stepId)?.n ?? 0);
   }
   setInputAnsweredBy(id: number, by: NonNullable<PendingInput['answered_by']>) {
     this.db.run('UPDATE pending_inputs SET answered_by = ? WHERE id = ?', by, id);

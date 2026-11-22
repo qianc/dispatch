@@ -1,6 +1,6 @@
 // System prompt text appended to Claude Code's own prompt for each session.
 import type { StartSpec } from '../shared/protocol.ts';
-import type { Item, Source } from '../shared/types.ts';
+import { repoFolder, type Item, type Source } from '../shared/types.ts';
 
 function sourceLine(s: Source) {
   const parts = [`${s.kind} "${s.title}"`];
@@ -59,7 +59,7 @@ function repoLines(spec: StartSpec) {
       const extra = r.local_path && r.read_dirs?.length
         ? `\n  Reference folders in the owner's checkout, not in git (read only): ${r.read_dirs.map((d) => `${r.local_path!.replace(/\/$/, '')}/${d}`).join(', ')}`
         : '';
-      return `- ${where} at ${single ? '.' : `./${r.github_name}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})${extra}`;
+      return `- ${where} at ${single ? '.' : `./${repoFolder(r)}`} (base ${r.default_branch}${spec.branch ? `, branch ${spec.branch}` : ', read-only checkout'})${extra}`;
     })
     .join('\n');
 }
@@ -169,7 +169,7 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
   } else {
     lines.push(
       '## Your job',
-      'Suggest the next batch of work. A batch runs as ONE Claude Code session that produces ONE branch and ONE pull request per changed repo, so group items that belong together and keep the batch small enough to review quickly, also on a phone.',
+      'Suggest the next batch of work. A batch runs as ONE Claude Code session that produces ONE branch and ONE pull request per changed repo, so group items that belong together.',
       'Weigh importance against effort, look at the code where needed, and say briefly why you picked the batch. You may also suggest new items (new_items) when you find gaps.',
       'Before you propose a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner, which can change what belongs in a batch.',
       'When the owner agrees, or when you have a clear suggestion, call `propose_batch`. The owner sees it as a card they can edit and start.',
@@ -207,7 +207,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     '1. Read the trackers and the code. Read each item you want to use in full with `get_item`: comments hold decisions and open points.',
     '2. Ask the owner what is unclear, one question at a time. Do not guess what only they can know.',
     '3. File what is missing with `create_item`, so that every step has items that say what is wanted.',
-    '4. Call `set_plan`. One step is one batch: small enough to review quickly (also on a phone), in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
+    '4. Call `set_plan`. One step is one batch, in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
     '5. Explain the plan briefly and stop. The owner approves it with a button.',
     '',
     '## Run phase',
@@ -248,6 +248,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
       '- Answer with `answer_session` when the plan, the items or what the owner told you settle it. Say in your answer why, in a few words. The owner sees your answer in the batch and can overrule it; if they do, follow them.',
       '- When it is a choice only the owner can make (taste, money, risk, anything they did not tell you), give it to them with `hand_to_owner` and one line why. Do not guess. A question you leave open goes to the owner by itself.',
       "- Approve a batch's plan when it does what its step asks and no more. Send it back with feedback when it misses the step or reaches beyond it.",
+      '- You may answer 10 questions (plan approvals too) per step, over all its sessions. After that its questions go to the owner, and Dispatch tells you so.',
       '- When a merge stops (a failed check, conflicts), you may tell the batch once how to fix it with `send_to_session`. When a batch ends its turn with no pull request, read its last message: close the step if nothing needs a merge, or tell it what is missing. A message to a batch that still works is queued: it gets it when its turn ends, so do not wait or send it again. If the batch closes or asks a question first, Dispatch tells you it was not delivered. You have 3 messages per step, queued ones too; after that it is the owner\'s.',
     ] : []),
     '',
@@ -286,7 +287,7 @@ function scheduledJob(s: NonNullable<StartSpec['schedule']>, editItems = false):
     '',
     'Keep to the scope. Pick work that clearly fits it and is ready to do. Do not be greedy: starting nothing is a good result when nothing fits or nothing is ready. Never start an item that is on hold, in progress, in review, or already in a batch; Dispatch refuses those anyway.',
     'Before you start a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner; an item that waits on the owner is not ready.',
-    `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together and keep each batch small enough to review quickly, also on a phone. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
+    `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
     'When the scope asks for it (e.g. triage), change items with `update_item` (status, importance, effort, tags, modules, with a comment that says why). ' + (editItems ? 'This project lets you change an item\'s title and description too (`title`, `body_md`; `body_md` replaces the whole text, so start from the current one): do that yourself when the scope asks for it, not as a comment for the owner to apply. ' : 'An item\'s title and description are not yours to change in this project: put a proposed text in a comment. ') + 'You cannot take an item off hold or close it. File new items you find with `create_item`.',
     'End with a short summary: what you started and why, or why you started nothing. It is the result of this run.',
   ];

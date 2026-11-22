@@ -5,7 +5,8 @@
 //   2. a person signed in through the proxy (or the password) enters the code in Settings
 //   3. the app's poll collects a device cookie, once; the device then acts as that person
 // Device sessions last DEVICE_DAYS, are listed in Settings and can be revoked there.
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
+import { sha256 } from './access.ts';
 import type { Db } from './db.ts';
 
 export const DEVICE_COOKIE = 'dispatch_device';
@@ -28,7 +29,6 @@ export interface Device {
 
 interface Pending { code: string; name: string; expires: number; secret: string | null; ip: string }
 
-const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => new Date().toISOString();
 const normalize = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 

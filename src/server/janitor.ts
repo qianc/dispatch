@@ -1,10 +1,11 @@
 // Tidies what finished sessions leave on disk: worktrees, and their branches once merged.
 // When a session finishes it is tidied at once; an hourly check (and the inbox) finds what is
 // left later (a branch merged afterwards, chats unused for a week) and offers to clean it up.
-import { CHAT_KINDS, FINAL_STATUSES, type Session } from '../shared/types.ts';
+import { CHAT_KINDS, FINAL_STATUSES, type Repo, type Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import { expireOAuthClients } from './oauth.ts';
+import { orchestratorCheckouts } from './repos.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import type { Leftover, TidyResult } from '../worker/workspace.ts';
@@ -62,7 +63,12 @@ export class Janitor {
     return !!s && FINAL_STATUSES.includes(s.status);
   }
 
+  /** The repos an orchestrator spans (app.ts wires it to the orchestration, as for sessions). */
+  orchestrationOf: ((s: Session) => { repos: Repo[] } | null) | null = null;
+
   private reposOf(s: Session) {
+    // an orchestrator has no project: its read-only checkouts are those of its span (DISP-167)
+    if (s.kind === 'orchestrator') return orchestratorCheckouts(this.store, this.orchestrationOf?.(s)?.repos ?? [], s.worker_id);
     return s.project_id ? this.store.repos(s.project_id) : [];
   }
   private mergedRepoIds(s: Session) {
@@ -88,7 +94,7 @@ export class Janitor {
       r.worktree !== 'none' ? `${r.repo}: worktree ${r.worktree}` : '',
       r.branch !== 'none' ? `${r.repo}: branch ${r.branch}` : '',
     ]).filter(Boolean);
-    if (said.length && !CHAT_KINDS.includes(s.kind) && s.kind !== 'planner') {
+    if (said.length && !CHAT_KINDS.includes(s.kind) && s.kind !== 'planner' && s.kind !== 'orchestrator') {
       const ev = this.store.addEvent(s.id, { kind: 'system', text: `Cleaned up. ${said.join('; ')}.` });
       this.bus.emit({ t: 'session_event', event: ev });
     }

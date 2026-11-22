@@ -2,8 +2,9 @@
 // session cookie whose secret is a row in web_sessions (DISP-71). A row can be deleted, so a session
 // can be revoked: sign out, "sign out everywhere" in Settings, or a changed password at start.
 // Tokens and the proxy header live in access.ts.
-import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { sha256 } from './access.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 
@@ -29,7 +30,6 @@ function verifyHash(password: string, stored: string): Promise<boolean> {
   });
 }
 
-const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => new Date().toISOString();
 
 export interface WebSession { id: number; name: string; created_at: string; expires_at: string; last_used_at: string | null }

@@ -36,7 +36,7 @@ import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
 import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
 import { labelReleased } from './releases.ts';
-import { placementProblem } from './repos.ts';
+import { orchestratorCheckouts, placementProblem } from './repos.ts';
 import { assertWritable, disabledMessage } from './projectLock.ts';
 import type { Store } from './store.ts';
 import type { WorkerEvent, WorkerHub } from './workerHub.ts';
@@ -47,6 +47,9 @@ import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } fro
 
 /** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
 export type IdentityResolver = (startedBy: string | null, project: Project | null, workerId?: number) => GithubIdentity | IdentityRefusal;
+
+/** How a push names the session it is about: its project, or for an orchestrator (no project) its title. */
+const pushName = (s: Session) => (s.kind === 'orchestrator' ? s.title : (s.project_key ?? 'Assistant'));
 
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {
@@ -335,7 +338,8 @@ export class Sessions {
 
   /** As whom an existing session acts on GitHub now (null: no GitHub needed, or an assistant chat). */
   private identityOf(s: Session) {
-    // an orchestrator's own checkouts: as for its first project
+    // an orchestrator: as for its first project. Its checkouts each use their own project's GitHub
+    // account (Repo.github_account, DISP-167); a user's own credential is used for all of them
     if (s.kind === 'orchestrator') return this.identityFor(s.started_by, this.orchestrationOf?.(s)?.first, s.worker_id);
     if (s.kind === 'assistant' || !s.project_id) return null;
     return this.identityFor(s.started_by, this.store.project(s.project_id), s.worker_id);
@@ -648,14 +652,18 @@ export class Sessions {
   startOrchestrator(input: { title: string; prompt: string; first: Project; model?: OrchestratorModel; effort?: RunOptions['effort'] }, startedBy: string | null, init: (s: Session) => void): Session {
     const workerId = this.workerFor(input.first, null, startedBy);
     this.preflight(startedBy, input.first, workerId);
-    const session = this.store.createSession({
-      project_id: null, kind: 'orchestrator', title: input.title, status: 'queued', force_plan: false, branch: null,
-      initial_prompt: input.prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(input.first, null, undefined, workerId),
-      // its own model and effort; the run options of its batches are kept with the orchestration
-      options: { ...DEFAULT_RUN_OPTIONS, model: input.model ?? 'default', effort: input.effort ?? 'default', worker_id: workerId },
-      worker_id: workerId, started_by: startedBy,
+    // one transaction: an orchestration that cannot be made leaves no orchestrator session behind
+    const session = this.store.db.tx(() => {
+      const created = this.store.createSession({
+        project_id: null, kind: 'orchestrator', title: input.title, status: 'queued', force_plan: false, branch: null,
+        initial_prompt: input.prompt, source_id: null, item_ids: [], claude_account: this.claudeAccountFor(input.first, null, undefined, workerId),
+        // its own model and effort; the run options of its batches are kept with the orchestration
+        options: { ...DEFAULT_RUN_OPTIONS, model: input.model ?? 'default', effort: input.effort ?? 'default', worker_id: workerId },
+        worker_id: workerId, started_by: startedBy,
+      });
+      init(created);
+      return created;
     });
-    init(session);
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;
@@ -981,7 +989,7 @@ export class Sessions {
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
-    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, cleanup: false, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: sessionId, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(sessionId)) this.bus.emit({ t: 'input', input: i });
     if (status === 'stopped' && s.kind === 'work') {
       for (const it of this.store.itemsByIds(s.item_ids)) {
@@ -1009,7 +1017,7 @@ export class Sessions {
         continue;
       }
       if (!s || FINAL_STATUSES.includes(s.status) || s.status === 'queued') {
-        this.hub.send(workerId, { t: 'close', session_id: id, cleanup: false, repos: s ? this.reposOf(s) : [] });
+        this.hub.send(workerId, { t: 'close', session_id: id, repos: s ? this.reposOf(s) : [] });
       }
     }
     // still running over there: no longer waiting for it
@@ -1052,7 +1060,7 @@ export class Sessions {
     if (msg.t === 'session_check') return this.onSessionCheck(s, msg); // a stopped check's last word ends its run (DISP-149)
     if (FINAL_STATUSES.includes(s.status)) {
       // A runner that should not exist any more (closed while the worker was away): ignore it and stop it.
-      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+      if (msg.t !== 'status') this.hub.send(workerId, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
       return;
     }
     switch (msg.t) {
@@ -1146,7 +1154,7 @@ export class Sessions {
         if (msg.status === 'idle' && proposed !== undefined) {
           // one notice for the turn: the proposal, with Claude's explanation
           const text = this.store.session(s.id)?.last_text || proposed;
-          this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, text, `proposal-${s.id}`);
+          this.notify(s, `${pushName(s)}: proposal ready`, text, `proposal-${s.id}`);
         } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const waiting = () => {
             const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
@@ -1583,8 +1591,7 @@ export class Sessions {
   private reposOf(s: Session) {
     if (s.kind === 'orchestrator') {
       // read-only checkouts of every project it spans; a local repo only where this worker has an ok copy
-      const all = this.orchestrationOf?.(s)?.repos ?? [];
-      return all.filter((r) => r.kind !== 'local' || (s.worker_id != null && !placementProblem(this.store, [r], s.worker_id)));
+      return orchestratorCheckouts(this.store, this.orchestrationOf?.(s)?.repos ?? [], s.worker_id);
     }
     const repos = s.project_id ? this.store.repos(s.project_id) : [];
     // a release works on its one repo
@@ -1777,7 +1784,7 @@ export class Sessions {
   tellOwnerInput(s: Session, input: PendingInput) {
     const p = input.payload;
     const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
-    this.notify(s, `${s.project_key ?? 'Assistant'}: ${what}`, inputReason(p), `input-${input.id}`);
+    this.notify(s, `${pushName(s)}: ${what}`, inputReason(p), `input-${input.id}`);
   }
 
   /** A question its orchestrator had is the owner's now: the session says what it waits for, and they are told. */
@@ -1944,7 +1951,7 @@ export class Sessions {
       worker_id: workerId, moved_from: s.id, started_by: s.started_by,
     });
     for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);
-    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, cleanup: false, repos: this.reposOf(s) });
+    this.hub.send(s.worker_id, { t: 'close', session_id: s.id, repos: this.reposOf(s) });
     for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
     this.addEvent(s.id, { kind: 'system', text: `Moved to worker ${target.name}: continued in session #${next.id}.` });
     this.setStatus(s.id, 'stopped', { ended_at: new Date().toISOString(), waiting_reason: null });

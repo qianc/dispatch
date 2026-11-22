@@ -25,6 +25,8 @@ describe('the prompts do not take the owner for phone-only (DISP-129)', () => {
 
   it('say mobile or desktop, never that the owner is on their phone', () => {
     expect(src).not.toMatch(/(from|on) their phone|reads on a phone/);
+    // batch size is not capped by what is easy to review: the owner reviews large batches as they like
+    expect(src).not.toMatch(/small enough to review/);
     expect(assistantPrompt([])).toContain('on mobile or desktop');
   });
 

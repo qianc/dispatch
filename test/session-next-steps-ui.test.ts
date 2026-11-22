@@ -56,11 +56,11 @@ describe('Mark as complete on a session\'s own page (DISP-124)', () => {
     const s = session({ kind: 'orchestrator', project_id: null, project_key: null });
     const qc = new QueryClient();
     const orchestration: Orchestration = {
-      session_id: s.id, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'done', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1, answer_children: true, notify_owner: 'needs_you', quiet_log: [], cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
+      session_id: s.id, title: 'Auth rework', goal: 'Rework auth', project_ids: [1], project_keys: ['AA'], phase: 'done', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1, plan_notified_version: 1, finish_notified: false, answer_children: true, notify_owner: 'needs_you', quiet_log: [], cost_usd: 0, cost_limit_usd: null, paused_reason: null, next_wake: null, model: 'default', effort: 'default',
       max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: null, proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '',
       steps: [1, 2].map((n) => ({
         id: n, orchestration_id: s.id, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-        state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null,
+        state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, child: null,
       })),
     };
     qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], attention: finishedAttention(orchestration), repos: [], source: null, project: null, failure: null, orchestration } satisfies SessionDetail);
