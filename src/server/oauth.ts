@@ -68,6 +68,12 @@ export class OAuth {
   private pending = new Map<string, Pending>();
   private codes = new Map<string, Code>();
 
+  /** Approvals and codes past their time go: a used one is deleted at once, an unused one only here (DISP-193). */
+  sweep(t = Date.now()) {
+    for (const [k, v] of this.pending) if (v.expires < t) this.pending.delete(k);
+    for (const [k, v] of this.codes) if (v.expires < t) this.codes.delete(k);
+  }
+
   constructor(cfg: Config, db: Db, access: Access) {
     this.cfg = cfg;
     this.db = db;
@@ -163,6 +169,7 @@ export class OAuth {
     // Step 1: who is approving, and what. Shows a consent page; nothing is granted on GET.
     app.get('/authorize', async (req, reply) => {
       reply.header('content-security-policy', pageCsp());
+      this.sweep();
       const q = req.query as Record<string, string | undefined>;
       const client = q.client_id ? this.client(q.client_id) : null;
       if (!client) return reply.status(400).type('text/html').send(page('Unknown app', '<p>This app is not registered with Dispatch. Add the connector again.</p>'));
@@ -200,6 +207,7 @@ export class OAuth {
     // Step 2: the decision, from the same person (re-checked: a POST alone proves nothing).
     app.post('/authorize', async (req, reply) => {
       reply.header('content-security-policy', pageCsp());
+      this.sweep();
       const b = (req.body ?? {}) as Record<string, string>;
       const p = this.pending.get(String(b.request ?? ''));
       this.pending.delete(String(b.request ?? ''));
