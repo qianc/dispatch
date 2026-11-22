@@ -209,6 +209,19 @@ describe('planChange rules', () => {
     expect(minorProblem(started, ok, split)).toMatch(/has started/);
   });
 
+  it('a split keeps the order of the work: the parts wait for what the step waited for, and what waited for it waits for every part (DISP-205)', () => {
+    const old = [step(1), step(2, { item_ids: [10, 11], depends_on: [1] }), step(3, { depends_on: [2] })];
+    const part = (items: number[], after: number[]): NextStep => ({ title: 'part', project_id: 1, prompt_md: '', item_ids: items, after, optional: false });
+    // the parts start in parallel with the migration
+    expect(minorProblem(old, [next(old[0]), part([10], []), part([11], []), next(old[2], [1, 2, 3])], split)).toMatch(/must wait for the steps it waited for/);
+    // step 3 waits for no part
+    expect(minorProblem(old, [next(old[0]), part([10], [1]), part([11], [1]), next(old[2], [1])], split)).toMatch(/must wait for all of its parts/);
+    // step 3 waits for one part only
+    expect(minorProblem(old, [next(old[0]), part([10], [1]), part([11], [1]), next(old[2], [2])], split)).toMatch(/must wait for all of its parts/);
+    // the parts in parallel, both after step 1, and step 3 after both: the right shape
+    expect(minorProblem(old, [next(old[0]), part([10], [1]), part([11], [1]), next(old[2], [2, 3])], split)).toBeNull();
+  });
+
   it('started steps keep their prompt and their order; nothing moves to another project', () => {
     const old = [step(1, { state: 'running' }), step(2, { state: 'done' }), step(3)];
     const reword = { kind: 'reword', reason: 'x' } as const;
