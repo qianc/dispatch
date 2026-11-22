@@ -103,8 +103,7 @@ export class Orchestrator {
    * that were still waiting.
    */
   resume() {
-    for (const o of this.store.orchestrations()) {
-      if (o.phase === 'done' || o.phase === 'stopped') continue;
+    for (const o of this.store.liveOrchestrations()) {
       for (const step of o.steps) {
         this.safely(() => {
           this.sync(step.id);
@@ -1439,6 +1438,7 @@ export class Orchestrator {
     const step = this.store.step(stepId);
     const child = step?.child_session_id ? this.store.session(step.child_session_id) : undefined;
     if (!step || !child || step.seen !== seen) return;
+    this.store.setNoPrWoken(step.id, seen);
     const last = (child.last_text ?? '').replace(/\s+/g, ' ').slice(0, 300);
     this.wake(step.orchestration_id, [
       `Step ${step.position} "${step.title}" (${step.project_key}, session #${child.id}) ended its turn with no pull request.${last ? ` Its last message: "${last}"` : ''}`,
@@ -1485,8 +1485,7 @@ export class Orchestrator {
   /** Offers that waited for their orchestrator too long (it works, or its worker is away) go to the owner (DISP-166). */
   checkOffers() {
     const now = this.now().getTime();
-    for (const o of this.store.orchestrations()) {
-      if (o.phase === 'done' || o.phase === 'stopped') continue;
+    for (const o of this.store.liveOrchestrations()) {
       const own = this.store.session(o.session_id);
       for (const step of o.steps) {
         if (step.offer && step.offered_at && now - Date.parse(step.offered_at) >= this.delegateTimeoutMs) {
@@ -1502,8 +1501,7 @@ export class Orchestrator {
    */
   checkDeploys() {
     const now = this.now();
-    for (const o of this.store.orchestrations()) {
-      if (o.phase === 'done' || o.phase === 'stopped') continue;
+    for (const o of this.store.liveOrchestrations()) {
       for (const step of o.steps) {
         const running = Object.keys(step.deploys).filter((repo) => step.deploys[repo] === 'running');
         if (!running.length) continue;
@@ -1711,11 +1709,12 @@ export class Orchestrator {
 
   /**
    * A step whose batch ended its turn with no pull request: the orchestrator is woken if it stays so.
-   * `resumed`: after a restart, the timer is armed again, unless the wake already went out (its offer is stored).
+   * `resumed`: after a restart, the timer is armed again, unless the wake already went out for this
+   * turn end (stored: its offer may be cleared by then, or never made, DISP-180).
    */
   private noPullRequestLater(step: OrchestrationStep, resumed = false) {
     if (step.state !== 'running' || step.note !== 'turn ended, no PR yet' || !step.seen) return;
-    if (resumed && step.offer === 'no_pr') return;
+    if (resumed && this.store.noPrWoken(step.id) === step.seen) return;
     const o = this.store.orchestration(step.orchestration_id);
     if (o?.phase !== 'run' || !o.answer_children) return;
     const seen = step.seen;

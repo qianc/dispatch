@@ -143,6 +143,20 @@ describe('sessions with the fake runner', () => {
     expect((await s.call('GET', '/projects/HC/items')).data.length).toBe(before);
   });
 
+  it('an item kept from a longer effort scale still saves; only a changed value is checked (DISP-183)', async () => {
+    await s.call('POST', '/projects', { key: 'SC', name: 'Scales', effort_scale: ['XS', 'S', 'M', 'L', 'XL'] });
+    const it = (await s.call('POST', '/projects/SC/items', { title: 'Big one', effort: 4, importance: 2 })).data;
+    expect((await s.call('PATCH', '/projects/SC', { effort_scale: ['S', 'M', 'L'] })).status).toBe(200);
+    // the item page sends effort and importance with every save
+    const saved = await s.call('PATCH', `/items/${it.id}`, { title: 'Big one, renamed', effort: 4, importance: 2 });
+    expect(saved.status).toBe(200);
+    expect(saved.data).toMatchObject({ title: 'Big one, renamed', effort: 4 });
+    const changed = await s.call('PATCH', `/items/${it.id}`, { effort: 3 });
+    expect(changed.status).toBe(400);
+    expect(changed.data.error).toMatch(/Effort 3 is outside the project scale/);
+    expect((await s.call('PATCH', `/items/${it.id}`, { effort: 2 })).status).toBe(200);
+  });
+
   it('lets the agent add items to its batch when the owner asks, so the merge closes them too', async () => {
     const a = (await s.call('POST', '/projects/HC/items', { title: 'Started with this' })).data;
     const b = (await s.call('POST', '/projects/HC/items', { title: 'Asked for later', status: 'backlog' })).data;

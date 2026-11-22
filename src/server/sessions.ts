@@ -1325,14 +1325,14 @@ export class Sessions {
     const asked = input?.payload.kind === 'cross_project' ? input.payload : null;
     if (!input || !asked) throw new Error('No approval for this request: ask the owner first.');
     if (input.answer?.kind !== 'cross_project' || !input.answer.approve) throw new Error('The owner did not approve this request.');
-    if (this.crossUsed.has(input.id)) throw new Error('This approval was already used: ask again.');
     const fields = ['action', 'project_key', 'query', 'key', 'body'] as const;
     if (fields.some((f) => (asked[f] ?? null) !== (p[f] ?? null))) throw new Error('The request is not the one the owner approved.');
     const own = this.store.project(s.project_id!)!;
     const project = this.store.projectByKey(asked.project_key);
     if (!project) throw new Error(`No project ${asked.project_key}`);
     if (project.id === own.id) throw new Error(`${own.key} is this chat's own project: use list_items and get_item.`);
-    this.crossUsed.add(input.id);
+    // stored: a restart does not make it valid again (DISP-179)
+    if (!this.store.useInput(input.id)) throw new Error('This approval was already used: ask again.');
     const scaled = (i: Item) => ({
       key: i.key, type: i.type, title: i.title, status: i.status,
       importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],
@@ -1404,9 +1404,6 @@ export class Sessions {
     this.addEvent(s.id, { kind: 'system', text: `Filed ${item.key} in project ${target.key}` });
     return { key: item.key, id: item.id, project: target.key, status: item.status };
   }
-
-  /** cross-project approvals already used: each one runs its request once */
-  private crossUsed = new Set<number>();
 
   /** An item by key: in `project`, or (null: the assistant) in any project. */
   private itemByKey(key: unknown, project: Project | null) {

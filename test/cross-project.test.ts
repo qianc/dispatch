@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CrossProjectRequest } from '../src/shared/types.ts';
+import { Sessions } from '../src/server/sessions.ts';
 import { crossProjectTools } from '../src/worker/mcp.ts';
 import { startServer, OWNER } from './helpers.ts';
 
@@ -77,6 +78,19 @@ describe('Cross-project access from planner and discussion chats', () => {
     await expect(s.ctx.sessions.rpc(c.id, 'cross_project', { ...req, body: 'something else', approval: yes.approval })).rejects.toThrow(/not the one/);
     await s.ctx.sessions.rpc(c.id, 'cross_project', { ...req, approval: yes.approval });
     expect(s.ctx.store.comments(pb2.id)).toEqual([expect.objectContaining({ author: 'claude', body_md: body, session_id: c.id })]);
+  });
+
+  it('an approval used before a server restart is not valid after it (DISP-179)', async () => {
+    const c = chat();
+    const req: CrossProjectRequest = { action: 'comment', project_key: 'PB', key: 'PB-1', body: 'Seen from PA.' };
+    const pb1 = s.ctx.store.itemByNumber(s.ctx.store.projectByKey('PB')!.id, 1)!;
+    const { approval } = await ask(c.id, req, true);
+    await s.ctx.sessions.rpc(c.id, 'cross_project', { ...req, approval });
+    // a new Sessions on the same database: what the old one held in memory is gone
+    const { store, bus, hub, notifier, workers, users } = s.ctx;
+    const restarted = new Sessions(store, bus, hub, notifier, workers, users);
+    await expect(restarted.rpc(c.id, 'cross_project', { ...req, approval })).rejects.toThrow(/already used/);
+    expect(store.comments(pb1.id).filter((x) => x.body_md === 'Seen from PA.')).toHaveLength(1);
   });
 
   it('is only for watched planner and discussion chats, and only for other projects', async () => {
