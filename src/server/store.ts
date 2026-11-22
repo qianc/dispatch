@@ -931,9 +931,13 @@ export class Store {
     this.db.run('INSERT INTO orchestration_events (orchestration_id, text, due_at) VALUES (?, ?, ?)', sessionId, text, dueAt);
   }
   /** The events it can take now: not delivered yet, and due (a timer: from its time on). */
-  pendingOrchEvents(sessionId: number, nowIso = now()): { id: number; text: string }[] {
-    return this.db.all<{ id: number; text: string }>('SELECT id, text FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND (due_at IS NULL OR due_at <= ?) ORDER BY id', sessionId, nowIso)
-      .map((r) => ({ id: Number(r.id), text: String(r.text) }));
+  pendingOrchEvents(sessionId: number, nowIso = now()): { id: number; text: string; due_at: string | null }[] {
+    return this.db.all<{ id: number; text: string; due_at: string | null }>('SELECT id, text, due_at FROM orchestration_events WHERE orchestration_id = ? AND delivered_at IS NULL AND (due_at IS NULL OR due_at <= ?) ORDER BY id', sessionId, nowIso)
+      .map((r) => ({ id: Number(r.id), text: String(r.text), due_at: r.due_at === null ? null : String(r.due_at) }));
+  }
+  /** An event's text, changed before it is delivered (a timer that came due late says so). */
+  setOrchEventText(id: number, text: string) {
+    this.db.run('UPDATE orchestration_events SET text = ? WHERE id = ? AND delivered_at IS NULL', text, id);
   }
   /** Its own timers that have not come due, soonest first. */
   waitingTimers(sessionId: number, nowIso = now()): { id: number; due_at: string }[] {
