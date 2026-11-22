@@ -96,6 +96,22 @@ describe('discuss chats and files from a source folder', () => {
     expect((await fetch(`${s.base}/api/projects/SLD/file?path=docs/triage.md&source=${src.id}`, { headers: auth })).status).toBe(404);
   });
 
+  it("lets a discuss chat read its source's base_dir, never the folder of an absolute title (DISP-152)", async () => {
+    const project = s.ctx.store.projectByKey('SLD')!;
+    const readDirs = async (sourceId: number) => {
+      const [item] = s.ctx.store.createProposedItems(project.id, [{ type: 'backlog', title: `From source ${sourceId}`, body_md: '', importance: 2, effort: null, labels: [], modules: [] }], sourceId);
+      const chat = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'which folders?' })).data;
+      return waitFor(async () => {
+        const ev = (await s.call('GET', `/sessions/${chat.id}`)).data.events.find((e: { body: { text?: string } }) => e.body.text?.startsWith('(fake) I may read'));
+        return ev?.body.text as string | undefined;
+      }, 'discuss answer', 20_000);
+    };
+    const titled = s.ctx.store.createSource(project.id, { kind: 'manual', title: join(srcDir, 'backlog.md'), body_md: 'x', reporter: null, version_tag: null, skill_name: null });
+    expect(await readDirs(titled.id)).not.toContain(srcDir);
+    const imported = s.ctx.store.createSource(project.id, { kind: 'manual', title: 'Slides backlog', body_md: 'x', reporter: null, version_tag: null, skill_name: null, base_dir: srcDir });
+    expect(await readDirs(imported.id)).toContain(srcDir);
+  }, 40_000);
+
   it('runs a read-only discuss chat per item, outside the agent lists and slots', async () => {
     const item = (await s.call('POST', '/projects/SLD/items', { title: 'Charts overlap' })).data;
     const chat = (await s.call('POST', `/items/${item.id}/discuss`, { text: 'what is this?' })).data;
