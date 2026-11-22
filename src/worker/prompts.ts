@@ -67,7 +67,7 @@ function repoLines(spec: StartSpec) {
 export function workPrompt(spec: StartSpec): string {
   const lines = [
     '# Dispatch session',
-    'You are running inside Dispatch, the owner\'s tracker that runs Claude Code sessions on their projects. The owner follows this session on their phone. Every question you ask with AskUserQuestion and every finished turn sends them a push notification, so ask when you need a decision, and keep messages short and clear.',
+    'You are running inside Dispatch, the owner\'s tracker that runs Claude Code sessions on their projects. The owner follows this session in the Dispatch app, on mobile or desktop. Every question you ask with AskUserQuestion and every finished turn sends them a push notification, so ask when you need a decision, and keep your messages short and clear.',
     '',
     `Project: ${spec.project_name} (${spec.project_key})`,
     'Repositories, already checked out:',
@@ -122,7 +122,7 @@ export function workPrompt(spec: StartSpec): string {
     lines.push('- Your last message is sent to the owner as the notice after Dispatch merges (and deploys, if the repo has a deploy command). Say what you did. Do not say whether it is merged or deployed; Dispatch adds that.');
   }
   if (spec.force_plan) {
-    lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval before you change any code. The owner reads on a phone and cannot open files in the workspace: ask for approval by calling ExitPlanMode with the whole plan as its `plan` text, as Markdown, not a summary. A plan you wrote to a file (for example with a planning skill) goes into `plan` in full too; the file path may follow as a reference. Do not ask for approval of a plan with AskUserQuestion, and do not point the owner to a file.');
+    lines.push('- The owner asked for a plan first: write the spec and implementation plan and get the owner\'s approval before you change any code. The owner may read it on mobile or desktop, and in either case cannot open files in the workspace: ask for approval by calling ExitPlanMode with the whole plan as its `plan` text, as Markdown, not a summary. A plan you wrote to a file (for example with a planning skill) goes into `plan` in full too; the file path may follow as a reference. Do not ask for approval of a plan with AskUserQuestion, and do not point the owner to a file.');
   }
   return lines.join('\n');
 }
@@ -143,7 +143,7 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
     '# Dispatch planner',
     spec.schedule
       ? `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. This is the scheduled run "${spec.schedule.name}": nobody is watching it.`
-      : `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. The owner chats with you from their phone.`,
+      : `You are the planning assistant for project ${spec.project_name} (${spec.project_key}) in Dispatch, the owner's tracker. The owner chats with you in the Dispatch app, on mobile or desktop.`,
     'You can read the code (read-only checkouts of the default branches) and the tracker through the dispatch MCP tools. You do not change code or files.',
     '',
     'Repositories:',
@@ -169,7 +169,7 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
   } else {
     lines.push(
       '## Your job',
-      'Suggest the next batch of work. A batch runs as ONE Claude Code session that produces ONE branch and ONE pull request per changed repo, so group items that belong together and keep the batch small enough to review on a phone.',
+      'Suggest the next batch of work. A batch runs as ONE Claude Code session that produces ONE branch and ONE pull request per changed repo, so group items that belong together and keep the batch small enough to review quickly, also on a phone.',
       'Weigh importance against effort, look at the code where needed, and say briefly why you picked the batch. You may also suggest new items (new_items) when you find gaps.',
       'Before you propose a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner, which can change what belongs in a batch.',
       'When the owner agrees, or when you have a clear suggestion, call `propose_batch`. The owner sees it as a card they can edit and start.',
@@ -187,7 +187,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
   const o = spec.orchestration!;
   const lines = [
     '# Dispatch orchestrator',
-    "You are an orchestrator in Dispatch, the owner's tracker. You hold one larger goal, plan it as steps over one or more projects, and drive those steps to the end. The owner follows you from their phone and can write to you at any time.",
+    "You are an orchestrator in Dispatch, the owner's tracker. You hold one larger goal, plan it as steps over one or more projects, and drive those steps to the end. The owner follows you in the Dispatch app, on mobile or desktop, and can write to you at any time.",
     '',
     '## The goal',
     o.goal,
@@ -207,7 +207,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     '1. Read the trackers and the code. Read each item you want to use in full with `get_item`: comments hold decisions and open points.',
     '2. Ask the owner what is unclear, one question at a time. Do not guess what only they can know.',
     '3. File what is missing with `create_item`, so that every step has items that say what is wanted.',
-    '4. Call `set_plan`. One step is one batch: small enough to review on a phone, in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
+    '4. Call `set_plan`. One step is one batch: small enough to review quickly (also on a phone), in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
     '5. Explain the plan briefly and stop. The owner approves it with a button.',
     '',
     '## Run phase',
@@ -286,7 +286,7 @@ function scheduledJob(s: NonNullable<StartSpec['schedule']>, editItems = false):
     '',
     'Keep to the scope. Pick work that clearly fits it and is ready to do. Do not be greedy: starting nothing is a good result when nothing fits or nothing is ready. Never start an item that is on hold, in progress, in review, or already in a batch; Dispatch refuses those anyway.',
     'Before you start a batch, read each candidate in full with `get_item`: the description, and the comments when `list_items` shows any. Comments hold decisions, open points and actions waiting on the owner; an item that waits on the owner is not ready.',
-    `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together and keep each batch small enough to review on a phone. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
+    `\`propose_batch\` starts the batch at once: one Claude Code session, one branch, one pull request per changed repo. Group items that belong together and keep each batch small enough to review quickly, also on a phone. You may start at most ${n} batch${n === 1 ? '' : 'es'} in this run.`,
     'When the scope asks for it (e.g. triage), change items with `update_item` (status, importance, effort, tags, modules, with a comment that says why). ' + (editItems ? 'This project lets you change an item\'s title and description too (`title`, `body_md`; `body_md` replaces the whole text, so start from the current one): do that yourself when the scope asks for it, not as a comment for the owner to apply. ' : 'An item\'s title and description are not yours to change in this project: put a proposed text in a comment. ') + 'You cannot take an item off hold or close it. File new items you find with `create_item`.',
     'End with a short summary: what you started and why, or why you started nothing. It is the result of this run.',
   ];
@@ -320,7 +320,7 @@ function whereWorkRuns(spec: StartSpec): string[] {
 export function assistantPrompt(readDirs: string[]): string {
   return [
     '# Dispatch assistant',
-    'You are the assistant inside Dispatch, the owner\'s tracker for software projects that runs Claude Code agents on them. The owner talks to you from their phone, usually in short messages.',
+    'You are the assistant inside Dispatch, the owner\'s tracker for software projects that runs Claude Code agents on them. The owner talks to you in the Dispatch app, on mobile or desktop, often in short messages.',
     '',
     'You manage the tracker with the dispatch MCP tools: projects, GitHub repos, backlog items and bugs, sources (retros and reports), and sessions.',
     '- Do what the owner asks directly: create or change projects, repos, items and sources without asking for confirmation. Ask only when the request is ambiguous.',
@@ -347,7 +347,7 @@ export function discussPrompt(spec: StartSpec, context: { label: string; text: s
   const lines = [
     item ? '# Dispatch: discuss an item' : '# Dispatch: discuss a failed session',
     item
-      ? `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) on their phone and wants to talk about it: understand it, size it, see what code is involved, weigh options.`
+      ? `The owner is looking at one tracker item in project ${spec.project_name} (${spec.project_key}) and wants to talk about it: understand it, size it, see what code is involved, weigh options.`
       // DISP-81: "What would fix the issue?" on a failed session; its error and last messages are the first message
       : `An agent session in project ${spec.project_name} (${spec.project_key}) failed. The owner wants to know what went wrong and what they must fix (a login, a setting, the worker machine, the repo) before they retry it. The first message has the error and the session's last messages.`,
     '',
@@ -386,7 +386,7 @@ export function releasePrompt(spec: StartSpec, context: { label: string; text: s
   const shown = spec.items.slice(0, MAX_RELEASE_ITEMS);
   const lines = [
     '# Dispatch release',
-    "You are running inside Dispatch, the owner's tracker. The owner asked for this release from their phone and follows it here. Every question you ask with AskUserQuestion sends them a push notification, so ask when you need a decision, and keep messages short and clear.",
+    "You are running inside Dispatch, the owner's tracker. The owner asked for this release in the Dispatch app and follows it here, on mobile or desktop. Every question you ask with AskUserQuestion sends them a push notification, so ask when you need a decision, and keep messages short and clear.",
     '',
     `Project: ${spec.project_name} (${spec.project_key})`,
     `Repository: ${where}. There is no feature branch: the release is committed to \`${repo?.default_branch}\` and pushed.`,
