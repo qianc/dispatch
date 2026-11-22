@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import type { GithubCred, RpcMethod, SelfUpdateAnswer, ServerToWorker, StartSpec, WorkerCommand, WorkerToServer } from '../shared/protocol.ts';
@@ -257,8 +257,9 @@ export class ServerLink {
       await this.workspaces.prepare(spec); // read-only detached checkouts (branch is null)
       dirs.push(...spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r)));
     }
-    const src = spec.source?.title;
-    if (src && isAbsolute(src) && insideDirs(src, this.opts.assistantReadDirs, '/')) dirs.push(dirname(src));
+    // only the folder the Assistant's markdown import recorded; a title is caller-set text (DISP-152)
+    const base = spec.source?.base_dir;
+    if (base && isAbsolute(base) && insideDirs(base, this.opts.assistantReadDirs, '/')) dirs.push(base);
     // folders of the owner's real checkout that git does not carry into a session (repo setting)
     const extra: string[] = [];
     for (const r of spec.repos) {
