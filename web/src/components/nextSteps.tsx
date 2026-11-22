@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import type { Attention, OpenProposal } from '../../../src/shared/types.ts';
 import { api, type Project, type Repo } from '../api.ts';
-import { useChosenWorker, useRunOptions } from './batch.tsx';
+import { useChosenWorker, useRunOptions, useSentOptions } from './batch.tsx';
 import { useCardPicks, useProposalActions } from './proposals.ts';
 import { SignInPanel } from './signIn.tsx';
 import { Button, ErrorText, cx } from './ui.tsx';
@@ -47,13 +47,14 @@ function ProposalActions({ sessionId, projectKey, card, many }: { sessionId: num
   const [options] = useRunOptions(projectKey);
   const p = card.proposal;
   const [workerId] = useChosenWorker(project ?? { worker_id: null }, p.type === 'batch' ? p.worker : undefined);
+  const sent = useSentOptions(options, workerId);
   const { start, create, dismiss, busy, error } = useProposalActions({ sessionId, eventId: card.event_id, project });
   // what was unticked on the card in the chat stays out here too
   const [picked] = useCardPicks(sessionId, card.event_id, p.type === 'batch' ? p.item_ids : []);
   return (
     <>
       {p.type === 'batch' ? (
-        <Button small variant="primary" disabled={busy || !project || (!picked.size && !p.new_items.length)} onClick={() => start.mutate({ title: p.title, item_ids: [...picked], new_items: p.new_items, prompt: p.prompt, force_plan: p.force_plan, options: { ...options, worker_id: workerId } })}>
+        <Button small variant="primary" disabled={busy || !project || (!picked.size && !p.new_items.length)} onClick={() => start.mutate({ title: p.title, item_ids: [...picked], new_items: p.new_items, prompt: p.prompt, force_plan: p.force_plan, options: sent })}>
           Start {many ? `"${p.title}"` : 'batch'} ({picked.size + p.new_items.length})
         </Button>
       ) : (

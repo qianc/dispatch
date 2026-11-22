@@ -2,7 +2,7 @@
 import { join, resolve } from 'node:path';
 import { loadWorkerConfig } from './config.ts';
 import { migrateLegacyLayout } from './layout.ts';
-import { expandDirs, linkAgentSkills, type RunnerOptions } from './runner.ts';
+import { expandDirs, linkAgentSkills, parseOptionalPlugins, type RunnerOptions } from './runner.ts';
 import type { WorkerVersion } from '../shared/types.ts';
 import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
@@ -22,6 +22,8 @@ if (addedToPath.length) console.log(`PATH for agents: added ${addedToPath.join('
 const FAKE = env.RUNNER === 'fake';
 const opts: RunnerOptions = {
   pluginDirs: (env.AGENT_PLUGIN_DIRS ?? '').split(':').filter(Boolean),
+  // plugins a batch turns on with a checkbox (DISP-222)
+  optionalPlugins: parseOptionalPlugins(env.AGENT_OPTIONAL_PLUGINS ?? ''),
   settingSources: (env.AGENT_SETTING_SOURCES ?? 'user,project').split(',').filter(Boolean) as RunnerOptions['settingSources'],
   idleCloseMs: Number(env.IDLE_CLOSE_MINUTES ?? 10) * 60_000,
   // per-session environment: the session's Claude account, and its starter's own GitHub account

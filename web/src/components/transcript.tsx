@@ -12,7 +12,7 @@ import { Lightbox } from './images.tsx';
 import { useCardPicks, useProposalActions } from './proposals.ts';
 import { ItemKeyLink } from './itemPeek.tsx';
 import { fullTime, messageTime } from '../time.ts';
-import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions } from './batch.tsx';
+import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions, useSentOptions } from './batch.tsx';
 
 
 /** One assistant message. Memoized on primitives so a refetch does not re-parse every message's markdown. */
@@ -491,13 +491,14 @@ function ProposalCard({ eventId, done, proposal, session, project, readOnly }: {
   const [showOptions, setShowOptions] = useState(false);
   const proposedWorker = proposal.type === 'batch' ? { name: proposal.worker, reason: proposal.worker_reason } : undefined;
   const [workerId, setWorkerId] = useChosenWorker(project, proposedWorker?.name);
+  const sent = useSentOptions(options, workerId);
 
   // items can move on after the card was made (closed, or started in another session): leave them out
   const goneIds = new Set(items.filter((i) => ['done', 'canceled', 'in_progress', 'in_review'].includes(i.status)).map((i) => i.id));
   const usable = [...picked].filter((id) => !goneIds.has(id));
   const { start, create } = useProposalActions({ sessionId: session.id, eventId, project });
   const startBatch = () => start.mutate({
-    title, item_ids: usable, new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: { ...options, worker_id: workerId },
+    title, item_ids: usable, new_items: newItems.filter((_, i) => pickedNew.has(i)), prompt, force_plan: forcePlan, options: sent,
   });
   const createItems = () => create.mutate({ items: newItems.filter((_, i) => pickedNew.has(i)), source_id: proposal.type === 'items' ? proposal.source_id : null });
 
@@ -551,9 +552,9 @@ function ProposalCard({ eventId, done, proposal, session, project, readOnly }: {
           </label>
           <div className="mt-2"><WorkerField value={workerId} onChange={setWorkerId} project={project} proposed={proposedWorker} /></div>
           <button type="button" className="mt-2 text-[13px] text-accent" onClick={() => setShowOptions(!showOptions)} aria-expanded={showOptions}>
-            Run options{runOptionsSummary(options).length ? `: ${runOptionsSummary(options).join(', ')}` : ' (defaults)'} {showOptions ? '▴' : '▾'}
+            Run options{runOptionsSummary(sent).length ? `: ${runOptionsSummary(sent).join(', ')}` : ' (defaults)'} {showOptions ? '▴' : '▾'}
           </button>
-          {showOptions && <div className="mt-2"><RunOptionsFields value={options} set={setOptions} project={project} /></div>}
+          {showOptions && <div className="mt-2"><RunOptionsFields value={options} set={setOptions} project={project} workerId={workerId} /></div>}
         </>
       )}
       {done ? (
