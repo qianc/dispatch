@@ -1225,12 +1225,7 @@ export class Sessions {
     if (s.kind === 'release' && !['get_item', 'list_items', 'get_image', 'add_comment', 'release_items'].includes(method)) throw new Error(`A release session cannot call ${method}.`);
     if (method === 'release_items' && (s.kind !== 'release' || !s.release)) throw new Error('Only a release session labels released items.');
     const project = this.store.project(s.project_id!)!;
-    const byKey = (key: unknown) => {
-      const n = Number(String(key).split('-').pop());
-      const it = this.store.itemByNumber(project.id, n);
-      if (!it) throw new Error(`No item ${String(key)} in project ${project.key}`);
-      return it;
-    };
+    const byKey = (key: unknown) => this.itemByKey(key, project);
     switch (method) {
       case 'list_items':
         return this.listItems(project, p);
@@ -1477,8 +1472,7 @@ export class Sessions {
   /** Discuss: show a suggested change to an item as a card; nothing changes until the owner applies it. */
   private proposeItemUpdate(s: Session, p: ItemUpdateProposal): string {
     const project = this.store.project(s.project_id!)!;
-    const it = this.store.itemByNumber(project.id, Number(p.key.split('-').pop()));
-    if (!it) throw new Error(`No item ${p.key} in project ${project.key}`);
+    const it = this.itemByKey(p.key, project);
     const { changes, comment } = this.itemChanges(project, it, p);
     const before: ItemChanges = {};
     for (const k of Object.keys(changes) as (keyof ItemChanges)[]) {
