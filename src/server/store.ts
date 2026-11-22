@@ -685,11 +685,27 @@ export class Store {
   queued(): Session[] {
     return this.db.all(`${SESSION_SELECT} WHERE s.status = 'queued' ORDER BY s.id`).map((r) => this.toSession(r));
   }
-  /** Earlier work sessions in this project that are not abandoned (a queued "after" batch waits on them). */
-  earlierWork(s: Session): Session[] {
-    return this.db
-      .all(`${SESSION_SELECT} WHERE s.project_id = ? AND s.id < ? AND s.kind = 'work' AND s.status NOT IN ('stopped','failed') ORDER BY s.id`, s.project_id ?? -1, s.id)
+  /**
+   * Earlier work sessions in this project that a queued "after" batch may wait on, with their open
+   * PRs: not done yet, or done with a PR still open (DISP-157). `alsoIds` are kept whatever their
+   * state (sessions whose merge check still runs). A session done with no open PR is left out.
+   */
+  earlierWork(s: Session, alsoIds: number[] = []): (Session & { open_prs: PullRequest[] })[] {
+    const also = alsoIds.length ? ` OR s.id IN (${alsoIds.map(() => '?').join(',')})` : '';
+    const rows = this.db
+      .all(
+        `${SESSION_SELECT} WHERE s.project_id = ? AND s.id < ? AND s.kind = 'work' AND s.status NOT IN ('stopped','failed')
+          AND (s.status IN ('queued','running','waiting_input','idle')
+            OR EXISTS (SELECT 1 FROM pull_requests op WHERE op.session_id = s.id AND op.state = 'open')${also})
+          ORDER BY s.id`,
+        s.project_id ?? -1, s.id, ...alsoIds,
+      )
       .map((r) => this.toSession(r));
+    if (!rows.length) return [];
+    const prs = this.db
+      .all(`${PR_SELECT} WHERE pr.state = 'open' AND pr.session_id IN (${rows.map(() => '?').join(',')}) ORDER BY pr.id DESC`, ...rows.map((r) => r.id))
+      .map(toPr);
+    return rows.map((r) => ({ ...r, open_prs: prs.filter((p) => p.session_id === r.id) }));
   }
 
   // ---------- schedules ----------

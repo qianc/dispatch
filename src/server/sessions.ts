@@ -1628,12 +1628,12 @@ export class Sessions {
    * the main branch with that work in it. A batch whose auto-merge stopped holds the queue too.
    */
   waitingFor(next: Session): string | null {
-    for (const e of this.store.earlierWork(next)) {
+    for (const e of this.store.earlierWork(next, [...this.settling])) {
       const name = `#${e.id} ${e.title.length > 40 ? `${e.title.slice(0, 40)}…` : e.title}`;
       if (['queued', 'running', 'waiting_input'].includes(e.status)) return `Waiting for ${name} to finish`;
       if (e.options.auto_merge === 'off') continue;
       if (this.settling.has(e.id)) return `Waiting for ${name} to merge`;
-      const open = this.store.prs({ session_id: e.id }).filter((p) => p.state === 'open');
+      const open = e.open_prs;
       if (!open.length) continue;
       const stuck = open.find((p) => p.blocked || p.mergeable === false);
       return stuck ? `Waiting for ${name} to merge: ${stuck.blocked ?? 'it has merge conflicts'}` : `Waiting for ${name} to merge`;
