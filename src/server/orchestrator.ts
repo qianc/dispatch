@@ -153,7 +153,13 @@ export class Orchestrator {
       const c = s.child_session_id ? this.store.session(s.child_session_id) : undefined;
       return { ...s, child: c ? { id: c.id, status: c.status, title: c.title, waiting_reason: c.waiting_reason } : null };
     });
-    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: o.phase === 'plan' || o.phase === 'run' ? this.timersOf(o)[0]?.due_at ?? null : null };
+    const wakes = (o.phase === 'plan' || o.phase === 'run') && !this.ownFailed(o);
+    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: wakes ? this.timersOf(o)[0]?.due_at ?? null : null };
+  }
+
+  /** Its own session failed: its timers wait until the owner writes to it and it goes on. */
+  private ownFailed(o: Pick<Orchestration, 'session_id'>): boolean {
+    return this.store.session(o.session_id)?.status === 'failed';
   }
 
   /** What an idle orchestrator needs from its owner, or null while it only waits for its steps. */
@@ -185,6 +191,7 @@ export class Orchestrator {
   private waitingOf(o: Orchestration): string | null {
     if (o.phase === 'done' || o.phase === 'stopped') return null;
     if (o.phase === 'paused') return o.paused_reason ?? 'Paused';
+    if (this.ownFailed(o)) return 'Its session failed: write to it to go on';
     const timer = () => (this.timersOf(o).length ? 'Waits for its own timer' : null);
     if (o.phase === 'plan') return o.steps.length && !o.plan_approved ? 'Plan ready to approve' : timer();
     const failed = o.steps.find((s) => s.state === 'failed');
@@ -877,7 +884,17 @@ export class Orchestrator {
   flush(sessionId: number) {
     const o = this.store.orchestration(sessionId);
     if (!o || (o.phase !== 'plan' && o.phase !== 'run')) return;
-    if (this.store.session(sessionId)?.status !== 'idle') return;
+    const status = this.store.session(sessionId)?.status;
+    // its session failed: a timer that comes due waits for the owner to write to it, and says it came late
+    if (status === 'failed') {
+      for (const e of this.dueEvents(sessionId)) {
+        if (e.due_at && e.text.startsWith('Your timer: ') && !e.text.includes('(came due at ')) {
+          this.store.setOrchEventText(e.id, `${e.text} (came due at ${e.due_at.slice(11, 16)} UTC while the session was failed)`);
+        }
+      }
+      return;
+    }
+    if (status !== 'idle') return;
     const pending = this.dueEvents(sessionId);
     if (!pending.length) return;
     const ids = pending.map((e) => e.id);
@@ -1085,11 +1102,20 @@ export class Orchestrator {
   /** At its cost limit an orchestration is paused: nothing new starts, what runs goes on, and the owner is told once. */
   private checkCost(sessionId: number) {
     const o = this.store.orchestration(sessionId);
-    if (!o || o.cost_limit_usd === null || (o.phase !== 'plan' && o.phase !== 'run')) return;
+    if (!o || o.cost_limit_usd === null) return;
+    // paused by the owner, its batches still spend: the cost reason is set once, and is the flag that the owner was told
+    const paused = o.phase === 'paused';
+    if (paused ? o.paused_reason !== null : o.phase !== 'plan' && o.phase !== 'run') return;
     const cost = this.store.orchestrationCost(sessionId);
     if (cents(cost) < cents(o.cost_limit_usd)) return;
     const used = `${usd(cost)} of ${usd(o.cost_limit_usd)} used.`;
-    this.pause(sessionId, `Cost limit reached: ${used}`);
+    if (paused) {
+      this.store.updateOrchestration(sessionId, { paused_reason: `Cost limit reached: ${used}` });
+      this.sessions.systemNote(sessionId, `Cost limit reached while paused. ${used}`);
+      this.emit(sessionId);
+    } else {
+      this.pause(sessionId, `Cost limit reached: ${used}`);
+    }
     void this.notifier.send({ title: `${o.title}: cost limit reached`, body: `${used} Running sessions go on; no new step starts. Raise the limit to go on.`, url: `/s/${sessionId}`, tag: `orch-cost-${sessionId}` }, o.started_by);
   }
 
@@ -1221,8 +1247,11 @@ export class Orchestrator {
 
   /** The orchestrator answers a question or a plan approval of one of its batches. */
   private answerSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
+    // the phase first: a pause hands the questions to the owner, so ownInput alone would not say why
+    if (o.phase === 'paused') throw new Error("The orchestration is paused: its batches' questions are the owner's until they resume it.");
+    if (o.phase === 'done' || o.phase === 'stopped') throw new Error('This orchestration is closed.');
+    if (o.phase === 'plan') throw new Error("The changed plan waits for the owner: until they approve it, your batches' questions are theirs.");
     const input = this.ownInput(o, p.input_id);
-    if (o.phase !== 'run') throw new Error("The changed plan waits for the owner: until they approve it, your batches' questions are theirs.");
     const payload = input.payload;
     if (payload.kind === 'plan_approval') {
       if (typeof p.approve !== 'boolean') throw new Error('A plan needs approve: true or false.');
@@ -1503,6 +1532,8 @@ export class Orchestrator {
       this.store.dropTimers(s.id);
       this.emit(s.id);
     }
+    // its page says it waits for the owner, not for a timer that cannot fire
+    if (s.status === 'failed') this.emit(s.id);
   }
 
   /**

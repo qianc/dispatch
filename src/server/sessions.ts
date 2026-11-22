@@ -48,6 +48,9 @@ import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } fro
 /** Resolves as whom a session started by `startedBy` acts on GitHub (identity.ts; set by app.ts). */
 export type IdentityResolver = (startedBy: string | null, project: Project | null, workerId?: number) => GithubIdentity | IdentityRefusal;
 
+/** How a push names the session it is about: its project, or for an orchestrator (no project) its title. */
+const pushName = (s: Session) => (s.kind === 'orchestrator' ? s.title : (s.project_key ?? 'Assistant'));
+
 /** Two cards of the same kind are versions of one another: same title, or items in common. */
 function overlaps(a: Proposal, b: Proposal): boolean {
   if (a.type === 'batch' && b.type === 'batch') {
@@ -1146,7 +1149,7 @@ export class Sessions {
         if (msg.status === 'idle' && proposed !== undefined) {
           // one notice for the turn: the proposal, with Claude's explanation
           const text = this.store.session(s.id)?.last_text || proposed;
-          this.notify(s, `${s.project_key ?? 'Assistant'}: proposal ready`, text, `proposal-${s.id}`);
+          this.notify(s, `${pushName(s)}: proposal ready`, text, `proposal-${s.id}`);
         } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const waiting = () => {
             const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
@@ -1777,7 +1780,7 @@ export class Sessions {
   tellOwnerInput(s: Session, input: PendingInput) {
     const p = input.payload;
     const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
-    this.notify(s, `${s.project_key ?? 'Assistant'}: ${what}`, inputReason(p), `input-${input.id}`);
+    this.notify(s, `${pushName(s)}: ${what}`, inputReason(p), `input-${input.id}`);
   }
 
   /** A question its orchestrator had is the owner's now: the session says what it waits for, and they are told. */
