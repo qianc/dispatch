@@ -3,7 +3,6 @@
 // down runs when it is back, if that is less than CATCH_UP_MS later.
 import type { Schedule, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
-import type { Config } from './config.ts';
 import type { Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
 
@@ -54,14 +53,12 @@ export class Scheduler {
   private store: Store;
   private sessions: Sessions;
   private bus: Bus;
-  private cfg: Pick<Config, 'authUsers'>;
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(store: Store, sessions: Sessions, bus: Bus, cfg: Pick<Config, 'authUsers'> = { authUsers: [] }) {
+  constructor(store: Store, sessions: Sessions, bus: Bus) {
     this.store = store;
     this.sessions = sessions;
     this.bus = bus;
-    this.cfg = cfg;
   }
 
   start() {
@@ -98,9 +95,7 @@ export class Scheduler {
     if (!s) throw new Error('Unknown schedule');
     const project = this.store.project(s.project_id)!;
     try {
-      // a person taken off AUTH_USERS starts nothing more, their schedules included (DISP-173)
-      const { authUsers } = this.cfg;
-      if (s.owner && authUsers.length && !authUsers.includes(s.owner)) throw new Error(`Schedule '${s.name}' runs as ${s.owner}, who may no longer use this install.`);
+      // startScheduled refuses an owner taken off AUTH_USERS (DISP-173, DISP-195)
       const session = this.sessions.startScheduled(project, s);
       this.store.updateSchedule(s.id, { last_session_id: session.id, last_error: null });
       return session;

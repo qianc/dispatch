@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { asksOrchestrator } from '../../shared/attention.ts';
-import { projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
+import { OPEN_ITEM_STATUSES, projectInput, projectPatch, isRepoSubdir, repoInput, repoPatch } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 import { assertWritable, setDisabled } from '../projectLock.ts';
 import { principalName } from '../access.ts';
@@ -17,7 +17,7 @@ export function projectRoutes(app: FastifyInstance, { store, hub, github, worker
   app.get('/api/projects', async () =>
     store.projects().map((p) => {
       const sessions = store.sessions({ project_id: p.id, statuses: ['queued', 'running', 'waiting_input', 'idle'] });
-      const open = store.items(p.id, { status: ['triage', 'backlog', 'todo', 'in_progress', 'in_review'] });
+      const open = store.items(p.id, { status: OPEN_ITEM_STATUSES });
       return {
         ...p,
         muted: store.isMuted(p.id),

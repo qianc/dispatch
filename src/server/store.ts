@@ -1065,10 +1065,13 @@ export class Store {
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }));
   }
 
-  /** The last `limit` events before seq `before` (default: the newest), and whether there are earlier ones (DISP-162). */
-  eventsPage(sessionId: number, limit: number, before = Number.MAX_SAFE_INTEGER): { events: SessionEvent[]; earlier: boolean } {
+  /**
+   * The last `limit` events between seq `after` and `before` (default: all of them up to the newest), and
+   * whether there are earlier ones in that range (DISP-162, DISP-220).
+   */
+  eventsPage(sessionId: number, limit: number, before = Number.MAX_SAFE_INTEGER, after = 0): { events: SessionEvent[]; earlier: boolean } {
     const rows = this.db
-      .all('SELECT * FROM session_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?', sessionId, before, limit + 1)
+      .all('SELECT * FROM session_events WHERE session_id = ? AND seq > ? AND seq < ? ORDER BY seq DESC LIMIT ?', sessionId, after, before, limit + 1)
       .map((r) => ({ id: Number(r.id), session_id: Number(r.session_id), seq: Number(r.seq), body: json(r.body, { kind: 'system', text: '' }), created_at: String(r.created_at) }) as SessionEvent);
     return { events: rows.slice(0, limit).reverse(), earlier: rows.length > limit };
   }

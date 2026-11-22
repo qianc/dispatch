@@ -68,6 +68,10 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   and the push says "merged and deployed" or that the deploy failed, with the end of its output.
   The deploy may restart the server itself: the worker keeps the result and reports it when the
   server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
+  Whatever a deploy, setup or check command leaves running in its process group is killed about
+  half a second after the command ends, so a test server cannot outlive it: a service started with
+  a plain `&` or `nohup` dies with it. To keep a service, start it outside the group, with
+  `setsid` or `systemd-run --user`, or let Docker or systemd run it.
 - **Usage limit**: a session whose turn stops on its Claude account's usage limit (the five-hour
   or weekly limit) is not done. It shows "Waiting for limit" with the reset time, and goes on by
   itself after the reset; a message from you makes it try at once. Until then nothing treats it as

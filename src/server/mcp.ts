@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { MANY_RELEASE_ITEMS } from '../shared/release.ts';
-import { ITEM_STATUSES, type Item, type Project } from '../shared/types.ts';
+import { ITEM_STATUSES, OPEN_ITEM_STATUSES, type Item, type Project } from '../shared/types.ts';
 import type { Principal } from './access.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
@@ -15,7 +15,6 @@ import { labelReleased } from './releases.ts';
 import { assertWritable } from './projectLock.ts';
 import type { Store } from './store.ts';
 
-const OPEN = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 const AUTHOR = 'claude';
 
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] });
@@ -84,7 +83,7 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
     },
   }, guard(false, (a: { project: string; status?: string[]; all?: boolean; type?: string; tag?: string; module?: string; query?: string }) => {
     const p = project(a.project);
-    let items = store.items(p.id, { type: a.type, status: a.all ? undefined : a.status ?? OPEN });
+    let items = store.items(p.id, { type: a.type, status: a.all ? undefined : a.status ?? OPEN_ITEM_STATUSES });
     const low = (xs: string[]) => xs.map((x) => x.toLowerCase());
     if (a.tag) items = items.filter((i) => low(i.labels).includes(a.tag!.toLowerCase()));
     if (a.module) items = items.filter((i) => low(i.modules).includes(a.module!.toLowerCase()));

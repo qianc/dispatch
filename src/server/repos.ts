@@ -103,10 +103,11 @@ export function orchestratorCheckouts(store: Store, repos: Repo[], workerId: num
  * The repos of a session with their own folder each (DISP-167): repos whose names collide (two
  * owners, two projects) get `<owner>-<name>` (GitHub) or `<name>-<id>` (hosted and local repos, or
  * when that collides as well). The others keep their name, so no folder of a session without a
- * collision moves.
+ * collision moves. Names differing only in case collide too: they are one folder on a Windows or
+ * macOS worker (DISP-220).
  */
 export function withFolders(repos: Repo[]): Repo[] {
-  const count = (names: string[], n: string) => names.filter((x) => x === n).length;
+  const count = (names: string[], n: string) => names.filter((x) => x.toLowerCase() === n.toLowerCase()).length;
   const names = repos.map((r) => r.github_name);
   const first = repos.map((r) => (count(names, r.github_name) < 2 ? r.github_name : r.kind !== 'hosted' && !r.local_path ? `${r.github_owner}-${r.github_name}` : `${r.github_name}-${r.id}`));
   return repos.map((r, i) => {
@@ -140,9 +141,9 @@ export function ownerName(v: string): { owner: string; name: string } {
 }
 
 /** A session's worktree folder is the repo's name, so a project's repos need distinct names (DISP-142). */
-/** `exceptId`: the repo being renamed. */
+/** Case does not count (DISP-220): a Windows or macOS worker has one folder for both. `exceptId`: the repo being renamed. */
 export function assertNameFree(store: Store, projectId: number, name: string, exceptId?: number) {
-  if (store.repos(projectId).some((r) => r.github_name === name && r.id !== exceptId)) throw new HttpError(409, `This project already has a repo named ${name}.`);
+  if (store.repos(projectId).some((r) => r.github_name.toLowerCase() === name.toLowerCase() && r.id !== exceptId)) throw new HttpError(409, `This project already has a repo named ${name}.`);
 }
 
 /**

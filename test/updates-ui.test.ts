@@ -157,6 +157,16 @@ describe('Settings → Updates (DISP-112)', () => {
     expect(checkResult(info(), broken, at)).toMatchObject({ text: expect.stringMatching(/^The check at 16[.:]05 failed: GitHub answered 502$/), tone: 'bad' });
   });
 
+  it('"Check now" right after the server updated itself does not call the commit it runs new (DISP-220)', () => {
+    const at = new Date(2026, 10, 22, 16, 5);
+    // the saved check was for the old commit A; the server now runs B, the newest
+    const updated = info({ version: { sha: B, tag: null }, state: { ...info().state, for_sha: B, behind_by: 0, commits: [], ahead_shas: [] }, target: null });
+    expect(checkResult(info(), updated, at)).toMatchObject({ text: expect.stringMatching(/^Up to date as of 16[.:]05\. The server runs bbbbbbb, the newest on main\.$/), tone: 'ok' });
+    // still behind after the update, but the newest commit is the one seen before: not new
+    const partly = info({ version: { sha: C, tag: null }, state: { ...info().state, for_sha: C, behind_by: 1 } });
+    expect(checkResult(info(), partly, at).text).toMatch(/^No new commits as of 16[.:]05\. bbbbbbb is still the newest on main\.$/);
+  });
+
   it('logs each update: what, from which version to which, who started it, and how it ended', () => {
     const text = show(info({
       log: [

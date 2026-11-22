@@ -7,6 +7,8 @@ import { z } from 'zod';
 
 export const ITEM_TYPES = ['backlog', 'bug'] as const;
 export const ITEM_STATUSES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'hold', 'done', 'canceled'] as const;
+/** Items still to be done or under way: what agents and project counts list as open. */
+export const OPEN_ITEM_STATUSES: ItemStatus[] = ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
 export const SOURCE_KINDS = ['manual', 'retro', 'skill_run', 'user_report', 'agent_session'] as const;
 export const SESSION_KINDS = ['work', 'planner', 'assistant', 'discuss', 'release', 'orchestrator'] as const;
 /** Light read-only chats: no worker slot, not listed as agent work, no push when a reply is ready. */
@@ -1103,7 +1105,7 @@ export interface UpdateState {
   on_branch: boolean;
   /** the first lines of those commits, newest first (at most 20) */
   commits: { sha: string; subject: string }[];
-  /** the commits past the server's on the release branch, as far as one look at GitHub reads them (DISP-194): a worker on one of them is newer than the server */
+  /** the commits past the server's on the release branch, as far as one look at GitHub reads them, and the workers' commits past it when far behind (DISP-194, DISP-220): a worker on one of them is newer than the server */
   ahead_shas: string[];
   error: string | null;
 }

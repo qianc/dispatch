@@ -9,6 +9,7 @@ import {
   crossProjectSummary,
   FINAL_STATUSES,
   ITEM_STATUSES,
+  OPEN_ITEM_STATUSES,
   itemPatch,
   proposedItemSchema,
   type InputAnswer,
@@ -1416,7 +1417,7 @@ export class Sessions {
 
   /** A project's open items, one line each (the agents' list_items). */
   listItems(project: Project, p: Record<string, unknown>) {
-    const status = Array.isArray(p.status) ? (p.status as string[]) : ['triage', 'backlog', 'todo', 'in_progress', 'in_review'];
+    const status = Array.isArray(p.status) ? (p.status as string[]) : OPEN_ITEM_STATUSES;
     return this.store.items(project.id, { type: p.type as string | undefined, status }).map((i) => ({
       key: i.key, id: i.id, type: i.type, title: i.title, status: i.status,
       importance: project.importance_scale[i.importance - 1], effort: i.effort === null ? null : project.effort_scale[i.effort],

@@ -59,13 +59,19 @@ export function workerWhy(w: UpdateWorker): string | null {
 
 const clock = (at: Date) => at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
-/** What "Check now" found, against what the card showed before (DISP-194): also when nothing changed. */
+/**
+ * What "Check now" found, against what the card showed before (DISP-194): also when nothing changed.
+ * The newest commit is not new when the server already runs it, as after its own update (DISP-220).
+ */
 export function checkResult(before: UpdateInfo | undefined, after: UpdateInfo, at: Date): { text: string; tone: Tone } {
   const { state: st, branch } = after;
   const t = clock(at);
   if (st.error) return { text: `The check at ${t} failed: ${st.error}`, tone: 'bad' };
   if (!st.commit) return { text: `Checked at ${t}. ${behindLine(after).text}`, tone: 'neutral' };
-  if (before?.state.commit?.sha === st.commit.sha && before.state.for_sha === st.for_sha) {
+  if (st.for_sha === after.version.sha && st.on_branch && st.behind_by === 0) {
+    return { text: `Up to date as of ${t}. The server runs ${short(st.commit.sha)}, the newest on ${branch}.`, tone: 'ok' };
+  }
+  if (before?.state.commit?.sha === st.commit.sha) {
     return { text: `No new commits as of ${t}. ${short(st.commit.sha)} is still the newest on ${branch}.`, tone: 'neutral' };
   }
   return { text: `New on ${branch} as of ${t}: ${short(st.commit.sha)}.`, tone: 'accent' };

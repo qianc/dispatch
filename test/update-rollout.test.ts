@@ -693,6 +693,26 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect(await statuses()).toEqual({ default: 'newest', b: 'newer' });
     });
 
+    it('far behind, a worker on a commit one look did not list is not behind either (DISP-220)', async () => {
+      const [C, D] = [sha('c'), sha('d')];
+      const why = 'It was not started through the launcher (node src/launch.ts server|worker).';
+      await worker('test-token', { sha: B, updatable: false, why });
+      await worker(b.secret, { sha: sha('e'), updatable: false, why });
+      await online(2);
+      s.ctx.version.sha = A;
+      const src = fakeSource([A, B, C, D]);
+      // as GitHub when more than a page behind: only the newest commits come back
+      const compare = src.compare;
+      src.compare = (async (base: string, head: string) => {
+        const r = await compare(base, head);
+        return { ...r, commits: r.commits.slice(-1) };
+      }) as typeof compare;
+      s.ctx.updates.source = src;
+      await s.call('POST', '/update/check');
+      // B is past the server's A although the look listed only D; e is on no branch
+      expect(await statuses()).toEqual({ default: 'newer', b: 'behind' });
+    });
+
     it('workers take only a commit of the release branch: a server off it updates none', async () => {
       const wa = await worker('test-token', updatable);
       await online(1);
