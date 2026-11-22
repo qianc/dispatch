@@ -42,7 +42,7 @@ import { Users } from './users.ts';
 import { Identities } from './identities.ts';
 import { SecretBox, keyMatches, loadKey } from './secretBox.ts';
 import { githubRoutes } from './routes/github.ts';
-import { connectUrl, needsGithub, resolveGithubIdentity, type IdentityDeps } from './identity.ts';
+import { connectUrl, needsGithub, removedStarter, resolveGithubIdentity, type IdentityDeps } from './identity.ts';
 import { safePath } from '../shared/safePath.ts';
 import type { Session } from '../shared/types.ts';
 import { HostedGit } from './hosted.ts';
@@ -134,8 +134,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     const cred = s.started_by ? identities.get(s.started_by) : null;
     return [...cfg.githubAccounts.map((a) => a.token), ...(cred && 'token' in cred ? [cred.token] : [])];
   };
-  // as Sessions.identityFor: a session with no user may use its worker's own env account
+  // as Sessions.identityFor: a session with no user may use its worker's own env account. A starter
+  // taken off AUTH_USERS is refused (DISP-200): no auto-merge, push or PR write as them; reads use the env accounts
   const sessionIdentity = (s: Session) => {
+    const removed = removedStarter(cfg.authUsers, s.started_by);
+    if (removed) return removed;
     const project = s.project_id ? store.project(s.project_id) : undefined;
     return project && needsGithub(store, project) ? resolveGithubIdentity(identityDeps, s, project, s.worker_id ?? undefined) : null;
   };

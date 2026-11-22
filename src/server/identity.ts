@@ -36,6 +36,15 @@ export interface IdentityDeps {
 
 export const isRefusal = (r: GithubIdentity | IdentityRefusal | null | undefined): r is IdentityRefusal => !!r && 'refused' in r;
 
+/**
+ * A starter taken off a non-empty AUTH_USERS (DISP-195, DISP-200): their sessions neither start nor
+ * resume, and nothing acts on GitHub as them. Null while they may use the install (or nobody started it).
+ */
+export function removedStarter(authUsers: string[], startedBy: string | null): IdentityRefusal | null {
+  if (!startedBy || !authUsers.length || authUsers.includes(startedBy)) return null;
+  return { refused: true, code: 'user_removed', user: startedBy, message: `${startedBy} may no longer use this install (not in AUTH_USERS), so their sessions do not run.`, connect_url: '/settings' };
+}
+
 /** Does work in this project reach GitHub? GitHub repos, and hosted repos with an upstream, do. */
 export function needsGithub(store: Pick<Store, 'repos'>, project: Pick<Project, 'id'> | null | undefined): boolean {
   if (!project) return false;
