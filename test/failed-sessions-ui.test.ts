@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { failureReason } from '../src/shared/attention.ts';
+import { attentionOf, failureReason } from '../src/shared/attention.ts';
 import { DEFAULT_RUN_OPTIONS, type FailedSession, type Session } from '../src/shared/types.ts';
 import { liveGroups, waitingCount } from '../web/src/activity.ts';
 import type { Inbox, SessionDetail } from '../web/src/api.ts';
@@ -31,7 +31,7 @@ const session = (over: Partial<Session> = {}): Session => ({
 const REASON = 'GitHub is not signed in on this worker';
 const page = (s: Session, failure: SessionDetail['failure'] = { reason: REASON, retried_as: null, discussion: null }) => {
   const qc = new QueryClient();
-  qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure } satisfies SessionDetail);
+  qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], attention: attentionOf(s, []), repos: [], source: null, project: null, failure } satisfies SessionDetail);
   return renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' });
 };
 const BUTTONS = /Mark as ignored.*What would fix the issue\?.*I've fixed it, please retry/;

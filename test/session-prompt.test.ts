@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Session } from '../src/shared/types.ts';
+import { attentionOf } from '../src/shared/attention.ts';
 import type { SessionDetail } from '../web/src/api.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
 
@@ -29,7 +30,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null, closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null, ...over,
 });
-const detail = (s: Session): SessionDetail => ({ session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null });
+const detail = (s: Session): SessionDetail => ({ session: s, events: [], inputs: [], items: [], prs: [], attention: attentionOf(s, []), repos: [], source: null, project: null });
 
 const prompt = (id: number, text: string) => renderPage(createElement(SessionPrompt, { sessionId: id, text }));
 

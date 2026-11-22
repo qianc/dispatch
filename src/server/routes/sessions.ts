@@ -4,7 +4,7 @@ import { SESSION_KINDS, answerInput, batchInput, plannerInput, proposedItemSchem
 import { attentionOf, cardText, failureReason } from '../../shared/attention.ts';
 import type { Principal } from '../access.ts';
 import { assertCanDrive, canDrive, canStop } from '../sessionGuard.ts';
-import type { Session } from '../../shared/types.ts';
+import type { PullRequest, Session } from '../../shared/types.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 
@@ -36,6 +36,9 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const from = ref && store.session(ref.session_id);
     if (from) assertCanDrive(who(req), from, users.installOwner);
   };
+  /** what a session needs from you, for the inbox and its page alike (DISP-159): a PR being merged shows as merging */
+  const attention = (s: Session, prs: PullRequest[]) => (s.kind === 'orchestrator' ? orchestrator.attention(s.id)
+    : attentionOf(s, prs, s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow));
 
   /** Everything waiting on you, across projects: only sessions you can act on (DISP-63). */
   app.get('/api/inbox', async (req) => {
@@ -47,9 +50,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     // card_text: the last message, unless the pull requests moved on after it was written (DISP-106)
     const idle = store.sessions({ statuses: ['idle'] }).filter(mine).flatMap((s) => {
       const prs = store.prs({ session_id: s.id });
-      const attention = s.kind === 'orchestrator' ? orchestrator.attention(s.id)
-        : attentionOf(s, prs, s.kind === 'planner' ? store.events(s.id) : [], github.mergingNow);
-      return attention ? [{ ...s, attention, card_text: cardText(s.last_text, prs) }] : [];
+      const a = attention(s, prs);
+      return a ? [{ ...s, attention: a, card_text: cardText(s.last_text, prs) }] : [];
     });
     // failed sessions not yet ignored or retried (DISP-81), each with a short reason
     const failed = store.failedOpen().filter(mine).map((s) => ({ ...s, reason: failureReason(s, store.lastError(s.id)) }));
@@ -149,12 +151,15 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     const s = session((req.params as { id: string }).id);
     // ?after=<seq>: only newer events (the phone polls this while live updates are held back)
     const after = Number((req.query as { after?: string }).after ?? 0) || 0;
+    const prs = store.prs({ session_id: s.id });
     return {
       session: s,
       events: store.events(s.id, after),
       inputs: store.inputs(s.id),
       items: store.itemsByIds(s.item_ids),
-      prs: store.prs({ session_id: s.id }),
+      prs,
+      // the inbox's attention; an orchestrator that needs nothing from you yet still has a state on its page
+      attention: attention(s, prs) ?? attentionOf(s, prs, [], github.mergingNow),
       repos: s.project_id ? store.repos(s.project_id) : [],
       source: s.source_id ? store.source(s.source_id) : null,
       project: s.project_id ? store.project(s.project_id) : null,

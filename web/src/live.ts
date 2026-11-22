@@ -108,17 +108,21 @@ function apply(qc: QueryClient, e: LiveEvent) {
         }
         return { ...d, events: [...d.events, e.event] };
       });
-      if (gap) qc.invalidateQueries({ queryKey: ['session', e.event.session_id] });
+      // a planning chat's proposal cards change what it needs from you (its attention, DISP-159)
+      if (gap || e.event.body.kind === 'proposal' || e.event.body.kind === 'proposal_done') qc.invalidateQueries({ queryKey: ['session', e.event.session_id] });
       // a reply in the assistant chat: update the unread badge
       if ((e.event.body.kind === 'assistant' || e.event.body.kind === 'proposal') && qc.getQueryData<AssistantChat>(['assistant'])?.session_id === e.event.session_id) {
         qc.invalidateQueries({ queryKey: ['assistant'] });
       }
       return;
     }
-    case 'session':
+    case 'session': {
+      const before = qc.getQueryData<SessionDetail>(['session', e.session.id])?.session;
       qc.setQueryData<SessionDetail>(['session', e.session.id], (d) => (d ? { ...d, session: e.session } : d));
-      // a failed session's reason and retry come with the detail (DISP-81)
-      if (e.session.status === 'failed') qc.invalidateQueries({ queryKey: ['session', e.session.id] });
+      // a failed session's reason and retry come with the detail (DISP-81); a sign-in it needs, with its attention (DISP-159)
+      if (e.session.status === 'failed' || (before && JSON.stringify(before.login_needed) !== JSON.stringify(e.session.login_needed))) {
+        qc.invalidateQueries({ queryKey: ['session', e.session.id] });
+      }
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['projects'] });
@@ -126,6 +130,7 @@ function apply(qc: QueryClient, e: LiveEvent) {
       if (e.session.kind === 'discuss') qc.invalidateQueries({ queryKey: ['discuss'] });
       if (e.session.schedule_id) qc.invalidateQueries({ queryKey: ['schedules', e.session.project_key] });
       return;
+    }
     case 'input':
       qc.setQueryData<SessionDetail>(['session', e.input.session_id], (d) =>
         d ? { ...d, inputs: [...d.inputs.filter((i) => i.id !== e.input.id), e.input].sort((a, b) => a.id - b.id) } : d,
@@ -154,6 +159,8 @@ function apply(qc: QueryClient, e: LiveEvent) {
       return;
     case 'orchestration':
       qc.setQueryData<SessionDetail>(['session', e.orchestration.session_id], (d) => (d ? { ...d, orchestration: e.orchestration } : d));
+      // the orchestrator's attention comes from its orchestration (DISP-159)
+      qc.invalidateQueries({ queryKey: ['session', e.orchestration.session_id] });
       qc.invalidateQueries({ queryKey: ['orchestrations'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       return;

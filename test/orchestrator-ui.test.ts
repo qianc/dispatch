@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Orchestration, type OrchestrationStep, type Session } from '../src/shared/types.ts';
+import { attentionOf } from '../src/shared/attention.ts';
 import type { SessionDetail } from '../web/src/api.ts';
 import { doneCount, orchestrationProblem, stepActions, stepRight } from '../web/src/orchestration.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
@@ -103,7 +104,7 @@ describe('the session page of an orchestrator', () => {
   });
   const page = (detail: Partial<SessionDetail> & { session: Session }) => {
     const qc = new QueryClient();
-    qc.setQueryData(['session', detail.session.id], { events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, orchestration: null, part_of: null, ...detail } satisfies SessionDetail);
+    qc.setQueryData(['session', detail.session.id], { events: [], inputs: [], items: [], prs: [], attention: attentionOf(detail.session, []), repos: [], source: null, project: null, failure: null, orchestration: null, part_of: null, ...detail } satisfies SessionDetail);
     return textOf(renderPage(createElement(SessionView), { qc, path: `/s/${detail.session.id}`, route: '/s/:id' }));
   };
 
@@ -120,7 +121,7 @@ describe('the session page of an orchestrator', () => {
 
   const html = (detail: Partial<SessionDetail> & { session: Session }) => {
     const qc = new QueryClient();
-    qc.setQueryData(['session', detail.session.id], { events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, orchestration: null, part_of: null, ...detail } satisfies SessionDetail);
+    qc.setQueryData(['session', detail.session.id], { events: [], inputs: [], items: [], prs: [], attention: attentionOf(detail.session, []), repos: [], source: null, project: null, failure: null, orchestration: null, part_of: null, ...detail } satisfies SessionDetail);
     return renderPage(createElement(SessionView), { qc, path: `/s/${detail.session.id}`, route: '/s/:id' });
   };
   const head = (h: string) => textOf(h.slice(h.indexOf('<header'), h.indexOf('</header>')));

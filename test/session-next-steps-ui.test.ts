@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Attention, type Orchestration, type Session } from '../src/shared/types.ts';
+import { attentionOf, finishedAttention } from '../src/shared/attention.ts';
 import { nextStepsOnPage } from '../web/src/components/nextSteps.tsx';
 import type { SessionDetail } from '../web/src/api.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
@@ -26,7 +27,7 @@ const session = (over: Partial<Session> = {}): Session => ({
 });
 const html = (s: Session) => {
   const qc = new QueryClient();
-  qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null } satisfies SessionDetail);
+  qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], attention: attentionOf(s, []), repos: [], source: null, project: null, failure: null } satisfies SessionDetail);
   return renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' });
 };
 const page = (s: Session) => textOf(html(s));
@@ -62,7 +63,7 @@ describe('Mark as complete on a session\'s own page (DISP-124)', () => {
         state: n === 1 ? 'done' as const : 'failed' as const, note: null, child_session_id: 10 + n, seen: null, deploys: {}, messages_sent: 0, optional: false, child: null,
       })),
     };
-    qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], repos: [], source: null, project: null, failure: null, orchestration } satisfies SessionDetail);
+    qc.setQueryData(['session', s.id], { session: s, events: [], inputs: [], items: [], prs: [], attention: finishedAttention(orchestration), repos: [], source: null, project: null, failure: null, orchestration } satisfies SessionDetail);
     const text = textOf(renderPage(createElement(SessionView), { qc, path: `/s/${s.id}`, route: '/s/:id' }));
     expect(text).toContain('Finished, but the goal is not fully met: step 2 failed.');
     expect(text).toContain('✓ Mark as complete');
