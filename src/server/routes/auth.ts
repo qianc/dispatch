@@ -101,6 +101,8 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
   app.get('/api/tokens', async (req) => access.tokens(mine(req)));
   app.post('/api/tokens', async (req) => {
     const user = req.principal!.user!;
+    // a token outlives Unpair: a paired device makes none, as it pairs no more devices (DISP-237)
+    if (access.browserUser(req, { devices: false }) !== user) throw new HttpError(403, 'Make tokens from a signed-in browser, not from a paired device.');
     const b = z.object({
       name: z.string().trim().min(1).max(60),
       scopes: z.array(z.enum(SCOPES)).min(1).default(['tracker']),

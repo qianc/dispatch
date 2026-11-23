@@ -42,6 +42,9 @@ export function CloseButton({ onClick, label }: { onClick: () => void; label: st
  * An image from another origin. Agent output can carry one (a prompt injection), and loading it
  * would send whatever its URL holds to that host, so it shows as a link instead (DISP-144).
  */
+/** A path in this app. `//host` and `/\host` are other sites: they would replace the app in its tab (DISP-237). */
+export const inAppHref = (href: string) => href.startsWith('/') && !/^[\\/]{2}/.test(href);
+
 export function isExternalImage(src: string) {
   try {
     const u = new URL(src, location.origin);
@@ -63,7 +66,7 @@ export function Md({ children, className }: { children: string; className?: stri
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ href = '', children: c }) => (href.startsWith('/') ? <Link to={href}>{c}</Link> : <a href={href} target="_blank" rel="noreferrer">{c}</a>),
+          a: ({ href = '', children: c }) => (inAppHref(href) ? <Link to={href}>{c}</Link> : <a href={href} target="_blank" rel="noreferrer">{c}</a>),
           img: ({ src = '', alt }) => <MdImage src={String(src)} alt={alt} />,
         }}
       >

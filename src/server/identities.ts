@@ -138,6 +138,17 @@ export class Identities {
     return this.info(user)!;
   }
 
+  /**
+   * The owner moved from a placeholder name (users.ts): their connection goes with them, sealed again
+   * for the new name. Kept where `to` already has one; one this key cannot read moves as it is.
+   */
+  move(from: string, to: string) {
+    const r = this.db.get<{ token_enc: string }>('SELECT token_enc FROM github_identities WHERE user = ?', from);
+    if (!r || this.db.get('SELECT 1 FROM github_identities WHERE user = ?', to)) return;
+    const token = this.open(from, r.token_enc);
+    this.db.run('UPDATE github_identities SET user = ?, token_enc = ? WHERE user = ?', to, token === null ? r.token_enc : this.box.seal(token, aad(to)), from);
+  }
+
   /** The token, or null when this key cannot read it (sealed with another key). */
   private open(user: string, sealed: string): string | null {
     try {
