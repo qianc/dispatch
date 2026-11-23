@@ -269,12 +269,15 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   /** messages are added in order, also while an earlier one's images are still being fetched */
   private chain: Promise<void> = Promise.resolve();
   private fetchImage: ImageFetch;
+  /** messages pushed that Claude has not taken yet (an image fetch, or not read) */
+  unread = 0;
 
   constructor(fetchImage: ImageFetch) {
     this.fetchImage = fetchImage;
   }
 
   push(text: string) {
+    this.unread++;
     this.chain = this.chain.then(async () => {
       const content = await userContent(text, this.fetchImage);
       this.items.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '' } as SDKUserMessage);
@@ -291,7 +294,10 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 
   async *[Symbol.asyncIterator]() {
     for (;;) {
-      while (this.items.length) yield this.items.shift()!;
+      while (this.items.length) {
+        this.unread--;
+        yield this.items.shift()!;
+      }
       if (this.done) return;
       await new Promise<void>((r) => (this.wake = r));
       this.wake = null;
@@ -488,6 +494,7 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   push(text: string) {
+    if (this.closed) return; // its slot is free and nothing reads the text: the caller starts a new runner
     this.clearIdle();
     // a retry after signing in again: a login that fails again is news again (DISP-60)
     for (const k of this.noticed) if (k.startsWith('login-')) this.noticed.delete(k);
@@ -715,6 +722,9 @@ export class ClaudeRunner implements AgentRunner {
         this.clearLimitWait();
         return this.resumeAfterLimit();
       }
+      // a message sent during this turn is not answered yet: its turn runs next, so this is no idle,
+      // and an idle now would name that message's turn as ended (DISP-234)
+      if ((m.queued_turn_count ?? 0) > 0 || this.input.unread > 0) return;
       if (this.bgTasks > 0) {
         // the turn ended but work goes on in the background: not the owner's turn yet, and never idle-close
         this.event({ kind: 'system', text: `Waiting for ${this.bgTasks} background task${this.bgTasks === 1 ? '' : 's'} to finish.` });
