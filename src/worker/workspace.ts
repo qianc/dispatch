@@ -1,11 +1,11 @@
 // Git clones and per-session worktrees under WORKSPACES_DIR.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { GeneratorItem } from '../shared/generatorItems.ts';
 import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
@@ -325,12 +325,15 @@ export class Workspaces {
     return !!repo.local_path && repo.worktree_from !== 'clone';
   }
 
-  /** Is this worktree a worktree of the owner's repo (not of Dispatch's clone)? */
+  /**
+   * Is this worktree a worktree of the owner's repo (not of Dispatch's clone)? Both share one git
+   * dir; a path test would miss an owner's repo that is itself a linked worktree (DISP-248 #89).
+   */
   static isAttached(wt: string, repo: Repo) {
-    if (!repo.local_path) return false;
+    if (!repo.local_path || !existsSync(join(wt, '.git'))) return false;
+    const common = (dir: string) => realpathSync(resolve(dir, execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: dir, encoding: 'utf8', env: procEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).trim()));
     try {
-      const gitdir = readFileSync(join(wt, '.git'), 'utf8').match(/^gitdir:\s*(.+)$/m)?.[1]?.trim() ?? '';
-      return resolve(gitdir).startsWith(resolve(repo.local_path, '.git') + sep);
+      return common(wt) === common(repo.local_path);
     } catch {
       return false;
     }
