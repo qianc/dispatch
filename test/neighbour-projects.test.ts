@@ -68,6 +68,20 @@ describe('Filing items into neighbour projects', () => {
     rules.delete('NB');
   });
 
+  it("tries again when the neighbour's rules could not be read (DISP-239 #27)", async () => {
+    const w = session('NA');
+    const real = s.ctx.sessions.rules;
+    s.ctx.sessions.rules = async () => {
+      throw new Error("Nothing created yet: NB's instructions for agents (CLAUDE.md of techdoc) could not be read (Worker is not connected). Try again later.");
+    };
+    await expect(s.ctx.sessions.rpc(w.id, 'create_item', { ...item, project_key: 'NB' })).rejects.toThrow(/could not be read/);
+    s.ctx.sessions.rules = real;
+    rules.set('NB', 'Titles start with the page id.');
+    // not marked as shown: the rules come on the next try
+    await expect(s.ctx.sessions.rpc(w.id, 'create_item', { ...item, project_key: 'NB' })).rejects.toThrow(/Titles start with the page id/);
+    rules.delete('NB');
+  });
+
   it('is for work sessions and scheduled runs only', async () => {
     await expect(s.ctx.sessions.rpc(session('NA', 'planner').id, 'create_item', { ...item, project_key: 'NB' })).rejects.toThrow(/Only work sessions and scheduled runs/);
     const sched = (await s.call('POST', '/projects/NA/schedules', { name: 'Nightly', at_time: '02:00' })).data as { id: number };
