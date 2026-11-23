@@ -101,8 +101,8 @@ export class ServerLink {
   private opts: RunnerOptions;
   readonly workspaces: Workspaces;
   private runners = new Map<number, AgentRunner>();
-  /** sessions whose workspace is still being prepared; messages for them wait here */
-  private starting = new Map<number, string[]>();
+  /** sessions whose workspace is still being prepared; messages for them (and their `turn_id`) wait here */
+  private starting = new Map<number, { text: string; turn?: string }[]>();
   /** Stops a starting session's setup command when it is closed (DISP-186). */
   private startAborts = new Map<number, AbortController>();
   private kinds = new Map<number, StartSpec['kind']>();
@@ -122,11 +122,14 @@ export class ServerLink {
    */
   private lastStatus = new Map<number, StatusMsg>();
   /**
-   * Per session, the `turn_id` of the last start or send from the server: each status names it
+   * Per session, the `turn_id` of the last start or send from the server, set when its text is handed
+   * to the runner (not when it arrives: a hosted fetch comes first, DISP-234): each status names it
    * (`ack`), and the hello repeats it, so the server knows which turn a status ends and which of
    * its writes were lost (DISP-202, DISP-203).
    */
   private received = new Map<number, string>();
+  /** runners the server closed: a message that waited for a fetch is not started again for them */
+  private dropped = new WeakSet<AgentRunner>();
   private rpcWaiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   /** what runs now for the server besides sessions (commands, deploys, pushes), by what it is (DISP-112) */
   private jobs = new Map<string, number>();
@@ -369,9 +372,11 @@ export class ServerLink {
     return r ? this.entry.releases.find((c) => c.repo === r.cap_repo && c.label_prefix === r.label_prefix) : undefined;
   }
 
-  async launch(spec: StartSpec, text: string, isStart: boolean): Promise<void> {
+  async launch(spec: StartSpec, text: string, isStart: boolean, turnId?: string): Promise<void> {
     // spec and text may be adjusted below (attached worktrees, setup notes)
     const id = spec.session_id;
+    // from here the statuses speak for this message's turn
+    const take = (turn: string | undefined) => (turn ? this.received.set(id, turn) : this.received.delete(id));
     this.kinds.set(id, spec.kind);
     this.remember(id, spec.github);
     const live = this.runners.get(id);
@@ -382,7 +387,7 @@ export class ServerLink {
       live.close();
       if (slot) this.shared.slots.set(this.slotKey(id), true);
       // messages that come during the tidy wait for this one, in order (DISP-220)
-      const held: string[] = [];
+      const held: { text: string; turn?: string }[] = [];
       this.starting.set(id, held);
       await this.dropCheckouts(id, this.launched.get(id) ?? [], spec.repos);
       // closed during the tidy (DISP-193), maybe started again since (DISP-220): close found no
@@ -391,7 +396,7 @@ export class ServerLink {
       this.starting.delete(id);
       // not a new start: with all slots taken it would be refused, and the owner's text lost (DISP-175).
       // The launch takes its queue before its first await: the held messages go into it
-      const started = this.launch(spec, text, false);
+      const started = this.launch(spec, text, false, turnId);
       this.starting.get(id)?.push(...held);
       return started;
     }
@@ -399,11 +404,18 @@ export class ServerLink {
       this.turnChecks.get(id)?.ownerTurn();
       // counted as work: a restart during the fetch would lose the message
       if (!this.shared.fake) await this.job(`session ${id} gets a message`, () => this.fetchHosted(spec));
+      // it closed during the fetch (idle close, crash): the message starts it again, unless the server closed it
+      if (this.runners.get(id) !== live) return this.dropped.has(live) ? undefined : this.launch(spec, text, false, turnId);
+      take(turnId);
       return live.push(text);
     }
     const waiting = this.starting.get(id);
-    if (waiting) return void waiting.push(text); // still preparing: deliver after start
+    if (waiting) {
+      take(turnId); // no runner yet that could speak for an older turn
+      return void waiting.push({ text, turn: turnId }); // still preparing: deliver after start
+    }
     const refused = this.refusal(spec);
+    take(turnId);
     if (refused) return this.send({ t: 'status', session_id: id, status: 'failed', error: refused });
     // a release runs the command and notes of this worker's own config, never what a server sends
     const cap = spec.kind === 'release' ? this.releaseCapability(spec) : undefined;
@@ -416,7 +428,7 @@ export class ServerLink {
       if (this.ws?.readyState === WebSocket.OPEN) this.write(this.ws, { t: 'refused', session_id: id, reason: 'busy' });
       return;
     }
-    const queued: string[] = [];
+    const queued: { text: string; turn?: string }[] = [];
     this.starting.set(id, queued);
     const abort = new AbortController();
     this.startAborts.set(id, abort);
@@ -500,7 +512,10 @@ export class ServerLink {
         this.launched.set(id, spec.repos);
       }
       runner.start(text);
-      for (const t of queued) runner.push(t);
+      for (const q of queued) {
+        take(q.turn);
+        runner.push(q.text);
+      }
     } catch (e) {
       // closed meanwhile: close has freed the slot and tidied; a new start of the session owns what is left
       if (this.starting.get(id) !== queued) {
@@ -509,6 +524,7 @@ export class ServerLink {
       }
       this.starting.delete(id);
       if (holdsSlot) this.shared.slots.set(this.slotKey(id), false);
+      if (queued.length) take(queued[queued.length - 1].turn); // the failure answers the last message too
       console.error(`[${this.entry.name}] session ${id} failed to start`, e);
       this.send({ t: 'status', session_id: id, status: 'failed', error: `Could not start: ${(e as Error).message}` });
     } finally {
@@ -614,15 +630,11 @@ export class ServerLink {
     if ((msg.t === 'start' || msg.t === 'send') && msg.spec.github) this.secrets.add(msg.spec.github.token);
     // a new turn is on its way: the last status no longer says where the session is
     if (msg.t === 'start' || msg.t === 'send') this.lastStatus.delete(msg.spec.session_id);
-    if (msg.t === 'start' || msg.t === 'send') {
-      if (msg.turn_id) this.received.set(msg.spec.session_id, msg.turn_id);
-      else this.received.delete(msg.spec.session_id);
-    }
     switch (msg.t) {
       case 'start':
-        return this.launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt, true);
+        return this.launch(msg.spec, msg.spec.resume_note ?? msg.spec.prompt, true, msg.turn_id);
       case 'send':
-        return this.launch({ ...msg.spec, resume: msg.spec.resume }, msg.text, false);
+        return this.launch({ ...msg.spec, resume: msg.spec.resume }, msg.text, false, msg.turn_id);
       case 'answer':
         return this.runners.get(msg.session_id)?.answer(msg.local_id, msg.answer);
       case 'interrupt':
@@ -637,9 +649,11 @@ export class ServerLink {
         this.turnChecks.delete(msg.session_id);
         this.creds.delete(msg.session_id);
         this.received.delete(msg.session_id);
+        this.lastStatus.delete(msg.session_id);
         this.scopes.delete(msg.session_id);
         this.launched.delete(msg.session_id);
         const r = this.runners.get(msg.session_id);
+        if (r) this.dropped.add(r);
         r?.close();
         this.shared.slots.set(this.slotKey(msg.session_id), false);
         return;
@@ -758,11 +772,20 @@ export class ServerLink {
       this.ws = sock;
       // the worker's token goes in the connection's header, never in a message: every message is scrubbed
       const live = [...this.runners.keys(), ...this.starting.keys()];
+      // a session closed since the last hello: its last status, so a turn that ended is not resumed
+      // (DISP-248). One in the outbox comes after the hello, behind its turn's events: `queued`
+      const ended = new Map<number, StatusMsg>();
+      for (const m of [...this.lastStatus.values(), ...this.outbox.map((o) => (o.t === 'status' ? { ...o, queued: true } : null))]) {
+        if (m && !live.includes(m.session_id)) ended.set(m.session_id, m);
+      }
       for (const id of this.lastStatus.keys()) if (!live.includes(id)) this.lastStatus.delete(id);
       for (const id of this.received.keys()) if (!live.includes(id)) this.received.delete(id);
       const acks = Object.fromEntries([...this.received].map(([id, turn]) => [String(id), turn]));
-      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values()], acks });
-      for (const m of this.outbox.splice(0)) this.write(sock, m);
+      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values(), ...ended.values()], acks });
+      for (const m of this.outbox.splice(0)) {
+        this.write(sock, m);
+        if (m.t === 'status') this.lastStatus.set(m.session_id, m); // written now: the next hello repeats it
+      }
     });
     sock.on('message', (data) => {
       heard();
