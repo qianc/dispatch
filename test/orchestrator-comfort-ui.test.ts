@@ -17,7 +17,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationStep => ({
   id, orchestration_id: 5, position: id, title: `Step ${id}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-  state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, child: null, ...over,
+  state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, worker: null, child: null, ...over,
 });
 const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
   session_id: 5, title: 'Auth rework', goal: 'Rework auth', project_ids: [1, 2], project_keys: ['AA', 'BB'], phase: 'run', paused_from: null, plan_md: '', plan_approved: true, plan_version: 1, plan_notified_version: 1, finish_notified: false,

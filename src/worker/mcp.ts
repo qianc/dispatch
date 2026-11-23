@@ -329,6 +329,7 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
     item_keys: z.array(z.string()).default([]).describe('Keys of the items this step works on, all in its project'),
     after: z.array(z.number().int().min(1)).default([]).describe('Places in this list (from 1) of the steps that must be merged first'),
     optional: z.boolean().default(false).describe('You may skip it later without asking (nice to have, not needed for the goal)'),
+    worker: z.string().optional().describe("The worker its batch runs on, by name, when the owner wants one; leave out for the project's default"),
   })).min(1);
   const step_id = z.number().int().describe('The step_id from "The plan now" (not its place in the list)');
   return [

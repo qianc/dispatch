@@ -22,6 +22,19 @@ describe('orchestrator: steps', () => {
     expect(t.events(p.id)).toContain(`system: Step 1 started: session #${child.id}`);
   });
 
+  it('a step that names a worker starts its batch there (DISP-251)', async () => {
+    const { worker } = t.s.ctx.workers.create('render', '', OWNER);
+    const a = await t.item('AA', 'One');
+    const id = t.start().session_id;
+    await expect(t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'Render', project_key: 'AA', item_keys: [a.key], worker: 'nope' }] })).rejects.toThrow('Step 1: no worker "nope".');
+    await t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'Render', project_key: 'AA', item_keys: [a.key], worker: 'render' }] });
+    t.s.ctx.orchestrator.approve(id);
+    const [step] = t.s.ctx.orchestrator.view(id).steps;
+    expect(step.worker).toBe('render');
+    await t.rpc(id, 'start_step', { step_id: step.id });
+    expect(work()[0]).toMatchObject({ worker_id: worker.id, options: { worker_id: worker.id } });
+  });
+
   it('a step waits for the steps before it', async () => {
     const p = await t.approved();
     await expect(t.rpc(p.id, 'start_step', { step_id: p.second.id })).rejects.toThrow('Step 2 waits for step 1 ("Token store"), which is pending.');

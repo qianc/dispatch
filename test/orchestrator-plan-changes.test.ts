@@ -192,7 +192,7 @@ describe('orchestrator: changes of the approved plan', () => {
 describe('planChange rules', () => {
   const step = (id: number, over: Partial<OrchestrationStep> = {}): OrchestrationStep => ({
     id, orchestration_id: 1, position: id, title: `S${id}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-    state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, ...over,
+    state: 'pending', note: null, child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, worker: null, ...over,
   });
   const next = (s: OrchestrationStep, after: number[] = [], over: Partial<NextStep> = {}): NextStep => ({ id: s.id, title: s.title, project_id: s.project_id, prompt_md: s.prompt_md, item_ids: s.item_ids, after, optional: s.optional, ...over });
   const split = { kind: 'split', reason: 'Too big.' } as const;

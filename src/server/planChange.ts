@@ -13,6 +13,7 @@ export interface NextStep {
   item_ids: number[];
   after: number[];
   optional: boolean;
+  worker?: string | null;
 }
 
 export const CHANGE_WORDS: Record<MinorChange['kind'], string> = {
@@ -77,7 +78,7 @@ export function heldByProposal(old: OrchestrationStep[], next: NextStep[]): numb
     if (o.state !== 'pending') return false;
     const n = byId.get(o.id);
     if (!n) return true;
-    return n.title !== o.title || n.prompt_md !== o.prompt_md || n.project_id !== o.project_id || n.optional !== o.optional
+    return n.title !== o.title || n.prompt_md !== o.prompt_md || n.project_id !== o.project_id || n.optional !== o.optional || (n.worker ?? null) !== o.worker
       || !sameSet(n.item_ids, o.item_ids) || !sameSet(before.get(`s${o.id}`)!, after.get(`s${o.id}`)!);
   }).map((o) => o.id);
 }
@@ -124,6 +125,7 @@ export function minorProblem(old: OrchestrationStep[], next: NextStep[], change:
     if (n.project_id !== o.project_id) return `${name(o)} moves to another project`;
     if (!sameSet(n.item_ids, o.item_ids)) return `the items of ${name(o)} change`;
     if (n.optional !== o.optional) return `${name(o)} becomes ${n.optional ? 'optional' : 'required'}`;
+    if ((n.worker ?? null) !== o.worker) return `${name(o)} moves to another worker`;
     const reworded = n.title !== o.title || n.prompt_md !== o.prompt_md;
     if (reworded && change.kind !== 'reword') return `the wording of ${name(o)} changes: that is a separate reword`;
     if (n.prompt_md !== o.prompt_md && o.state !== 'pending') return `${name(o)} has started: its batch has its prompt already`;
@@ -187,6 +189,7 @@ export function describeChange(old: OrchestrationStep[], next: NextStep[], chang
       n.project_id !== o.project_id ? 'moved to another project' : '',
       !sameSet(n.item_ids, o.item_ids) ? 'other items' : '',
       n.optional !== o.optional ? (n.optional ? 'optional now' : 'required now') : '',
+      (n.worker ?? null) !== o.worker ? `on worker ${n.worker ?? 'default'}` : '',
       !sameSet(before.get(`s${o.id}`)!, after.get(`s${o.id}`)!) ? 'waits for other steps' : '',
       i + 1 !== o.position ? `now at place ${i + 1}` : '',
     ].filter(Boolean);

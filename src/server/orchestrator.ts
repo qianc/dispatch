@@ -14,6 +14,7 @@ import { assertWritable } from './projectLock.ts';
 import { withFolders } from './repos.ts';
 import { SessionError, type Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
+import { Workers } from './workers.ts';
 
 const ITEM_KEY = /^([A-Z][A-Z0-9]*)-(\d+)$/;
 
@@ -276,7 +277,7 @@ export class Orchestrator {
     const held = this.heldNow(o);
     const lines = o.steps.map((s) => {
       const after = s.depends_on.flatMap((d) => place.get(d) ?? []);
-      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
+      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', s.worker ? `on worker ${s.worker}` : '', held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
       return `${s.position}. [${s.state}${s.note ? `: ${s.note}` : ''}] ${s.project_key} — ${s.title} (${facts.join(', ')})`;
     });
     const ready = this.readySteps(o);
@@ -492,11 +493,12 @@ export class Orchestrator {
         seen.add(st.id);
         if (before.child_session_id && before.project_id !== project.id) throw new Error(`Step "${before.title}" already ran as session #${before.child_session_id}: it cannot move to another project.`);
       }
+      if (st.worker && !new Workers(this.store.db).byName(st.worker)) throw new Error(`Step ${n}: no worker "${st.worker}".`);
       for (const a of st.after) {
         if (a === n) throw new Error(`Step ${n} cannot come after itself.`);
         if (a > plan.steps.length) throw new Error(`Step ${n} comes after step ${a}, but the plan has no step ${a}.`);
       }
-      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)], optional: st.optional };
+      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)], optional: st.optional, worker: st.worker ?? null };
     });
     // no circle of steps that wait for each other
     const state = new Map<number, 'open' | 'done'>();
@@ -639,7 +641,7 @@ export class Orchestrator {
     });
     const ok = items.filter((it) => !out.some((line) => line.startsWith(`${it.key} `)));
     if (items.length && !ok.length) throw new Error(`Nothing left to start: ${out.join(', ')}.`);
-    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
+    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: step.worker ? { ...o.options, worker_id: null } : o.options, worker: step.worker ?? undefined }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
     this.store.setTimerStreak(o.session_id, 0);

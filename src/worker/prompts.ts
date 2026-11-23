@@ -207,7 +207,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
     '1. Read the trackers and the code. Read each item you want to use in full with `get_item`: comments hold decisions and open points.',
     '2. Ask the owner what is unclear, one question at a time. Do not guess what only they can know.',
     '3. File what is missing with `create_item`, so that every step has items that say what is wanted.',
-    '4. Call `set_plan`. One step is one batch, in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), and `after` for the steps that must be merged first, also across projects. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
+    '4. Call `set_plan`. One step is one batch, in one project. Give each step its items (`item_keys`), a `prompt` with everything the batch\'s agent needs beyond its items (decisions you took with the owner, how it fits the other steps, what to leave alone), `after` for the steps that must be merged first, also across projects, and `worker` (a worker by name) when the owner wants the step to run on a certain worker. Steps with no `after` between them may run at the same time. `plan_md` holds the reasoning the owner should read.',
     '5. Explain the plan briefly and stop. The owner approves it with a button.',
     '',
     '## Run phase',
