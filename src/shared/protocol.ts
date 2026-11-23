@@ -154,8 +154,10 @@ export type WorkerToServer =
    * missed from these (DISP-197). An older worker sends none; an older server ignores them.
    * Also per session closed since the last hello, its last status (DISP-248).
    * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
+   * `waiting`: the `local_id`s of the questions its sessions still wait on: an answer lost on the
+   * link is sent again (DISP-239 #26).
    */
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string> }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; waiting?: string[] }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */

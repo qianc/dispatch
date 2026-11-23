@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { projectRules } from '../src/server/projectRules.ts';
 import { plannerPrompt } from '../src/worker/prompts.ts';
 import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 import { startServer, OWNER } from './helpers.ts';
@@ -58,5 +59,23 @@ describe("a project's own instructions for items", () => {
     it('create at once in a project without instructions', async () => {
       expect(await create(chat().id, 'PLN')).toHaveLength(1);
     });
+  });
+});
+
+describe('projectRules when a file cannot be read (DISP-239 #27)', () => {
+  const project = { id: 1, key: 'NB', worker_id: 7 } as never;
+  const deps = (error: string) => ({
+    store: { repos: () => [{ kind: 'github', github_name: 'techdoc' }], defaultWorkerId: () => 7 },
+    hub: { cmd: async () => { throw new Error(error); } },
+    hosted: {},
+  }) as never;
+
+  it('throws when the worker that reads them is away, so nobody takes that for "no rules"', async () => {
+    await expect(projectRules(deps('Worker is not connected'), project)).rejects.toThrow(/NB's instructions for agents \(CLAUDE.md of techdoc\) could not be read/);
+    await expect(projectRules(deps('worker command read_file timed out'), project)).rejects.toThrow(/could not be read/);
+  });
+
+  it('is empty when git has no such file', async () => {
+    expect(await projectRules(deps("git show refs/heads/main:CLAUDE.md failed: fatal: path 'CLAUDE.md' does not exist in 'refs/heads/main'"), project)).toBe('');
   });
 });

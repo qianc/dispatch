@@ -56,6 +56,10 @@ export class FakeRunner implements AgentRunner {
     return this.busy ? 'is working' : null;
   }
 
+  waitingOn() {
+    return [...this.waiting.keys()];
+  }
+
   answer(localId: string, answer: InputAnswer) {
     this.waiting.get(localId)?.(answer);
     this.waiting.delete(localId);

@@ -805,8 +805,9 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     // a retry of a message that was stored (its answer was lost on the way): nothing to do (DISP-83)
     if (opts.client_id && this.store.hasUserMessage(s.id, opts.client_id)) return;
-    if (s.status === 'queued' && CHAT_KINDS.includes(s.kind)) {
-      // a chat that has not started yet: the message goes with its first turn (sent quickly one after another)
+    if (s.status === 'queued' && (CHAT_KINDS.includes(s.kind) || s.sdk_session_id)) {
+      // a chat that has not started yet: the message goes with its first turn (sent quickly one after another);
+      // a started session that waits with a reply already: this one goes with it (DISP-248 #66)
       const text = this.userMessage(sessionId, ownText, images, opts);
       const before = s.pending_prompt ?? (s.sdk_session_id ? null : s.initial_prompt);
       this.emitSession(this.store.updateSession(s.id, { pending_prompt: before ? `${before}\n\n${text}` : text }));
@@ -850,6 +851,8 @@ export class Sessions {
     const s = this.mustGet(sessionId);
     const seq = this.store.unread(s.id).last_seq;
     if (s.status !== 'idle' && s.status !== 'failed') throw new SessionError(s.status === 'completed' || s.status === 'stopped' ? 'This session is closed.' : 'This session is not stopped.', 409);
+    // its retry has its items now: both would work on them (DISP-248 #68)
+    if (s.closed_reason === 'retried') throw new SessionError(`This session was retried${this.store.retryOf(s.id) ? ` in #${this.store.retryOf(s.id)!.id}` : ''}.`, 409);
     const name = this.workers.get(s.worker_id ?? -1)?.name ?? 'its worker';
     if (!this.hub.isConnected(s.worker_id ?? -1)) throw new SessionError(`Worker ${name} is not connected. Start it, then press Retry.`, 503);
     // an update is about to stop the server or this worker: a turn that starts now would be cut off
@@ -901,7 +904,7 @@ export class Sessions {
    */
   discussFailure(sessionId: number, startedBy: string | null): Session {
     const s = this.mustBeFailed(sessionId);
-    const open = this.store.discussionsAbout(s.id).find((d) => d.started_by === startedBy && !FINAL_STATUSES.includes(d.status));
+    const open = this.openDiscussion(s.id, startedBy);
     if (open) return open;
     const project = s.project_id ? this.store.project(s.project_id) ?? null : null;
     assertWritable(this.store, project);
@@ -914,6 +917,11 @@ export class Sessions {
         claude_account: this.claudeAccountFor(project, null, undefined, workerId), worker_id: workerId, started_by: startedBy,
       });
     }, this.failurePrompt(s), []);
+  }
+
+  /** A user's discussion of a failed session that has not ended: the page links it, and asking again returns it. */
+  openDiscussion(sessionId: number, user: string | null): Session | undefined {
+    return this.store.discussionsAbout(sessionId).find((d) => d.started_by === user && !FINAL_STATUSES.includes(d.status));
   }
 
   /** The first message of a failure discussion: what the session was, its error, and its last messages. */
@@ -1047,20 +1055,22 @@ export class Sessions {
 
   // ---------- worker events ----------
 
-  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = [], acks: Record<string, string> | null = null) {
+  onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = [], acks: Record<string, string> | null = null, waiting: string[] = []) {
     // a removed starter's sessions that wait for the usage limit over there end now, not at the reset (DISP-208)
     for (const s of this.liveSessions()) if (s.worker_id === workerId && s.limit_wait && live.includes(s.id)) this.stopRemoved(s);
     // a repeated idle of the turn before a lost message is no turn end (DISP-203): staleEnd drops it
     const coming = this.lostStatuses(workerId, live, statuses);
     this.lostTurns(workerId, live, acks);
+    this.lostAnswers(workerId, live, waiting);
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
       const s = this.store.session(id);
       if (s && s.worker_id !== workerId) continue; // another worker's session: not this one's to close
       // the runner kept going while the link was down, and the owner replied: deliver it there
       // (unless it may not act on GitHub now: then it is closed and waits in the queue, see dispatch)
+      // (nor while an update holds it or the owner paused it, DISP-248 #70: it waits in the queue as well)
       const identity = s?.status === 'queued' && s.pending_prompt ? this.identityOf(s) : null;
-      if (s && s.status === 'queued' && s.pending_prompt && !isRefusal(identity)) {
+      if (s && s.status === 'queued' && s.pending_prompt && !isRefusal(identity) && !this.held(s) && !s.paused) {
         this.sendTurn(workerId, { t: 'send', session_id: s.id, text: s.pending_prompt, spec: this.spec(s, s.pending_prompt, s.sdk_session_id, null, identity) });
         this.setStatus(s.id, 'running', { waiting_reason: null, pending_prompt: null });
         continue;
@@ -1078,7 +1088,14 @@ export class Sessions {
     const lost = this.liveSessions().filter((s) => s.worker_id === workerId && !live.includes(s.id) && !coming.has(s.id));
     for (const s of lost) {
       for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
-      if (!s.sdk_session_id) {
+      if (CHAT_KINDS.includes(s.kind)) {
+        // a chat is not resumed: its turn is over, and the owner asks again (DISP-239 #24)
+        this.addEvent(s.id, { kind: 'system', text: 'The worker restarted during this turn, so Claude did not finish its answer. Send your message again.' });
+        this.setStatus(s.id, 'idle', { waiting_reason: null });
+        continue;
+      }
+      // an update about to stop it would cut the turn off, and a paused one waits (DISP-248 #70)
+      if (!s.sdk_session_id || this.held(s) || s.paused) {
         this.setStatus(s.id, 'queued');
         continue;
       }
@@ -1154,6 +1171,22 @@ export class Sessions {
   }
 
   /**
+   * An answer written on a half-open link was lost (DISP-239 #26): the runner still waits on a
+   * question that is answered here. Its stored answer goes again.
+   */
+  private lostAnswers(workerId: number, live: number[], waiting: string[]) {
+    if (!waiting.length) return;
+    for (const id of live) {
+      if (this.store.session(id)?.worker_id !== workerId) continue;
+      for (const i of this.store.inputs(id)) {
+        if (!i.answer || !waiting.includes(i.local_id)) continue;
+        console.warn(`session ${id}: the answer to question ${i.id} was lost on the link to worker ${workerId}; sent again`);
+        this.hub.send(workerId, { t: 'answer', session_id: id, local_id: i.local_id, answer: i.answer });
+      }
+    }
+  }
+
+  /**
    * A status the worker wrote on a half-open link was lost (DISP-197): its hello repeats the last
    * one of each live session. A turn that ended over there while we still think it works is
    * handled now, as if the status had come; a newer sdk session id is kept.
@@ -1183,9 +1216,9 @@ export class Sessions {
     return coming;
   }
 
-  /** Agent sessions with a runner (chats are not resumed). */
+  /** Sessions of every kind with a runner, chats too (DISP-239 #24). */
   private liveSessions() {
-    return this.store.sessions({ statuses: ['running', 'waiting_input'] });
+    return this.store.sessions({ statuses: ['running', 'waiting_input'], all_kinds: true, limit: null });
   }
 
   onWorkerMessage(workerId: number, msg: WorkerEvent) {
@@ -1235,10 +1268,17 @@ export class Sessions {
           if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id) this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
           return;
         }
+        // a reply waits in the queue (an update holds it, or it is paused): a turn the runner started by itself (the
+        // usage limit reset) does not deliver it, and its end does not drop it (DISP-248 #63)
+        if (s.status === 'queued' && s.pending_prompt && (this.held(s) || s.paused) && (msg.status === 'running' || msg.status === 'idle')) {
+          if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id) this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
+          return;
+        }
         const patch: Partial<Session> = {};
         if (msg.sdk_session_id) patch.sdk_session_id = msg.sdk_session_id;
         if (msg.model) patch.run_model = msg.model;
         if (msg.status === 'failed') {
+          this.closeWhenIdle.delete(s.id); // the next message reopens the chat, not closes it (DISP-248 #69)
           patch.ended_at = new Date().toISOString();
           if (msg.error) this.addEvent(s.id, { kind: 'error', text: msg.error });
         }
@@ -1530,8 +1570,9 @@ export class Sessions {
     assertWritable(this.store, target);
     const seen = `${s.id}:${target.id}`;
     if (!this.neighbourRulesShown.has(seen)) {
-      this.neighbourRulesShown.add(seen);
+      // a read that failed throws, and the rules are shown on the next try (DISP-239 #27)
       const rules = await this.rules(target);
+      this.neighbourRulesShown.add(seen);
       if (rules) {
         throw new Error([
           `Nothing created yet. ${target.key} has its own instructions for agents (below). Apply what they say about items (type, required ids or fields, naming, language) and call create_item again.`,
@@ -2107,10 +2148,14 @@ export class Sessions {
       }
     }
     const where = pushed ? 'and pushed' : `but ${from} was not reachable, so commits it had not pushed may be missing`;
+    // as it is now: the agent may have added items during the push (DISP-248 #67)
+    const now = this.mustGet(s.id);
+    // the owner's reply that waited for the old worker goes along (DISP-239 #25)
+    const reply = now.pending_prompt ? `\n\nThe owner's reply, which the session had not received yet:\n\n${now.pending_prompt}` : '';
     const next = this.store.createSession({
       project_id: s.project_id, kind: 'work', title: s.title, status: 'queued', force_plan: s.force_plan, branch: s.branch,
-      initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} ${where}. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}`.trim(),
-      source_id: s.source_id, item_ids: s.item_ids, options: { ...s.options, worker_id: workerId }, claude_account: s.claude_account,
+      initial_prompt: `Continue the work on branch ${s.branch}; it was started on worker ${from} ${where}. Fetch it, check what is done, and finish the batch.\n\n${s.initial_prompt}${reply}`.trim(),
+      source_id: s.source_id, item_ids: now.item_ids, options: { ...s.options, worker_id: workerId }, claude_account: s.claude_account,
       worker_id: workerId, moved_from: s.id, started_by: s.started_by,
     });
     for (const pr of this.store.prs({ session_id: s.id })) this.store.db.run('UPDATE pull_requests SET session_id = ? WHERE id = ?', next.id, pr.id);

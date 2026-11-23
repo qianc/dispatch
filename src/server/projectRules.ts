@@ -20,12 +20,22 @@ export async function readRepoFile({ store, hub, hosted }: Deps, project: Projec
   return Buffer.from(res.base64, 'base64');
 }
 
-/** The project's instruction files as one markdown text; '' when it has none (or no repo can be read). */
+/** workerHub's words when no worker could be asked: a later try may read the file */
+const UNREACHABLE = /not connected|timed out|worker disconnected/;
+
+/**
+ * The project's instruction files as one markdown text; '' when it has none (or git cannot read
+ * them). When the worker that reads them is away it throws: the caller must not take that for
+ * "no rules" (DISP-239 #27).
+ */
 export async function projectRules(deps: Deps, project: Project): Promise<string> {
   const parts: string[] = [];
   for (const repo of deps.store.repos(project.id)) {
     for (const name of RULE_FILES) {
-      const text = await readRepoFile(deps, project, repo, name).then((b) => b.toString('utf8').trim(), () => '');
+      const text = await readRepoFile(deps, project, repo, name).then((b) => b.toString('utf8').trim(), (e: Error) => {
+        if (!UNREACHABLE.test(e.message)) return '';
+        throw new Error(`Nothing created yet: ${project.key}'s instructions for agents (${name} of ${repo.github_name}) could not be read (${e.message}). Try again later.`);
+      });
       if (text) parts.push(`### ${name} of ${repo.github_name}\n\n${text.slice(0, MAX_CHARS)}`);
     }
   }

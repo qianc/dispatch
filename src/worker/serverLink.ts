@@ -144,6 +144,13 @@ export class ServerLink {
   /** The server pings every 20 s (workerHub). Hearing nothing for this long means the connection
    * is dead but not closed (laptop slept, NAT entry gone): drop it and reconnect. */
   silenceMs = 60_000;
+  /**
+   * A link up this long was fine: the next reconnect starts at 1 s again. One closed sooner backs off,
+   * and one the server replaced (close 4000: another worker uses this token) waits `replacedMs`, so
+   * two of them do not kick each other off once a second (DISP-248 #87).
+   */
+  stableMs = 30_000;
+  replacedMs = 5 * 60_000;
 
   constructor(entry: ServerEntry, shared: LinkShared) {
     this.entry = entry;
@@ -252,6 +259,8 @@ export class ServerLink {
       else this.lastStatus.delete(msg.session_id);
     }
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+    // a tool result's screenshots stay out of memory while the server is away: hours of them add up (DISP-248 #88)
+    else if (msg.t === 'event' && msg.images) this.outbox.push({ t: 'event', session_id: msg.session_id, body: msg.body });
     // rpc calls time out on their own and are retried by the agent; old progress is of no use
     else if (msg.t !== 'rpc' && msg.t !== 'slots' && msg.t !== 'cmd_progress' && !(msg.t === 'session_check' && msg.progress)) this.outbox.push(msg);
   }
@@ -758,11 +767,12 @@ export class ServerLink {
       watchdog = setTimeout(() => sock.terminate(), this.silenceMs);
       watchdog.unref();
     };
+    let opened = 0;
     sock.on('ping', heard);
     sock.on('open', async () => {
       if (epoch !== this.epoch) return void sock.close(1000);
       heard();
-      delay = 1000;
+      opened = Date.now();
       console.log(`worker connected to ${url}${name === 'default' ? '' : ` (${name})`}${this.shared.fake ? ' (fake runner)' : ''}`);
       // the link is used only from the hello on: what is said while the facts are gathered goes to
       // the outbox, behind what already waits there (DISP-141)
@@ -781,7 +791,8 @@ export class ServerLink {
       for (const id of this.lastStatus.keys()) if (!live.includes(id)) this.lastStatus.delete(id);
       for (const id of this.received.keys()) if (!live.includes(id)) this.received.delete(id);
       const acks = Object.fromEntries([...this.received].map(([id, turn]) => [String(id), turn]));
-      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values(), ...ended.values()], acks });
+      const waiting = [...this.runners.values()].flatMap((r) => r.waitingOn());
+      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values(), ...ended.values()], acks, waiting });
       for (const m of this.outbox.splice(0)) {
         this.write(sock, m);
         if (m.t === 'status') this.lastStatus.set(m.session_id, m); // written now: the next hello repeats it
@@ -806,8 +817,10 @@ export class ServerLink {
         this.serverVersion = null;
       }
       if (code === 4001) console.error(`server ${name} rejected the worker token`);
+      else if (code === 4000) console.warn(`server ${name} took another connection with this worker's token (a second worker with the same config?); retrying in ${Math.round(this.replacedMs / 1000)} s`);
       else if (code !== 1000) console.warn(`worker disconnected from ${name} (${code} ${reason}); retrying`);
-      setTimeout(() => this.connect(Math.min(delay * 2, 30_000), epoch), delay);
+      const wait = code === 4000 ? this.replacedMs : opened && Date.now() - opened >= this.stableMs ? 1000 : delay;
+      setTimeout(() => this.connect(Math.min(wait * 2, 30_000), epoch), wait);
     });
     sock.on('error', () => undefined);
   }
