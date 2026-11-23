@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useNavigationType, useParams } from 're
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { CHAT_KINDS, FINAL_STATUSES } from '../../../src/shared/types.ts';
 import { api, type PartOf, type SessionDetail } from '../api.ts';
-import { withLive } from '../live.ts';
+import { EVENT_PAGE, fitWindow, pagedBack, withLive } from '../live.ts';
 import { ChatInput } from '../components/ChatInput.tsx';
 import { PendingMessages } from '../components/PendingMessages.tsx';
 import { reconcile, sendPending, usePending, type Pending } from '../pendingSends.ts';
@@ -50,8 +50,7 @@ export interface ChatMode {
   projects?: MentionProject[];
 }
 
-/** How many events a session page loads at first, and with each "Show earlier" (DISP-162). */
-export const EVENT_PAGE = 300;
+export { EVENT_PAGE };
 
 /**
  * A session's detail: the last events first; after that, ask only for new events and keep the ones we have.
@@ -68,7 +67,7 @@ export async function fetchSession(qc: QueryClient, id: number): Promise<Session
   if (d.earlier) return withLive({ ...d, events: fresh, earlier: true });
   const now = qc.getQueryData<SessionDetail>(['session', id]) ?? prev;
   const last = now.events.at(-1)?.seq ?? after;
-  return withLive({ ...d, events: [...now.events, ...fresh.filter((e) => e.seq > last)], earlier: now.earlier });
+  return fitWindow(withLive({ ...d, events: [...now.events, ...fresh.filter((e) => e.seq > last)], earlier: now.earlier }));
 }
 
 /** "Show earlier": the events before the first one loaded, put in front of them. */
@@ -77,6 +76,7 @@ export async function fetchEarlier(qc: QueryClient, id: number, beforeAdd?: () =
   if (!first) return;
   const page = await api.get<SessionDetail>(`/sessions/${id}?before=${first}&limit=${EVENT_PAGE}`);
   beforeAdd?.();
+  pagedBack.add(id);
   qc.setQueryData<SessionDetail>(['session', id], (d) => {
     // the cache was replaced meanwhile (a DISP-184 refetch): the page no longer joins it, drop it (DISP-216)
     if (!d || d.events[0]?.seq !== first) return d;

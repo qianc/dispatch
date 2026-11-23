@@ -37,7 +37,8 @@ export function Thumbs({ images, className = 'ml-3.5 mb-1' }: { images: { url: s
   );
 }
 
-function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
+/** Memoized: a live event leaves the rows it does not touch alone (DISP-247). */
+const ToolRow = memo(function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
   const [open, setOpen] = useState(false);
   const name = use.name.replace(/^mcp__dispatch__/, '');
   return (
@@ -56,9 +57,31 @@ function ToolRow({ use, result }: { use: ToolUse; result?: ToolResult }) {
       )}
     </div>
   );
+});
+
+/** A message or tool call: what a work group holds, and how the transcript shows it outside one. */
+function workEvent(e: SessionEvent, results: Map<string, ToolResult>, project: Project | null, sourceId: number | null): ReactNode {
+  const b = e.body;
+  if (b.kind === 'assistant') {
+    return (
+      <div key={e.seq}>
+        <AssistantText text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={sourceId} />
+        <MessageTime at={e.created_at} />
+      </div>
+    );
+  }
+  if (b.kind === 'tool_use') return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
+  return null;
 }
 
-function WorkGroup({ events, live, render, results }: { events: SessionEvent[]; live: boolean; render: (e: SessionEvent) => ReactNode; results: Map<string, ToolResult> }) {
+interface WorkProps { events: SessionEvent[]; live: boolean; results: Map<string, ToolResult>; project: Project | null; sourceId: number | null }
+
+/** Same events, and the same results for its tool calls: a new event elsewhere does not redraw the group (DISP-247). */
+export const sameWork = (a: WorkProps, b: WorkProps) =>
+  a.live === b.live && a.project === b.project && a.sourceId === b.sourceId && a.events.length === b.events.length &&
+  a.events.every((e, i) => e === b.events[i] && (e.body.kind !== 'tool_use' || a.results.get(e.body.tool_use_id) === b.results.get(e.body.tool_use_id)));
+
+const WorkGroup = memo(function WorkGroup({ events, live, results, project, sourceId }: WorkProps) {
   const [open, setOpen] = useState(live);
   useEffect(() => { if (!live) setOpen(false); }, [live]);
   const uses = events.flatMap((e) => (e.body.kind === 'tool_use' && !HIDDEN_TOOLS.has(e.body.name) ? [e.body] : []));
@@ -74,11 +97,11 @@ function WorkGroup({ events, live, render, results }: { events: SessionEvent[]; 
         {failed > 0 && <span className="text-bad shrink-0">{failed} failed</span>}
       </button>
       {open ? (
-        <div className="px-2.5 pb-2 space-y-2 border-t border-line/70 pt-2 text-[14px] text-muted">{events.map(render)}</div>
+        <div className="px-2.5 pb-2 space-y-2 border-t border-line/70 pt-2 text-[14px] text-muted">{events.map((e) => workEvent(e, results, project, sourceId))}</div>
       ) : images.length > 0 && <div className="pb-2"><Thumbs images={images} /></div>}
     </div>
   );
-}
+}, sameWork);
 
 /** When a message was sent: small, under it; the full date and time on hover or long-press. */
 function MessageTime({ at }: { at: string }) {
@@ -109,16 +132,9 @@ export function Transcript({ session, events, inputs, project, readOnly = false,
           </div>
         );
       case 'assistant':
-        return (
-          <div key={e.seq}>
-            <AssistantText text={b.text} projectId={project?.id} projectKey={project?.key} sourceId={session.source_id} />
-            <MessageTime at={e.created_at} />
-          </div>
-        );
       case 'tool_use':
-        return HIDDEN_TOOLS.has(b.name) ? null : <ToolRow key={e.seq} use={b} result={results.get(b.tool_use_id)} />;
       case 'tool_result':
-        return null;
+        return workEvent(e, results, project, session.source_id);
       case 'result':
         return (
           <div key={e.seq} className="flex items-center gap-2 text-[11px] text-faint py-1">
@@ -158,7 +174,7 @@ export function Transcript({ session, events, inputs, project, readOnly = false,
       {units.map((u) =>
         u.t === 'event' ? render(u.e)
         : u.t === 'pending_proposal' ? <p key={`p-${u.key}`} className="text-[13px] text-accent animate-pulse">Claude is writing up a proposal…</p>
-        : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} render={render} results={results} />)}
+        : <WorkGroup key={`w-${u.key}`} events={u.events} live={u.live} results={results} project={project} sourceId={session.source_id} />)}
       {partial && openNotShown(events, inputs).map((i) => <InputCard key={`i-${i.id}`} input={i} readOnly={readOnly} />)}
     </div>
   );
@@ -234,7 +250,8 @@ function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: A
   );
 }
 
-export function InputCard({ input, readOnly = false }: { input: PendingInput; readOnly?: boolean }) {
+/** Memoized: an open question does not redraw with every live event (DISP-247). */
+export const InputCard = memo(function InputCard({ input, readOnly = false }: { input: PendingInput; readOnly?: boolean }) {
   const qc = useQueryClient();
   const waiting = !input.answered_at && !input.expired;
   // only whoever started the session answers it
@@ -338,7 +355,7 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
       <ErrorText error={send.error ?? overrule.error} />
     </div>
   );
-}
+});
 
 // ---------- proposals ----------
 
@@ -496,10 +513,12 @@ function PlannerProposalCard({ eventId, done, proposal, session, project, readOn
 }
 
 function ProposalCard({ eventId, done, proposal, session, project, readOnly }: { eventId: number; done: string | null; proposal: Exclude<Proposal, { type: 'planner' } | { type: 'item_update' } | { type: 'orchestration' }>; session: Session; project: Project; readOnly: boolean }) {
+  const cardIds = proposal.type === 'batch' ? proposal.item_ids : [];
+  // only the card's items, not every item the project ever had (DISP-247)
   const { data: items = [] } = useQuery({
-    queryKey: ['items', project.id],
-    queryFn: () => api.get<Item[]>(`/projects/${project.key}/items`),
-    enabled: proposal.type === 'batch',
+    queryKey: ['card-items', project.id, cardIds],
+    queryFn: () => api.get<Item[]>(`/projects/${project.key}/items?ids=${cardIds.join(',')}`),
+    enabled: cardIds.length > 0,
   });
   const [picked, setPicked] = useCardPicks(session.id, eventId, proposal.type === 'batch' ? proposal.item_ids : []);
   const newItems = proposal.type === 'batch' ? proposal.new_items : proposal.items;
@@ -523,7 +542,6 @@ function ProposalCard({ eventId, done, proposal, session, project, readOnly }: {
 
   // items can move on after the card was made (closed, or started in another session): leave them out.
   // The server says which, so an item whose session only waits for its usage limit stays startable (DISP-246).
-  const cardIds = proposal.type === 'batch' ? proposal.item_ids : [];
   const { data: gone = [] } = useQuery({
     queryKey: ['card-gone', project.id, cardIds],
     queryFn: () => api.get<number[]>(`/projects/${project.key}/items/gone?ids=${cardIds.join(',')}`),

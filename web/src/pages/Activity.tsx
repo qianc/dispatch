@@ -33,9 +33,11 @@ export function Activity() {
   // same query as the menu: an idle session's attention says whether Dispatch checks or merges it
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
   const attention = new Map((inbox?.idle ?? []).map((s) => [s.id, s.attention]));
-  const { data: recent = [] } = useQuery({ queryKey: ['sessions', 'recent'], queryFn: () => api.get<Session[]>('/sessions?status=completed,failed,stopped') });
   // failed sessions not yet ignored or retried (DISP-81): their own section, not also in Recently finished
   const failed = inbox?.failed ?? [];
+  // only the rows shown, plus room for the open failed ones left out of them (DISP-247)
+  const want = PAGE + failed.length;
+  const { data: recent = [] } = useQuery({ queryKey: ['sessions', 'recent', want], queryFn: () => api.get<Session[]>(`/sessions?status=completed,failed,stopped&limit=${want}`), placeholderData: keepPreviousData });
   const failedIds = new Set(failed.map((s) => s.id));
   const finished = recent.filter((s) => !failedIds.has(s.id));
   // orchestrations: an orchestrator's row shows its steps, and a step's batch says what it is part of
@@ -67,7 +69,7 @@ export function Activity() {
       )}
       {!searching && finished.length > 0 && (
         <Section title="Recently finished">
-          <Card>{finished.slice(0, 30).map((s) => <SessionRow key={s.id} s={s} showProject orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />)}</Card>
+          <Card>{finished.slice(0, PAGE).map((s) => <SessionRow key={s.id} s={s} showProject orch={orchOf.get(s.id)} partOf={partOf.get(s.id)} />)}</Card>
         </Section>
       )}
       </div>

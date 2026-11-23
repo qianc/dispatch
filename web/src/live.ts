@@ -1,7 +1,7 @@
 // Server-sent events → React Query cache.
 import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
-import type { AssistantChat, PrDetail, SessionDetail, SessionEvent } from './api.ts';
+import type { AssistantChat, Inbox, PrDetail, Session, SessionDetail, SessionEvent } from './api.ts';
 import { prPageStale } from './prs.ts';
 import { dropDeletedItem, patchItemList } from './itemsCache.ts';
 
@@ -30,6 +30,34 @@ export function withLive(d: SessionDetail): SessionDetail {
   const missing: SessionEvent[] = [];
   for (const e of [...extra].sort((a, b) => a.seq - b.seq)) if (e.seq === max + missing.length + 1) missing.push(e);
   return missing.length ? { ...d, events: [...d.events, ...missing] } : d;
+}
+
+/** How many events a session page loads at first, and with each "Show earlier" (DISP-162); also the live window (DISP-247). */
+export const EVENT_PAGE = 300;
+
+/** Sessions whose page was paged back with "Show earlier": their events are not trimmed to the window. */
+export const pagedBack = new Set<number>();
+
+/** The last EVENT_PAGE events, so a long live run does not grow the transcript without end (DISP-247). */
+export function fitWindow(d: SessionDetail): SessionDetail {
+  if (d.events.length <= EVENT_PAGE || pagedBack.has(d.session.id)) return d;
+  return { ...d, events: d.events.slice(-EVENT_PAGE), earlier: true };
+}
+
+/** A session as the lists show it: what changes with every message (its last text, usage) left out. */
+function listShape({ last_text: _t, usage: _u, run_model: _m, sdk_session_id: _s, updated_at: _a, ...rest }: Session & { updated_at?: string }) {
+  return JSON.stringify(rest);
+}
+/** Each session's list shape as last seen on the stream; a change means the lists are refetched (DISP-247). */
+const shapes = new Map<number, string>();
+
+/** Put a changed session into the cached session lists and the inbox, without refetching them. */
+function patchSessionLists(qc: QueryClient, s: Session) {
+  const put = <T extends { id: number }>(list: T[] | undefined) => (list?.some((x) => x.id === s.id) ? list.map((x) => (x.id === s.id ? { ...x, ...s } : x)) : list);
+  qc.setQueriesData<Session[] | { pages: { sessions: Session[] }[] }>({ queryKey: ['sessions'] }, (d) =>
+    Array.isArray(d) ? put(d) : d && 'pages' in d ? { ...d, pages: d.pages.map((p) => ({ ...p, sessions: put(p.sessions)! })) } : d,
+  );
+  qc.setQueryData<Inbox>(['inbox'], (d) => d && { ...d, idle: put(d.idle)!, failed: put(d.failed), sessions: put(d.sessions)! });
 }
 
 /** False until the stream has delivered an event; queries poll while it is false (see main.tsx). */
@@ -66,7 +94,10 @@ export function connectLive(qc: QueryClient): () => void {
   // a session's query gone from the cache (closed long enough ago): its live events are of no use
   const unwatch = qc.getQueryCache().subscribe((ev) => {
     const key = ev.query.queryKey;
-    if (ev.type === 'removed' && key[0] === 'session') recent.delete(Number(key[1]));
+    if (ev.type === 'removed' && key[0] === 'session') {
+      recent.delete(Number(key[1]));
+      pagedBack.delete(Number(key[1]));
+    }
   });
 
   // iOS freezes a backgrounded app and kills its stream, yet the EventSource can still say OPEN.
@@ -102,6 +133,7 @@ export function connectLive(qc: QueryClient): () => void {
     liveHealthy = false;
     unwatch();
     recent.clear();
+    shapes.clear();
     clearTimeout(retry);
     clearInterval(watchdog);
     es?.close();
@@ -132,7 +164,7 @@ export function apply(qc: QueryClient, e: LiveEvent) {
           gap = true;
           return d;
         }
-        return { ...d, events: [...d.events, e.event] };
+        return fitWindow({ ...d, events: [...d.events, e.event] });
       });
       // a planning chat's proposal cards change what it needs from you (its attention, DISP-159)
       if (gap || e.event.body.kind === 'proposal' || e.event.body.kind === 'proposal_done') qc.invalidateQueries({ queryKey: ['session', e.event.session_id] });
@@ -149,6 +181,11 @@ export function apply(qc: QueryClient, e: LiveEvent) {
       if (e.session.status === 'failed' || (before && JSON.stringify(before.login_needed) !== JSON.stringify(e.session.login_needed))) {
         qc.invalidateQueries({ queryKey: ['session', e.session.id] });
       }
+      // a new message or usage only (several a second while an agent works): patch the lists, no refetch (DISP-247)
+      const shape = listShape(e.session);
+      const same = shapes.get(e.session.id) === shape;
+      shapes.set(e.session.id, shape);
+      if (same) return patchSessionLists(qc, e.session);
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['projects'] });
@@ -168,6 +205,7 @@ export function apply(qc: QueryClient, e: LiveEvent) {
     case 'item':
       if (!patchItemList(qc, e.item)) qc.invalidateQueries({ queryKey: ['items', e.item.project_id] });
       qc.invalidateQueries({ queryKey: ['card-gone', e.item.project_id] });
+      qc.invalidateQueries({ queryKey: ['card-items', e.item.project_id] });
       qc.invalidateQueries({ queryKey: ['item', e.item.id] });
       // a source's page and its project's Sources list with their item counts (DISP-248)
       if (e.item.source_id) {

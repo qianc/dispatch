@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { itemInput, itemPatch } from '../../shared/types.ts';
 import { principalName } from '../access.ts';
+import { slug } from '../../shared/paths.ts';
 import { intParam, notFound, type Ctx } from './ctx.ts';
+
+const idList = (ids: string | undefined) => String(ids ?? '').split(',').filter(Boolean).map(Number).filter(Number.isInteger);
 
 export function itemRoutes(app: FastifyInstance, { store, bus, attachments, sessions }: Ctx) {
   const project = (key: unknown) => {
@@ -18,15 +21,17 @@ export function itemRoutes(app: FastifyInstance, { store, bus, attachments, sess
 
   app.get('/api/projects/:key/items', async (req) => {
     const p = project((req.params as { key: string }).key);
-    const q = req.query as { type?: string; status?: string; source_id?: string };
+    const q = req.query as { type?: string; status?: string; source_id?: string; ids?: string; slug?: string };
+    // a batch card's items, or the item an `#anchor` link names: not the whole list (DISP-247)
+    if (q.ids !== undefined) return store.itemsByIds(idList(q.ids)).filter((i) => i.project_id === p.id);
+    if (q.slug !== undefined) return store.items(p.id).filter((i) => slug(i.title) === q.slug).slice(0, 1);
     return store.items(p.id, { type: q.type, status: q.status?.split(',').filter(Boolean), source_id: q.source_id ? Number(q.source_id) : undefined });
   });
 
   /** Which of these items a batch card can no longer start (DISP-246): the server's rule, so a limit-waiting item stays startable. */
   app.get('/api/projects/:key/items/gone', async (req) => {
     const p = project((req.params as { key: string }).key);
-    const ids = String((req.query as { ids?: string }).ids ?? '').split(',').map(Number).filter(Number.isInteger);
-    return store.itemsByIds(ids).filter((i) => i.project_id === p.id && sessions.movedOn(i, true)).map((i) => i.id);
+    return store.itemsByIds(idList((req.query as { ids?: string }).ids)).filter((i) => i.project_id === p.id && sessions.movedOn(i, true)).map((i) => i.id);
   });
 
   app.post('/api/projects/:key/items', async (req) => {
