@@ -58,8 +58,12 @@ export class Orchestrator {
    */
   private makeTitle: ((s: Session, goal: string, projects: string[]) => Promise<string>) | undefined;
 
-  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string> }) {
+  /** Run a merged batch's deploy of a repo again (app.ts: GitHub's deploy of its merged PR). False: nothing to deploy. */
+  private redeploy: (s: Session, repoId: number) => boolean;
+
+  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string>; redeploy?: (s: Session, repoId: number) => boolean }) {
     this.makeTitle = deps.makeTitle;
+    this.redeploy = deps.redeploy ?? (() => false);
     this.store = deps.store;
     this.bus = deps.bus;
     this.sessions = deps.sessions;
@@ -1535,6 +1539,35 @@ export class Orchestrator {
         if (!lost && running.every((repo) => step.deploys_started[repo])) continue;
         this.store.updateStep(step.id, { deploys, deploys_started: started });
         if (lost) this.safely(() => this.sync(step.id));
+      }
+    }
+  }
+
+  /** step:repo deploys run again after a worker lost them: once each, then the timeout decides */
+  private rerun = new Set<string>();
+
+  /**
+   * A worker said hello, with the deploys it still runs or has a result for. A step's deploy it ran
+   * that is not among them was cut off: a restart of the worker killed it (the owner's deploy restarts
+   * the worker when no session works, which is when the last step's deploy runs). It runs again,
+   * once, so the step still ends with its result instead of "no deploy result in 30 min" (DISP-221).
+   * `deploys` null: an older worker, which does not say.
+   */
+  onWorkerHello(workerId: number, deploys: number[] | null) {
+    if (!deploys) return;
+    for (const o of this.store.liveOrchestrations()) {
+      for (const step of o.steps) {
+        const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+        if (child?.worker_id !== workerId) continue;
+        for (const repo of Object.keys(step.deploys)) {
+          const key = `${step.id}:${repo}`;
+          if (step.deploys[repo] !== 'running' || deploys.includes(Number(repo)) || this.rerun.has(key)) continue;
+          this.rerun.add(key);
+          this.safely(() => {
+            if (!this.redeploy(child, Number(repo))) return;
+            this.sessions.systemNote(child.id, 'The worker restarted during the deploy: it runs again.');
+          });
+        }
       }
     }
   }

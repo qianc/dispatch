@@ -153,8 +153,10 @@ export type WorkerToServer =
    * missed from these (DISP-197). An older worker sends none; an older server ignores them.
    * Also per session closed since the last hello, its last status (DISP-248).
    * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
+   * `deploys`: the repos (by id) whose deploy it runs, or whose result waits in its outbox. A deploy
+   * the server sent that is not here was cut off, by a restart of the worker (DISP-221).
    */
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string> }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; deploys?: number[] }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */

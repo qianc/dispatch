@@ -179,13 +179,15 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, users, dbFile });
   updates.restoreNote = restored;
   hub.handlers = {
-    onHello: (workerId, live, facts, statuses, acks) => {
+    onHello: (workerId, live, facts, statuses, acks, deploys) => {
       workers.seen(workerId, facts);
       // the server's commit: how a worker sees that an update of the server took
       hub.send(workerId, { t: 'welcome', version: version.sha });
       // before its sessions are looked at: a worker back from its update takes work again
       updates.onWorkerHello(workerId, facts);
       sessions.onWorkerHello(workerId, live, statuses, acks);
+      // a step's deploy the worker lost in a restart runs again (DISP-221)
+      ctx.orchestrator.onWorkerHello(workerId, deploys);
       // are its local repo copies still there? (sessions only go to workers whose copies are ok)
       void checkPlacements(store, hub, workerId)
         .then(() => !closing && store.placementsOn(workerId).forEach(({ repo }) => bus.emit({ t: 'project', key: store.project(repo.project_id)!.key })))
@@ -208,6 +210,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     store, bus, sessions, notifier, merging: () => github.mergingNow,
     // only a worker can ask Claude: the orchestrator's own, on its account. Short: a title is not worth a long wait (DISP-110)
     makeTitle: async (s, goal, projects) => (await hub.cmd<{ title?: string }>(s.worker_id, { c: 'make_title', goal, projects, account: s.claude_account }, 30_000)).title ?? '',
+    redeploy: (s, repoId) => {
+      const pr = store.prs({ session_id: s.id }).findLast((p) => p.state === 'merged' && p.repo_id === repoId);
+      if (pr) github.deploy(pr);
+      return !!pr;
+    },
   });
   sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
   sessions.delegateInput = (s, input) => orchestrator.delegate(s, input);

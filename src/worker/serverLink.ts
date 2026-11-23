@@ -709,6 +709,8 @@ export class ServerLink {
 
   /** Deploys per repo, one after the other: two merges in a row must not deploy at the same time. */
   private deploys = new Map<number, Promise<void>>();
+  /** per repo: deploys asked and not reported yet (the hello names them, DISP-221) */
+  private deploying = new Map<number, number>();
 
   /** Run a repo's deploy command and report the result, also after a reconnect (DISP-37). */
   private deploy(sessionId: number, repo: Repo, cred: GithubCred | null | undefined) {
@@ -722,7 +724,13 @@ export class ServerLink {
       if (!repo.deploy_command || (this.shared.fake && !repo.local_path)) return;
       result(await this.workspaces.deploy(repo, cred).catch((e) => ({ ok: false, sha: null, output: (e as Error).message, duration_ms: 0 })));
     };
-    const next = this.job(`a deploy of ${repo.github_name} runs`, () => (this.deploys.get(repo.id) ?? Promise.resolve()).then(go));
+    this.deploying.set(repo.id, (this.deploying.get(repo.id) ?? 0) + 1);
+    const done = () => {
+      const n = (this.deploying.get(repo.id) ?? 1) - 1;
+      if (n > 0) this.deploying.set(repo.id, n);
+      else this.deploying.delete(repo.id);
+    };
+    const next = this.job(`a deploy of ${repo.github_name} runs`, () => (this.deploys.get(repo.id) ?? Promise.resolve()).then(go).finally(done));
     this.deploys.set(repo.id, next);
     return next;
   }
@@ -781,7 +789,9 @@ export class ServerLink {
       for (const id of this.lastStatus.keys()) if (!live.includes(id)) this.lastStatus.delete(id);
       for (const id of this.received.keys()) if (!live.includes(id)) this.received.delete(id);
       const acks = Object.fromEntries([...this.received].map(([id, turn]) => [String(id), turn]));
-      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values(), ...ended.values()], acks });
+      // a deploy that runs, or whose result goes out right after the hello, is not lost
+      const deploys = [...new Set([...this.deploying.keys(), ...this.outbox.flatMap((o) => (o.t === 'deploy_result' ? [o.repo_id] : []))])];
+      this.write(sock, { t: 'hello', live, claude_accounts: facts.claude_accounts, facts, statuses: [...this.lastStatus.values(), ...ended.values()], acks, deploys });
       for (const m of this.outbox.splice(0)) {
         this.write(sock, m);
         if (m.t === 'status') this.lastStatus.set(m.session_id, m); // written now: the next hello repeats it
