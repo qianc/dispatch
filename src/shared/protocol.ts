@@ -106,13 +106,14 @@ export type WorkerCommand =
   /** `items`: the export for the repo's generate command (DISP-56), when it has one */
   /** sha: the branch commit the caller looked at; the worker refuses (moved) when the branch is elsewhere (DISP-232) */
   | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null; sha?: string }
-  | { c: 'branch_status'; repo: Repo; branch: string }
+  /** last_sha: the branch's last known commit (merged or not, once the branch is deleted) */
+  | { c: 'branch_status'; repo: Repo; branch: string; last_sha?: string | null }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
   | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string }
   /** check a folder is a git repo we may use (LOCAL_REPO_DIRS) and read its default branch */
   | { c: 'inspect_local_repo'; path: string }
   /** a local repo's session branch: diff against the default branch */
-  | { c: 'branch_diff'; repo: Repo; branch: string; merged_sha?: string }
+  | { c: 'branch_diff'; repo: Repo; branch: string; merged_sha?: string; fork_sha?: string | null }
   /** what a finished session left on disk (worktrees, its branch, merged or not) */
   | { c: 'leftovers'; session_id: number; repos: Repo[]; branch: string | null; merged_repo_ids: number[] }
   /** remove a finished session's worktrees, and its branch where merged */
@@ -153,10 +154,12 @@ export type WorkerToServer =
    * missed from these (DISP-197). An older worker sends none; an older server ignores them.
    * Also per session closed since the last hello, its last status (DISP-248).
    * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
+   * `waiting`: the `local_id`s of the questions its sessions still wait on: an answer lost on the
+   * link is sent again (DISP-239 #26).
    * `deploys`: the repos (by id) whose deploy it runs, or whose result waits in its outbox. A deploy
    * the server sent that is not here was cut off, by a restart of the worker (DISP-221).
    */
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; deploys?: number[] }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; waiting?: string[]; deploys?: number[] }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */

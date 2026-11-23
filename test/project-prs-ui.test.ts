@@ -26,7 +26,7 @@ const NO_MERGE_GENERATE = "This repo merges only in Dispatch, on a session's wor
 const approval = (over: Partial<PrApproval> = {}): PrApproval => ({ at: '2026-11-02T00:00:00Z', by: 'alice', sha: 'sha41', review: 'sent', note: null, ...over });
 const pr = (number: number, over: Partial<ProjectPr> = {}): ProjectPr => ({
   id: number, session_id: null, repo_id: 1, repo_full_name: 'me/app', number, url: `https://github.com/me/app/pull/${number}`, title: `PR ${number}`, state: 'open', mergeable: true, mergeable_state: 'clean',
-  head_ref: `dep-${number}`, head_sha: `sha${number}`, last_synced: null, local: false, blocked: null, behind_at_merge: null, started_by: null, github_login: null, author: 'dependabot[bot]', base_ref: 'main',
+  head_ref: `dep-${number}`, head_sha: `sha${number}`, last_synced: null, local: false, blocked: null, behind_at_merge: null, started_by: null, github_login: null, author: 'dependabot[bot]', base_ref: 'main', fork_sha: null,
   draft: false, changed_files: 2, ci_state: 'success', gh_updated_at: null, approval: null, linked: null, ...over,
 });
 const repo = (id: number, over: Partial<Repo> = {}): Repo => ({ id, project_id: 1, github_owner: 'me', github_name: 'app', default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null, kind: 'github', ...over });

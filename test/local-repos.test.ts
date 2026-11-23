@@ -56,6 +56,21 @@ describe('local repos in the worker', () => {
     expect((await ws.branchDiff(repo, 'dispatch/l-5-x', sha)).map((f) => [f.filename, f.status, f.additions])).toEqual([['b.txt', 'added', 1]]);
   });
 
+  it('reviews a branch with a non-ASCII file name and sees its patch (DISP-240)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
+    const dir = localRepo(root);
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
+    const repo: Repo = { id: 9, project_id: 1, github_owner: 'local', github_name: 'tpl', default_branch: 'main', check_command: null, local_path: dir, worktree_from: null, setup_command: null };
+    git(dir, 'checkout', '--quiet', '-b', 'docs');
+    writeFileSync(join(dir, 'åäö.md'), 'översikt\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'docs');
+    git(dir, 'checkout', '--quiet', 'main');
+    const files = await ws.branchDiff(repo, 'docs');
+    expect(files).toEqual([expect.objectContaining({ filename: 'åäö.md', status: 'added', additions: 1 })]);
+    expect(files[0].patch).toContain('+översikt');
+  });
+
   it('a branch with the same tree as a rewritten main does not differ from it (DISP-33)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsp-local-'));
     const dir = localRepo(root);

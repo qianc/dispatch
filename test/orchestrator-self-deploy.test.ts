@@ -19,7 +19,7 @@ describe('orchestrator: a self-deploy cut off by a worker restart (DISP-221)', (
   afterEach(() => { t.s.ctx.orchestrator.stop(); return t.s.app.close(); });
 
   const turn = (id: number) => { t.status(id, 'running'); t.status(id, 'idle'); };
-  const hello = (workerId: number, deploys: number[] | null) => t.s.ctx.hub.handlers.onHello(workerId, [], null, [], null, deploys);
+  const hello = (workerId: number, deploys: number[] | null) => t.s.ctx.hub.handlers.onHello(workerId, [], null, [], null, [], deploys);
 
   it('merges the only running step, the worker restarts mid-deploy and the server restarts: the step ends done with its deploy result', async () => {
     const p = await t.approved();

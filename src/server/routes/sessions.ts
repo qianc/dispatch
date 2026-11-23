@@ -48,7 +48,8 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     // a planning chat's open proposal cards decide what it offers
     // an orchestrator that only waits for its steps needs nothing from you: it is left out
     // card_text: the last message, unless the pull requests moved on after it was written (DISP-106)
-    const idle = store.sessions({ statuses: ['idle'] }).filter(mine).flatMap((s) => {
+    // all of them: the user filter comes after the query, so a limit would hide some (DISP-248 #71)
+    const idle = store.sessions({ statuses: ['idle'], limit: null }).filter(mine).flatMap((s) => {
       const prs = store.prs({ session_id: s.id });
       const a = attention(s, prs);
       return a ? [{ ...s, attention: a, card_text: cardText(s.last_text, prs) }] : [];
@@ -179,7 +180,7 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
       failure: s.status === 'failed' ? {
         reason: failureReason(s, store.lastError(s.id)),
         retried_as: store.retryOf(s.id)?.id ?? null,
-        discussion: store.discussionsAbout(s.id).find((d) => d.started_by === who(req).user && d.status !== 'completed' && d.status !== 'stopped')?.id ?? null,
+        discussion: sessions.openDiscussion(s.id, who(req).user)?.id ?? null,
       } : null,
       // what the caller may do with it (DISP-63)
       access: { drive: canDrive(who(req), s, users.installOwner), stop: canStop(who(req), s, users.installOwner) },

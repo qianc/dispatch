@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,5 +63,24 @@ describe('backup of hosted repos', () => {
     writeFileSync(join(data, 'git', 'r1.git', 'HEAD'), 'ref: refs/heads/main\n');
     const made = await backupOnce(data, out, 14, new Date('2026-10-19T01:15:00Z'));
     expect(made.some((f) => /^dispatch-git-\d{8}-\d{6}\.tgz$/.test(f))).toBe(true);
+  });
+
+  // root reads a file with no permissions, so tar would not fail
+  it.skipIf(process.getuid?.() === 0).each(['attachments', 'git'])('makes the other tarballs when the %s tar fails, says so, and leaves no .tmp (DISP-242)', async (bad) => {
+    const data = mkdtempSync(join(tmpdir(), 'dsp-bk-data-'));
+    const out = mkdtempSync(join(tmpdir(), 'dsp-bk-out-'));
+    new DatabaseSync(join(data, 'dispatch.db')).exec('CREATE TABLE t (v TEXT)');
+    for (const dir of ['attachments', 'git']) {
+      mkdirSync(join(data, dir, 'x'), { recursive: true });
+      writeFileSync(join(data, dir, 'x', 'f'), 'data');
+    }
+    chmodSync(join(data, bad, 'x', 'f'), 0); // tar cannot read it: exit 2
+    const good = bad === 'git' ? 'attachments' : 'git';
+    await expect(backupOnce(data, out, 14, new Date('2026-10-19T01:15:00Z'))).rejects.toThrow(new RegExp(`but not ${bad}:`));
+    const files = readdirSync(out);
+    expect(files.some((f) => f.startsWith(`dispatch-${good}-`) && f.endsWith('.tgz'))).toBe(true);
+    expect(files.some((f) => f.startsWith(`dispatch-${bad}-`))).toBe(false);
+    expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
+    chmodSync(join(data, bad, 'x', 'f'), 0o644);
   });
 });

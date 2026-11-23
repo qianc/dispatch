@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, sessionAgentEnv } from '../src/shared/accounts.ts';
+import { claudeAccounts, claudeEnv, githubAccounts, githubEnv, pick, pickGithub, sessionAgentEnv } from '../src/shared/accounts.ts';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { rateLimitNotice } from '../src/worker/runner.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
@@ -45,6 +45,37 @@ describe('accounts from env', () => {
     });
     expect(pick([{ name: 'a' }, { name: 'b' }], 'b')?.name).toBe('b');
     expect(pick([{ name: 'a' }, { name: 'b' }], null)?.name).toBe('a');
+  });
+
+  it('a GitHub account that was removed gives none, not the first account (DISP-248)', async () => {
+    expect(pickGithub([{ name: 'a' }, { name: 'b' }], 'b')?.name).toBe('b');
+    expect(pickGithub([{ name: 'a' }, { name: 'b' }], null)?.name).toBe('a');
+    expect(pickGithub([{ name: 'a' }, { name: 'b' }], 'gone')).toBeUndefined();
+    const s = await startServer({ GITHUB_ACCOUNTS: 'personal,work', GITHUB_ACCOUNT_PERSONAL_TOKEN: 'tok-p', GITHUB_ACCOUNT_WORK_TOKEN: 'tok-w' });
+    try {
+      expect(s.ctx.github.gitEnv({ github_account: 'gone' })).toEqual({});
+      expect(s.ctx.github.clientFor({ github_account: 'gone' })).toBeNull();
+      expect(s.ctx.github.gitEnv({ github_account: null }).DISPATCH_GH_TOKEN).toBe('tok-p');
+      expect(s.ctx.github.clientFor({ github_account: 'work' })).not.toBeNull();
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it("git gets the GitHub token only for GitHub's address, not for another host (DISP-241)", async () => {
+    const s = await startServer();
+    try {
+      const home = mkdtempSync(join(tmpdir(), 'dsp-cred-'));
+      const fill = (host: string) => execFileSync('git', ['credential', 'fill'], {
+        input: `protocol=https\nhost=${host}\n\n`, encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: home, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', ...s.ctx.github.gitEnvForToken('tok-gh') },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      expect(fill('github.com')).toContain('password=tok-gh');
+      expect(() => fill('gitea.example.com')).toThrow();
+    } finally {
+      await s.app.close();
+    }
   });
 
   it('gives a work session only the work token (DISP-134)', () => {

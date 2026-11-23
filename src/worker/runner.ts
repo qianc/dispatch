@@ -38,6 +38,8 @@ export interface AgentRunner {
   close(): void;
   /** What a restart of the worker would cut off now ("is working"), or null: for the update gate (DISP-112). */
   activity(): string | null;
+  /** The `local_id`s of the questions it waits on: the hello names them (DISP-239 #26). */
+  waitingOn(): string[];
 }
 
 export interface RunnerOptions {
@@ -356,6 +358,8 @@ const resetMs = (at: number) => at * (at < 1e12 ? 1000 : 1);
 export const LIMIT_MARGIN_MS = 60_000;
 /** A wake-up counts as set until this long after its time: the turn it starts shows by then. */
 const WAKE_MARGIN_MS = 60_000;
+/** A turn that ended with only background shells left (a dev server) is the owner's after this (DISP-239 #29). */
+export const SHELL_IDLE_MS = 10 * 60_000;
 /** The reset time is not known: try again after this time. */
 export const LIMIT_RETRY_MS = 15 * 60_000;
 /** What the session is sent when its usage limit has reset (DISP-108). */
@@ -396,6 +400,9 @@ export class ClaudeRunner implements AgentRunner {
   private idleSent = false;
   /** Live background tasks (shell, subagents) that are real work; the turn can end while they run. */
   private bgTasks = 0;
+  /** Every live background task is a shell, named here; empty when any is not (a subagent works). */
+  private bgShells: string[] = [];
+  private shellTimer: NodeJS.Timeout | null = null;
   /** A ScheduleWakeup the agent set: keep the process alive until then. */
   private wakeAt = 0;
   private bgIdleTimer: NodeJS.Timeout | null = null;
@@ -511,6 +518,10 @@ export class ClaudeRunner implements AgentRunner {
     this.input.push(text);
   }
 
+  waitingOn() {
+    return [...this.waiting.keys()];
+  }
+
   answer(localId: string, answer: InputAnswer) {
     const resolve = this.waiting.get(localId);
     if (!resolve) return;
@@ -540,6 +551,7 @@ export class ClaudeRunner implements AgentRunner {
     this.clearIdle();
     this.clearLimitWait();
     if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
+    this.clearShellIdle();
     for (const resolve of this.waiting.values()) resolve(null);
     this.waiting.clear();
     this.input.end();
@@ -550,7 +562,8 @@ export class ClaudeRunner implements AgentRunner {
   activity(): string | null {
     if (this.closed) return null;
     if (this.waiting.size) return 'waits for an answer';
-    if (this.bgTasks > 0) return 'has background tasks running';
+    // shells left after a turn that was reported done (a dev server): nothing the owner waits for
+    if (this.bgTasks > 0 && !(this.idleSent && this.bgShells.length)) return 'has background tasks running';
     // it waits for the usage limit: after a restart it is resumed and waits again
     if (this.limitTimer) return null;
     if (!this.betweenTurns) return 'is working';
@@ -640,13 +653,16 @@ export class ClaudeRunner implements AgentRunner {
   private handle(m: SDKMessage) {
     if (m.type === 'system' && m.subtype === 'background_tasks_changed') {
       const before = this.bgTasks;
-      this.bgTasks = m.tasks.filter((t) => !t.ambient).length;
+      const live = m.tasks.filter((t) => !t.ambient);
+      this.bgTasks = live.length;
+      this.bgShells = live.every((t) => t.task_type === 'local_bash') ? live.map((t) => t.description) : [];
       if (this.betweenTurns && before > 0 && this.bgTasks === 0) {
         // tasks done; Claude normally starts a new turn on their notification. If it does not, it is idle.
+        this.clearShellIdle();
         if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
         this.bgIdleTimer = setTimeout(() => {
           this.bgIdleTimer = null;
-          if (this.betweenTurns && this.bgTasks === 0) void this.endTurn();
+          if (this.betweenTurns && this.bgTasks === 0 && !this.idleSent) void this.endTurn();
         }, 30_000);
       }
       return;
@@ -676,6 +692,7 @@ export class ClaudeRunner implements AgentRunner {
       }
       if (this.bgIdleTimer) clearTimeout(this.bgIdleTimer);
       this.bgIdleTimer = null;
+      this.clearShellIdle();
       // the usage limit stopped this turn: its end is not "done", the session waits for the reset (DISP-108)
       const limit = !m.parent_tool_use_id && isLimitHit(m);
       if (limit) this.limitHit = true;
@@ -729,14 +746,36 @@ export class ClaudeRunner implements AgentRunner {
         // the turn ended but work goes on in the background: not the owner's turn yet, and never idle-close
         this.event({ kind: 'system', text: `Waiting for ${this.bgTasks} background task${this.bgTasks === 1 ? '' : 's'} to finish.` });
         this.deps.emit({ t: 'status', session_id: this.sessionId, status: 'running' });
+        this.armShellIdle();
         return;
       }
       void this.endTurn();
     }
   }
 
-  /** The turn is over: report it done, unless the check before that sends the agent back to work. */
-  private async endTurn() {
+  /**
+   * Only shells are left after the turn (`npm run dev`, forgotten): after SHELL_IDLE_MS the turn is
+   * reported done with a note, so the session does not look busy for good (DISP-239 #29). The
+   * shells keep running until the session closes.
+   */
+  private armShellIdle() {
+    this.clearShellIdle();
+    this.shellTimer = setTimeout(() => {
+      this.shellTimer = null;
+      if (this.closed || !this.betweenTurns || this.idleSent || !this.bgShells.length || this.bgTasks !== this.bgShells.length) return;
+      const n = this.bgShells.length;
+      this.event({ kind: 'system', text: `The turn counts as done: only ${n === 1 ? 'a background command runs' : `${n} background commands run`} (${this.bgShells.join(', ')}). ${n === 1 ? 'It keeps' : 'They keep'} running until the session closes.` });
+      void this.endTurn(true);
+    }, SHELL_IDLE_MS);
+  }
+
+  private clearShellIdle() {
+    if (this.shellTimer) clearTimeout(this.shellTimer);
+    this.shellTimer = null;
+  }
+
+  /** The turn is over: report it done, unless the check before that sends the agent back to work. `shells`: background shells may run. */
+  private async endTurn(shells = false) {
     if (this.limitTimer) return; // it waits for the usage limit: the turn is not over
     if (this.deps.beforeIdle) {
       const turn = this.sent;
@@ -745,7 +784,7 @@ export class ClaudeRunner implements AgentRunner {
         return null;
       });
       // closed, or the owner sent a message meanwhile: that turn runs now
-      if (this.closed || turn !== this.sent || !this.betweenTurns || this.bgTasks > 0 || this.limitTimer) return;
+      if (this.closed || turn !== this.sent || !this.betweenTurns || (this.bgTasks > 0 && !shells) || this.limitTimer) return;
       if (fix) {
         this.betweenTurns = false;
         this.sent++;

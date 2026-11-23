@@ -54,8 +54,8 @@ import { Scheduler } from './scheduler.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
-import { runningVersion, sameVersion } from '../update/version.ts';
-import { keepCopy, restoreCopy } from './preUpdate.ts';
+import { runningVersion } from '../update/version.ts';
+import { restoreCopy } from './preUpdate.ts';
 import { Updates } from './updates.ts';
 import { updateRoutes } from './routes/updates.ts';
 
@@ -179,13 +179,13 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const updates = new Updates({ cfg, db, bus, notifier, version, store, hub, sessions, github, workers, users, dbFile });
   updates.restoreNote = restored;
   hub.handlers = {
-    onHello: (workerId, live, facts, statuses, acks, deploys) => {
+    onHello: (workerId, live, facts, statuses, acks, waiting, deploys) => {
       workers.seen(workerId, facts);
       // the server's commit: how a worker sees that an update of the server took
       hub.send(workerId, { t: 'welcome', version: version.sha });
       // before its sessions are looked at: a worker back from its update takes work again
       updates.onWorkerHello(workerId, facts);
-      sessions.onWorkerHello(workerId, live, statuses, acks);
+      sessions.onWorkerHello(workerId, live, statuses, acks, waiting);
       // a step's deploy the worker lost in a restart runs again (DISP-221)
       ctx.orchestrator.onWorkerHello(workerId, deploys);
       // are its local repo copies still there? (sessions only go to workers whose copies are ok)
@@ -402,20 +402,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     updates.stop();
     github.stop();
     ctx.sessions.stop();
-    // the server stops for its own update: the old version can go back to this database
-    const own = updates.ownUpdate();
-    let noCopy: Error | null = null;
-    if (own && sameVersion(version.sha, own.from_sha)) {
-      try {
-        keepCopy(db.raw, dbFile, { from: own.from_sha, to: own.to_sha });
-      } catch (e) {
-        noCopy = e as Error;
-      }
-    }
+    // the copy of the database for its own update was taken before the stop (updates.ts, DISP-242)
     db.raw.close();
-    // the close fails, so the server does not end with exit code 0: the launcher then does not
-    // go on to a version that may change a database nothing can put back
-    if (noCopy) throw new Error(`keeping a copy of the database for the update failed: ${noCopy.message}`);
   });
 
   return { app, ctx, routes };

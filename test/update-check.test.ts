@@ -33,6 +33,7 @@ describe('finding new versions of Dispatch (DISP-112)', () => {
       { name: 'v1.2.0', sha: sha('b') },
       { name: 'v1.10.0', sha: sha('e') }, // not on the branch
       { name: 'nightly', sha: sha('c') },
+      { name: 'v1.3.0-rc.1', sha: sha('c') }, // a pre-release is not followed (DISP-248)
       { name: 'v1.0.0', sha: sha('a') },
     ]);
     let info = (await s.call('POST', '/update/check')).data;
