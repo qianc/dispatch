@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { itemInput, itemPatch } from '../../shared/types.ts';
+import { principalName } from '../access.ts';
 import { intParam, notFound, type Ctx } from './ctx.ts';
 
 export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ctx) {
@@ -69,8 +70,10 @@ export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ct
 
   app.post('/api/items/:id/comments', async (req) => {
     const it = item((req.params as { id: string }).id);
-    // skills and scripts sign their comments (e.g. "claude"); the app's own are "you"
-    const { body_md, author } = z.object({ body_md: z.string().min(1), author: z.string().trim().min(1).max(40).default('you') }).parse(req.body);
-    return store.addComment(it.id, author, body_md);
+    // skills and scripts sign their comments (e.g. "claude"); otherwise the writer's name (DISP-244)
+    const { body_md, author } = z.object({ body_md: z.string().min(1), author: z.string().trim().min(1).max(40).optional() }).parse(req.body);
+    const c = store.addComment(it.id, author ?? principalName(req.principal), body_md);
+    bus.emit({ t: 'item', item: store.item(it.id)! });
+    return c;
   });
 }

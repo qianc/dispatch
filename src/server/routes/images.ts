@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { MAX_IMAGE_BYTES as MAX_BYTES } from '../../shared/chatImages.ts';
+import { principalName } from '../access.ts';
 import { HttpError, intParam, notFound, type Ctx } from './ctx.ts';
 
 /**
@@ -26,7 +27,7 @@ export function imageRoutes(app: FastifyInstance, { store, bus, attachments }: C
       const saved = attachments.saveItemImage(it.id, body);
       if (!saved) throw new HttpError(415, 'Only PNG, JPEG, GIF and WebP images can be attached.');
       const name = (q.name ?? '').replace(/[/\\\0]/g, '').trim().slice(0, 120) || `image.${saved.file.split('.').pop()}`;
-      const author = (q.author ?? 'you').trim().slice(0, 40) || 'you';
+      const author = q.author?.trim().slice(0, 40) || principalName(req.principal);
       const { file: _file, ...img } = store.addItemImage({ item_id: it.id, comment_id: commentId, name, file: saved.file, mime: saved.mime, size: body.length, author });
       bus.emit({ t: 'item', item: store.item(it.id)! });
       return img;
