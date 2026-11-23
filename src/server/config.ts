@@ -129,6 +129,11 @@ export function loadConfig(raw = process.env): Config {
   };
   cfg.installOwner = env.DISPATCH_OWNER?.trim() || (cfg.authMode === 'proxy' ? cfg.authUsers[0] : undefined) || (cfg.authMode === 'off' ? 'local' : 'owner');
   cfg.adoptOwner = cfg.authMode === 'proxy' && !env.DISPATCH_OWNER?.trim() && !cfg.authUsers.length;
+  // the owner is never locked out of their own install (DISP-237)
+  if (cfg.authUsers.length && !cfg.authUsers.includes(cfg.installOwner)) {
+    console.warn(`AUTH_USERS leaves out the install owner "${cfg.installOwner}": they may use the install all the same. Add them to AUTH_USERS, or set DISPATCH_OWNER.`);
+    cfg.authUsers.push(cfg.installOwner);
+  }
   if (cfg.proxySecret && cfg.proxySecret.length < 24) throw new Error('PROXY_SECRET must be at least 24 characters.');
   if (env.AUTH_MODE && !['password', 'proxy'].includes(env.AUTH_MODE)) throw new Error('AUTH_MODE must be password or proxy.');
   if (cfg.authMode === 'password' && !cfg.appPassword && !cfg.appPasswordHash) {

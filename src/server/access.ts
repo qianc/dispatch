@@ -16,6 +16,7 @@ import type { Auth } from './auth.ts';
 import type { Config } from './config.ts';
 import { now, type Db } from './db.ts';
 import { DEVICE_COOKIE, type Devices } from './devices.ts';
+import { isRemovedUser } from './identity.ts';
 import type { Users } from './users.ts';
 
 export const SCOPES = ['read', 'tracker', 'sessions', 'admin'] as const;
@@ -216,6 +217,13 @@ export interface ApiToken {
 
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
+/** Constant-time string compare; lengths in bytes, so a non-ASCII guess is a plain mismatch, not a throw. */
+export function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
 // ---------- addresses ----------
 
 /** IPv4-mapped IPv6 ("::ffff:1.2.3.4") as plain IPv4. */
@@ -264,7 +272,9 @@ export function clientIp(req: Pick<FastifyRequest, 'socket' | 'headers'>, truste
   const ip = req.socket.remoteAddress ?? 'unknown';
   const trusted = (a: string) => isLoopback(a) || ipInList(a, trustedProxies);
   if (!trusted(ip)) return clientKey(ip);
-  const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+  // some proxies add the port: "1.2.3.4:5678", "[2001:db8::1]:443"
+  const noPort = (h: string) => h.match(/^\[(.+)\](?::\d+)?$/)?.[1] ?? h.replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, '$1');
+  const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => noPort(h.trim())).filter(Boolean);
   while (hops.length > 1 && trusted(hops.at(-1)!)) hops.pop();
   return clientKey(hops.at(-1) ?? ip);
 }
@@ -325,9 +335,7 @@ export class Access {
     let proxy = ipInList(ip, this.cfg.trustedProxies);
     if (proxy && this.cfg.proxySecret) {
       // the proxy's host is shared (other containers have its address): the proxy proves itself
-      const got = Buffer.from(String(req.headers[this.cfg.proxySecretHeader] ?? ''));
-      const want = Buffer.from(this.cfg.proxySecret);
-      proxy = got.length === want.length && timingSafeEqual(got, want);
+      proxy = safeEqual(String(req.headers[this.cfg.proxySecretHeader] ?? ''), this.cfg.proxySecret);
     }
     return { local: isLoopback(ip), proxy };
   }
@@ -352,7 +360,7 @@ export class Access {
     const paired = () => {
       const user = devices ? this.device(req)?.user ?? null : null;
       // a person taken off AUTH_USERS loses their paired devices too (DISP-132)
-      return user && this.cfg.authUsers.length && !this.cfg.authUsers.includes(user) ? null : user;
+      return isRemovedUser(this.cfg.authUsers, user) ? null : user;
     };
     if (this.cfg.authMode === 'proxy') {
       if (f.proxy) {
@@ -361,7 +369,7 @@ export class Access {
         if (req.cookies?.[DEVICE_COOKIE]) return paired();
         const user = String(req.headers[this.cfg.authHeader] ?? '').trim();
         if (!user) return null;
-        if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(user)) return null;
+        if (isRemovedUser(this.cfg.authUsers, user)) return null;
         this.users.adopt(user);
         return user;
       }
@@ -388,14 +396,14 @@ export class Access {
   private tokenPrincipal(secret: string, local: boolean): Principal | null {
     // the single token from before named tokens: kept working until it is retired in Settings
     const legacy = this.db.setting('api_token');
-    if (legacy && secret.length === legacy.length && timingSafeEqual(Buffer.from(secret), Buffer.from(legacy))) {
+    if (legacy && safeEqual(secret, legacy)) {
       return { kind: 'token', name: 'legacy API token', scopes: this.limit([...SCOPES], local), local, user: null, legacy: true };
     }
     const row = this.db.get<{ id: number; name: string; scopes: string; user: string | null; expires_at: string | null; revoked_at: string | null }>(
       'SELECT id, name, scopes, user, expires_at, revoked_at FROM api_tokens WHERE hash = ?', sha256(secret),
     );
     if (!row || row.revoked_at || (row.expires_at && row.expires_at < now())) return null;
-    if (row.user && this.cfg.authUsers.length && !this.cfg.authUsers.includes(row.user)) return null;
+    if (isRemovedUser(this.cfg.authUsers, row.user)) return null;
     this.db.run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), row.id);
     return { kind: 'token', name: row.name, scopes: this.limit(JSON.parse(row.scopes), local), local, token_id: row.id, user: row.user };
   }

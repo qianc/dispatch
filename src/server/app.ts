@@ -98,11 +98,11 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   const db = new Db(dbFile);
   // after the database: it made the data folder the key file goes into
   const secretKey = loadKey(cfg, dbFile);
-  const users = new Users(db, cfg);
-  users.claim();
   // people's own GitHub tokens, sealed with the secret key (DISP-63)
   const box = new SecretBox(secretKey.key);
   const identities = new Identities(db, box, cfg);
+  const users = new Users(db, cfg, identities);
+  users.claim();
   if (!keyMatches(db, box)) {
     console.warn('The secret key changed: GitHub tokens stored with the old key cannot be read (Settings → Your GitHub says "connect again"). Start with the old key to read them again.');
   }
