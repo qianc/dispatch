@@ -114,7 +114,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   useEffect(() => { if (data) reconcile(pendingKey, data.events); }, [data?.events, pendingKey]);
   const interrupt = useMutation({ mutationFn: () => api.post(`/sessions/${id}/interrupt`) });
   const finish = useMutation({
-    mutationFn: (b: { status: 'completed' | 'stopped'; cleanup: boolean }) => api.post(`/sessions/${id}/finish`, b),
+    mutationFn: (b: { status?: 'completed' | 'stopped'; cleanup: boolean }) => api.post(`/sessions/${id}/finish`, b),
     onSuccess: () => { setMenu(false); refresh(); },
   });
   const startNow = useMutation({ mutationFn: () => api.post(`/sessions/${id}/start-now`), onSuccess: refresh });
@@ -480,7 +480,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           {data.part_of && <p className="text-[13px] text-muted">{partOfText(data.part_of)}</p>}
           {stop && !final && !data.orchestration && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
           {stop && !final && !data.orchestration && <Button variant="danger" className="w-full" onClick={() => confirm('Stop this session? Its items go back to Todo.') && finish.mutate({ status: 'stopped', cleanup: false })}>Stop session</Button>}
-          {stop && final && <Button className="w-full" onClick={() => finish.mutate({ status: s.status as 'completed' | 'stopped', cleanup: true })}>Delete worktree from disk</Button>}
+          {stop && final && <Button className="w-full" onClick={() => finish.mutate({ cleanup: true })}>Delete worktree from disk</Button>}
           <ErrorText error={finish.error ?? syncPrs.error ?? createPr.error ?? move.error ?? interrupt.error} />
           {s.usage?.cost_usd !== undefined && <p className="text-[12px] text-faint text-center pt-2">Estimated usage ${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} model turns</p>}
         </div>

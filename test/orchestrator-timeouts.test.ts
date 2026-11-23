@@ -152,6 +152,19 @@ describe('orchestrator: timeouts of deploys and offers (DISP-166)', () => {
       expect(titles()).toEqual([]);
     });
 
+    it('a turn with no pull request while paused: the orchestrator is woken on resume (DISP-235)', async () => {
+      const p = await running();
+      t.s.ctx.orchestrator.settleMs = 0;
+      t.s.ctx.orchestrator.pause(p.id);
+      turn(p.child);
+      expect(t.store.step(p.first.id)).toMatchObject({ state: 'running', note: 'turn ended, no PR yet', offer: null });
+      const noPrTold = () => told(p.id).filter((m) => m.includes('ended its turn with no pull request'));
+      expect(noPrTold()).toHaveLength(0);
+      t.s.ctx.orchestrator.resumeOne(p.id);
+      expect(noPrTold()).toHaveLength(1);
+      expect(t.store.step(p.first.id)).toMatchObject({ offer: 'no_pr' });
+    });
+
     it('a stopped merge with no orchestrator turn end in time goes to the owner from tick', async () => {
       const p = await stoppedMerge();
       t.status(p.id, 'running'); // it works, and its turn does not end

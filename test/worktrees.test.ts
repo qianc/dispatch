@@ -63,6 +63,22 @@ describe('worktrees of the owner\'s repo (local repos, default)', () => {
     expect(git(dir, 'worktree', 'list')).not.toContain(wt);
   });
 
+  it('tidy keeps the worktree of a repo it was not told about, with its uncommitted work (DISP-227)', async () => {
+    const ws = new Workspaces(tmp('dsp-ws-'));
+    const a = localRepo(ownerRepo(), { id: 3, github_name: 'a' });
+    const b = localRepo(ownerRepo(), { id: 4, github_name: 'b' });
+    await ws.prepare({ ...spec(a, 12), repos: [a, b] });
+    const wtB = ws.repoDir(12, b);
+    writeFileSync(join(wtB, 'a.txt'), 'edited\n');
+    // b was removed from the project: the janitor lists only a, which is clean
+    expect(await ws.tidy(12, [a], 'dispatch/t-12', { deleteMerged: false, force: false })).toMatchObject([{ repo: 'a', worktree: 'removed' }]);
+    expect(existsSync(ws.repoDir(12, a))).toBe(false);
+    expect(readFileSync(join(wtB, 'a.txt'), 'utf8')).toBe('edited\n');
+    // once b is tidied too, the empty folder goes
+    await ws.tidy(12, [b], 'dispatch/t-12', { deleteMerged: false, force: true });
+    expect(existsSync(ws.sessionDir(12))).toBe(false);
+  });
+
   it('starts new sessions from the owner\'s current main, and planners get a detached checkout', async () => {
     const dir = ownerRepo();
     const ws = new Workspaces(tmp('dsp-ws-'));

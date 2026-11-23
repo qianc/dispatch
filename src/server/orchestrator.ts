@@ -783,6 +783,8 @@ export class Orchestrator {
     this.sessions.systemNote(sessionId, 'Resumed by the owner.');
     this.emit(sessionId);
     this.flush(sessionId);
+    // a step's turn that ended with no PR while paused armed no wake: it is armed now (DISP-235)
+    for (const st of this.must(sessionId).steps) this.noPullRequestLater(st, true);
     return this.view(sessionId);
   }
 
