@@ -67,7 +67,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   `HEAD`: nothing else updates it after a merge. Deploys of one repo run one at a time. The result goes into the session,
   and the push says "merged and deployed" or that the deploy failed, with the end of its output.
   The deploy may restart the server itself: the worker keeps the result and reports it when the
-  server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`).
+  server is back. If it restarts the worker, do that last, detached (e.g. `systemd-run --user …`),
+  and only once the worker runs no deploy: a restart kills a running deploy. The deploy of an
+  orchestration's step that a worker restart cut off runs again, once, when the worker is back.
   Whatever a deploy, setup or check command leaves running in its process group is killed about
   half a second after the command ends, so a test server cannot outlive it: a service started with
   a plain `&` or `nohup` dies with it. To keep a service, start it outside the group, with
