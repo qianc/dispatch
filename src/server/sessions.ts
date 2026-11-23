@@ -1050,9 +1050,9 @@ export class Sessions {
   onWorkerHello(workerId: number, live: number[], statuses: StatusMsg[] = [], acks: Record<string, string> | null = null) {
     // a removed starter's sessions that wait for the usage limit over there end now, not at the reset (DISP-208)
     for (const s of this.liveSessions()) if (s.worker_id === workerId && s.limit_wait && live.includes(s.id)) this.stopRemoved(s);
-    // first the lost turns: a repeated idle of the turn before one is no turn end (DISP-203)
+    // a repeated idle of the turn before a lost message is no turn end (DISP-203): staleEnd drops it
+    const coming = this.lostStatuses(workerId, live, statuses);
     this.lostTurns(workerId, live, acks);
-    this.lostStatuses(workerId, live, statuses);
     // Runners the worker still has but we consider finished (closed while it was disconnected): stop them.
     for (const id of live) {
       const s = this.store.session(id);
@@ -1074,7 +1074,8 @@ export class Sessions {
       if (s.waiting_reason?.startsWith('Waiting for worker')) this.emitSession(this.store.updateSession(s.id, { waiting_reason: null }));
     }
     // Anything of this worker's we believe is live but it does not know about was lost (worker restart): resume it.
-    const lost = this.liveSessions().filter((s) => s.worker_id === workerId && !live.includes(s.id));
+    // (one whose turn end waits in the worker's outbox is not lost: it comes right after the hello)
+    const lost = this.liveSessions().filter((s) => s.worker_id === workerId && !live.includes(s.id) && !coming.has(s.id));
     for (const s of lost) {
       for (const i of this.store.expireInputs(s.id)) this.bus.emit({ t: 'input', input: i });
       if (!s.sdk_session_id) {
@@ -1103,6 +1104,15 @@ export class Sessions {
    * restart nothing is compared.
    */
   private turns = new Map<number, { id: string; worker: number; msg: TurnMsg }>();
+
+  /**
+   * An idle or failed that names an older turn than the last start or send (`ack`): it ends the turn
+   * before a message still on its way, not the session's turn (DISP-202, DISP-248).
+   */
+  private staleEnd(s: Session, msg: StatusMsg) {
+    const turn = this.turns.get(s.id);
+    return (msg.status === 'idle' || msg.status === 'failed') && !!msg.ack && !!turn && msg.ack !== turn.id;
+  }
 
   /** A start or send, named so the worker's statuses and hello can say whether it arrived. */
   private sendTurn(workerId: number | null | undefined, msg: TurnMsg) {
@@ -1147,18 +1157,30 @@ export class Sessions {
    * A status the worker wrote on a half-open link was lost (DISP-197): its hello repeats the last
    * one of each live session. A turn that ended over there while we still think it works is
    * handled now, as if the status had come; a newer sdk session id is kept.
+   * A session closed over there since its last hello (DISP-248) whose turn ended is not lost: its
+   * end is handled now, or, if it waits in the worker's outbox (`queued`), when it comes. Returns those.
    */
   private lostStatuses(workerId: number, live: number[], statuses: StatusMsg[]) {
+    const coming = new Set<number>();
     for (const msg of statuses) {
       const s = this.store.session(msg.session_id);
-      if (!s || s.worker_id !== workerId || !live.includes(s.id)) continue;
-      if ((s.status === 'running' || s.status === 'waiting_input') && (msg.status === 'idle' || msg.status === 'failed')) {
+      if (!s || s.worker_id !== workerId) continue;
+      const ends = (s.status === 'running' || s.status === 'waiting_input') && (msg.status === 'idle' || msg.status === 'failed');
+      if (!live.includes(s.id)) {
+        if (!ends || this.staleEnd(s, msg)) continue;
+        if (msg.queued) {
+          coming.add(s.id);
+          continue;
+        }
+      }
+      if (ends) {
         console.warn(`session ${s.id}: its "${msg.status}" was lost on the link to worker ${workerId}; taken from its hello`);
         this.onWorkerMessage(workerId, msg);
       } else if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id && ['running', 'waiting_input', 'idle'].includes(s.status)) {
         this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
       }
     }
+    return coming;
   }
 
   /** Agent sessions with a runner (chats are not resumed). */
@@ -1208,8 +1230,7 @@ export class Sessions {
         // its starter was taken off AUTH_USERS (DISP-208): a session that waits for the usage limit, or
         // comes back from that wait, does not go on as them after the reset
         if (msg.status === 'running' && (msg.limit || s.limit_wait) && this.stopRemoved(s)) return;
-        const turn = this.turns.get(s.id);
-        if (msg.status === 'idle' && msg.ack && turn && msg.ack !== turn.id) {
+        if (this.staleEnd(s, msg)) {
           // the end of the turn before the last message, which is on its way: its turn runs next (DISP-202)
           if (msg.sdk_session_id && msg.sdk_session_id !== s.sdk_session_id) this.emitSession(this.store.updateSession(s.id, { sdk_session_id: msg.sdk_session_id }));
           return;

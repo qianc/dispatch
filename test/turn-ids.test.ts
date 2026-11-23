@@ -125,6 +125,55 @@ describe('turn ids between server and worker (DISP-202, DISP-203)', () => {
     wb.close();
   });
 
+  it('a failed of the turn before a message on its way is no end either (finding 64)', async () => {
+    const { wb, job, t1 } = await firstTurn(false);
+    expect((await s.call('POST', `/sessions/${job.id}/messages`, { text: 'one more thing' })).status).toBe(200);
+    await waitFor(() => wb.of('send').length === 1, 'send');
+    const t2 = wb.of('send')[0].turn_id!;
+    wb.send({ t: 'status', session_id: job.id, status: 'failed', error: 'The Claude process stopped unexpectedly.', ack: t1 });
+    wb.send({ t: 'event', session_id: job.id, body: { kind: 'system', text: 'marker' } });
+    await waitFor(async () => (await events(job.id)).some((e) => e.body.text === 'marker'), 'failed handled');
+    expect(await get(job.id)).toMatchObject({ status: 'running', ended_at: null });
+    wb.send({ t: 'status', session_id: job.id, status: 'failed', error: 'it broke', ack: t2 });
+    await waitFor(async () => (await get(job.id)).status === 'failed', 'failed');
+    wb.close();
+  });
+
+  /** A running session whose runner closed over there while the link was down. */
+  const closedOver = async (status: Record<string, unknown>) => {
+    const { wb: first, job, t1 } = await firstTurn(false);
+    first.close();
+    await waitFor(() => !s.ctx.hub.isConnected(b.id), 'gone');
+    const wb = await rawWorker(s.port, b.secret, { live: [], statuses: [{ t: 'status', session_id: job.id, ack: t1, ...status }], acks: {} });
+    await new Promise((r) => setTimeout(r, 200));
+    return { wb, job, t1 };
+  };
+
+  it('a turn that ended while the link was down is not resumed: its idle is in the hello (finding 65)', async () => {
+    const { wb, job } = await closedOver({ status: 'idle' });
+    expect(await get(job.id)).toMatchObject({ status: 'idle', waiting_reason: 'Turn finished' });
+    expect(wb.of('start')).toEqual([]);
+    wb.close();
+  });
+
+  it('one whose idle waits in the outbox is not resumed: the idle comes after the hello (finding 65)', async () => {
+    const { wb, job, t1 } = await closedOver({ status: 'idle', queued: true });
+    expect(wb.of('start')).toEqual([]);
+    expect((await get(job.id)).status).toBe('running');
+    wb.send({ t: 'event', session_id: job.id, body: { kind: 'assistant', text: 'all done' } });
+    wb.send({ t: 'status', session_id: job.id, status: 'idle', ack: t1 });
+    await waitFor(async () => (await get(job.id)).status === 'idle', 'idle');
+    expect((await get(job.id)).last_text).toBe('all done');
+    wb.close();
+  });
+
+  it('a closed session whose last status is of an older turn is resumed as before (finding 65)', async () => {
+    const { wb, job } = await closedOver({ status: 'idle', ack: 'older-turn' });
+    await waitFor(() => wb.of('start').length === 1, 'resumed');
+    expect((await get(job.id)).status).toBe('running');
+    wb.close();
+  });
+
   it('a send that arrived is not sent again, and its turn\'s idle from the hello ends it', async () => {
     const { wb: first, job, t1 } = await firstTurn(true);
     expect((await s.call('POST', `/sessions/${job.id}/messages`, { text: 'please answer this' })).status).toBe(200);
