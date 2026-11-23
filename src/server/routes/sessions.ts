@@ -212,8 +212,10 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
 
   app.post('/api/sessions/:id/finish', async (req) => {
     const s = session((req.params as { id: string }).id);
-    const { status, cleanup } = z.object({ status: z.enum(['completed', 'stopped']), cleanup: z.boolean().default(false) }).parse(req.body);
-    sessions.finish(s.id, status, cleanup);
+    // no status: only remove its worktrees, as it ended (a failed one too, DISP-228)
+    const { status, cleanup } = z.object({ status: z.enum(['completed', 'stopped']).optional(), cleanup: z.boolean().default(false) }).parse(req.body);
+    if (status) sessions.finish(s.id, status, cleanup);
+    else sessions.cleanupFinished(s.id);
     return store.session(s.id);
   });
 

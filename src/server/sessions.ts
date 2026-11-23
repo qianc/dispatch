@@ -1019,6 +1019,11 @@ export class Sessions {
   /** `keepItems`: ids of its items that stay in progress when it is stopped (another session has them now). */
   finish(sessionId: number, status: 'completed' | 'stopped', cleanup = false, keepItems: number[] = []) {
     const s = this.mustGet(sessionId);
+    // already ended (moved, stopped at a limit wait, failed): only the tidy-up; its items may be another session's now (DISP-228)
+    if (FINAL_STATUSES.includes(s.status)) {
+      if (cleanup) this.cleanupFinished(sessionId);
+      return;
+    }
     this.turns.delete(sessionId);
     // the janitor removes worktrees and merged branches after the runner has stopped
     this.hub.send(s.worker_id, { t: 'close', session_id: sessionId });
@@ -1031,6 +1036,13 @@ export class Sessions {
     this.setStatus(sessionId, status, { ended_at: new Date().toISOString(), waiting_reason: null, login_needed: null });
     this.onFinished?.(this.store.session(sessionId)!, status, cleanup);
     this.dispatch();
+  }
+
+  /** "Delete worktree from disk" of an ended session: its status and items stay as they are (DISP-228). */
+  cleanupFinished(sessionId: number) {
+    const s = this.mustGet(sessionId);
+    if (!FINAL_STATUSES.includes(s.status)) throw new SessionError('The session has not ended: stop or complete it first.', 409);
+    this.onFinished?.(s, s.status === 'completed' ? 'completed' : 'stopped', true);
   }
 
   // ---------- worker events ----------
