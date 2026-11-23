@@ -1,6 +1,6 @@
 // DISP-228: "Delete worktree from disk" on a session that already ended only tidies it up:
 // its status stays, and items that another session has now are left alone.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startServer } from './helpers.ts';
 
 describe('cleanup of an ended session (DISP-228)', () => {
@@ -11,7 +11,7 @@ describe('cleanup of an ended session (DISP-228)', () => {
     await s.call('POST', '/projects', { key: 'FC', name: 'Cleanup' });
     await s.call('POST', '/projects/FC/repos', { github_owner: 'me', github_name: 'fc' });
     tidied = [];
-    vi.spyOn(s.ctx.sessions, 'onFinished').mockImplementation((x, _status, removeAll) => tidied.push({ id: x.id, removeAll }));
+    s.ctx.sessions.onFinished = (x, _status, removeAll) => void tidied.push({ id: x.id, removeAll });
   });
   afterEach(() => s.app.close());
 
