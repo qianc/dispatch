@@ -17,10 +17,12 @@ export interface GithubCall {
  * with the token it was made with (DISP-63).
  */
 export function fakeGithub(ctx: Pick<Ctx, 'github'>, impl: FakeOcto) {
+  // a repo without commit statuses, unless the test gives some (DISP-231)
+  const defaults: FakeOcto = { repos: { getCombinedStatusForRef: async () => ({ data: { state: 'pending', total_count: 0, statuses: [] } }) } };
   const calls: GithubCall[] = [];
   const client = (token: string) => new Proxy({}, {
     get: (_t, ns: string) => {
-      const v = impl[ns];
+      const v = impl[ns] ?? defaults[ns];
       if (typeof v === 'function') return (...args: unknown[]) => {
         calls.push({ token, method: ns, args: args[1] ?? args[0] });
         return v(...args);
@@ -28,7 +30,7 @@ export function fakeGithub(ctx: Pick<Ctx, 'github'>, impl: FakeOcto) {
       if (!v || typeof v !== 'object') return v;
       return new Proxy(v, {
         get: (o, name: string) => {
-          const fn = o[name];
+          const fn = o[name] ?? defaults[ns]?.[name];
           if (typeof fn !== 'function') return fn;
           const rec = (args: unknown) => {
             calls.push({ token, method: `${ns}.${name}`, args });

@@ -176,7 +176,8 @@ describe('acting on GitHub as the session starter', () => {
     expect(gh.by(BOB_TOKEN)).toEqual([]);
     expect(gh.calls.map((c) => c.method)).not.toContain('pulls.merge');
     expect(gh.by('shared')).toContain('pulls.list');
-    expect(warn.mock.calls.flat().join(' ')).toMatch(/bob may no longer use this install/);
+    // stopped before any merge, with the reason on the PR (DISP-226)
+    expect(s.ctx.store.prs({ session_id: job.id })[0].blocked).toMatch(/bob may no longer use this install/);
     // bob back on the list: the same sync merges, as him
     s.ctx.cfg.authUsers = ['alice', 'bob'];
     await s.ctx.github.syncSession(s.ctx.store.session(job.id)!);
