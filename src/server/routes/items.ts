@@ -4,7 +4,7 @@ import { itemInput, itemPatch } from '../../shared/types.ts';
 import { principalName } from '../access.ts';
 import { intParam, notFound, type Ctx } from './ctx.ts';
 
-export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ctx) {
+export function itemRoutes(app: FastifyInstance, { store, bus, attachments, sessions }: Ctx) {
   const project = (key: unknown) => {
     const p = store.projectByKey(String(key));
     if (!p) throw notFound('Project');
@@ -20,6 +20,13 @@ export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ct
     const p = project((req.params as { key: string }).key);
     const q = req.query as { type?: string; status?: string; source_id?: string };
     return store.items(p.id, { type: q.type, status: q.status?.split(',').filter(Boolean), source_id: q.source_id ? Number(q.source_id) : undefined });
+  });
+
+  /** Which of these items a batch card can no longer start (DISP-246): the server's rule, so a limit-waiting item stays startable. */
+  app.get('/api/projects/:key/items/gone', async (req) => {
+    const p = project((req.params as { key: string }).key);
+    const ids = String((req.query as { ids?: string }).ids ?? '').split(',').map(Number).filter(Number.isInteger);
+    return store.itemsByIds(ids).filter((i) => i.project_id === p.id && sessions.movedOn(i, true)).map((i) => i.id);
   });
 
   app.post('/api/projects/:key/items', async (req) => {
@@ -65,6 +72,7 @@ export function itemRoutes(app: FastifyInstance, { store, bus, attachments }: Ct
     const it = item((req.params as { id: string }).id);
     for (const img of store.itemImages(it.id)) attachments.deleteItemImage(it.id, img.file);
     store.deleteItem(it.id);
+    bus.emit({ t: 'item_deleted', id: it.id, project_id: it.project_id });
     return { ok: true };
   });
 

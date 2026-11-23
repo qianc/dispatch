@@ -2,6 +2,8 @@
 // text. Linked from Settings → Workers. Nothing secret is on this page: the token is pasted on the
 // machine, where the steps say.
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api, type Me } from '../api.ts';
 import { Page } from '../components/Layout.tsx';
 import { Button, Card, Field, Section, cx, inputCls } from '../components/ui.tsx';
 import { REPO_PLACEHOLDER, isCommandLine, workerSetupPrompt, workerSetupSteps, type WorkerSetupInput } from '../workerSetup.ts';
@@ -14,7 +16,8 @@ const saveRepo = (url: string) => { try { url.trim() ? localStorage.setItem(REPO
 export function WorkerSetup() {
   const [form, setForm] = useState({ name: '', description: '' });
   const [repo, setRepo] = useState(savedRepo);
-  const input: WorkerSetupInput = { server: location.origin, build: __BUILD__, repo, ...form };
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  const input: WorkerSetupInput = { server: location.origin, build: __BUILD__, commit: me?.server_sha ?? null, repo, ...form };
   const prompt = workerSetupPrompt(input);
   const steps = workerSetupSteps(input);
   const [copied, setCopied] = useState<'yes' | 'no' | null>(null);

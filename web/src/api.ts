@@ -31,13 +31,16 @@ const extraOf = (d: ErrorBody) => ({
   connect_url: typeof d.connect_url === 'string' ? d.connect_url : undefined,
 });
 
+/** `body`: sent as JSON, or a Blob (an image) as it is, the server checking its type. */
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const raw = body instanceof Blob;
+  const type = raw ? (body.type.startsWith('image/') ? body.type : 'application/octet-stream') : 'application/json';
   const res = await fetch(`/api${path}`, {
     method,
     // ask for JSON: a sign-in proxy then answers 401 instead of redirecting to its login page.
     // x-dispatch-path: the page this comes from, where connecting GitHub comes back to (DISP-63)
-    headers: { accept: 'application/json', ...(globalThis.location ? { 'x-dispatch-path': location.pathname + location.search } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers: { accept: 'application/json', ...(globalThis.location ? { 'x-dispatch-path': location.pathname + location.search } : {}), ...(body !== undefined ? { 'content-type': type } : {}) },
+    body: raw ? body : body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
     // a sign-in proxy that redirects to its login all the same (Entra, …): the browser blocks that
     // request to another origin, so do not follow it (DISP-107)
@@ -58,19 +61,11 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
-/** Upload one image file to an item (raw body; the server checks it is an image). */
-export async function uploadImage(itemId: number, file: File, commentId?: number) {
+/** Upload one image file to an item (raw body; the server checks it is an image). Through req: a sign-in proxy's redirect is "Signed out" here too (DISP-246). */
+export function uploadImage(itemId: number, file: File, commentId?: number) {
   const q = new URLSearchParams({ name: file.name || 'image' });
   if (commentId) q.set('comment_id', String(commentId));
-  const res = await fetch(`/api/items/${itemId}/images?${q}`, {
-    method: 'POST',
-    headers: { 'content-type': file.type.startsWith('image/') ? file.type : 'application/octet-stream' },
-    body: file,
-    credentials: 'same-origin',
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as ErrorBody).error ?? res.statusText, false, extraOf(data as ErrorBody));
-  return data as ItemImage;
+  return req<ItemImage>('POST', `/items/${itemId}/images?${q}`, file);
 }
 
 export const api = {
@@ -174,6 +169,8 @@ export interface Me {
   vapid_public_key: string;
   /** the server's time zone, which schedule times are in (DISP-190) */
   time_zone: string | null;
+  /** the commit the server runs (null: unknown, or signed out; missing from older servers) */
+  server_sha?: string | null;
 }
 
 /** The signed-in person's own GitHub connection (never its token). */

@@ -28,7 +28,7 @@ import { claudeLabel, useAccounts } from '../accounts.ts';
 import { useWorkers, workerName } from '../workers.ts';
 import { useVeryWide } from '../wide.ts';
 import { canAct, readOnlyText, startedBy } from '../access.ts';
-import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls } from '../components/ui.tsx';
+import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls, loadingText } from '../components/ui.tsx';
 
 /** "Part of Auth rework (step 2 of 6)": the orchestration a step's batch belongs to. */
 export const partOfText = (p: PartOf) => `Part of ${p.title}${p.step_position ? ` (step ${p.step_position} of ${p.step_count})` : ''}`;
@@ -93,7 +93,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const [text, setText] = useState('');
   const [menu, setMenu] = useState(false);
   const { data: accounts } = useAccounts();
-  const { data } = useQuery({
+  const { data, error: loadError } = useQuery({
     queryKey: ['session', id],
     queryFn: () => fetchSession(qc, id),
   });
@@ -220,7 +220,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
     if (card && area) area.scrollTo({ top: area.scrollTop + card.getBoundingClientRect().top - area.getBoundingClientRect().top - 12, behavior: 'smooth' });
   };
 
-  if (!data) return <Page title="Session" back><Empty>Loading…</Empty></Page>;
+  if (!data) return <Page title="Session" back><Empty>{loadingText(loadError)}</Empty></Page>;
   const { session: s, project } = data;
   // from the server, as the inbox has it: a PR it merges now is no PR to review (DISP-159)
   const { attention } = data;

@@ -41,6 +41,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'GET /api/projects': 'read',
   'GET /api/projects/:key': 'read',
   'GET /api/projects/:key/items': 'read',
+  'GET /api/projects/:key/items/gone': 'read',
   'GET /api/projects/:key/facets': 'read',
   'GET /api/projects/:key/costs': 'read',
   'GET /api/projects/:key/file': 'read',

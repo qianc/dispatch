@@ -75,6 +75,9 @@ export function Schedules({ project }: { project: ProjectSummary }) {
   );
 }
 
+/** "Most batches per run" as saved: a whole number from 1 to 10; empty or nonsense is 1. */
+export const batchesPerRun = (typed: string) => Math.max(1, Math.min(10, Math.round(Number(typed)) || 1));
+
 function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; schedule: ScheduleView | null; onDone: () => void }) {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
@@ -87,14 +90,14 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
     at_time: schedule?.at_time ?? '02:00',
     days: schedule?.days ?? [0, 1, 2, 3, 4, 5, 6],
     scope_md: schedule?.scope_md ?? '',
-    max_batches: schedule?.max_batches ?? 1,
+    max_batches: String(schedule?.max_batches ?? 1), // as typed: clamped on save (DISP-248)
     enabled: schedule?.enabled ?? true,
   });
   const [options, setOptions] = useState<RunOptions>(schedule?.options ?? DEFAULT_RUN_OPTIONS);
   const refresh = () => qc.invalidateQueries({ queryKey: ['schedules', project.key] });
   const save = useMutation({
     mutationFn: () => {
-      const body = { ...f, options };
+      const body = { ...f, max_batches: batchesPerRun(f.max_batches), options };
       return schedule ? api.patch(`/schedules/${schedule.id}`, body) : api.post(`/projects/${project.key}/schedules`, body);
     },
     onSuccess: () => { refresh(); onDone(); },
@@ -128,7 +131,7 @@ function ScheduleForm({ project, schedule, onDone }: { project: ProjectSummary; 
         <textarea className={cx(inputCls, 'min-h-24')} value={f.scope_md} onChange={(e) => setF({ ...f, scope_md: e.target.value })} placeholder="e.g. Bugs in the ui module, small effort only. Triage new bugs first." aria-label="Scope" />
       </Field>
       <Field label="Most batches per run">
-        <input type="number" min={1} max={10} className={inputCls} value={f.max_batches} onChange={(e) => setF({ ...f, max_batches: Math.max(1, Math.min(10, Number(e.target.value) || 1)) })} aria-label="Most batches per run" />
+        <input type="number" min={1} max={10} className={inputCls} value={f.max_batches} onChange={(e) => setF({ ...f, max_batches: e.target.value })} aria-label="Most batches per run" />
       </Field>
       <details className="mb-3">
         <summary className="text-[14px] py-2 cursor-pointer">Run options for its batches{summary.length ? <span className="text-muted"> · {summary.join(', ')}</span> : ''}</summary>

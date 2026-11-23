@@ -1,7 +1,7 @@
 import { ProjectBadge, ProjectKey } from './ProjectBadge.tsx';
 import type { ReactNode } from 'react';
-import { Link, Outlet, useLocation, useNavigate, useRouteError, type RouteObject } from 'react-router';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Link, Outlet, useLocation, useNavigate, useParams, useRouteError, type RouteObject } from 'react-router';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type AssistantChat, type Inbox, type Me, type ProjectSummary, type Session } from '../api.ts';
@@ -57,8 +57,16 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
 export const layoutRoute = (pages: RouteObject[]): RouteObject => ({
   element: <Layout />,
   errorElement: <PageError />,
-  children: [{ errorElement: <PageError />, children: pages }],
+  children: [{ errorElement: <PageError />, children: pages.map((p) => (p.path?.includes(':') ? { ...p, element: <ByParams>{p.element}</ByParams> } : p)) }],
 });
+
+/**
+ * A page made anew for each id in its path (DISP-245): /s/A to /s/B would otherwise keep A's
+ * half-typed reply and images, and Send would post them to B.
+ */
+export function ByParams({ children }: { children: ReactNode }) {
+  return <Fragment key={Object.values(useParams()).join('/')}>{children}</Fragment>;
+}
 
 /** What a page shows instead of itself when it threw. */
 export function PageError() {

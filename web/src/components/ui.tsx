@@ -76,6 +76,12 @@ export function Md({ children, className }: { children: string; className?: stri
   );
 }
 
+/** What a page shows before its data comes: "Loading…", or why it never will (DISP-246). */
+export function loadingText(error: unknown): string {
+  if (!error) return 'Loading…';
+  return (error as { status?: number }).status === 404 ? 'Not found. It may have been deleted.' : (error as Error).message;
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="px-6 py-12 text-center text-muted text-sm">{children}</div>;
 }
@@ -264,6 +270,13 @@ export function ErrorText({ error }: { error: unknown }) {
       {typeof connect === 'string' && <> <a href={connect} className="text-accent font-medium underline">Connect GitHub</a></>}
     </p>
   );
+}
+
+/** "26 Oct 2026 · 1d ago" (or "· just now") for when something was made. */
+export function createdLabel(iso: string) {
+  const date = new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const ago = timeAgo(iso);
+  return `${date} · ${ago === 'now' ? 'just now' : `${ago} ago`}`;
 }
 
 export function timeAgo(iso: string) {

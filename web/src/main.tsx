@@ -8,6 +8,7 @@ import { api, ApiError, type Me } from './api.ts';
 import { connectLive, liveHealthy } from './live.ts';
 import { trackPresence } from './presence.ts';
 import { initTheme } from './theme.ts';
+import { markStarted } from './boot.ts';
 import { layoutRoute } from './components/Layout.tsx';
 import { Login, SignedOut } from './pages/Login.tsx';
 import { Pair } from './pages/Pair.tsx';
@@ -94,7 +95,7 @@ function App() {
   return <RouterProvider router={router} />;
 }
 
-(window as unknown as { __dispatchStarted: boolean }).__dispatchStarted = true;
+markStarted();
 initTheme();
 
 // Fit the app to the visible area: when the iOS keyboard opens only the visual viewport shrinks, so

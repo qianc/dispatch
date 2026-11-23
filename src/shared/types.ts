@@ -1089,6 +1089,8 @@ export type LiveEvent =
   | { t: 'session_event'; event: SessionEvent }
   | { t: 'input'; input: PendingInput }
   | { t: 'item'; item: Item }
+  /** an item was deleted (DISP-246): other devices drop it from their lists and its open page */
+  | { t: 'item_deleted'; id: number; project_id: number }
   | { t: 'pr'; pr: PullRequest }
   /** a project, or its repos, changed (lists and the project page refresh) */
   | { t: 'project'; key: string }

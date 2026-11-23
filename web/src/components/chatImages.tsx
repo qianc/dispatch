@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
-import { ApiError } from '../api.ts';
+import { api } from '../api.ts';
 import type { PendingImage } from '../pendingSends.ts';
 
 interface Pasted { id: number; preview: string; file: string | null; error: string | null }
 
 const MAX_EDGE = 2000; // Claude scales larger images down anyway
 const MAX_BYTES = 3_500_000; // stays under Claude's per-image limit once base64-encoded
+export const MAX_IMAGES = 10; // per message, as the server takes them
+
+/**
+ * Which picked images go into the box (DISP-246): only as many as fit beside those already there,
+ * and how many were left out. A GIF is not shrunk, so one over MAX_BYTES would fail the turn.
+ */
+export function fitImages<F extends { type: string; size: number }>(files: F[], attached: number) {
+  const fit = files.slice(0, Math.max(0, MAX_IMAGES - attached));
+  return { fit, leftOut: files.length - fit.length };
+}
+export const gifTooBig = (f: { type: string; size: number }) => f.type === 'image/gif' && f.size > MAX_BYTES;
 
 function toBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
   return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
 }
 
-/** A phone screenshot can be large: scale it to what Claude can take. GIFs stay as they are. */
+/** A phone screenshot can be large: scale it to what Claude can take. GIFs stay as they are (gifTooBig refuses a large one). */
 async function shrink(file: File): Promise<Blob> {
   if (file.type === 'image/gif') return file;
   const bmp = await createImageBitmap(file).catch(() => null);
@@ -27,17 +38,7 @@ async function shrink(file: File): Promise<Blob> {
   return blob ?? file;
 }
 
-async function upload(blob: Blob): Promise<string> {
-  const res = await fetch('/api/chat-images', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': blob.type.startsWith('image/') ? blob.type : 'application/octet-stream' },
-    body: blob,
-    credentials: 'same-origin',
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? res.statusText);
-  return (data as { file: string }).file;
-}
+const upload = (blob: Blob) => api.post<{ file: string }>('/chat-images', blob).then((d) => d.file);
 
 /**
  * Images pasted into a chat (DISP-34), uploaded at once so sending stays quick; also before the
@@ -46,15 +47,22 @@ async function upload(blob: Blob): Promise<string> {
  */
 export function useChatImages() {
   const [list, setList] = useState<Pasted[]>([]);
+  const [leftOut, setLeftOut] = useState(0);
   const next = useRef(1);
   const live = useRef(list);
   live.current = list;
   useEffect(() => () => live.current.forEach((p) => URL.revokeObjectURL(p.preview)), []);
 
   const add = (files: File[]) => {
-    for (const f of files.slice(0, 10)) {
+    const { fit, leftOut } = fitImages(files, live.current.length);
+    setLeftOut(leftOut);
+    for (const f of fit) {
       const id = next.current++;
       const preview = URL.createObjectURL(f);
+      if (gifTooBig(f)) {
+        setList((l) => [...l, { id, preview, file: null, error: `This GIF is over ${MAX_BYTES / 1_000_000} MB, too large for Claude. Send a smaller one.` }]);
+        continue;
+      }
       setList((l) => [...l, { id, preview, file: null, error: null }]);
       shrink(f)
         .then((b) => upload(b))
@@ -62,20 +70,21 @@ export function useChatImages() {
         .catch((e) => setList((l) => l.map((p) => (p.id === id ? { ...p, error: (e as Error).message } : p))));
     }
   };
-  const remove = (id: number) => setList((l) => {
+  const remove = (id: number) => { setLeftOut(0); setList((l) => {
     const gone = l.find((p) => p.id === id);
     if (gone) URL.revokeObjectURL(gone.preview);
     return l.filter((p) => p.id !== id);
-  });
-  const clear = () => setList((l) => {
+  }); };
+  const clear = () => { setLeftOut(0); setList((l) => {
     l.forEach((p) => URL.revokeObjectURL(p.preview));
     return [];
-  });
+  }); };
   /** The uploaded images, to go with a message that is shown at once (DISP-83): the box is empty after. */
   const take = (): PendingImage[] => {
     const l = live.current;
     l.filter((p) => !p.file).forEach((p) => URL.revokeObjectURL(p.preview));
     setList([]);
+    setLeftOut(0);
     live.current = [];
     return l.flatMap((p) => (p.file ? [{ file: p.file, preview: p.preview }] : []));
   };
@@ -96,6 +105,7 @@ export function useChatImages() {
     </div>
   ) : null;
 
-  const error = list.find((p) => p.error)?.error ?? null;
+  const error = list.find((p) => p.error)?.error
+    ?? (leftOut ? `${leftOut} image${leftOut === 1 ? ' was' : 's were'} left out: ${MAX_IMAGES} per message.` : null);
   return { add, clear, take, restore, files, uploading, error, input: { onImages: add, attachments: view, hasImages: files.length > 0 } };
 }

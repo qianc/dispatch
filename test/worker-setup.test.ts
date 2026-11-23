@@ -5,7 +5,7 @@ import { renderPage, stubBrowser, textOf } from './web-render.ts';
 
 vi.mock('../web/src/wide.ts', () => ({ useWide: () => true, useVeryWide: () => true }));
 
-const input = { server: 'https://dispatch.example.com', build: '2026-11-09 12:34', repo: 'https://github.com/acme/dispatch/', name: 'desktop', description: 'Windows desktop in WSL. Has PowerPoint.' };
+const input = { server: 'https://dispatch.example.com', build: '2026-11-09 12:34', commit: 'abcdef0123456789abcdef0123456789abcdef01', repo: 'https://github.com/acme/dispatch/', name: 'desktop', description: 'Windows desktop in WSL. Has PowerPoint.' };
 
 /** Things that must never be in the prompt: tokens of any kind, passwords, a login. */
 const SECRET_LIKE = [
@@ -27,7 +27,9 @@ describe('the worker setup prompt (DISP-68)', () => {
     expect(prompt).toContain('https://dispatch.example.com');
     expect(prompt).toContain('SERVER_WS_URL=wss://dispatch.example.com/worker');
     expect(prompt).toContain('2026-11-09 12:34 UTC');
-    expect(prompt).toContain("--before='2026-11-09 12:34 +0000'");
+    // the server's own commit, not one picked by build time (DISP-248)
+    expect(prompt).toContain('git checkout --detach abcdef0123456789abcdef0123456789abcdef01');
+    expect(prompt).not.toContain('--before');
     expect(prompt).toContain('the worker desktop');
     expect(prompt).toContain('Name: desktop');
     expect(prompt).toContain('Windows desktop in WSL. Has PowerPoint.');
@@ -65,7 +67,7 @@ describe('the worker setup prompt (DISP-68)', () => {
   });
 
   it('without a name, repository or build, asks for the name and the address and stays on main', () => {
-    const p = workerSetupPrompt({ server: 'http://localhost:3000', build: 'test', repo: '', name: '', description: '' });
+    const p = workerSetupPrompt({ server: 'http://localhost:3000', build: 'test', commit: null, repo: '', name: '', description: '' });
     expect(p).toContain('the owner picks the name');
     expect(p).toContain('Ask the owner for the address of the Dispatch repository');
     expect(p).toContain('git clone https://github.com/<you>/dispatch ~/dispatch');

@@ -11,6 +11,8 @@ export interface WorkerSetupInput {
   server: string;
   /** the build the server runs, as Settings shows it ("2026-11-09 12:34", UTC) */
   build: string;
+  /** the commit the server runs (/api/me), null when it does not know: the worker checks out the same (DISP-248) */
+  commit: string | null;
   /** the public repository with the code (remembered on the device); empty: the LLM asks the owner */
   repo: string;
   /** the worker's name (lowercase letters, digits and dashes); empty: the owner picks one */
@@ -24,6 +26,8 @@ export const workerSocketUrl = (server: string) => `${server.replace(/^http/, 'w
 
 /** Is this a build stamp like "2026-11-09 12:34"? (the test render has "test") */
 const isBuildStamp = (build: string) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(build);
+/** A full commit id, safe to put in a shell command. */
+const isCommit = (sha: string | null): sha is string => !!sha && /^[0-9a-f]{40}$/.test(sha);
 
 export interface SetupStep { title: string; lines: string[] }
 
@@ -33,15 +37,16 @@ const ENV_FILE = '~/.config/dispatch/worker.env';
  * The steps, in order. Written as instructions, so they read the same to a person and to an LLM
  * that walks the person through them. "The owner" is the person who runs Dispatch.
  */
-export function workerSetupSteps({ server, build, repo, name, description }: WorkerSetupInput): SetupStep[] {
+export function workerSetupSteps({ server, commit, repo, name, description }: WorkerSetupInput): SetupStep[] {
   const worker = name.trim() || '<a name: lowercase letters, digits and dashes>';
   const about = description.trim() || '<what this machine has and when to use it>';
   const code = repo.trim().replace(/\/$/, '') || REPO_PLACEHOLDER;
-  const checkout = isBuildStamp(build)
-    ? [`The server runs the build from ${build} UTC. Check out the commit of \`main\` from just before that time, so the worker matches the server:`,
-      `    git checkout --detach "$(git rev-list -1 --before='${build} +0000' origin/main)"`,
+  // the server's own commit, not one picked by its build time: an image can be built later from an older commit
+  const checkout = isCommit(commit)
+    ? [`The server runs commit ${commit}. Check out the same commit, so the worker matches the server:`,
+      `    git checkout --detach ${commit}`,
       'If the owner would rather run the latest code, stay on `main` instead.']
-    : ['Stay on `main`: it is the version the server runs.'];
+    : ['Stay on `main`: the server does not say which commit it runs, so take the latest.'];
   return [
     {
       title: 'Check the machine',
