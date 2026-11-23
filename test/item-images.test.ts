@@ -24,7 +24,7 @@ describe('images on items', () => {
     const res = await upload(it.id, PNG, 'name=legend%20overlap.png', 'application/octet-stream');
     expect(res.status).toBe(200);
     const img = await res.json();
-    expect(img).toMatchObject({ item_id: it.id, comment_id: null, name: 'legend overlap.png', mime: 'image/png', size: PNG.length, author: 'you' });
+    expect(img).toMatchObject({ item_id: it.id, comment_id: null, name: 'legend overlap.png', mime: 'image/png', size: PNG.length, author: OWNER });
     expect(img.file).toBeUndefined(); // the server's file name stays on the server
 
     const detail = (await s.call('GET', `/items/${it.id}`)).data;

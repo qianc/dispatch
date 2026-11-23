@@ -616,12 +616,13 @@ export class Store {
     const params: (string | number)[] = [];
     const terms = searchTerms(f.q ?? '');
     const likes = terms.map((t) => `%${t.replace(/[\\%_]/g, '\\$&')}%`);
-    const text = "json_extract(e.body, '$.text')";
-    const message = "json_extract(e.body, '$.kind') IN ('user', 'assistant')";
-    for (const like of likes) {
-      where.push(`(s.title LIKE ? ESCAPE '\\' OR s.initial_prompt LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = s.id AND ${message} AND ${text} LIKE ? ESCAPE '\\'))`);
-      params.push(like, like, like);
-    }
+    // a word (or quoted phrase) as an FTS5 prefix phrase: "zeb" finds "Zebra"
+    const phrases = terms.map((t) => `"${t.replace(/"/g, '""')}"*`);
+    const inText = (q: string) => `text : (${q})`;
+    terms.forEach((_, i) => {
+      where.push(`(ulower(s.title) LIKE ? ESCAPE '\\' OR ulower(s.initial_prompt) LIKE ? ESCAPE '\\' OR s.id IN (SELECT session_id FROM session_event_text WHERE session_event_text MATCH ?))`);
+      params.push(likes[i], likes[i], inText(phrases[i]));
+    });
     if (f.project_id) { where.push('s.project_id = ?'); params.push(f.project_id); }
     if (f.kind) { where.push('s.kind = ?'); params.push(f.kind); }
     if (f.from) { where.push('s.created_at >= ?'); params.push(f.from); }
@@ -631,14 +632,15 @@ export class Store {
       `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC, s.id DESC LIMIT ? OFFSET ?`,
       ...params, limit + 1, Math.max(f.offset ?? 0, 0),
     );
-    const best = likes.length
-      ? `SELECT ${text} AS text FROM session_events e WHERE e.session_id = ? AND ${message} AND (${likes.map(() => `${text} LIKE ? ESCAPE '\\'`).join(' OR ')})
-          ORDER BY ${likes.map(() => `(${text} LIKE ? ESCAPE '\\')`).join(' + ')} DESC, e.seq DESC LIMIT 1`
-      : '';
+    // the message with the most words of the query, the newest among equals
+    const words = (text: string) => terms.filter((t) => text.toLowerCase().includes(t)).length;
     return {
       sessions: rows.slice(0, limit).map((r) => {
         const s = this.toSession(r);
-        const hit = best ? this.db.get<{ text: string }>(best, s.id, ...likes, ...likes) : undefined;
+        const hits = terms.length
+          ? this.db.all<{ text: string }>('SELECT text FROM session_event_text WHERE session_event_text MATCH ? ORDER BY rowid DESC', `session_id : "${s.id}" AND ${inText(phrases.join(' OR '))}`)
+          : [];
+        const hit = hits.reduce<{ text: string } | undefined>((a, h) => (!a || words(h.text) > words(a.text) ? h : a), undefined);
         const from = hit?.text ?? (terms.some((t) => s.initial_prompt.toLowerCase().includes(t)) ? s.initial_prompt : null);
         return { ...s, snippet: from ? snippetOf(from, terms) : null };
       }),
@@ -1050,6 +1052,8 @@ export class Store {
     return this.db.tx(() => {
       const seq = Number(this.db.get<{ n: number }>('SELECT coalesce(max(seq), 0) + 1 AS n FROM session_events WHERE session_id = ?', sessionId)!.n);
       const { lastId } = this.db.run('INSERT INTO session_events (session_id, seq, body) VALUES (?, ?, ?)', sessionId, seq, JSON.stringify(body));
+      // the owner's and Claude's messages are what Activity's search looks in (DISP-244)
+      if ((body.kind === 'user' || body.kind === 'assistant') && body.text) this.db.run('INSERT INTO session_event_text (rowid, text, session_id) VALUES (?, ?, ?)', lastId, body.text, sessionId);
       return { id: lastId, session_id: sessionId, seq, body, created_at: now() };
     });
   }
