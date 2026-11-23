@@ -34,7 +34,7 @@ describe('orchestrator: deploy notices of a step (DISP-103)', () => {
     return { ...p, child };
   };
 
-  it('a failed deploy the orchestrator deals with gives no push; the event stays in the batch', async () => {
+  it('a failed deploy gives no push while the orchestrator has it; the event stays in the batch. Starting an unrelated step does not deal with it (DISP-243)', async () => {
     const p = await deploying();
     deployResult(p.child, false);
     expect(t.store.step(p.first.id)).toMatchObject({ state: 'failed', note: 'deploy failed' });
@@ -42,11 +42,11 @@ describe('orchestrator: deploy notices of a step (DISP-103)', () => {
     expect(told(p.id).at(-1)).toContain('failed: deploy failed');
     expect(told(p.id).at(-1)).toContain('You may fix the deploy once');
     expect(titles()).toEqual([]);
-    // its turn: it starts a step for it
+    // its turn: it only starts the independent step 3, so the owner is told of step 1's deploy
     t.status(p.id, 'running');
     await t.startStep(p.id, p.third.id);
     t.status(p.id, 'idle');
-    expect(titles()).toEqual([]);
+    expect(t.pushes).toEqual([{ title: 'Rework auth: step 1 needs you', body: 'Its deploy failed, and the orchestrator did not fix it.', url: `/s/${p.child}` }]);
   });
 
   it('a failed deploy the orchestrator does nothing for gives exactly one push', async () => {

@@ -80,7 +80,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
         {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
         {planWaits && <p className="mt-1.5 text-[12px] text-muted">Nothing starts before you approve. To change the plan, write to the orchestrator below.</p>}
-        {o.proposal && open && <ProposalCard o={o} mine={mine} act={(path) => act.mutate({ path: `${base}/${path}`, body: path === 'approve' ? { plan_version: o.plan_version } : {} })} busy={act.isPending} />}
+        {o.proposal && open && <ProposalCard o={o} mine={mine} act={(path) => act.mutate({ path: `${base}/${path}`, body: { plan_version: o.plan_version } })} busy={act.isPending} />}
         <ErrorText error={act.error} />
       </div>
       {o.steps.length ? (

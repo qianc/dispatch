@@ -156,8 +156,10 @@ export type WorkerToServer =
    * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
    * `waiting`: the `local_id`s of the questions its sessions still wait on: an answer lost on the
    * link is sent again (DISP-239 #26).
+   * `deploys`: the repos (by id) whose deploy it runs, or whose result waits in its outbox. A deploy
+   * the server sent that is not here was cut off, by a restart of the worker (DISP-221).
    */
-  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; waiting?: string[] }
+  | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string>; waiting?: string[]; deploys?: number[] }
   /** the worker's free session slots changed (it can serve several servers) */
   | { t: 'slots'; free: number }
   /** the worker did not start a session: 'busy' (no free slot) or why it is not allowed */
