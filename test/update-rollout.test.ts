@@ -783,6 +783,8 @@ describe('the rollout of an update: the server first, then the workers, each in 
       srv.ctx.updates.setSettings({ auto: true });
       await srv.ctx.updates.tick();
       expect(asked).toHaveLength(1);
+      // taken before the stop is asked for, not in the time-limited shutdown (DISP-242)
+      expect(existsSync(`${dbFile}.pre-update`)).toBe(true);
       // the launcher stops the server
       await srv.app.close();
       expect(existsSync(`${dbFile}.pre-update`)).toBe(true);

@@ -54,8 +54,8 @@ import { Scheduler } from './scheduler.ts';
 import { Orchestrator } from './orchestrator.ts';
 import { disabledMessage, refusedWrite } from './projectLock.ts';
 import { readOnlyMessage, refusedSession } from './sessionGuard.ts';
-import { runningVersion, sameVersion } from '../update/version.ts';
-import { keepCopy, restoreCopy } from './preUpdate.ts';
+import { runningVersion } from '../update/version.ts';
+import { restoreCopy } from './preUpdate.ts';
 import { Updates } from './updates.ts';
 import { updateRoutes } from './routes/updates.ts';
 
@@ -395,20 +395,8 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
     updates.stop();
     github.stop();
     ctx.sessions.stop();
-    // the server stops for its own update: the old version can go back to this database
-    const own = updates.ownUpdate();
-    let noCopy: Error | null = null;
-    if (own && sameVersion(version.sha, own.from_sha)) {
-      try {
-        keepCopy(db.raw, dbFile, { from: own.from_sha, to: own.to_sha });
-      } catch (e) {
-        noCopy = e as Error;
-      }
-    }
+    // the copy of the database for its own update was taken before the stop (updates.ts, DISP-242)
     db.raw.close();
-    // the close fails, so the server does not end with exit code 0: the launcher then does not
-    // go on to a version that may change a database nothing can put back
-    if (noCopy) throw new Error(`keeping a copy of the database for the update failed: ${noCopy.message}`);
   });
 
   return { app, ctx, routes };

@@ -160,7 +160,7 @@ export function githubCredEnv(c: GithubCred): Env {
 
 /** A session's GitHub environment: its starter's own credential when it has one, else the project's env account. */
 export function sessionGithubEnv(spec: Pick<StartSpec, 'github_account'> & { github?: GithubCred | null }, envAccounts: GithubAccount[]): Env {
-  return spec.github ? githubCredEnv(spec.github) : githubEnv(pick(envAccounts, spec.github_account));
+  return spec.github ? githubCredEnv(spec.github) : githubEnv(pickGithub(envAccounts, spec.github_account));
 }
 
 /**
@@ -176,4 +176,9 @@ export function sessionAgentEnv(base: Env, spec: Pick<StartSpec, 'github_account
 /** The account a session or repo uses: the named one, else the first. */
 export function pick<T extends { name: string }>(accounts: T[], name: string | null | undefined): T | undefined {
   return (name && accounts.find((a) => a.name === name)) || accounts[0];
+}
+
+/** A GitHub account: the named one, the first when none is named; a name no longer configured gives none, not another identity (DISP-248). */
+export function pickGithub<T extends { name: string }>(accounts: T[], name: string | null | undefined): T | undefined {
+  return name ? accounts.find((a) => a.name === name) : accounts[0];
 }

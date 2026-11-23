@@ -168,6 +168,7 @@ function toPr(r: Row): PullRequest {
     github_login: (r.github_login as string | null) ?? null,
     author: (r.author as string | null) ?? null,
     base_ref: (r.base_ref as string | null) ?? null,
+    fork_sha: (r.fork_sha as string | null) ?? null,
     draft: bool(r.draft),
     changed_files: numOrNull(r.changed_files),
     ci_state: (r.ci_state as CiState | null) ?? null,
@@ -1177,15 +1178,17 @@ export class Store {
     return r && toPr(r);
   }
   /** One row per PR of a repo. Only a row with no session takes `session_id`: a row that has one keeps it. */
-  upsertPr(p: { session_id: number | null; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null }): PullRequest {
+  /** `fork_sha`: given only while known (an open local review); a row keeps its last one. */
+  upsertPr(p: { session_id: number | null; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null; fork_sha?: string | null }): PullRequest {
     this.db.run(
-      `INSERT INTO pull_requests (session_id, repo_id, number, url, title, state, mergeable, mergeable_state, head_ref, head_sha, last_synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO pull_requests (session_id, repo_id, number, url, title, state, mergeable, mergeable_state, head_ref, head_sha, fork_sha, last_synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_id, number) DO UPDATE SET url = excluded.url, title = excluded.title, state = excluded.state,
          mergeable = excluded.mergeable, mergeable_state = excluded.mergeable_state, head_ref = excluded.head_ref,
          head_sha = excluded.head_sha, last_synced = excluded.last_synced,
+         fork_sha = COALESCE(excluded.fork_sha, pull_requests.fork_sha),
          session_id = COALESCE(pull_requests.session_id, excluded.session_id)`,
-      p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, now(),
+      p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, p.fork_sha ?? null, now(),
     );
     return toPr(this.db.get(`${PR_SELECT} WHERE pr.repo_id = ? AND pr.number = ?`, p.repo_id, p.number)!);
   }

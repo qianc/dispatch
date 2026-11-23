@@ -67,9 +67,18 @@ export interface Project {
   created_at: string;
 }
 
-/** A repo's folder in a session: its name, or its `dir` when names collide (DISP-167); a `dir` that is not one plain name is not used. */
-export function repoFolder(repo: Pick<Repo, 'github_name' | 'dir'>): string {
-  return repo.dir && /^[\w.-]+$/.test(repo.dir) && !/^\.\.?$/.test(repo.dir) ? repo.dir : repo.github_name;
+/** A GitHub repo name, and the name of a repo Dispatch keeps (DISP-240: never "." or ".."). */
+export const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+/** A GitHub owner; also 'local' and 'hosted'. */
+export const REPO_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
+/**
+ * A repo's folder in a session: its name, or its `dir` when names collide (DISP-167); a `dir` that is not one plain name is not used.
+ * A name that is not one folder (".." or a path, DISP-240) gives `repo-<id>`, so a tidy never removes more than the repo's folder.
+ */
+export function repoFolder(repo: Pick<Repo, 'id' | 'github_name' | 'dir'>): string {
+  if (repo.dir && /^[\w.-]+$/.test(repo.dir) && !/^\.\.?$/.test(repo.dir)) return repo.dir;
+  return !repo.github_name || /[/\\\0]/.test(repo.github_name) || /^\.\.?$/.test(repo.github_name) ? `repo-${repo.id}` : repo.github_name;
 }
 
 export interface Repo {
@@ -598,6 +607,8 @@ export interface PullRequest {
   /** GitHub login of who opened it (null: not known, or a deleted user) */
   author: string | null;
   base_ref: string | null;
+  /** a local or hosted review: where its branch left the default branch, while it was open (shows a fast-forward's diff) */
+  fork_sha: string | null;
   draft: boolean;
   changed_files: number | null;
   /** null: not known */
@@ -737,8 +748,8 @@ export const schedulePatch = z.object({
 });
 
 export const repoInput = z.object({
-  github_owner: z.string().min(1),
-  github_name: z.string().min(1),
+  github_owner: z.string().regex(REPO_OWNER, 'Not a GitHub owner name.'),
+  github_name: z.string().regex(REPO_NAME, 'A repo name is letters, digits, dots, dashes and underscores.'),
   local_path: z.string().nullable().default(null),
   worktree_from: z.enum(['repo', 'clone']).nullable().default(null),
   setup_command: z.string().nullable().default(null),
@@ -773,8 +784,8 @@ export const itemPatch = z.object({
 });
 
 export const repoPatch = z.object({
-  github_owner: z.string().min(1).optional(),
-  github_name: z.string().min(1).optional(),
+  github_owner: z.string().regex(REPO_OWNER, 'Not a GitHub owner name.').optional(),
+  github_name: z.string().regex(REPO_NAME, 'A repo name is letters, digits, dots, dashes and underscores.').optional(),
   default_branch: z.string().min(1).optional(),
   check_command: z.string().nullable().optional(),
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
@@ -800,7 +811,8 @@ export const sourcePatch = z.object({
 export interface BranchFile { filename: string; status: string; additions: number; deletions: number; patch: string | null }
 /** State of a session branch in a local repo (the stand-in for a PR). */
 /** `differs`: the branch's tree is not the default branch's (false when only the commits differ, e.g. main was rewritten). */
-export interface BranchStatus { exists: boolean; ahead: number; behind: number; merged: boolean; conflicts: boolean; differs: boolean; head_sha: string | null }
+/** `merged` of a branch that is gone: its last known commit is in the default branch. `fork_sha`: where an unmerged branch left the default branch. */
+export interface BranchStatus { exists: boolean; ahead: number; behind: number; merged: boolean; conflicts: boolean; differs: boolean; head_sha: string | null; fork_sha?: string | null }
 
 export const sourceInput = z.object({
   kind: z.enum(SOURCE_KINDS).default('retro'),
