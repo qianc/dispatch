@@ -31,7 +31,8 @@ describe("a project's own instructions for items", () => {
       await s.call('POST', '/projects', { key: 'SLD', name: 'slides' });
       await s.call('POST', '/projects', { key: 'PLN', name: 'Plain' });
       const repo = (await s.call('POST', '/projects/SLD/repos', { hosted: { name: 'slides' } })).data;
-      const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+      // main is set up straight in the server's repo, as a Dispatch merge would (DISP-224)
+      const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', DISPATCH_ALLOW_DEFAULT: '1' };
       const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env, encoding: 'utf8' });
       const dir = mkdtempSync(join(tmpdir(), 'dsp-rules-'));
       git(dir, 'clone', '--quiet', s.ctx.hosted.dir(s.ctx.store.repo(repo.id)!), '.');

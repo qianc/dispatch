@@ -162,7 +162,8 @@ describe('response headers', () => {
       await s.call('POST', '/projects', { key: 'SV', name: 'svg' });
       const repo = (await s.call('POST', '/projects/SV/repos', { hosted: { name: 'app' } })).data;
       const dir = mkdtempSync(join(tmpdir(), 'dsp-svg-'));
-      const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+      // main is set up straight in the server's repo, as a Dispatch merge would (DISP-224)
+      const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', DISPATCH_ALLOW_DEFAULT: '1' };
       const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, env, encoding: 'utf8' });
       git('clone', '--quiet', s.ctx.hosted.dir(repo), '.');
       writeFileSync(join(dir, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');

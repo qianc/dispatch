@@ -104,7 +104,8 @@ export type ServerToWorker =
 export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }
   /** `items`: the export for the repo's generate command (DISP-56), when it has one */
-  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null }
+  /** sha: the branch commit the caller looked at; the worker refuses (moved) when the branch is elsewhere (DISP-232) */
+  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null; sha?: string }
   | { c: 'branch_status'; repo: Repo; branch: string }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
   | { c: 'read_file'; repo?: Repo; base_dir?: string; path: string }

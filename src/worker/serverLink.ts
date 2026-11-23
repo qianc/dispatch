@@ -571,7 +571,7 @@ export class ServerLink {
         await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch, 'github' in cmd ? cmd.github : this.creds.get(cmd.session_id));
         return { ok: true };
       case 'merge_local':
-        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github);
+        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github, cmd.sha);
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch);
       case 'branch_diff':

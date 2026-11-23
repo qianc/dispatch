@@ -881,8 +881,9 @@ export class GitHub {
       // A 5xx, a network error, or Dispatch's own refusal (no `response`; e.g. a starter taken off
       // AUTH_USERS, which can change without a new head) is tried again at the next sync.
       const { status, response } = e as { status?: number; response?: unknown };
+      // the head moved since its checks were read (GitHub's 409, or Dispatch's own for a local merge, DISP-232): the next sync reads the new one
+      if (status === 409) return;
       if (!response || !status || status < 400 || status >= 500) throw e;
-      if (status === 409) return; // the head moved since its checks were read: the next sync reads the new one
       this.autoMergeNoted.add(refusedKey);
       return note(`GitHub refused the merge: ${(e as Error).message.slice(0, 200)}`);
     }
@@ -1082,14 +1083,14 @@ export class GitHub {
     if (repo.local_path || repo.generate_command) how = 'local';
     // for the sync metrics: how far behind it is now (a failed lookup is no reason not to merge)
     this.store.setPrBehindAtMerge(pr.id, await this.behindBy(repo, pr, caller).then((b) => b.behind, () => null));
-    if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method);
+    if (repo.kind === 'hosted' && pr.local) return this.mergeHosted(repo, pr, method, sha);
     if (how === 'github') {
       const t = this.mustTarget(repo);
       const s = this.sessionOf(pr);
       const octo = s ? this.client(s, repo, 'write') : this.mustClient(this.asCaller(caller, repo, 'write').octo, repo);
       await octo.pulls.merge({ owner: t.owner, repo: t.repo, pull_number: pr.number, merge_method: method, ...(sha ? { sha } : {}) });
     } else {
-      const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`);
+      const res = await this.mergeOnWorker(pr, repo, pr.local ? this.mergeMessage(pr) : `Merge #${pr.number}: ${pr.title}`, sha);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
       // a hosted repo's PR on its upstream, merged here: GitHub closes the PR only when it gets the merge (DISP-207)
       const s = this.sessionOf(pr);
@@ -1112,15 +1113,20 @@ export class GitHub {
    * progress shows in the session while it runs; how long it took is kept for the next estimate.
    * The worker limits the check's run time (CHECK_TIMEOUT_MIN); here it only has to keep reporting.
    */
-  private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string) {
-    type Res = { ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean };
+  private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string, sha?: string) {
+    type Res = { ok: boolean; conflict?: boolean; moved?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean };
     // a GitHub repo's merge is pushed to GitHub: as the starter only. Elsewhere their name goes on the commit.
     const s = this.sessionOf(pr);
     const github = this.target(repo) && repo.kind !== 'hosted' ? this.as(s, repo, 'write').cred : this.credOf(s);
     let res: Res | undefined;
+    const worker = this.workerOf(pr);
+    // a hosted repo's merge comes back as a push of its default branch: only this worker's, only now (DISP-224)
+    const allowPush = <T,>(fn: () => Promise<T>) => (repo.kind === 'hosted' && this.hosted && worker !== null ? this.hosted.whileMerging(repo, worker, fn) : fn());
     try {
-      res = await this.hub.cmd<Res>(this.workerOf(pr), { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github }, 15 * 60_000,
-        (p) => this.checks.progress(pr, repo, p as CheckProgress));
+      res = await allowPush(() => this.hub.cmd<Res>(worker, { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github, ...(sha ? { sha } : {}) }, 15 * 60_000,
+        (p) => this.checks.progress(pr, repo, p as CheckProgress)));
+      // the branch moved on since the caller looked at it (DISP-232)
+      if (res.moved) throw moved();
       if (res.ok && res.check_reused && s) this.store.addEvent(s.id, { kind: 'system', text: `Check of ${repo.github_name} not run again for the merge: it already passed on exactly this tree (${repo.check_command}).` });
       return res;
     } finally {
@@ -1145,14 +1151,15 @@ export class GitHub {
    * or generate command, on the session's worker (which runs the check before it pushes the merge back here).
    * Then the merged default branch goes to the upstream, if there is one.
    */
-  private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase') {
+  private async mergeHosted(repo: Repo, pr: PullRequest, method: 'squash' | 'merge' | 'rebase', sha?: string) {
     const s = this.sessionOf(pr)!;
     const message = this.mergeMessage(pr);
     if (repo.check_command || repo.generate_command) {
-      const res = await this.mergeOnWorker(pr, repo, message);
+      const res = await this.mergeOnWorker(pr, repo, message, sha);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     } else {
-      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge', authorEnv(this.credOf(s)));
+      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge', authorEnv(this.credOf(s)), sha);
+      if (!res.ok && res.moved) throw moved();
       if (!res.ok) return { ok: false as const, conflict: res.conflict, output: res.output };
     }
     // a squash leaves the branch outside the history: say it is merged, do not work it out

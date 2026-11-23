@@ -66,11 +66,12 @@ describe('what a pull request belongs to, and its approval, in words (DISP-111)'
     expect(linkLabels({ linked: { session_id: 3, title: 'Plan', item_keys: [] } })).toEqual(['Session']);
   });
 
-  it('mergeBody: a PR with no session merges on GitHub, and only the commit the page shows', () => {
+  it('mergeBody: a PR with no session merges on GitHub; every merge only the commit the page shows (DISP-232)', () => {
     expect(mergeBody({ local: false, session_id: null, head_sha: 'sha41' }, 'local', 'squash')).toEqual({ how: 'github', method: 'squash', sha: 'sha41' });
-    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'local', 'merge')).toEqual({ how: 'local', method: 'merge' });
-    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'github', 'rebase')).toEqual({ how: 'github', method: 'rebase' });
-    expect(mergeBody({ local: true, session_id: 3, head_sha: 'sha5' }, 'github', 'squash')).toEqual({ how: 'local', method: 'squash' });
+    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'local', 'merge')).toEqual({ how: 'local', method: 'merge', sha: 'sha5' });
+    expect(mergeBody({ local: false, session_id: 3, head_sha: 'sha5' }, 'github', 'rebase')).toEqual({ how: 'github', method: 'rebase', sha: 'sha5' });
+    expect(mergeBody({ local: true, session_id: 3, head_sha: 'sha5' }, 'github', 'squash')).toEqual({ how: 'local', method: 'squash', sha: 'sha5' });
+    expect(mergeBody({ local: true, session_id: 3, head_sha: null }, 'github', 'squash')).toEqual({ how: 'local', method: 'squash' });
   });
 
   it('prPageStale: an open PR page is read again when the branch or the state moved on', () => {

@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { HostedGit } from '../src/server/hosted.ts';
 import type { Repo } from '../src/shared/types.ts';
 
-const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+// the tests push main straight into the bare repo, as a Dispatch merge on a worker would (DISP-224)
+const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', DISPATCH_ALLOW_DEFAULT: '1' };
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: ENV, encoding: 'utf8' }).trim();
 const repo = (id: number, extra: Partial<Repo> = {}): Repo => ({ id, project_id: 1, github_owner: 'hosted', github_name: `r${id}`, default_branch: 'main', check_command: null, local_path: null, worktree_from: null, setup_command: null, kind: 'hosted', worker_id: null, ...extra });
 
@@ -90,6 +91,39 @@ describe('hosted repos on the server', () => {
     expect(bad).toMatchObject({ ok: false, conflict: true });
     expect(git(h.dir(r), 'rev-parse', 'refs/heads/main')).toBe(after);
     expect(await h.branchStatus(r, 'other')).toMatchObject({ conflicts: true });
+  });
+
+  it('merges only the branch commit the caller looked at (DISP-232)', async () => {
+    const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
+    const r = repo(3);
+    await h.create(r, 'main');
+    const w = workClone(h, r);
+    git(w, 'checkout', '--quiet', '-b', 'feat');
+    commit(w, 'a.txt', 'reviewed\n');
+    git(w, 'push', '--quiet', 'origin', 'feat');
+    const reviewed = git(h.dir(r), 'rev-parse', 'refs/heads/feat');
+    commit(w, 'b.txt', 'not reviewed\n');
+    git(w, 'push', '--quiet', 'origin', 'feat');
+    const main = git(h.dir(r), 'rev-parse', 'refs/heads/main');
+    expect(await h.merge(r, 'feat', 'Merge feat', 'merge', undefined, reviewed)).toMatchObject({ ok: false, moved: true });
+    expect(git(h.dir(r), 'rev-parse', 'refs/heads/main')).toBe(main);
+    const tip = git(h.dir(r), 'rev-parse', 'refs/heads/feat');
+    expect(await h.merge(r, 'feat', 'Merge feat', 'merge', undefined, tip)).toMatchObject({ ok: true });
+    expect((await h.readFile(r, 'b.txt')).toString()).toBe('not reviewed\n');
+  });
+
+  it('a retired repo id gets its guard hook again when a new repo takes it (DISP-238)', async () => {
+    const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
+    const r = repo(4);
+    await h.create(r, 'main');
+    await h.retire(r);
+    expect(h.exists(r)).toBe(false);
+    // an older database hands the id out again: the new repo is guarded (no force-push to main)
+    await h.create(r, 'main');
+    await h.ensureSafe(r);
+    const w = workClone(h, r);
+    git(w, 'commit', '--quiet', '--amend', '--allow-empty', '-m', 'rewritten');
+    expect(() => git(w, 'push', '--quiet', '--force', 'origin', 'main')).toThrow(/only moves forward/);
   });
 
   it('pushes to and fast-forwards from an upstream, and refuses a diverged one', async () => {
