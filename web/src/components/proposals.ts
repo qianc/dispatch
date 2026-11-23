@@ -33,6 +33,37 @@ export function useCardPicks(sessionId: number, eventId: number, proposed: numbe
   return [picked, update] as const;
 }
 
+/** The rest of what you can change on a batch card: which new items it files, its title, prompt and plan-first. */
+export interface CardEdits { new_picked: number[]; title: string; prompt: string; force_plan: boolean }
+
+/** The card's edits as saved, else the card's own values; new-item picks only of indexes the card has. */
+export function savedCardEdits(key: string, card: CardEdits): CardEdits {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<CardEdits> | null;
+    if (saved && typeof saved === 'object') {
+      return {
+        new_picked: Array.isArray(saved.new_picked) ? card.new_picked.filter((i) => saved.new_picked!.includes(i)) : card.new_picked,
+        title: typeof saved.title === 'string' ? saved.title : card.title,
+        prompt: typeof saved.prompt === 'string' ? saved.prompt : card.prompt,
+        force_plan: typeof saved.force_plan === 'boolean' ? saved.force_plan : card.force_plan,
+      };
+    }
+  } catch { /* a bad entry: start from the card */ }
+  return card;
+}
+
+/** A batch card's edits, kept like its picks so the Inbox's Start starts what the card says (DISP-245). */
+export function useCardEdits(sessionId: number, eventId: number, card: CardEdits) {
+  const key = `dispatch:card-edits:${sessionId}:${eventId}`;
+  const [edits, setEdits] = useState<CardEdits>(() => savedCardEdits(key, card));
+  const update = (patch: Partial<CardEdits>) => setEdits((prev) => {
+    const next = { ...prev, ...patch };
+    localStorage.setItem(key, JSON.stringify(next));
+    return next;
+  });
+  return [edits, update] as const;
+}
+
 /**
  * What you can do with a proposal card: start the batch, create the items, or dismiss it. Used by
  * the card in the chat and by the planning chat's card in the Inbox. Starting opens the new session;

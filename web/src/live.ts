@@ -3,7 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { LiveEvent } from '../../src/shared/types.ts';
 import type { AssistantChat, PrDetail, SessionDetail, SessionEvent } from './api.ts';
 import { prPageStale } from './prs.ts';
-import { patchItemList } from './itemsCache.ts';
+import { dropDeletedItem, patchItemList } from './itemsCache.ts';
 
 /** Recent live events per session, so a refetch that raced with them can't drop them. Only for sessions
  * whose query is in the cache, and only for a few minutes: a race is over long before that (DISP-162). */
@@ -111,7 +111,7 @@ export function connectLive(qc: QueryClient): () => void {
   };
 }
 
-function apply(qc: QueryClient, e: LiveEvent) {
+export function apply(qc: QueryClient, e: LiveEvent) {
   switch (e.t) {
     case 'hello':
       return;
@@ -152,6 +152,8 @@ function apply(qc: QueryClient, e: LiveEvent) {
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['projects'] });
+      // a session that starts, waits for its limit or ends changes which card items are gone (DISP-246)
+      if (e.session.project_id) qc.invalidateQueries({ queryKey: ['card-gone', e.session.project_id] });
       if (e.session.kind === 'assistant') qc.invalidateQueries({ queryKey: ['assistant'] });
       if (e.session.kind === 'discuss') qc.invalidateQueries({ queryKey: ['discuss'] });
       if (e.session.schedule_id) qc.invalidateQueries({ queryKey: ['schedules', e.session.project_key] });
@@ -165,9 +167,19 @@ function apply(qc: QueryClient, e: LiveEvent) {
       return;
     case 'item':
       if (!patchItemList(qc, e.item)) qc.invalidateQueries({ queryKey: ['items', e.item.project_id] });
+      qc.invalidateQueries({ queryKey: ['card-gone', e.item.project_id] });
       qc.invalidateQueries({ queryKey: ['item', e.item.id] });
-      if (e.item.source_id) qc.invalidateQueries({ queryKey: ['source', e.item.source_id] });
+      // a source's page and its project's Sources list with their item counts (DISP-248)
+      if (e.item.source_id) {
+        qc.invalidateQueries({ queryKey: ['source', e.item.source_id] });
+        qc.invalidateQueries({ queryKey: ['sources', e.item.project_id] });
+      }
       qc.invalidateQueries({ queryKey: ['projects'] });
+      return;
+    case 'item_deleted':
+      dropDeletedItem(qc, e);
+      // an open page of it reads again, gets the 404, and says so (no stale item kept as data)
+      void qc.resetQueries({ queryKey: ['item', e.id], exact: true });
       return;
     case 'project':
       qc.invalidateQueries({ queryKey: ['projects'] });

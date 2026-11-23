@@ -90,6 +90,11 @@ export function recentDiscussions<T extends Pick<Session, 'updated_at'>>(open: T
   return open.filter((s) => now - Date.parse(s.updated_at) < DISCUSSION_DAYS * 86_400_000);
 }
 
+/** The discussions that are yours to close (DISP-245): another person's is theirs; with no sign-in, all. */
+export function ownDiscussions<T extends Pick<Session, 'started_by'>>(open: T[], user: string | null | undefined): T[] {
+  return user ? open.filter((s) => s.started_by === user) : open;
+}
+
 /**
  * Where a session's row opens. An open discussion opens on its item, beside it on desktop
  * (DISP-58), and the open assistant chat on its own screen: those screens show the open thread.

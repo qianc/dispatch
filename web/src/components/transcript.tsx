@@ -9,7 +9,7 @@ import { effortLabel } from './items.tsx';
 import { RichMd } from './RichMd.tsx';
 import { HIDDEN_TOOLS, groupWork } from './turns.ts';
 import { Lightbox } from './images.tsx';
-import { useCardPicks, useProposalActions } from './proposals.ts';
+import { useCardEdits, useCardPicks, useProposalActions } from './proposals.ts';
 import { ItemKeyLink } from './itemPeek.tsx';
 import { fullTime, messageTime } from '../time.ts';
 import { RunOptionsFields, WorkerField, runOptionsSummary, useChosenWorker, useRunOptions, useSentOptions } from './batch.tsx';
@@ -172,16 +172,33 @@ function openNotShown(events: SessionEvent[], inputs: PendingInput[]) {
 
 // ---------- questions & plan approval ----------
 
-function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: string; onChange: (v: string) => void; disabled: boolean }) {
-  const picked = q.multiSelect ? value.split(', ').filter(Boolean) : [value];
-  const known = new Set(q.options.map((o) => o.label));
-  const other = picked.filter((p) => p && !known.has(p)).join(', ');
+/** An answer as picked: the options, and the Other text, apart until it is sent (DISP-246). */
+export interface AnswerParts { picked: string[]; other: string }
+
+/** The answer sent: a multi-select's options and Other text joined with ", "; a single one is either. */
+export function joinAnswer(q: Pick<Question, 'multiSelect'>, a: AnswerParts): string {
+  return q.multiSelect ? [...a.picked, a.other.trim()].filter(Boolean).join(', ') : a.other || a.picked[0] || '';
+}
+
+/** A sent answer read back for showing: the options it names (an option may hold ", " itself), the rest is Other. */
+export function parseAnswer(q: Pick<Question, 'multiSelect' | 'options'>, value: string): AnswerParts {
+  const labels = q.options.map((o) => o.label);
+  if (!q.multiSelect) return labels.includes(value) ? { picked: [value], other: '' } : { picked: [], other: value };
+  let rest = `, ${value}, `;
+  const picked: string[] = [];
+  for (const l of [...labels].sort((a, b) => b.length - a.length)) {
+    if (!rest.includes(`, ${l}, `)) continue;
+    picked.push(l);
+    rest = rest.replace(`, ${l}, `, ', ');
+  }
+  return { picked: labels.filter((l) => picked.includes(l)), other: rest.slice(2, -2) };
+}
+
+function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: AnswerParts; onChange: (v: AnswerParts) => void; disabled: boolean }) {
+  const { picked, other } = value;
   const toggle = (label: string) => {
-    if (!q.multiSelect) return onChange(label);
-    const set = new Set(picked.filter((p) => known.has(p)));
-    if (set.has(label)) set.delete(label);
-    else set.add(label);
-    onChange([...set, ...(other ? [other] : [])].join(', '));
+    if (!q.multiSelect) return onChange({ picked: [label], other: '' });
+    onChange({ picked: picked.includes(label) ? picked.filter((p) => p !== label) : [...picked, label], other });
   };
   return (
     <div className="mb-3 last:mb-0">
@@ -210,7 +227,7 @@ function QuestionBlock({ q, value, onChange, disabled }: { q: Question; value: s
           placeholder="Other…"
           disabled={disabled}
           value={other}
-          onChange={(e) => onChange(q.multiSelect ? [...picked.filter((p) => known.has(p)), e.target.value].filter(Boolean).join(', ') : e.target.value)}
+          onChange={(e) => onChange({ picked: q.multiSelect ? picked : [], other: e.target.value })}
         />
       </div>
     </div>
@@ -222,9 +239,12 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
   const waiting = !input.answered_at && !input.expired;
   // only whoever started the session answers it
   const open = waiting && !readOnly;
-  const [answers, setAnswers] = useState<Record<string, string>>(() =>
-    input.answer?.kind === 'question' ? input.answer.answers : {},
-  );
+  const questions = input.payload.kind === 'question' ? input.payload.questions : [];
+  const [parts, setParts] = useState<Record<string, AnswerParts>>(() => {
+    const given = input.answer?.kind === 'question' ? input.answer.answers : {};
+    return Object.fromEntries(questions.map((q) => [q.question, parseAnswer(q, given[q.question] ?? '')]));
+  });
+  const answers = Object.fromEntries(questions.map((q) => [q.question, joinAnswer(q, parts[q.question] ?? { picked: [], other: '' })]));
   const [feedback, setFeedback] = useState('');
   const send = useMutation({
     mutationFn: (body: unknown) => api.post(`/inputs/${input.id}/answer`, body),
@@ -252,7 +272,7 @@ export function InputCard({ input, readOnly = false }: { input: PendingInput; re
       {p.kind === 'question' ? (
         <>
           {p.questions.map((q) => (
-            <QuestionBlock key={q.question} q={q} value={shownAnswer(input, answers, q.question)} disabled={!open} onChange={(v) => setAnswers({ ...answers, [q.question]: v })} />
+            <QuestionBlock key={q.question} q={q} value={open ? parts[q.question] : parseAnswer(q, shownAnswer(input, answers, q.question))} disabled={!open} onChange={(v) => setParts({ ...parts, [q.question]: v })} />
           ))}
           {open && (
             <Button
@@ -483,18 +503,33 @@ function ProposalCard({ eventId, done, proposal, session, project, readOnly }: {
   });
   const [picked, setPicked] = useCardPicks(session.id, eventId, proposal.type === 'batch' ? proposal.item_ids : []);
   const newItems = proposal.type === 'batch' ? proposal.new_items : proposal.items;
-  const [pickedNew, setPickedNew] = useState<Set<number>>(() => new Set(newItems.map((_, i) => i)));
-  const [title, setTitle] = useState(proposal.type === 'batch' ? proposal.title : '');
-  const [prompt, setPrompt] = useState(proposal.type === 'batch' ? proposal.prompt : '');
-  const [forcePlan, setForcePlan] = useState(proposal.type === 'batch' ? proposal.force_plan : false);
+  const [edits, setEdits] = useCardEdits(session.id, eventId, {
+    new_picked: newItems.map((_, i) => i),
+    title: proposal.type === 'batch' ? proposal.title : '',
+    prompt: proposal.type === 'batch' ? proposal.prompt : '',
+    force_plan: proposal.type === 'batch' ? proposal.force_plan : false,
+  });
+  const pickedNew = new Set(edits.new_picked);
+  const setPickedNew = (n: Set<number>) => setEdits({ new_picked: [...n] });
+  const { title, prompt, force_plan: forcePlan } = edits;
+  const setTitle = (title: string) => setEdits({ title });
+  const setPrompt = (prompt: string) => setEdits({ prompt });
+  const setForcePlan = (force_plan: boolean) => setEdits({ force_plan });
   const [options, setOptions] = useRunOptions(project.key);
   const [showOptions, setShowOptions] = useState(false);
   const proposedWorker = proposal.type === 'batch' ? { name: proposal.worker, reason: proposal.worker_reason } : undefined;
   const [workerId, setWorkerId] = useChosenWorker(project, proposedWorker?.name);
-  const sent = useSentOptions(options, workerId);
+  const sent = useSentOptions(options, workerId, project);
 
-  // items can move on after the card was made (closed, or started in another session): leave them out
-  const goneIds = new Set(items.filter((i) => ['done', 'canceled', 'in_progress', 'in_review'].includes(i.status)).map((i) => i.id));
+  // items can move on after the card was made (closed, or started in another session): leave them out.
+  // The server says which, so an item whose session only waits for its usage limit stays startable (DISP-246).
+  const cardIds = proposal.type === 'batch' ? proposal.item_ids : [];
+  const { data: gone = [] } = useQuery({
+    queryKey: ['card-gone', project.id, cardIds],
+    queryFn: () => api.get<number[]>(`/projects/${project.key}/items/gone?ids=${cardIds.join(',')}`),
+    enabled: cardIds.length > 0 && !done,
+  });
+  const goneIds = new Set(gone);
   const usable = [...picked].filter((id) => !goneIds.has(id));
   const { start, create } = useProposalActions({ sessionId: session.id, eventId, project });
   const startBatch = () => start.mutate({

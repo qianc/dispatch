@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions, type SessionOptions } from '../../../src/shared/types.ts';
-import { api, type Item, type Me, type Project, type Repo, type Session } from '../api.ts';
+import { api, type Accounts, type Item, type Me, type Project, type Repo, type Session } from '../api.ts';
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
 import { projectClaude, useAccounts } from '../accounts.ts';
 import { useWorkers } from '../workers.ts';
@@ -49,10 +49,21 @@ export function useOptionalPlugins(workerId: number | null | undefined): string[
   return workerId != null ? of(workers.find((w) => w.id === workerId)) : [...new Set(workers.flatMap(of))];
 }
 
-/** The options a form sends for a batch on this worker: without plugins the worker does not have. */
-export function useSentOptions(options: RunOptions, workerId: number | null): RunOptions {
+/**
+ * The options a form sends for a batch on this worker: without plugins the worker does not have, and
+ * without a remembered Claude account the project no longer allows (DISP-245: the field hides it).
+ */
+export function useSentOptions(options: RunOptions, workerId: number | null, project: Pick<Project, 'claude_account' | 'claude_allowed'> | undefined): RunOptions {
   const plugins = useOptionalPlugins(workerId);
-  return { ...options, worker_id: workerId, plugins: options.plugins.filter((p) => plugins.includes(p)) };
+  const { data: accounts } = useAccounts();
+  return { ...options, worker_id: workerId, plugins: options.plugins.filter((p) => plugins.includes(p)), claude_account: sentAccount(options.claude_account, accounts, project) };
+}
+
+/** The remembered account if the project allows it, else null (the project's default). */
+export function sentAccount(name: string | null | undefined, accounts: Accounts | undefined, project: Pick<Project, 'claude_account' | 'claude_allowed'> | undefined): string | null {
+  if (!name || !project) return null;
+  if (accounts) return projectClaude(accounts, project).allowed.some((a) => a.name === name) ? name : null;
+  return !project.claude_allowed?.length || project.claude_allowed.includes(name) ? name : null;
 }
 
 export function RunOptionsFields({ value, set, project, workerId }: {
@@ -227,7 +238,7 @@ export function BatchForm({ project, items, onStarted }: { project: Project & { 
   const [forcePlan, setForcePlan] = useState(project.default_force_plan);
   const [options, setOptions] = useRunOptions(project.key);
   const [workerId, setWorkerId] = useChosenWorker(project);
-  const sent = useSentOptions(options, workerId);
+  const sent = useSentOptions(options, workerId, project);
   const start = useMutation({
     mutationFn: () => api.post<Session>(`/projects/${project.key}/batches`, { item_ids: items.map((i) => i.id), prompt, title: title || undefined, force_plan: forcePlan, options: sent }),
     onSuccess: onStarted,

@@ -7,7 +7,7 @@ import { HttpError, type Ctx } from './ctx.ts';
 import { getModelDefaults, setModelDefaults } from '../modelDefaults.ts';
 import { modelDefaults } from '../../shared/types.ts';
 
-export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices, users, secretKeyFile }: Ctx) {
+export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, hub, github, store, devices, users, secretKeyFile, version }: Ctx) {
   const db = store.db;
   const passwordSet = !!(cfg.appPassword || cfg.appPasswordHash);
   /** Where the password login may be used: anywhere in password mode; only from this machine behind a proxy. */
@@ -66,6 +66,8 @@ export function authRoutes(app: FastifyInstance, { auth, access, cfg, notifier, 
       vapid_public_key: notifier.publicKey,
       /** the zone schedule times are in, also for a project's first schedule (DISP-190) */
       time_zone: user ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+      /** the commit the server runs, for a new worker to check out (DISP-248) */
+      server_sha: user ? version.sha : null,
     };
   });
   app.get('/api/settings', async () => ({ github: cfg.githubAccounts.length > 0, legacy_token: access.hasLegacyToken(), auth_mode: cfg.authMode }));

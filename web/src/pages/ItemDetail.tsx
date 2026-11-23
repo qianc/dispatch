@@ -11,16 +11,9 @@ import { ItemFields, SessionRow, StatusPicker, effortLabel } from '../components
 import { dropDeletedItem } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { Discuss } from './Discuss.tsx';
-import { Button, Card, Chip, CloseButton, Empty, ErrorText, ImportanceIcon, Section, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
+import { Button, Card, Chip, CloseButton, Empty, ErrorText, ImportanceIcon, Section, Sheet, createdLabel, cx, inputCls, loadingText, timeAgo } from '../components/ui.tsx';
 
 /** An item. With `itemId` + `onClose` it renders as the desktop drawer next to the project list. */
-/** "26 Oct 2026 · 1d ago" for an item's created_at. */
-function createdLabel(iso: string) {
-  const date = new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  const ago = timeAgo(iso);
-  return `${date} · ${ago === 'now' ? 'just now' : `${ago} ago`}`;
-}
-
 export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () => void } = {}) {
   const params = useParams();
   const id = itemId ?? Number(params.id);
@@ -29,7 +22,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [comment, setComment] = useState('');
-  const { data: it } = useQuery({ queryKey: ['item', id], queryFn: () => api.get<Detail>(`/items/${id}`) });
+  const { data: it, error: loadError } = useQuery({ queryKey: ['item', id], queryFn: () => api.get<Detail>(`/items/${id}`) });
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['item', id] });
     if (it) qc.invalidateQueries({ queryKey: ['items', it.project_id] });
@@ -66,7 +59,7 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
     else next.delete('discuss');
     setSearch(next, { replace: true });
   };
-  if (!it) return <Page title="Item" back={drawer ? undefined : true} keepScroll={!drawer} actions={closeBtn}><Empty>Loading…</Empty></Page>;
+  if (!it) return <Page title="Item" back={drawer ? undefined : true} keepScroll={!drawer} actions={closeBtn}><Empty>{loadingText(loadError)}</Empty></Page>;
   const p = it.project;
   const busy = it.status === 'in_progress' || it.status === 'in_review';
 
@@ -176,9 +169,21 @@ export function ItemDetail({ itemId, onClose }: { itemId?: number; onClose?: () 
   );
 }
 
+/** The fields the sheet changed since it opened: only those are sent, so a change the agent made meanwhile stays (DISP-245). */
+export function changedFields<T extends object>(opened: T, draft: T): Partial<T> {
+  return Object.fromEntries(Object.entries(draft).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(opened[k as keyof T]))) as Partial<T>;
+}
+
 function EditItem({ item, onDone, onDelete }: { item: Detail; onDone: () => void; onDelete: () => void }) {
-  const [draft, setDraft] = useState({ type: item.type, title: item.title, body_md: item.body_md, importance: item.importance, effort: item.effort, status: item.status, labels: item.labels, modules: item.modules });
-  const save = useMutation({ mutationFn: () => api.patch(`/items/${item.id}`, draft), onSuccess: onDone });
+  const [opened] = useState({ type: item.type, title: item.title, body_md: item.body_md, importance: item.importance, effort: item.effort, status: item.status, labels: item.labels, modules: item.modules });
+  const [draft, setDraft] = useState(opened);
+  const save = useMutation({
+    mutationFn: async () => {
+      const changes = changedFields(opened, draft);
+      if (Object.keys(changes).length) await api.patch(`/items/${item.id}`, changes);
+    },
+    onSuccess: onDone,
+  });
   return (
     <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
       <ItemFields project={item.project} draft={draft} set={(d) => setDraft({ ...draft, ...d })} showStatus />

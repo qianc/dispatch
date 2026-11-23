@@ -3,7 +3,7 @@ import { PROJECT_COLORS, PROJECT_COLOR_NAMES, PROJECT_ICONS } from '../../../src
 import { Icon } from '../components/icons.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { SOURCE_KINDS, type ItemType } from '../../../src/shared/types.ts';
 import { api, type Item, type ProjectSummary, type ReleaseOption, type ReleaseProposal, type Repo, type Session, type SourceSummary } from '../api.ts';
 import { MANY_RELEASE_ITEMS, normalizeVersion, VERSION_RE } from '../../../src/shared/release.ts';
@@ -20,7 +20,7 @@ import { fetchItems, itemsKey, toggleMarked } from '../itemsCache.ts';
 import { useVeryWide, useWide } from '../wide.ts';
 import { messageTime } from '../time.ts';
 import { ItemDetail } from './ItemDetail.tsx';
-import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, timeAgo } from '../components/ui.tsx';
+import { Button, Card, Chip, CloseButton, Empty, ErrorText, Field, Section, Segmented, Sheet, cx, inputCls, loadingText, timeAgo } from '../components/ui.tsx';
 
 type Tab = 'backlog' | 'bugs' | 'sessions' | 'prs' | 'sources' | 'settings';
 
@@ -52,7 +52,7 @@ export function Project() {
     next.set('new', '1');
     setParams(next, { replace: true });
   };
-  const { data: project } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
+  const { data: project, error: loadError } = useQuery({ queryKey: ['project', key], queryFn: () => api.get<ProjectSummary>(`/projects/${key}`) });
   // the open items only: done and canceled ones load when the list's Closed section is shown (DISP-161)
   const { data: items = [] } = useQuery({
     queryKey: itemsKey(project?.id, 'open'),
@@ -70,7 +70,7 @@ export function Project() {
   const openPrs = useProjectPrs(key, !!project).data?.prs.length ?? 0;
   const qc = useQueryClient();
   const toggle = useMutation(toggleMarked(qc));
-  if (!project) return <Page title={key} back="/projects"><Empty>Loading…</Empty></Page>;
+  if (!project) return <Page title={key} back="/projects"><Empty>{loadingText(loadError)}</Empty></Page>;
 
   const marked = items.filter((i) => i.marked);
   const type: ItemType = tab === 'bugs' ? 'bug' : 'backlog';
@@ -528,12 +528,16 @@ function Sources({ project }: { project: ProjectSummary }) {
 }
 
 function NewSourceForm({ project, onDone }: { project: ProjectSummary; onDone: (id: number) => void }) {
+  const qc = useQueryClient();
   const [f, setF] = useState({ kind: 'retro', title: '', body_md: '', reporter: '', version_tag: '', skill_name: '' });
   const create = useMutation({
     mutationFn: () => api.post<{ id: number }>(`/projects/${project.key}/sources`, {
       ...f, reporter: f.reporter || null, version_tag: f.version_tag || null, skill_name: f.skill_name || null,
     }),
-    onSuccess: (s) => onDone(s.id),
+    onSuccess: (s) => {
+      qc.invalidateQueries({ queryKey: ['sources', project.id] }); // the list has it when you go back (DISP-248)
+      onDone(s.id);
+    },
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   return (
@@ -587,6 +591,29 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 type Drafts = { name: string; description: string; importance: string; effort: string; placement_md: string };
 const draftsOf = (p: Pick<ProjectSummary, 'name' | 'description' | 'importance_scale' | 'effort_scale' | 'placement_md'>): Drafts =>
   ({ name: p.name, description: p.description, importance: p.importance_scale.join(', '), effort: p.effort_scale.join(', '), placement_md: p.placement_md });
+/** After a failed save: what was sent goes back to what was sent before, unless a newer send replaced it. */
+export function unsend<T extends object>(sent: T, tried: Partial<T>, prev: T): T {
+  const back = (Object.keys(tried) as (keyof T)[]).filter((k) => same(sent[k], tried[k]));
+  return { ...sent, ...Object.fromEntries(back.map((k) => [k, prev[k]])) };
+}
+
+/**
+ * A project save. `patch` shows at once, so a second quick toggle builds on the first (DISP-245);
+ * the server's answer is kept only from the last save started, as an earlier one lacks the later
+ * change. A failed save reads the project again.
+ */
+export async function saveProject(qc: QueryClient, key: string, last: { seq: number }, patch: object | null, work: () => Promise<ProjectSummary>) {
+  if (patch) qc.setQueryData<ProjectSummary>(['project', key], (p) => p && { ...p, ...patch });
+  const seq = ++last.seq;
+  try {
+    const p = await work();
+    if (seq === last.seq) qc.setQueryData(['project', key], p);
+  } catch (e) {
+    void qc.invalidateQueries({ queryKey: ['project', key] });
+    throw e;
+  }
+}
+
 const labels = (s: string) => s.split(',').map((l) => l.trim()).filter(Boolean);
 const draftValues = (d: Drafts) => ({ name: d.name, description: d.description, importance_scale: labels(d.importance), effort_scale: labels(d.effort), placement_md: d.placement_md });
 type TextKey = keyof ReturnType<typeof draftValues>;
@@ -634,27 +661,29 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
   const [saving, setSaving] = useState(0);
   const [saveError, setSaveError] = useState<unknown>(null);
   const [savedShown, setSavedShown] = useState(false);
-  const live = useRef({ project, drafts, sent: draftValues(drafts), typing: 0, saved: 0 });
+  const live = useRef({ project, drafts, sent: draftValues(drafts), typing: 0, saved: 0, last: { seq: 0 } });
   live.current.project = project;
   live.current.drafts = drafts;
 
-  /** One save: the page shows that it runs, that it is saved, or why it failed. */
-  const run = async (work: () => Promise<ProjectSummary>) => {
+  /** One save: the page shows that it runs, that it is saved, or why it failed. False when it failed. */
+  const run = async (work: () => Promise<ProjectSummary>, patch?: object): Promise<boolean> => {
     setSaving((n) => n + 1);
     setSaveError(null);
     try {
-      qc.setQueryData(['project', project.key], await work());
+      await saveProject(qc, project.key, live.current.last, patch ?? null, work);
       qc.invalidateQueries({ queryKey: ['projects'] }); // colours and icons elsewhere
       setSavedShown(true);
       clearTimeout(live.current.saved);
       live.current.saved = window.setTimeout(() => setSavedShown(false), SAVED_SHOWN_MS);
+      return true;
     } catch (e) {
       setSaveError(e);
+      return false;
     } finally {
       setSaving((n) => n - 1);
     }
   };
-  const save = (patch: object) => void run(() => api.patch<ProjectSummary>(url, patch));
+  const save = (patch: object) => run(() => api.patch<ProjectSummary>(url, patch), patch);
   const lock = async (disabled: boolean) => {
     const p = await api.post<ProjectSummary>(`${url}/${disabled ? 'disable' : 'enable'}`, {});
     qc.invalidateQueries({ queryKey: ['schedules', project.key] });
@@ -667,8 +696,11 @@ function ProjectSettings({ project }: { project: ProjectSummary }) {
     const now = draftValues(live.current.drafts);
     const changed = (Object.keys(now) as TextKey[]).filter((k) => (!keys || keys.includes(k)) && !same(now[k], live.current.sent[k]));
     if (!changed.length) return;
-    live.current.sent = { ...live.current.sent, ...Object.fromEntries(changed.map((k) => [k, now[k]])) };
-    save(Object.fromEntries(changed.map((k) => [k, now[k]])));
+    const prev = live.current.sent;
+    const tried = Object.fromEntries(changed.map((k) => [k, now[k]])) as Partial<ReturnType<typeof draftValues>>;
+    live.current.sent = { ...prev, ...tried };
+    // not saved: sent again when the field is next left (DISP-245)
+    void save(tried).then((ok) => { if (!ok) live.current.sent = unsend(live.current.sent, tried, prev); });
   };
   const type = (k: keyof Drafts) => (e: { target: { value: string } }) => {
     setDrafts((d) => ({ ...d, [k]: e.target.value }));

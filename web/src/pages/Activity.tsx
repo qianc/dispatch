@@ -3,9 +3,9 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@t
 import { searchTerms } from '../../../src/shared/search.ts';
 import type { Orchestration, SessionSearch } from '../../../src/shared/types.ts';
 import { partOfIndex } from '../orchestration.ts';
-import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchHits, searchQuery, type SessionFilter } from '../activity.ts';
+import { NO_FILTER, OPEN_STATUSES, filtering, ownDiscussions, recentDiscussions, searchHits, searchQuery, type SessionFilter } from '../activity.ts';
 import { Link } from 'react-router';
-import { api, type FailedSession, type Inbox, type ProjectSummary, type Session } from '../api.ts';
+import { api, type FailedSession, type Inbox, type Me, type ProjectSummary, type Session } from '../api.ts';
 import { ProjectKey } from '../components/ProjectBadge.tsx';
 import { Page } from '../components/Layout.tsx';
 import { SessionRow } from '../components/items.tsx';
@@ -28,7 +28,8 @@ export function Activity() {
   // item discussions not yet closed, answered or not: found again here, not only on their item (DISP-58).
   // One left alone for 10 days steps aside; it stays open on its item and in search.
   const { data: open = [] } = useQuery({ queryKey: ['sessions', 'discussions'], queryFn: () => api.get<Session[]>(`/sessions?kind=discuss&status=${OPEN_STATUSES}`) });
-  const discussions = recentDiscussions(open);
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  const discussions = ownDiscussions(recentDiscussions(open), me?.user);
   // same query as the menu: an idle session's attention says whether Dispatch checks or merges it
   const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<Inbox>('/inbox') });
   const attention = new Map((inbox?.idle ?? []).map((s) => [s.id, s.attention]));
@@ -94,7 +95,8 @@ function FailedRow({ s }: { s: FailedSession }) {
 /** An open discussion: drag it left to close it (phone), or the Close button (desktop). */
 function DiscussionRow({ s }: { s: Session }) {
   const qc = useQueryClient();
-  const close = () => api.post(`/items/${s.item_ids[0]}/discuss/new`).then(() => qc.invalidateQueries({ queryKey: ['sessions'] }));
+  // by its own id: a failure discussion has no item, and /discuss/new closes the caller's own (DISP-245)
+  const close = () => api.post(`/sessions/${s.id}/finish`, { status: 'completed' }).then(() => qc.invalidateQueries({ queryKey: ['sessions'] }));
   return (
     <SwipeToClose label="Close" onClose={close}>
       <div className="flex items-center">

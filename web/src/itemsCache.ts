@@ -45,7 +45,8 @@ export function toggleMarked(qc: QueryClient) {
     mutationFn: (it: Item) => api.patch<Item>(`/items/${it.id}`, { marked: !it.marked }),
     onMutate: async (it: Item) => {
       const key = ['items', it.project_id];
-      await qc.cancelQueries({ queryKey: key });
+      // only refetches of lists that have data: a cancelled first fetch (the Closed list just shown) stays on "Loading…" (DISP-248)
+      await qc.cancelQueries({ queryKey: key, predicate: (q) => q.state.data !== undefined });
       qc.setQueriesData<Item[]>({ queryKey: key }, (list) => list?.map((i) => (i.id === it.id ? { ...i, marked: !it.marked } : i)));
     },
     onError: (_e: unknown, it: Item) => {

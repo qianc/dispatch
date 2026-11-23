@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import type { Attention, OpenProposal } from '../../../src/shared/types.ts';
 import { api, type Project, type Repo } from '../api.ts';
 import { useChosenWorker, useRunOptions, useSentOptions } from './batch.tsx';
-import { useCardPicks, useProposalActions } from './proposals.ts';
+import { useCardEdits, useCardPicks, useProposalActions } from './proposals.ts';
 import { SignInPanel } from './signIn.tsx';
 import { Button, ErrorText, cx } from './ui.tsx';
 
@@ -47,19 +47,28 @@ function ProposalActions({ sessionId, projectKey, card, many }: { sessionId: num
   const [options] = useRunOptions(projectKey);
   const p = card.proposal;
   const [workerId] = useChosenWorker(project ?? { worker_id: null }, p.type === 'batch' ? p.worker : undefined);
-  const sent = useSentOptions(options, workerId);
+  const sent = useSentOptions(options, workerId, project);
   const { start, create, dismiss, busy, error } = useProposalActions({ sessionId, eventId: card.event_id, project });
   // what was unticked on the card in the chat stays out here too
   const [picked] = useCardPicks(sessionId, card.event_id, p.type === 'batch' ? p.item_ids : []);
+  // and so do the card's other edits: new items left out, title, instructions, plan first (DISP-245)
+  const newItems = p.type === 'batch' ? p.new_items : p.items;
+  const [edits] = useCardEdits(sessionId, card.event_id, {
+    new_picked: newItems.map((_, i) => i),
+    title: p.type === 'batch' ? p.title : '',
+    prompt: p.type === 'batch' ? p.prompt : '',
+    force_plan: p.type === 'batch' ? p.force_plan : false,
+  });
+  const pickedNew = newItems.filter((_, i) => edits.new_picked.includes(i));
   return (
     <>
       {p.type === 'batch' ? (
-        <Button small variant="primary" disabled={busy || !project || (!picked.size && !p.new_items.length)} onClick={() => start.mutate({ title: p.title, item_ids: [...picked], new_items: p.new_items, prompt: p.prompt, force_plan: p.force_plan, options: sent })}>
-          Start {many ? `"${p.title}"` : 'batch'} ({picked.size + p.new_items.length})
+        <Button small variant="primary" disabled={busy || !project || (!picked.size && !pickedNew.length)} onClick={() => start.mutate({ title: edits.title, item_ids: [...picked], new_items: pickedNew, prompt: edits.prompt, force_plan: edits.force_plan, options: sent })}>
+          Start {many ? `"${edits.title}"` : 'batch'} ({picked.size + pickedNew.length})
         </Button>
       ) : (
-        <Button small variant="primary" disabled={busy} onClick={() => create.mutate({ items: p.items, source_id: p.source_id })}>
-          Create {p.items.length} item{p.items.length === 1 ? '' : 's'}
+        <Button small variant="primary" disabled={busy || !pickedNew.length} onClick={() => create.mutate({ items: pickedNew, source_id: p.source_id })}>
+          Create {pickedNew.length} item{pickedNew.length === 1 ? '' : 's'}
         </Button>
       )}
       <Button small disabled={busy} onClick={() => dismiss.mutate()} aria-label={many ? `Dismiss ${p.type === 'batch' ? `"${p.title}"` : 'the items'}` : undefined}>Dismiss</Button>
