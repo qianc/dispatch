@@ -4,8 +4,9 @@
 //   images         → served by the same file route; one from another host shows as a link (DISP-144)
 import Markdown, { defaultUrlTransform, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Link } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useState, type MouseEvent, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { api, type Item, type Project } from '../api.ts';
 import { cx, inAppHref, MdImage } from './ui.tsx';
 import { dirOf, joinPath, slug } from '../../../src/shared/paths.ts';
@@ -40,12 +41,25 @@ export function safeDecode(s: string): string {
   }
 }
 
+/** An `#anchor` link: the item it names is looked up when it is clicked, not with the whole list (DISP-247). */
+function AnchorLink({ project, anchor, children }: { project: LinkContext['project']; anchor: string; children: ReactNode }) {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const [missing, setMissing] = useState(false);
+  if (missing) return <span className="text-accent/70">{children}</span>;
+  const open = async (e: MouseEvent) => {
+    e.preventDefault();
+    const [target] = await qc.fetchQuery({
+      queryKey: ['anchor', project.id, anchor],
+      queryFn: () => api.get<Item[]>(`/projects/${project.key}/items?slug=${encodeURIComponent(anchor)}`),
+    });
+    if (target) void nav(`/items/${target.id}`);
+    else setMissing(true);
+  };
+  return <a href={`#${anchor}`} onClick={(e) => open(e).catch(() => undefined)}>{children}</a>;
+}
+
 export function RichMd({ children, ctx, className }: { children: string; ctx: LinkContext; className?: string }) {
-  const { data: items = [] } = useQuery({
-    queryKey: ['items', ctx.project.id],
-    queryFn: () => api.get<Item[]>(`/projects/${ctx.project.key}/items`),
-    enabled: children.includes('](#'),
-  });
   return (
     <div className={cx('md', className)}>
       <Markdown
@@ -55,10 +69,7 @@ export function RichMd({ children, ctx, className }: { children: string; ctx: Li
           a: ({ href = '', children: c }) => {
             if (/^(https?:|mailto:|[\\/]{2})/.test(href)) return <a href={href} target="_blank" rel="noreferrer">{c}</a>;
             if (inAppHref(href)) return <Link to={href}>{c}</Link>;
-            if (href.startsWith('#')) {
-              const target = items.find((i) => slug(i.title) === safeDecode(href.slice(1)));
-              return target ? <Link to={`/items/${target.id}`}>{c}</Link> : <span className="text-accent/70">{c}</span>;
-            }
+            if (href.startsWith('#')) return <AnchorLink project={ctx.project} anchor={safeDecode(href.slice(1))}>{c}</AnchorLink>;
             const path = joinPath(ctx.baseDir ?? '', safeDecode(href.split('#')[0]));
             return <Link to={viewerUrl(ctx, path)}>{c}</Link>;
           },

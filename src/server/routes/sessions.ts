@@ -68,11 +68,12 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
   });
 
   app.get('/api/sessions', async (req) => {
-    const q = req.query as { project?: string; status?: string; kind?: string };
+    const q = req.query as { project?: string; status?: string; kind?: string; limit?: string };
     return store.sessions({
       project_id: q.project ? project(q.project).id : undefined,
       statuses: q.status?.split(',').filter(Boolean) as never,
       kind: q.kind as never,
+      limit: z.coerce.number().int().min(1).max(200).optional().parse(q.limit),
     });
   });
 
