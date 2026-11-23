@@ -722,7 +722,10 @@ and runs the agents.
   any other request not from the machine itself is refused on every path. A request that carries a
   device cookie is believed for the device only, whatever header comes with it.
 - Hosted repos answer only the three git smart-HTTP endpoints, to worker tokens, without a shell; a
-  hook keeps the default branch from being force-pushed or deleted.
+  hook keeps the default branch from being force-pushed or deleted, and lets a push move it only
+  while Dispatch runs a merge on that worker. A merge takes only the commit that was reviewed.
+- Push notification endpoints must be public `https:` addresses: never loopback, private or
+  link-local ones.
 - Paths from clients are checked: a repo file cannot leave the repo, an attachment name must be one
   Dispatch made, and redirects (`/signin?to=`, `connect_url`) stay on Dispatch's own origin.
 
