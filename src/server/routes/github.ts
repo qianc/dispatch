@@ -67,6 +67,9 @@ export function githubRoutes(app: FastifyInstance, { cfg, identities, users, git
     get installOwner() {
       return users.installOwner;
     },
+    get authUsers() {
+      return cfg.authUsers;
+    },
     identity: (user, project) => sessions.identity!(user, project),
   });
   app.get('/api/projects/:key/github-access', async (req) => {

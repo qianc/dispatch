@@ -3,6 +3,7 @@ import { pushEndpointProblem } from './pushEndpoint.ts';
 import type { Bus } from './bus.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
+import { isRemovedUser } from './identity.ts';
 import type { Store } from './store.ts';
 import type { Users } from './users.ts';
 
@@ -36,6 +37,7 @@ export class Notifier {
   private store: Store;
   private bus: Bus;
   private users: Pick<Users, 'installOwner'>;
+  private cfg: Pick<Config, 'authUsers'>;
   /** Devices (push endpoints) that have the app in focus, until when. */
   private active = new Map<string, number>();
 
@@ -43,6 +45,7 @@ export class Notifier {
     this.store = store;
     this.bus = bus;
     this.users = users;
+    this.cfg = cfg;
     let keys = { publicKey: process.env.VAPID_PUBLIC_KEY ?? '', privateKey: process.env.VAPID_PRIVATE_KEY ?? '' };
     if (!keys.publicKey || !keys.privateKey) {
       const saved = db.setting('vapid');
@@ -73,10 +76,11 @@ export class Notifier {
     await webpush.sendNotification({ endpoint, keys }, payload, { TTL: 3600 });
   };
 
-  /** The users a target names; nobody named: the install owner. */
+  /** The users a target names; nobody named, or someone taken off AUTH_USERS (DISP-237): the install owner. */
   private targets(to: NoticeTarget): string[] {
-    const names = [...new Set((Array.isArray(to) ? to : [to]).filter((u): u is string => !!u))];
-    return names.length ? names : [this.users.installOwner];
+    const owner = this.users.installOwner;
+    const names = [...new Set((Array.isArray(to) ? to : [to]).map((u) => (isRemovedUser(this.cfg.authUsers, u) ? owner : u)).filter((u): u is string => !!u))];
+    return names.length ? names : [owner];
   }
 
   /** Tells `to` (see NoticeTarget) on every device of theirs, and in their open apps. */

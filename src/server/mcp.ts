@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { MANY_RELEASE_ITEMS } from '../shared/release.ts';
-import { ITEM_STATUSES, OPEN_ITEM_STATUSES, type Item, type Project } from '../shared/types.ts';
+import { ITEM_STATUSES, OPEN_ITEM_STATUSES, tagList, type Item, type Project } from '../shared/types.ts';
 import type { Principal } from './access.ts';
 import type { Attachments } from './attachments.ts';
 import type { Bus } from './bus.ts';
@@ -141,8 +141,8 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
       description: z.string().default('').describe('Markdown: context, what is wrong or wanted, how to know it is done'),
       importance: label.optional().describe('1-4 or a label of the project importance scale'),
       effort: label.nullable().optional().describe('A label of the project effort scale'),
-      tags: z.array(z.string()).default([]),
-      modules: z.array(z.string()).default([]),
+      tags: tagList.default([]),
+      modules: tagList.default([]),
       status: z.enum(ITEM_STATUSES).optional(),
       source_id: z.number().int().nullable().optional(),
     },
@@ -167,17 +167,17 @@ export function trackerTools(store: Store, bus: Bus, attachments: Attachments | 
       status: z.enum(ITEM_STATUSES).optional(),
       importance: label.optional(),
       effort: label.nullable().optional(),
-      tags: z.array(z.string()).optional(),
-      add_tags: z.array(z.string()).optional(),
+      tags: tagList.optional(),
+      add_tags: tagList.optional(),
       remove_tags: z.array(z.string()).optional(),
-      modules: z.array(z.string()).optional(),
+      modules: tagList.optional(),
     },
   }, guard(true, (a: { key: string; title?: string; description?: string; type?: 'backlog' | 'bug'; status?: Item['status']; importance?: number | string; effort?: number | string | null; tags?: string[]; add_tags?: string[]; remove_tags?: string[]; modules?: string[] }) => {
     const it = writable(item(a.key));
     const p = store.project(it.project_id)!;
     let labels = a.tags ?? it.labels;
     if (a.add_tags || a.remove_tags) {
-      const drop = (a.remove_tags ?? []).map((t) => t.toLowerCase());
+      const drop = (a.remove_tags ?? []).map((t) => t.trim().toLowerCase());
       labels = labels.filter((t) => !drop.includes(t.toLowerCase()));
       for (const t of a.add_tags ?? []) if (!labels.some((x) => x.toLowerCase() === t.toLowerCase())) labels.push(t);
     }

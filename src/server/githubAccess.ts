@@ -5,7 +5,7 @@ import type { Octokit } from '@octokit/rest';
 import type { GithubAccess, GithubAccessAccount, GithubPermission, Project, Repo } from '../shared/types.ts';
 import type { GitHub } from './github.ts';
 import type { Identities } from './identities.ts';
-import { isRefusal, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
+import { isRefusal, isRemovedUser, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 import type { Store } from './store.ts';
 
 const CACHE_MS = 10 * 60_000;
@@ -16,6 +16,7 @@ export interface GithubAccessDeps {
   github: Pick<GitHub, 'clientFor' | 'clientForToken' | 'accountsInfo'>;
   identities: Pick<Identities, 'listConnected' | 'get'>;
   installOwner: string;
+  authUsers: string[];
   /** as whom `user` acts in `project` (resolveGithubIdentity) */
   identity: (user: string | null, project: Project) => GithubIdentity | IdentityRefusal;
 }
@@ -54,7 +55,7 @@ export class GithubAccessChecker {
   }
 
   async view(project: Project, caller: string | null, verify: boolean): Promise<GithubAccess> {
-    const { store, identities, installOwner, identity } = this.deps;
+    const { store, identities, installOwner, authUsers, identity } = this.deps;
     const needs = needsGithub(store, project);
     const mine = needs ? identity(caller, project) : null;
     const you: GithubAccess['you'] = isRefusal(mine) ? { ok: false, message: mine.message, connect_url: mine.connect_url } : { ok: true };
@@ -64,6 +65,8 @@ export class GithubAccessChecker {
     const people = [...new Set([...identities.listConnected().map((c) => c.user), installOwner])].sort();
     const env = await this.deps.github.accountsInfo().catch(() => []);
     for (const user of people) {
+      // a person taken off AUTH_USERS acts on GitHub no more: not listed, and never asked about as them
+      if (isRemovedUser(authUsers, user)) continue;
       const id = identity(user, project);
       if (isRefusal(id)) continue;
       if (id.source === 'user') {
