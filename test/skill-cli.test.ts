@@ -57,6 +57,15 @@ describe('dispatch-backlog skill script', () => {
 
     await cli('comment', 'CLI-1', 'Found', 'the', 'cause');
     expect(await cli('show', 'CLI-1')).toMatch(/— claude, .*\nFound the cause/);
+    // text that starts with -- stays text; --json takes no value; --k=v and -- work (DISP-248)
+    await cli('comment', 'CLI-1', '--force is needed');
+    await cli('comment', 'CLI-1', '--', '--force');
+    await cli('update', 'CLI-1', '--title=--dry-run hides the legend');
+    const shown = await cli('show', 'CLI-1');
+    expect(shown).toMatch(/\n--force is needed/);
+    expect(shown).toMatch(/\n--force(\n|$)/);
+    expect(await cli('show', '--json', 'CLI-1')).toContain('CLI-1    ');
+    expect(shown).toContain('--dry-run hides the legend');
 
     await cli('status', 'hold', 'CLI-2');
     expect(await cli('list')).not.toContain('CLI-2');
@@ -177,6 +186,18 @@ describe('dispatch-backlog skill script', () => {
       expect(out).toContain('Fresh');
       expect(out).not.toContain('Between');
       expect(out).toContain('done since 2.0.0-rc.1');
+    });
+
+    it('orders pre-releases by number: rc.10 is after rc.9 (DISP-241)', async () => {
+      const { done, run } = await setup();
+      done('Nine', 20, ['rel:v2.0.0-rc.9']);
+      done('Ten', 5, ['rel:v2.0.0-rc.10']);
+      done('Between', 9);
+      done('Fresh', 1);
+      const { out } = await run('unreleased');
+      expect(out).toContain('done since v2.0.0-rc.10');
+      expect(out).toContain('Fresh');
+      expect(out).not.toContain('Between');
     });
 
     it('lets --since win over the labels', async () => {

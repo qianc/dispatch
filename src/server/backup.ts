@@ -33,17 +33,24 @@ export async function backupOnce(dataDir: string, outDir: string, keepDays: numb
   } finally {
     src.close();
   }
-  if (existsSync(join(dataDir, 'attachments'))) {
-    const tgz = `dispatch-attachments-${stamp}.tgz`;
-    execFileSync('tar', ['czf', join(outDir, `${tgz}.tmp`), '-C', dataDir, 'attachments']);
-    renameSync(join(outDir, `${tgz}.tmp`), join(outDir, tgz));
-    made.push(tgz);
-  }
-  // hosted repos (the server keeps their only copy unless they push to a GitHub upstream)
-  if (existsSync(join(dataDir, 'git'))) {
-    const tgz = `dispatch-git-${stamp}.tgz`;
-    execFileSync('tar', ['czf', join(outDir, `${tgz}.tmp`), '-C', dataDir, 'git']);
-    renameSync(join(outDir, `${tgz}.tmp`), join(outDir, tgz));
+  // hosted repos first: the server keeps their only copy unless they push to a GitHub upstream.
+  // Each tarball on its own, so one tar that fails does not skip the rest, nor retention (DISP-242).
+  const failed: string[] = [];
+  for (const dir of ['git', 'attachments']) {
+    if (!existsSync(join(dataDir, dir))) continue;
+    const tgz = `dispatch-${dir}-${stamp}.tgz`;
+    const tmp = join(outDir, `${tgz}.tmp`);
+    try {
+      execFileSync('tar', ['czf', tmp, '-C', dataDir, dir], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (e) {
+      // 1: GNU tar saw a file change while it read it (an upload); the archive is still written
+      if ((e as { status?: number }).status !== 1) {
+        rmSync(tmp, { force: true });
+        failed.push(`${dir}: ${String((e as { stderr?: Buffer }).stderr ?? (e as Error).message).trim().split('\n')[0]}`);
+        continue;
+      }
+    }
+    renameSync(tmp, join(outDir, tgz));
     made.push(tgz);
   }
   const cutoff = now.getTime() - keepDays * 86_400_000;
@@ -57,6 +64,7 @@ export async function backupOnce(dataDir: string, outDir: string, keepDays: numb
     if (kind) seen.set(kind, rank + 1);
     if (!made.includes(f) && rank >= KEEP_MIN && mtime < cutoff) rmSync(join(outDir, f));
   }
+  if (failed.length) throw new Error(`made ${made.join(', ')}, but not ${failed.join('; ')}`);
   return made;
 }
 

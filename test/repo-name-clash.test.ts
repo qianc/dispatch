@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Workspaces } from '../src/worker/workspace.ts';
-import type { Repo } from '../src/shared/types.ts';
+import { repoFolder, type Repo } from '../src/shared/types.ts';
 import { startServer } from './helpers.ts';
 
 describe('two repos with one name in a project (DISP-142)', () => {
@@ -32,6 +32,30 @@ describe('two repos with one name in a project (DISP-142)', () => {
     expect((await s.call('PATCH', `/repos/${lib.id}`, { github_name: 'lib' })).status).toBe(200);
     expect((await s.call('PATCH', `/repos/${lib.id}`, { github_name: 'core' })).status).toBe(200);
     await s.app.close();
+  });
+});
+
+describe('a repo name that is not one folder (DISP-240)', () => {
+  it('refuses ".." and paths as a name or owner, on add and on rename', async () => {
+    const s = await startServer();
+    await s.call('POST', '/projects', { key: 'NC', name: 'NC' });
+    for (const github_name of ['..', '.', 'a/b', '../x']) {
+      expect((await s.call('POST', '/projects/NC/repos', { github_owner: 'alice', github_name })).status).toBe(400);
+    }
+    expect((await s.call('POST', '/projects/NC/repos', { github_owner: '../x', github_name: 'app' })).status).toBe(400);
+    const app = (await s.call('POST', '/projects/NC/repos', { github_owner: 'alice', github_name: 'app' })).data as Repo;
+    expect((await s.call('PATCH', `/repos/${app.id}`, { github_name: '..' })).status).toBe(400);
+    expect((await s.call('PATCH', `/repos/${app.id}`, { github_owner: 'a/b' })).status).toBe(400);
+    expect(s.ctx.store.repo(app.id)!.github_name).toBe('app');
+    await s.app.close();
+  });
+
+  it('a stored name that is not one folder gets repo-<id> as its folder, never the sessions folder', () => {
+    expect(repoFolder({ id: 7, github_name: '..' })).toBe('repo-7');
+    expect(repoFolder({ id: 7, github_name: 'a/b' })).toBe('repo-7');
+    expect(repoFolder({ id: 7, github_name: 'my app' })).toBe('my app'); // a local folder's name, as before
+    const ws = new Workspaces(mkdtempSync(join(tmpdir(), 'dsp-ws-')));
+    expect(ws.repoDir(3, { id: 7, github_name: '..' } as Repo)).toBe(join(ws.sessionDir(3), 'repo-7'));
   });
 });
 

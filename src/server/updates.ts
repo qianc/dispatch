@@ -2,7 +2,7 @@
 // owner chose to do about it, and the rollout: the server first, then each worker, one at a time,
 // each only in wait mode. Only a commit of the release branch is ever a target.
 import { Octokit } from '@octokit/rest';
-import { pick } from '../shared/accounts.ts';
+import { pickGithub } from '../shared/accounts.ts';
 import type { SelfUpdateAnswer } from '../shared/protocol.ts';
 import { VERSION_RE, compareVersions } from '../shared/release.ts';
 import { updateSettings, type Session, type SessionStatus, type UpdateInfo, type UpdateRow, type UpdateRunState, type UpdateSettings, type UpdateState, type UpdateWorker, type WorkerFacts } from '../shared/types.ts';
@@ -14,7 +14,7 @@ import type { Config } from './config.ts';
 import type { Db, Row } from './db.ts';
 import type { GitHub } from './github.ts';
 import type { Notifier } from './notify.ts';
-import { dropCopy } from './preUpdate.ts';
+import { dropCopy, keepCopy } from './preUpdate.ts';
 import type { Sessions } from './sessions.ts';
 import type { Store } from './store.ts';
 import type { Users } from './users.ts';
@@ -174,7 +174,7 @@ export class Updates {
   }
 
   private sourceFor(repo: string): ReleaseSource {
-    const account = pick(this.cfg.githubAccounts, this.cfg.updateGithubAccount);
+    const account = pickGithub(this.cfg.githubAccounts, this.cfg.updateGithubAccount);
     return githubSource(new Octokit({ auth: account?.token, userAgent: 'dispatch', baseUrl: this.cfg.githubApiUrl }), repo, this.cfg.updateBranch);
   }
 
@@ -268,8 +268,8 @@ export class Updates {
         const latest = await this.source.latest();
         const toBranch = sha ? await this.source.compare(sha, latest.branch_sha) : null;
         const onBranch = !!toBranch && (toBranch.status === 'ahead' || toBranch.status === 'identical');
-        // the highest version tag that is on the branch
-        const named = latest.tags.filter((t) => VERSION_RE.test(t.name)).sort((a, b) => compareVersions(b.name, a.name)).slice(0, TAGS_TRIED);
+        // the highest release tag that is on the branch; pre-releases (v2.0.0-rc.1) are not followed (DISP-248)
+        const named = latest.tags.filter((t) => VERSION_RE.test(t.name) && !t.name.includes('-')).sort((a, b) => compareVersions(b.name, a.name)).slice(0, TAGS_TRIED);
         let tag: UpdateState['tag'] = null;
         for (const t of named) {
           const on = t.sha === latest.branch_sha ? 'identical' : (await this.source.compare(t.sha, latest.branch_sha)).status;
@@ -345,6 +345,7 @@ export class Updates {
     const workers = !!this.version.sha && this.workerList().some((w) => w.connected && w.updatable && (w.status === 'behind' || w.status === 'failed'));
     if (!t && !workers) throw new UpdateError(newer ? `The server cannot be updated. ${m.why}` : 'There is no newer version to update to. Press "Check now" first.');
     this.setBlocked({ server: null, workers: {} });
+    this.checkoutPast = null;
     this.db.setSetting('update_rollout', JSON.stringify({ ...(t ?? { sha: this.version.sha!, tag: this.version.tag }), by, from: this.version.sha }));
     this.changed();
     this.soon();
@@ -504,7 +505,8 @@ export class Updates {
     const waiting: string[] = [];
     // the server first
     const t = manual ? (sameVersion(manual.sha, this.version.sha) ? null : { sha: manual.sha, tag: manual.tag }) : this.target();
-    if (t) {
+    // a checkout already past the target (pulled by hand, not restarted) is not fetched again each tick (DISP-241)
+    if (t && t.sha !== this.checkoutPast) {
       const what = t.tag ?? short(t.sha);
       if (this.blocked().server === t.sha) waiting.push(`The update of the server to ${what} failed. "Update now" tries it again.`);
       else {
@@ -534,9 +536,27 @@ export class Updates {
   }
 
   private gitEnv(): NodeJS.ProcessEnv {
-    const account = pick(this.cfg.githubAccounts, this.cfg.updateGithubAccount);
+    const account = pickGithub(this.cfg.githubAccounts, this.cfg.updateGithubAccount);
     return { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(account ? this.d.github.gitEnvForToken(account.token) : {}) };
   }
+
+  /**
+   * The copy of the database the old version goes back to if the update does not hold. Taken
+   * before the stop is asked for: in the shutdown, a large database could outlast its time limit
+   * and be cut off (DISP-242). False: no copy, so the update failed.
+   */
+  private keepCopy(row: UpdateRow): boolean {
+    try {
+      keepCopy(this.db.raw, this.d.dbFile, { from: row.from_sha, to: row.to_sha });
+      return true;
+    } catch (e) {
+      this.serverEnded(row, 'failed', `Keeping a copy of the database for the update failed: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  /** A target the checkout was found to be past: the next restart runs that checkout. */
+  private checkoutPast: string | null = null;
 
   private async updateServer(t: { sha: string; tag: string | null }, by: string, m: ReturnType<Updates['mode']>): Promise<string[]> {
     const from = this.version.sha;
@@ -546,10 +566,12 @@ export class Updates {
     const row = this.addRow({ target: 'server', worker_id: m.worker ?? null, worker_name: m.worker === undefined ? null : this.workerName(m.worker), triggered_by: by, from_sha: from, to_sha: t.sha, to_tag: t.tag });
     const notNow = () => {
       this.dropRow(row.id);
+      dropCopy(this.d.dbFile);
       sessions.hold = null;
       sessions.dispatch();
     };
     if (m.mode === 'worker') {
+      if (!this.keepCopy(row)) return [];
       // the worker runs its own command; the server names only the commit
       if (hub.send(m.worker, { t: 'server_update', update_id: row.id, sha: t.sha, prev: from })) this.changed();
       else notNow();
@@ -560,7 +582,8 @@ export class Updates {
       await this.verify({ sha: t.sha, branch: this.cfg.updateBranch, role: 'server', dir: APP_DIR, from }, { fetch: true, env: this.gitEnv() });
     } catch (e) {
       if (e instanceof Refusal && e.kind === 'ahead') {
-        // the checkout is on this commit, or past it: nothing to do
+        // the checkout is on this commit, or past it: nothing to do, and not tried again every tick
+        this.checkoutPast = t.sha;
         notNow();
         if (this.rollout()) this.db.setSetting('update_rollout', '');
         return [];
@@ -574,6 +597,7 @@ export class Updates {
       notNow();
       return [`The server updates to ${t.tag ?? short(t.sha)} when it is idle. Now: ${busy.join(', ')}.`];
     }
+    if (!this.keepCopy(row)) return [];
     this.changed();
     // the launcher stops this server now; it answers here only when it refused
     this.launcher!.request({ sha: t.sha, from }, { update_id: row.id });

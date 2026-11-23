@@ -18,8 +18,9 @@ interface Note { from: string | null; to: string; at: string }
 const inMemory = (dbFile: string) => dbFile === ':memory:';
 
 /**
- * Keep a copy of the database as it is now. Call it as the last thing before the database closes,
- * when the server stops for its own update from `from` to `to`.
+ * Keep a copy of the database as it is now, when the server is about to stop for its own update
+ * from `from` to `to`: right before it asks for the stop, not in the shutdown, whose time limit a
+ * large copy could outlast (DISP-242).
  */
 export function keepCopy(db: DatabaseSync, dbFile: string, update: { from: string | null; to: string }) {
   if (inMemory(dbFile)) return;
