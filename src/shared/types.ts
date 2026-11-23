@@ -886,6 +886,8 @@ export interface OrchestrationStep {
   prompt_md: string;
   item_ids: number[];
   item_keys: string[];
+  /** the worker its batch runs on, by name; null: the project's or the owner's default (DISP-251) */
+  worker: string | null;
   /** ids of the steps that must be done or skipped first */
   depends_on: number[];
   state: StepState;
@@ -1024,6 +1026,8 @@ export const planInput = z.object({
     after: z.array(z.number().int().min(1)).default([]),
     /** the orchestrator may skip it without asking (DISP-119) */
     optional: z.boolean().default(false),
+    /** the worker its batch runs on, by name; unset: the project's or the owner's default (DISP-251) */
+    worker: z.string().trim().min(1).optional(),
   })).min(1, 'A plan needs at least one step.'),
 });
 export type PlanInput = z.infer<typeof planInput>;

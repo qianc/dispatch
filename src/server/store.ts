@@ -795,6 +795,7 @@ export class Store {
       prompt_md: String(r.prompt_md),
       item_ids: itemIds,
       item_keys: this.itemsByIds(itemIds).map((i) => i.key),
+      worker: (r.worker as string | null) ?? null,
       depends_on: json<number[]>(r.depends_on, []),
       state: r.state as OrchestrationStep['state'],
       note: (r.note as string | null) ?? null,
@@ -877,7 +878,7 @@ export class Store {
    * The plan's steps, in this order. A step given by `id` keeps its row (state, child session);
    * the others are new. Rows left out are removed. `after`: places in this list, from 1.
    */
-  replaceSteps(sessionId: number, steps: { id?: number; title: string; project_id: number; prompt_md: string; item_ids: number[]; after: number[]; optional?: boolean }[]): number[] {
+  replaceSteps(sessionId: number, steps: { id?: number; title: string; project_id: number; prompt_md: string; item_ids: number[]; after: number[]; optional?: boolean; worker?: string | null }[]): number[] {
     return this.db.tx(() => {
       const kept = new Set(steps.flatMap((s) => (s.id ? [s.id] : [])));
       for (const old of this.db.all<{ id: number }>('SELECT id FROM orchestration_steps WHERE orchestration_id = ?', sessionId)) {
@@ -885,12 +886,12 @@ export class Store {
       }
       const ids = steps.map((s, i) => {
         if (s.id) {
-          this.db.run('UPDATE orchestration_steps SET position = ?, title = ?, project_id = ?, prompt_md = ?, item_ids = ?, optional = ? WHERE id = ? AND orchestration_id = ?',
-            i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0, s.id, sessionId);
+          this.db.run('UPDATE orchestration_steps SET position = ?, title = ?, project_id = ?, prompt_md = ?, item_ids = ?, optional = ?, worker = ? WHERE id = ? AND orchestration_id = ?',
+            i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0, s.worker ?? null, s.id, sessionId);
           return s.id;
         }
-        return Number(this.db.run('INSERT INTO orchestration_steps (orchestration_id, position, title, project_id, prompt_md, item_ids, optional) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          sessionId, i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0).lastId);
+        return Number(this.db.run('INSERT INTO orchestration_steps (orchestration_id, position, title, project_id, prompt_md, item_ids, optional, worker) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          sessionId, i + 1, s.title, s.project_id, s.prompt_md, JSON.stringify(s.item_ids), s.optional ? 1 : 0, s.worker ?? null).lastId);
       });
       steps.forEach((s, i) => this.db.run('UPDATE orchestration_steps SET depends_on = ? WHERE id = ?', JSON.stringify(s.after.map((n) => ids[n - 1])), ids[i]));
       this.db.run('UPDATE orchestrations SET updated_at = ? WHERE session_id = ?', now(), sessionId);
