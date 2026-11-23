@@ -958,6 +958,10 @@ export class Store {
       ...(sessionId === undefined ? [] : [sessionId]),
     ).map((r) => ({ id: Number(r.id), step_id: Number(r.step_id), session_id: Number(r.session_id), text: String(r.text) }));
   }
+  /** The messages that wait for a batch wait for the session that took over from it. */
+  moveOrchMessages(fromSessionId: number, toSessionId: number) {
+    this.db.run("UPDATE orchestration_messages SET session_id = ? WHERE session_id = ? AND state = 'queued'", toSessionId, fromSessionId);
+  }
   setOrchMessagesState(ids: number[], state: 'queued' | 'delivered' | 'dropped') {
     for (const id of ids) this.db.run('UPDATE orchestration_messages SET state = ? WHERE id = ?', state, id);
   }
@@ -1124,7 +1128,16 @@ export class Store {
   }
   /** How many questions of a step's batches the orchestrator answered (an overruled answer counts too). */
   orchestratorAnswers(stepId: number): number {
-    return Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pending_inputs WHERE step_id = ? AND answered_by IN ('orchestrator', 'overruled')", stepId)?.n ?? 0);
+    const own = Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pending_inputs WHERE step_id = ? AND answered_by IN ('orchestrator', 'overruled')", stepId)?.n ?? 0);
+    return own + this.carried(stepId).answers;
+  }
+  /** What a step got from the step it was split from (DISP-243): that step's retries and answered questions. */
+  carried(stepId: number): { retries: number; answers: number } {
+    const r = this.db.get<{ r: number; a: number }>('SELECT carried_retries AS r, carried_answers AS a FROM orchestration_steps WHERE id = ?', stepId);
+    return { retries: Number(r?.r ?? 0), answers: Number(r?.a ?? 0) };
+  }
+  setCarried(stepId: number, c: { retries: number; answers: number }) {
+    this.db.run('UPDATE orchestration_steps SET carried_retries = ?, carried_answers = ? WHERE id = ?', c.retries, c.answers, stepId);
   }
   /** Marks an approved cross-project request used. False: it was used before (DISP-179). */
   useInput(id: number): boolean {

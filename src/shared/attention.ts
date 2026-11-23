@@ -3,13 +3,15 @@ import type { Attention, OpenProposal, Orchestration, PullRequest, Session, Sess
 const listed = (n: number[]) => (n.length > 1 ? `steps ${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : `step ${n[0]}`);
 
 /**
- * What a finished orchestration left undone: its failed steps and the skipped ones that were not
- * optional, e.g. "step 2 failed, steps 3 and 4 skipped". Empty when the goal is met (DISP-121).
+ * What a finished orchestration left undone: its failed steps, and the skipped or never started ones
+ * that were not optional, e.g. "step 2 failed, steps 3 and 4 skipped, step 5 not started". Empty when
+ * the goal is met (DISP-121, DISP-243).
  */
 export function finishGaps(o: Pick<Orchestration, 'steps'>): string {
   const failed = o.steps.filter((s) => s.state === 'failed').map((s) => s.position);
   const skipped = o.steps.filter((s) => s.state === 'skipped' && !s.optional).map((s) => s.position);
-  return [failed.length ? `${listed(failed)} failed` : '', skipped.length ? `${listed(skipped)} skipped` : ''].filter(Boolean).join(', ');
+  const notStarted = o.steps.filter((s) => s.state === 'pending' && !s.optional).map((s) => s.position);
+  return [failed.length ? `${listed(failed)} failed` : '', skipped.length ? `${listed(skipped)} skipped` : '', notStarted.length ? `${listed(notStarted)} not started` : ''].filter(Boolean).join(', ');
 }
 
 /** A finished orchestration: a run with failed or skipped steps never reads as a success (DISP-121). */

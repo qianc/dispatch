@@ -58,8 +58,12 @@ export class Orchestrator {
    */
   private makeTitle: ((s: Session, goal: string, projects: string[]) => Promise<string>) | undefined;
 
-  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string> }) {
+  /** Run a merged batch's deploy of a repo again (app.ts: GitHub's deploy of its merged PR). False: nothing to deploy. */
+  private redeploy: (s: Session, repoId: number) => boolean;
+
+  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string>; redeploy?: (s: Session, repoId: number) => boolean }) {
     this.makeTitle = deps.makeTitle;
+    this.redeploy = deps.redeploy ?? (() => false);
     this.store = deps.store;
     this.bus = deps.bus;
     this.sessions = deps.sessions;
@@ -154,7 +158,8 @@ export class Orchestrator {
       return { ...s, child: c ? { id: c.id, status: c.status, title: c.title, waiting_reason: c.waiting_reason } : null };
     });
     const wakes = (o.phase === 'plan' || o.phase === 'run') && !this.ownFailed(o);
-    return { ...o, steps, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: wakes ? this.timersOf(o)[0]?.due_at ?? null : null };
+    const proposal = o.proposal && { ...o.proposal, held: this.heldNow(o) };
+    return { ...o, steps, proposal, waiting: this.waitingOf(o), cost_usd: this.store.orchestrationCost(o.session_id), next_wake: wakes ? this.timersOf(o)[0]?.due_at ?? null : null };
   }
 
   /** Its own session failed: its timers wait until the owner writes to it and it goes on. */
@@ -241,12 +246,26 @@ export class Orchestrator {
     };
   }
 
+  /**
+   * The steps a change that waits for the owner holds, worked out from the plan as it is now: a step
+   * that failed when the change was made and is retried since is held too, else it would start with
+   * the prompt the change replaces (DISP-243). A change that no longer fits holds what it held.
+   */
+  private heldNow(o: Orchestration): number[] {
+    if (!o.proposal) return [];
+    try {
+      return heldByProposal(o.steps, this.buildPlan(o, { plan_md: o.proposal.plan_md, steps: o.proposal.steps }).steps);
+    } catch {
+      return o.proposal.held;
+    }
+  }
+
   /** The steps that can start now: pending, in an approved running plan, with every step before them settled. */
   readySteps(o: Orchestration): OrchestrationStep[] {
     if (o.phase !== 'run') return [];
     const state = new Map(o.steps.map((s) => [s.id, s.state]));
     // a change that waits for the owner holds the steps it changes, and only those (DISP-119)
-    const held = new Set(o.proposal?.held ?? []);
+    const held = new Set(this.heldNow(o));
     return o.steps.filter((s) => s.state === 'pending' && !held.has(s.id) && s.depends_on.every((d) => SETTLED.includes(state.get(d) ?? 'skipped')));
   }
 
@@ -254,9 +273,10 @@ export class Orchestrator {
   statusText(o: Orchestration): string {
     if (!o.steps.length) return 'No plan yet.';
     const place = new Map(o.steps.map((s) => [s.id, s.position]));
+    const held = this.heldNow(o);
     const lines = o.steps.map((s) => {
       const after = s.depends_on.flatMap((d) => place.get(d) ?? []);
-      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', o.proposal?.held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
+      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
       return `${s.position}. [${s.state}${s.note ? `: ${s.note}` : ''}] ${s.project_key} — ${s.title} (${facts.join(', ')})`;
     });
     const ready = this.readySteps(o);
@@ -516,8 +536,11 @@ export class Orchestrator {
       const after = this.must(o.session_id);
       return `The change is shown to the owner with an Approve button. ${this.proposalText(after, proposal)} Start what is ready now (${this.readySteps(after).map((x) => x.id).join(', ') || 'nothing is'}), explain the change briefly, then end your turn.`;
     }
-    this.store.replaceSteps(o.session_id, plan.steps);
-    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan', plan_version: o.plan_version + 1 });
+    // one write: a kill in between would leave the new steps under the old plan version (DISP-243)
+    this.store.db.tx(() => {
+      this.store.replaceSteps(o.session_id, plan.steps);
+      this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, plan_approved: false, phase: 'plan', plan_version: o.plan_version + 1 });
+    });
     // it takes its batches' questions only while an approved plan runs
     this.handOverAll(o.session_id, 'The orchestrator changed its plan and waits for your approval: this is yours.');
     this.sessions.systemNote(s.id, `Plan proposed: ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}`);
@@ -529,8 +552,9 @@ export class Orchestrator {
   private proposalText(o: Orchestration, p: PlanProposal): string {
     const at = (ids: number[]) => o.steps.filter((x) => ids.includes(x.id)).map((x) => x.position);
     const list = (n: number[]) => (n.length > 1 ? `steps ${n.slice(0, -1).join(', ')} and ${n.at(-1)}` : `step ${n[0]}`);
-    const held = at(p.held);
-    const goes = o.steps.filter((x) => !p.held.includes(x.id) && ['pending', 'running', 'review'].includes(x.state)).map((x) => x.position);
+    const heldIds = this.heldNow(o);
+    const held = at(heldIds);
+    const goes = o.steps.filter((x) => !heldIds.includes(x.id) && ['pending', 'running', 'review'].includes(x.state)).map((x) => x.position);
     return [
       `A change of the plan waits for your approval: ${p.summary}.`,
       held.length ? `Held until you answer: ${list(held)}.` : 'It holds no step.',
@@ -553,13 +577,20 @@ export class Orchestrator {
     if (problem) throw new Error(`This change needs the owner's approval: ${problem}. Propose it with set_plan; the steps it does not change go on meanwhile.`);
     const steps = plan.steps.map((st) => (st.id === undefined && change.kind === 'fix_blocker' ? { ...st, prompt_md: this.fixGuard(change, st.prompt_md) } : st));
     const summary = describeChange(o.steps, plan.steps, change);
-    const ids = this.store.replaceSteps(o.session_id, steps);
-    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md || o.plan_md, plan_version: o.plan_version + 1 });
-    const fixStep = change.kind === 'fix_blocker' ? ids[plan.steps.findIndex((st) => st.id === undefined)] : null;
-    this.store.addPlanChange(o.session_id, { kind: change.kind, decided_by: 'orchestrator', summary, reason: change.reason, verification: change.verification || null, step_id: fixStep });
+    // the parts of a split step keep its retries and answers: else fail, retry, split would never reach the caps (DISP-243)
+    const split = change.kind === 'split' ? o.steps.find((x) => !plan.steps.some((st) => st.id === x.id)) : undefined;
+    const carried = split && { retries: this.ownRetries(o, split.id), answers: this.store.orchestratorAnswers(split.id) };
+    const ids = this.store.db.tx(() => {
+      const ids = this.store.replaceSteps(o.session_id, steps);
+      this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md || o.plan_md, plan_version: o.plan_version + 1 });
+      const fixStep = change.kind === 'fix_blocker' ? ids[plan.steps.findIndex((st) => st.id === undefined)] : null;
+      this.store.addPlanChange(o.session_id, { kind: change.kind, decided_by: 'orchestrator', summary, reason: change.reason, verification: change.verification || null, step_id: fixStep });
+      if (carried) plan.steps.forEach((st, i) => st.id === undefined && this.store.setCarried(ids[i], carried));
+      return ids;
+    });
     this.sessions.systemNote(s.id, `Plan changed without approval (${CHANGE_WORDS[change.kind]}): ${summary}. Why: ${change.reason}${change.verification ? ` Verified by: ${change.verification}` : ''}`);
     this.acted.add(s.id);
-    this.tookUpDeploys(o.session_id);
+    if (change.kind === 'fix_blocker') this.tookUpDeploys(o.session_id);
     this.emit(o.session_id);
     const after = this.must(o.session_id);
     return `Changed: ${summary}. It is in the plan's history for the owner. Ready to start: ${this.readySteps(after).map((x) => x.id).join(', ') || 'none'}.`;
@@ -592,7 +623,7 @@ export class Orchestrator {
     if (o.phase === 'plan') throw new Error('The owner has not approved the plan yet.');
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase}.`);
     if (step.state !== 'pending') throw new Error(`Step ${step.position} is already ${step.state}.`);
-    if (o.proposal?.held.includes(step.id)) throw new Error(`Step ${step.position} is held by your change of the plan, which waits for the owner's approval.`);
+    if (this.heldNow(o).includes(step.id)) throw new Error(`Step ${step.position} is held by your change of the plan, which waits for the owner's approval.`);
     const blocker = step.depends_on.map((d) => o.steps.find((x) => x.id === d)).find((d) => d && !SETTLED.includes(d.state));
     if (blocker) throw new Error(`Step ${step.position} waits for step ${blocker.position} ("${blocker.title}"), which is ${blocker.state}.`);
     const running = o.steps.filter((x) => x.state === 'running').length;
@@ -611,7 +642,6 @@ export class Orchestrator {
     const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: o.options }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
-    this.tookUpDeploys(o.session_id);
     this.store.setTimerStreak(o.session_id, 0);
     this.store.updateStep(step.id, { state: 'running', child_session_id: child.id, seen: null, note: null });
     this.sessions.systemNote(s.id, `Step ${step.position} started: session #${child.id}${out.length ? ` (left out: ${out.join(', ')})` : ''}`);
@@ -659,12 +689,13 @@ export class Orchestrator {
   private acted = new Set<number>();
 
   /**
-   * The orchestrator acted on its failed deploys (a plan change, a repair step, a message): their
-   * offers are cleared now, in the store, so a restart before the turn ends does not tell the owner
-   * it did nothing (DISP-187).
+   * The orchestrator acted on its failed deploys (a plan change for the owner, a repair step, a
+   * message to that step's batch): their offers are cleared now, in the store, so a restart before
+   * the turn ends does not tell the owner it did nothing (DISP-187). `stepId`: only that step's. An
+   * action on other work (starting another step, rewording) takes up nothing (DISP-243).
    */
-  private tookUpDeploys(orchestrationId: number) {
-    for (const step of this.offered(orchestrationId, 'deploy')) this.clearOffer(step.id);
+  private tookUpDeploys(orchestrationId: number, stepId?: number) {
+    for (const step of this.offered(orchestrationId, 'deploy')) if (stepId === undefined || step.id === stepId) this.clearOffer(step.id);
   }
 
   /**
@@ -741,19 +772,22 @@ export class Orchestrator {
     } catch (e) {
       throw new SessionError(`The change no longer fits the plan: ${(e as Error).message} Decline it, and the orchestrator proposes it again.`, 409);
     }
-    this.store.replaceSteps(o.session_id, plan.steps);
-    this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, proposal: null });
-    this.store.addPlanChange(o.session_id, { kind: 'approved', decided_by: 'owner', summary: p.summary, reason: '', verification: null, step_id: null });
+    this.store.db.tx(() => {
+      this.store.replaceSteps(o.session_id, plan.steps);
+      this.store.updateOrchestration(o.session_id, { plan_md: plan.plan_md, proposal: null });
+      this.store.addPlanChange(o.session_id, { kind: 'approved', decided_by: 'owner', summary: p.summary, reason: '', verification: null, step_id: null });
+    });
     this.sessions.systemNote(o.session_id, 'Plan change approved.');
     this.emit(o.session_id);
     this.wake(o.session_id, 'The owner approved your change of the plan.');
     return this.view(o.session_id);
   }
 
-  /** The owner says no to a change of the running plan: the approved plan stays, and its held steps may start. */
-  decline(sessionId: number): Orchestration {
+  /** The owner says no to a change of the running plan: the approved plan stays, and its held steps may start. `planVersion` as for approve. */
+  decline(sessionId: number, planVersion?: number): Orchestration {
     const o = this.must(sessionId);
     if (!o.proposal) throw new SessionError('No change of the plan waits for you.', 409);
+    if (planVersion !== undefined && planVersion !== o.plan_version) throw new SessionError('The change of the plan is not the one you opened. Read it again, then decline it.', 409);
     this.store.updateOrchestration(sessionId, { proposal: null });
     this.store.addPlanChange(sessionId, { kind: 'declined', decided_by: 'owner', summary: o.proposal.summary, reason: '', verification: null, step_id: null });
     this.sessions.systemNote(sessionId, 'Plan change declined by the owner.');
@@ -853,7 +887,7 @@ export class Orchestrator {
   private retryOwn(s: Session, o: Orchestration, step: OrchestrationStep, reason: string): string {
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
     if (!reason) throw new Error('Say why a new run should pass.');
-    const done = o.changes.filter((c) => c.kind === 'retry' && c.step_id === step.id).length;
+    const done = this.ownRetries(o, step.id);
     if (done >= Orchestrator.MAX_OWN_RETRIES) throw new Error(`You retried step ${step.position} already: tell the owner what failed instead.`);
     this.makePending(step);
     this.store.addPlanChange(o.session_id, { kind: 'retry', decided_by: 'orchestrator', summary: `retried step ${step.position} "${step.title}"${step.child_session_id ? ` (session #${step.child_session_id} failed)` : ''}`, reason, verification: null, step_id: step.id });
@@ -861,6 +895,11 @@ export class Orchestrator {
     this.acted.add(s.id);
     this.emit(o.session_id);
     return `Step ${step.position} is pending again: start it with start_step when it is ready.`;
+  }
+
+  /** The orchestrator's own retries of a step, with those of the step it was split from. */
+  private ownRetries(o: Orchestration, stepId: number): number {
+    return o.changes.filter((c) => c.kind === 'retry' && c.step_id === stepId).length + this.store.carried(stepId).retries;
   }
 
   /** A failed step goes back to pending, for a new batch, when nothing of its old one is left to finish. */
@@ -874,6 +913,12 @@ export class Orchestrator {
       throw new SessionError(`Session #${step.child_session_id} of step ${step.position} has a pull request: retry that session from its page, or skip the step.`, 409);
     }
     this.store.updateStep(step.id, { state: 'pending', child_session_id: null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, note: step.child_session_id ? `retry of session #${step.child_session_id}` : null });
+    // the old batch is retried by the step: a Retry on its own page would start an orphan batch on its items (DISP-243)
+    const old = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+    if (old?.status === 'failed' && old.closed_reason !== 'retried') {
+      this.sessions.systemNote(old.id, `Retried by step ${step.position} of its orchestration: its next batch is the step's.`);
+      this.bus.emit({ t: 'session', session: this.store.updateSession(old.id, { closed_at: this.now().toISOString(), closed_reason: 'retried' }) });
+    }
   }
 
   /** The event that tells the orchestrator to wrap up, when every step is done or skipped. */
@@ -1350,7 +1395,7 @@ export class Orchestrator {
     else this.sessions.sendFromDispatch(child.id, message);
     this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
     this.acted.add(s.id);
-    this.tookUpDeploys(o.session_id);
+    this.tookUpDeploys(o.session_id, step.id);
     this.emit(o.session_id);
     if (!queue) return `Sent to session #${child.id} (${count}). End your turn: Dispatch wakes you when it changes.`;
     if (child.status === 'idle') this.deliverQueued(child.id);
@@ -1379,6 +1424,12 @@ export class Orchestrator {
     };
     // a closed orchestration: nobody to tell
     if (!step || !phase || phase === 'done' || phase === 'stopped') return drop(null);
+    // moved to another worker: they wait for the session that took over, which sync makes the step's batch (DISP-243)
+    const next = child.status === 'stopped' ? this.store.movedTo(child.id) : undefined;
+    if (next) {
+      this.store.moveOrchMessages(child.id, next.id);
+      return false;
+    }
     if (step.child_session_id !== child.id || FINAL_STATUSES.includes(child.status)) return drop(child.status === 'failed' ? 'the session failed' : 'the session is closed');
     if (child.status === 'waiting_input') return drop('the session waits for an answer');
     if (step.state !== 'running' && step.state !== 'review') return drop(`step ${step.position} is ${step.state}`);
@@ -1535,6 +1586,35 @@ export class Orchestrator {
         if (!lost && running.every((repo) => step.deploys_started[repo])) continue;
         this.store.updateStep(step.id, { deploys, deploys_started: started });
         if (lost) this.safely(() => this.sync(step.id));
+      }
+    }
+  }
+
+  /** step:repo deploys run again after a worker lost them: once each, then the timeout decides */
+  private rerun = new Set<string>();
+
+  /**
+   * A worker said hello, with the deploys it still runs or has a result for. A step's deploy it ran
+   * that is not among them was cut off: a restart of the worker killed it (the owner's deploy restarts
+   * the worker when no session works, which is when the last step's deploy runs). It runs again,
+   * once, so the step still ends with its result instead of "no deploy result in 30 min" (DISP-221).
+   * `deploys` null: an older worker, which does not say.
+   */
+  onWorkerHello(workerId: number, deploys: number[] | null) {
+    if (!deploys) return;
+    for (const o of this.store.liveOrchestrations()) {
+      for (const step of o.steps) {
+        const child = step.child_session_id ? this.store.session(step.child_session_id) : undefined;
+        if (child?.worker_id !== workerId) continue;
+        for (const repo of Object.keys(step.deploys)) {
+          const key = `${step.id}:${repo}`;
+          if (step.deploys[repo] !== 'running' || deploys.includes(Number(repo)) || this.rerun.has(key)) continue;
+          this.rerun.add(key);
+          this.safely(() => {
+            if (!this.redeploy(child, Number(repo))) return;
+            this.sessions.systemNote(child.id, 'The worker restarted during the deploy: it runs again.');
+          });
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 import { Orchestrator } from '../src/server/orchestrator.ts';
-import { DEFAULT_RUN_OPTIONS, type PullRequest } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, type PullRequest, type Session } from '../src/shared/types.ts';
 import { OWNER, startServer } from './helpers.ts';
 
 export type Server = Awaited<ReturnType<typeof startServer>>;
@@ -75,7 +75,7 @@ export async function setup(env: Record<string, string> = {}) {
   const restart = (before: (o: Orchestrator) => void = () => {}) => {
     const old = s.ctx.orchestrator;
     old.stop();
-    const o = new Orchestrator({ store, bus: s.ctx.bus, sessions: s.ctx.sessions, notifier: s.ctx.notifier, merging: () => s.ctx.github.mergingNow });
+    const o = new Orchestrator({ store, bus: s.ctx.bus, sessions: s.ctx.sessions, notifier: s.ctx.notifier, merging: () => s.ctx.github.mergingNow, redeploy: (old as unknown as { redeploy: (x: Session, repoId: number) => boolean }).redeploy });
     // as startServer sets them for tests
     o.batchMs = old.batchMs;
     o.now = old.now;

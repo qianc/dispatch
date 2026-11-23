@@ -1064,7 +1064,7 @@ export class GitHub {
    * After a merge: run the repo's deploy command on the session's worker (DISP-37). It reports
    * back on its own (sessions.ts, `deploy_result`): the deploy may restart this server.
    */
-  private deploy(pr: PullRequest) {
+  deploy(pr: PullRequest) {
     const repo = this.store.repo(pr.repo_id);
     const s = this.sessionOf(pr);
     if (!repo?.deploy_command || !s) return;
