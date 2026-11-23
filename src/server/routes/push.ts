@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { Ctx } from './ctx.ts';
+import { HttpError, type Ctx } from './ctx.ts';
+import { pushEndpointProblem } from '../pushEndpoint.ts';
 
 /** Push subscriptions are a person's own (DISP-65): every route here is `user` level and acts on the caller's devices only. */
 export function pushRoutes(app: FastifyInstance, { store, notifier }: Ctx) {
@@ -8,6 +9,9 @@ export function pushRoutes(app: FastifyInstance, { store, notifier }: Ctx) {
 
   app.post('/api/push/subscribe', async (req) => {
     const sub = z.object({ endpoint: z.url(), keys: z.object({ p256dh: z.string(), auth: z.string() }) }).parse(req.body);
+    // the server POSTs to it: never into its own machine or LAN (DISP-225)
+    const problem = await pushEndpointProblem(sub.endpoint);
+    if (problem) throw new HttpError(400, problem);
     store.addPushSubscription(sub.endpoint, sub.keys.p256dh, sub.keys.auth, req.headers['user-agent'] ?? null, me(req));
     return { ok: true };
   });
