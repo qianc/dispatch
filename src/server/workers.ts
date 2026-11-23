@@ -1,10 +1,11 @@
 // Worker records and their tokens. A worker connects to /worker with its secret (dsw_…); only a
 // SHA-256 of the secret is kept. The legacy worker (no hash) connects with the server's WORKER_TOKEN.
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { Config } from './config.ts';
 import type { Db, Row } from './db.ts';
 import { now } from './db.ts';
-import { sha256 } from './access.ts';
+import { safeEqual, sha256 } from './access.ts';
+import { isRemovedUser } from './identity.ts';
 import type { WorkerFacts, WorkerRecord } from '../shared/types.ts';
 
 export const WORKER_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -117,8 +118,8 @@ export class Workers {
  */
 export function workerFromToken(workers: Workers, cfg: Pick<Config, 'workerToken' | 'authUsers'>, token: string): WorkerRecord | null {
   if (!token) return null;
-  const legacy = !!cfg.workerToken && token.length === cfg.workerToken.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.workerToken));
+  const legacy = !!cfg.workerToken && safeEqual(token, cfg.workerToken);
   const w = legacy ? workers.legacy() : workers.verify(token);
-  if (w && cfg.authUsers.length && w.owner && !cfg.authUsers.includes(w.owner)) return null;
+  if (w && isRemovedUser(cfg.authUsers, w.owner)) return null;
   return w;
 }

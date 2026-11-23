@@ -5,6 +5,7 @@
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { now } from './db.ts';
+import type { Identities } from './identities.ts';
 import { Workers } from './workers.ts';
 
 export interface User {
@@ -27,9 +28,12 @@ export class Users {
   private adoptable: boolean;
   /** name → when last_seen_at was last written (a write a minute is plenty) */
   private seen = new Map<string, number>();
+  /** the owner's GitHub connection moves with them (sealed for their name) */
+  private identities?: Pick<Identities, 'move'>;
 
-  constructor(db: Db, cfg: Pick<Config, 'installOwner'> & Partial<Pick<Config, 'adoptOwner'>>) {
+  constructor(db: Db, cfg: Pick<Config, 'installOwner'> & Partial<Pick<Config, 'adoptOwner'>>, identities?: Pick<Identities, 'move'>) {
     this.db = db;
+    this.identities = identities;
     this.owner = cfg.installOwner;
     this.adoptable = !!cfg.adoptOwner;
   }
@@ -72,6 +76,9 @@ export class Users {
   private moveFrom(was: string) {
     this.db.tx(() => {
       for (const [table, col] of OWNER_COLUMNS) this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${col} = ?`, this.owner, was);
+      this.identities?.move(was, this.owner);
+      // settings keyed by user (orchestrator.ts); the new name's own stays
+      this.db.run('UPDATE OR IGNORE settings SET key = ? WHERE key = ?', `orchestrator_default:${this.owner}`, `orchestrator_default:${was}`);
       const old = this.db.get<{ default_worker_id: number | null }>('SELECT default_worker_id FROM users WHERE name = ?', was);
       this.db.run('DELETE FROM users WHERE name = ?', was);
       this.db.run(

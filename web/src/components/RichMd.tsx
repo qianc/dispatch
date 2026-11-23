@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Item, type Project } from '../api.ts';
-import { cx, MdImage } from './ui.tsx';
+import { cx, inAppHref, MdImage } from './ui.tsx';
 import { dirOf, joinPath, slug } from '../../../src/shared/paths.ts';
 
 export { dirOf, joinPath, slug };
@@ -53,8 +53,8 @@ export function RichMd({ children, ctx, className }: { children: string; ctx: Li
         urlTransform={urlTransform}
         components={{
           a: ({ href = '', children: c }) => {
-            if (/^(https?:|mailto:)/.test(href)) return <a href={href} target="_blank" rel="noreferrer">{c}</a>;
-            if (href.startsWith('/')) return <Link to={href}>{c}</Link>;
+            if (/^(https?:|mailto:|[\\/]{2})/.test(href)) return <a href={href} target="_blank" rel="noreferrer">{c}</a>;
+            if (inAppHref(href)) return <Link to={href}>{c}</Link>;
             if (href.startsWith('#')) {
               const target = items.find((i) => slug(i.title) === safeDecode(href.slice(1)));
               return target ? <Link to={`/items/${target.id}`}>{c}</Link> : <span className="text-accent/70">{c}</span>;

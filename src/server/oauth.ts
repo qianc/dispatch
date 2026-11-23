@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { sha256, type Access, type Principal, type Scope } from './access.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
+import { isRemovedUser } from './identity.ts';
 import type { Users } from './users.ts';
 
 /** What an MCP client may ever get: reading and editing the tracker, never agent sessions. */
@@ -125,7 +126,7 @@ export class OAuth {
       'SELECT g.id, g.scopes, g.access_expires_at, g.revoked_at, g.user, c.name FROM oauth_grants g JOIN oauth_clients c ON c.client_id = g.client_id WHERE g.access_hash = ?', sha256(token),
     );
     if (!r || r.revoked_at || r.access_expires_at < new Date().toISOString()) return null;
-    if (this.cfg.authUsers.length && !this.cfg.authUsers.includes(r.user)) return null;
+    if (isRemovedUser(this.cfg.authUsers, r.user)) return null;
     this.db.run('UPDATE oauth_grants SET last_used_at = ? WHERE id = ?', new Date().toISOString(), r.id);
     return { kind: 'oauth', name: r.name, scopes: new Set(JSON.parse(r.scopes)), local: false, user: r.user };
   }
@@ -182,7 +183,8 @@ export class OAuth {
       };
       if (q.response_type !== 'code') return back({ error: 'unsupported_response_type' });
       if (!q.code_challenge || q.code_challenge_method !== 'S256') return back({ error: 'invalid_request', error_description: 'PKCE with S256 is required' });
-      const user = this.access.browserUser(req);
+      // an app's grant outlives Unpair: a paired device approves none (DISP-237)
+      const user = this.access.browserUser(req, { devices: false });
       if (!user) {
         if (this.cfg.authMode === 'proxy') return reply.status(401).type('text/html').send(page('Not signed in', '<p>Open this through the sign-in proxy.</p>'));
         // the app's own login, then back here
@@ -211,7 +213,7 @@ export class OAuth {
       const b = (req.body ?? {}) as Record<string, string>;
       const p = this.pending.get(String(b.request ?? ''));
       this.pending.delete(String(b.request ?? ''));
-      const user = this.access.browserUser(req);
+      const user = this.access.browserUser(req, { devices: false });
       if (!p || p.expires < Date.now() || !user || user !== p.user) return reply.status(400).type('text/html').send(page('Expired', '<p>This approval expired. Start the connection again from the app.</p>'));
       const u = new URL(p.redirect_uri);
       if (p.state) u.searchParams.set('state', p.state);

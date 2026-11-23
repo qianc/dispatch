@@ -141,14 +141,18 @@ export type SelfUpdateAnswer =
   /** it cannot, or the commit is not one of its release branch */
   | { state: 'refused'; reason: string };
 
-/** `ack`: the `turn_id` of the last start or send the worker had got for this session when it wrote this */
-export type StatusMsg = { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string; ack?: string };
+/**
+ * `ack`: the `turn_id` of the last start or send the worker had handed to the session when it wrote this.
+ * `queued` (only in a hello): this status waits in the worker's outbox and comes right after the hello.
+ */
+export type StatusMsg = { t: 'status'; session_id: number; status: SessionStatus; sdk_session_id?: string; model?: string; error?: string; limit?: { resets_at: string | null }; unclean?: string; ack?: string; queued?: boolean };
 
 export type WorkerToServer =
   /**
    * `statuses`: per live session, the last status this worker wrote to a link (with the newest
    * sdk_session_id it reported). A write on a half-open link is lost: the server corrects what it
    * missed from these (DISP-197). An older worker sends none; an older server ignores them.
+   * Also per session closed since the last hello, its last status (DISP-248).
    * `acks`: per live session (by id), the `turn_id` of the last start or send it got (DISP-203).
    */
   | { t: 'hello'; live: number[]; claude_accounts?: ClaudeAccountInfo[]; facts?: WorkerFacts; statuses?: StatusMsg[]; acks?: Record<string, string> }
