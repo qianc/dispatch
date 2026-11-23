@@ -71,9 +71,10 @@ export function prRoutes(app: FastifyInstance, { github, sessions, store, users 
     const id = intParam((req.params as { id: string }).id);
     const { how, method, sha } = mergeInput.parse(req.body);
     const pr = store.pr(id);
-    // auto-merge stopped and the owner merges by hand: their hands were needed
-    if (pr?.blocked && pr.session_id !== null && store.session(pr.session_id)?.options.auto_merge !== 'off') store.addMergeEvent(pr.session_id, 'manual_merge', pr.id, pr.blocked);
-    return github.merge(id, how, method, caller(req), sha);
+    const res = await github.merge(id, how, method, caller(req), sha);
+    // auto-merge stopped and the owner merged by hand: their hands were needed (only once it merged)
+    if (res.ok && pr?.blocked && pr.session_id !== null && store.session(pr.session_id)?.options.auto_merge !== 'off') store.addMergeEvent(pr.session_id, 'manual_merge', pr.id, pr.blocked);
+    return res;
   });
 
   /** A hosted repo's review moves to a PR on its upstream GitHub repo. */

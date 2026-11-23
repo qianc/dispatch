@@ -16,7 +16,7 @@ function headings(lines: string[]): Heading[] {
     const f = l.match(/^\s*(```|~~~)/);
     if (f) fence = fence === f[1] ? null : fence ?? f[1];
     if (fence) return;
-    const m = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+    const m = l.match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
     if (m) out.push({ line: i, level: m[1].length, text: m[2] });
   });
   return out;

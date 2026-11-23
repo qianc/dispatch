@@ -16,7 +16,7 @@ import { isRefusal } from './identity.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
 export function parseRepo(input: string): { owner: string; name: string } {
-  const m = input.trim().match(/(?:github\.com[/:])?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  const m = input.trim().match(/^(?:(?:https?:\/\/)?(?:www\.)?github\.com[/:]|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
   if (!m) throw new Error(`Not a GitHub repo: ${input}. Use owner/name or a github.com URL.`);
   return { owner: m[1], name: m[2] };
 }

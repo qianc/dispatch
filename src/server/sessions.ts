@@ -250,7 +250,7 @@ export class Sessions {
       const worker = workerId !== undefined ? this.workers.get(workerId)?.name : undefined;
       throw new SessionError(worker ? `Worker ${worker} has no Claude account "${chosen}" (it has: ${known.join(', ')}).` : `Unknown Claude account "${chosen}". The worker has: ${known.join(', ')}.`);
     }
-    if (project?.claude_allowed && !project.claude_allowed.includes(chosen)) {
+    if (project?.claude_allowed?.length && !project.claude_allowed.includes(chosen)) {
       throw new SessionError(`Project ${project.key} does not allow the Claude account "${chosen}" (allowed: ${project.claude_allowed.join(', ')}).`);
     }
     return chosen === 'default' ? null : chosen;

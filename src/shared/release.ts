@@ -61,8 +61,8 @@ export function normalizeVersion(input: string, last: string | null): string {
 /** A release that would label more items than this asks the owner first. */
 export const MANY_RELEASE_ITEMS = 36;
 
-/** rel:v1.2.3, convert:0.3.0: a label that says a release of some line holds the item. */
-const RELEASE_LABEL_RE = /^\S*[^\sA-Za-z0-9.]v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+/** rel:v1.2.3, convert:0.3.0: a label that says a release of some line holds the item. A `-` or `_` before the version is part of a tag name (electron-33.0.1), not a release. */
+const RELEASE_LABEL_RE = /^\S*[^\sA-Za-z0-9._-]v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 /** Done items not in a release of this line or of another; with `since`, only those done from that moment on. */
 export function unreleased(items: Item[], prefix: string, since?: string | null): Item[] {
