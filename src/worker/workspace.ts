@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
@@ -793,9 +793,10 @@ export class Workspaces {
       });
       out.push(r);
     }
-    // the session folder goes once nothing is left in it; keepDir: other checkouts of the session stay in it (DISP-177)
+    // the session folder goes once nothing is left in it; keepDir: other checkouts of the session stay in it (DISP-177).
+    // Only when empty: a worktree of a repo not listed here (removed from the project) keeps its work (DISP-227)
     const dir = this.sessionDir(sessionId);
-    if (!opts.keepDir && existsSync(dir) && out.every((r) => r.worktree !== 'kept (uncommitted changes)')) await rm(dir, { recursive: true, force: true });
+    if (!opts.keepDir && existsSync(dir)) await rmdir(dir).catch(() => undefined);
     return out;
   }
 }
