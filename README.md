@@ -524,7 +524,7 @@ looks every 30 minutes. The button names the commit it installs: "Update the ser
 905e207" installs the newest commit of the release branch (or the newest version tag), on the
 server first and then on each worker that can update itself. With **Update automatically** on,
 Dispatch does that itself. It follows every commit of the release branch, or version tags only
-(`v1.2.3`).
+(`v1.2.3`; pre-release tags such as `v2.0.0-rc.1` are not followed).
 
 Each worker shows its commit against the server's: "Same as server" (or "Up to date" when the
 server is), "On the newest commit", "Newer than the server", or "Behind". A worker that cannot
@@ -849,8 +849,9 @@ label, then labels them, so the next entry starts where this one ended.
 
 `node src/server/backup.ts --data /data --out /backups --at 03:15 --keep 14` runs in the server
 image as a second service (`compose.server.yml` includes it) and makes, once a night, an online copy of
-the SQLite database (consistent while the server runs) and a tarball of the attachments. It keeps
-14 days. `--once` makes one copy now. Restore: stop the server, put the `.db` copy in place as
+the SQLite database (consistent while the server runs) and tarballs of the hosted repos and the
+attachments. Each tarball is made on its own: one that fails does not stop the others, and the run
+is logged as failed. It keeps 14 days. `--once` makes one copy now. Restore: stop the server, put the `.db` copy in place as
 `dispatch.db` (remove any `-wal`/`-shm` files next to it) and unpack the attachments.
 
 ## Tests
