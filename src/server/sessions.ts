@@ -4,7 +4,6 @@ import { failureReason } from '../shared/attention.ts';
 import type { GithubCred, ServerToWorker, StartSpec, StatusMsg, WorkerToServer } from '../shared/protocol.ts';
 import type { ClaudeAccountInfo } from '../shared/accounts.ts';
 import {
-  ACTIVE_STATUSES,
   CHAT_KINDS,
   crossProjectSummary,
   FINAL_STATUSES,
@@ -2269,9 +2268,5 @@ export class Sessions {
     if (s.orchestrator_id && this.childNotice?.(s, notice, kind)) return;
     // to whoever started it (a schedule's run: the schedule's owner); nobody: the install owner
     void this.notifier.send(notice, s.started_by);
-  }
-
-  isActive(s: Session) {
-    return ACTIVE_STATUSES.includes(s.status);
   }
 }

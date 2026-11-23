@@ -7,7 +7,7 @@ import { Button } from '../components/ui.tsx';
 // Plain fetch, outside the app's sign-in gate: nothing here needs a session.
 
 type PairState = 'checking' | 'waiting' | 'expired' | 'error';
-export type StartResult = { authed: true } | { pair_id: string; code: string } | { error: string };
+type StartResult = { authed: true } | { pair_id: string; code: string } | { error: string };
 
 /** The answer to `POST /api/devices/pair`. A refusal (429: the queue is full, or too many from this address) is an error with its message (DISP-214). */
 export async function readStart(r: Response): Promise<StartResult> {

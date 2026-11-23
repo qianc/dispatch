@@ -29,7 +29,7 @@ const isBuildStamp = (build: string) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(b
 /** A full commit id, safe to put in a shell command. */
 const isCommit = (sha: string | null): sha is string => !!sha && /^[0-9a-f]{40}$/.test(sha);
 
-export interface SetupStep { title: string; lines: string[] }
+interface SetupStep { title: string; lines: string[] }
 
 const ENV_FILE = '~/.config/dispatch/worker.env';
 

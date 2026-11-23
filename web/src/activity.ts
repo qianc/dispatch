@@ -1,8 +1,8 @@
 import { LIMIT_WAIT_LABEL, asksOrchestrator, limitWaitText, waitsOnOwner } from '../../src/shared/attention.ts';
 import type { Attention, Inbox, Session } from './api.ts';
 
-export interface NeedsEntry { id: number; key: string | null; title: string; tone: 'wait' | 'bad' | 'ok'; /** a failed session: why (DISP-81) */ reason?: string }
-export interface RunningEntry { session: Session; attention?: Attention }
+interface NeedsEntry { id: number; key: string | null; title: string; tone: 'wait' | 'bad' | 'ok'; /** a failed session: why (DISP-81) */ reason?: string }
+interface RunningEntry { session: Session; attention?: Attention }
 
 /**
  * The live sessions in groups, as the menu shows them: what needs you (open questions, idle
@@ -83,7 +83,7 @@ export function searchHits<T extends { id: number }>(pages: { sessions: T[] }[])
 export const OPEN_STATUSES = 'queued,running,waiting_input,idle';
 
 /** An open discussion untouched this long leaves Activity's list; it stays open on its item. */
-export const DISCUSSION_DAYS = 10;
+const DISCUSSION_DAYS = 10;
 
 /** The open discussions Activity shows: those with a message in the last DISCUSSION_DAYS days. */
 export function recentDiscussions<T extends Pick<Session, 'updated_at'>>(open: T[], now = Date.now()): T[] {

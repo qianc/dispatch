@@ -28,14 +28,9 @@ export class Attachments {
     });
   }
 
-  /** The image type from the file's first bytes; null if it is not PNG, JPEG, GIF or WebP. */
-  static sniff(data: Buffer): string | null {
-    return sniffImage(data);
-  }
-
   /** Store an item image. The type comes from the content, never from the name or header. */
   saveItemImage(itemId: number, data: Buffer): { file: string; mime: string } | null {
-    const mime = Attachments.sniff(data);
+    const mime = sniffImage(data);
     if (!mime) return null;
     const file = `${randomUUID()}.${EXT[mime]}`;
     mkdirSync(join(this.dir, 'items', String(itemId)), { recursive: true });
@@ -44,7 +39,7 @@ export class Attachments {
   }
 
   async readItemImage(itemId: number, file: string): Promise<Buffer | null> {
-    if (!/^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file)) return null;
+    if (!FILE.test(file)) return null;
     try {
       return await readFile(join(this.dir, 'items', String(itemId), file));
     } catch {
@@ -53,7 +48,7 @@ export class Attachments {
   }
 
   deleteItemImage(itemId: number, file: string) {
-    if (/^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/.test(file)) rmSync(join(this.dir, 'items', String(itemId), file), { force: true });
+    if (FILE.test(file)) rmSync(join(this.dir, 'items', String(itemId), file), { force: true });
   }
 
   /**
@@ -62,7 +57,7 @@ export class Attachments {
    * Images never sent are removed after a day.
    */
   savePendingImage(data: Buffer): { file: string; mime: string } | null {
-    const mime = Attachments.sniff(data);
+    const mime = sniffImage(data);
     if (!mime) return null;
     const dir = join(this.dir, 'pending');
     mkdirSync(dir, { recursive: true });
@@ -93,7 +88,7 @@ export class Attachments {
 
   /** null for names that are not ours (no path tricks). */
   async read(sessionId: number, name: string): Promise<{ type: string; data: Buffer } | null> {
-    const m = name.match(/^[0-9a-f-]{36}\.(png|jpg|gif|webp)$/);
+    const m = name.match(FILE);
     if (!m) return null;
     try {
       return { type: TYPE[m[1]], data: await readFile(join(this.dir, String(sessionId), name)) };

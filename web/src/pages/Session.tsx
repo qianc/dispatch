@@ -31,12 +31,12 @@ import { canAct, readOnlyText, startedBy } from '../access.ts';
 import { Button, Chip, CloseButton, Empty, ErrorText, SessionStatusChip, Sheet, cx, inputCls, loadingText } from '../components/ui.tsx';
 
 /** "Part of Auth rework (step 2 of 6)": the orchestration a step's batch belongs to. */
-export const partOfText = (p: PartOf) => `Part of ${p.title}${p.step_position ? ` (step ${p.step_position} of ${p.step_count})` : ''}`;
+const partOfText = (p: PartOf) => `Part of ${p.title}${p.step_position ? ` (step ${p.step_position} of ${p.step_count})` : ''}`;
 
 /** Where each chat was scrolled to (null: at the newest message), for coming back to it. This app run only. */
 const chatScroll = new Map<number, number | null>();
 
-export interface ChatMode {
+interface ChatMode {
   id: number;
   title: string;
   subtitle: string;
@@ -224,7 +224,6 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
   const { session: s, project } = data;
   // from the server, as the inbox has it: a PR it merges now is no PR to review (DISP-159)
   const { attention } = data;
-  if (isAssistant && !s) return null;
   const final = FINAL_STATUSES.includes(s.status);
   // the request the session waits on: the reply box points to it
   const openInput = [...data.inputs].reverse().find((i) => !i.answered_at && !i.expired);

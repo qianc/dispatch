@@ -105,7 +105,7 @@ export function editPending(id: string): Pending | undefined {
 }
 
 /** The client ids of the owner's messages the server has stored. */
-export const storedIds = (events: SessionEvent[]) =>
+const storedIds = (events: SessionEvent[]) =>
   new Set(events.flatMap((e) => (e.body.kind === 'user' && e.body.client_id ? [e.body.client_id] : [])));
 
 /** Drop the pending copies of messages that are in the session's events now. */

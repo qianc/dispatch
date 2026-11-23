@@ -1,6 +1,6 @@
 // Tools for the assistant chat: manage projects, repos, items and sources across the whole app.
 // Creating and changing things happens at once; starting agent sessions goes through a proposal card.
-import { dirname, isAbsolute } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { detectScales, type MdSection } from '../shared/markdownSections.ts';
 import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, OPEN_ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
@@ -294,7 +294,7 @@ export class AssistantTools {
         const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null; dir?: string };
         // the folder of the imported file; the only place a source gets one (DISP-131). It is a folder
         // on the worker this session runs on, and is read there only (DISP-174)
-        const baseDir = src.dir && isAbsolute(src.dir) ? src.dir : isAbsolute(src.title) ? dirname(src.title) : null;
+        const baseDir = src.dir && isAbsolute(src.dir) ? src.dir : null;
         // several imports from one file (e.g. one per group) share one source
         const source = this.store.sources(project.id).find((x) => x.title === src.title && x.body_md === src.body_md) ??
           this.store.createSource(project.id, {

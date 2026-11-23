@@ -1269,10 +1269,10 @@ export class Store {
       : this.db.all<PushSubscription>('SELECT endpoint, p256dh, auth, user FROM push_subscriptions WHERE user = ?', user);
   }
   /** A device subscribes for `user`; subscribing again on the same device (another person signed in there) moves it to them. */
-  addPushSubscription(endpoint: string, p256dh: string, auth: string, ua: string | null, user: string) {
+  addPushSubscription(endpoint: string, p256dh: string, auth: string, user: string) {
     this.db.run(
-      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, user) VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user = excluded.user',
-      endpoint, p256dh, auth, ua, user,
+      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user = excluded.user',
+      endpoint, p256dh, auth, user,
     );
   }
   /** Removes the subscription; with `user`, only if it is theirs. Returns whether a row went. */

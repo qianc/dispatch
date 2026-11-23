@@ -12,7 +12,7 @@ export function pushRoutes(app: FastifyInstance, { store, notifier }: Ctx) {
     // the server POSTs to it: never into its own machine or LAN (DISP-225)
     const problem = await pushEndpointProblem(sub.endpoint);
     if (problem) throw new HttpError(400, problem);
-    store.addPushSubscription(sub.endpoint, sub.keys.p256dh, sub.keys.auth, req.headers['user-agent'] ?? null, me(req));
+    store.addPushSubscription(sub.endpoint, sub.keys.p256dh, sub.keys.auth, me(req));
     return { ok: true };
   });
   /** Another person's device stays subscribed (removed: 0). */

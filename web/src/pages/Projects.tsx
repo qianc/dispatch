@@ -21,7 +21,7 @@ function NewProject({ onDone }: { onDone: (p: Project) => void }) {
   });
   return (
     <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
-      <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value, key: f.key || '' })} autoFocus /></Field>
+      <Field label="Name"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></Field>
       <Field label="Key" hint="Prefix for item keys, e.g. HC → HC-42"><input className={inputCls} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value.toUpperCase() })} maxLength={10} /></Field>
       <Field label="Description"><textarea className={inputCls} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
       <Field label="Importance scale" hint="Exactly 4 labels, lowest first"><input className={inputCls} value={f.importance} onChange={(e) => setF({ ...f, importance: e.target.value })} /></Field>

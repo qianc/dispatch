@@ -1,7 +1,7 @@
 // Navigation memory for the phone UI: which screen each bottom tab was last on, and where each
 // screen was scrolled to. Kept in sessionStorage so it survives reloads but not a fresh launch.
 
-export const TABS = ['/', '/activity', '/assistant', '/projects', '/settings'] as const;
+const TABS = ['/', '/activity', '/assistant', '/projects', '/settings'] as const;
 export type Tab = (typeof TABS)[number];
 
 const read = <T,>(key: string, fallback: T): T => {
@@ -20,7 +20,7 @@ const write = (key: string, value: unknown) => {
 };
 
 /** The tab a top-level path belongs to; null for inner screens (items, sessions, files, ...). */
-export function rootTab(pathname: string): Tab | null {
+function rootTab(pathname: string): Tab | null {
   if (pathname === '/') return '/';
   return TABS.find((t) => t !== '/' && pathname === t) ?? null;
 }
