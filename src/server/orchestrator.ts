@@ -641,7 +641,12 @@ export class Orchestrator {
     });
     const ok = items.filter((it) => !out.some((line) => line.startsWith(`${it.key} `)));
     if (items.length && !ok.length) throw new Error(`Nothing left to start: ${out.join(', ')}.`);
-    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: step.worker ? { ...o.options, worker_id: null } : o.options, worker: step.worker ?? undefined }, s.started_by);
+    // a step on its own worker loads only the plugins that worker has, as the batch form does (DISP-252)
+    const has = step.worker ? new Workers(this.store.db).byName(step.worker)?.facts?.optional_plugins ?? [] : null;
+    const plugins = has ? o.options.plugins.filter((p) => has.includes(p)) : o.options.plugins;
+    const dropped = o.options.plugins.filter((p) => !plugins.includes(p));
+    if (dropped.length) out.push(`plugin${dropped.length === 1 ? '' : 's'} ${dropped.join(', ')} (not on worker ${step.worker})`);
+    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: step.worker ? { ...o.options, worker_id: null, plugins } : o.options, worker: step.worker ?? undefined }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
     this.store.setTimerStreak(o.session_id, 0);

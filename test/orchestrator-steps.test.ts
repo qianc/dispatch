@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OWNER } from './helpers.ts';
 import { setup, type Setup } from './orchestrator-helpers.ts';
+import { DEFAULT_RUN_OPTIONS } from '../src/shared/types.ts';
 
 // The orchestrator starts its plan's steps as batches; the server decides whether each may start.
 describe('orchestrator: steps', () => {
@@ -33,6 +34,18 @@ describe('orchestrator: steps', () => {
     expect(step.worker).toBe('render');
     await t.rpc(id, 'start_step', { step_id: step.id });
     expect(work()[0]).toMatchObject({ worker_id: worker.id, options: { worker_id: worker.id } });
+  });
+
+  it('a step on a worker drops the plugins that worker does not have, and says so (DISP-252)', async () => {
+    const { worker } = t.s.ctx.workers.create('render', '', OWNER);
+    t.s.ctx.workers.seen(worker.id, { os: 'linux', hostname: 'r', slots: 1, free_slots: 1, claude_accounts: [], github_accounts: [], local_repo_dirs: [], optional_plugins: ['ponytail'] });
+    const a = await t.item('AA', 'One');
+    const id = t.start({ options: { ...DEFAULT_RUN_OPTIONS, plugins: ['ponytail', 'other'] } }).session_id;
+    await t.rpc(id, 'set_plan', { plan_md: '', steps: [{ title: 'Render', project_key: 'AA', item_keys: [a.key], worker: 'render' }] });
+    t.s.ctx.orchestrator.approve(id);
+    const [step] = t.s.ctx.orchestrator.view(id).steps;
+    expect(String(await t.rpc(id, 'start_step', { step_id: step.id }))).toContain('Left out: plugin other (not on worker render).');
+    expect(work()[0].options.plugins).toEqual(['ponytail']);
   });
 
   it('a step waits for the steps before it', async () => {
