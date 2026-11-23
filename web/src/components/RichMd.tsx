@@ -31,6 +31,15 @@ export const viewerUrl = (ctx: LinkContext, path: string) =>
 export const urlTransform: UrlTransform = (url, key, node) =>
   node.tagName === 'img' && key === 'src' && /^data:image\/(png|jpeg|gif|webp)[;,]/i.test(url) ? url : defaultUrlTransform(url);
 
+/** decodeURIComponent, or the text as it is when it has a bad escape like `%zz` (DISP-223). */
+export function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export function RichMd({ children, ctx, className }: { children: string; ctx: LinkContext; className?: string }) {
   const { data: items = [] } = useQuery({
     queryKey: ['items', ctx.project.id],
@@ -47,10 +56,10 @@ export function RichMd({ children, ctx, className }: { children: string; ctx: Li
             if (/^(https?:|mailto:)/.test(href)) return <a href={href} target="_blank" rel="noreferrer">{c}</a>;
             if (href.startsWith('/')) return <Link to={href}>{c}</Link>;
             if (href.startsWith('#')) {
-              const target = items.find((i) => slug(i.title) === decodeURIComponent(href.slice(1)));
+              const target = items.find((i) => slug(i.title) === safeDecode(href.slice(1)));
               return target ? <Link to={`/items/${target.id}`}>{c}</Link> : <span className="text-accent/70">{c}</span>;
             }
-            const path = joinPath(ctx.baseDir ?? '', decodeURIComponent(href.split('#')[0]));
+            const path = joinPath(ctx.baseDir ?? '', safeDecode(href.split('#')[0]));
             return <Link to={viewerUrl(ctx, path)}>{c}</Link>;
           },
           img: ({ src = '', alt }) => {

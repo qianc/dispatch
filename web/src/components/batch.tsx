@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, runOptions, type RunOptions, type SessionOptions } from '../../../src/shared/types.ts';
-import { api, type Item, type Project, type Repo, type Session } from '../api.ts';
+import { api, type Item, type Me, type Project, type Repo, type Session } from '../api.ts';
 import { Button, ErrorText, Field, Segmented, cx, inputCls } from './ui.tsx';
 import { projectClaude, useAccounts } from '../accounts.ts';
 import { useWorkers } from '../workers.ts';
@@ -121,8 +121,25 @@ export function localWorkers(repos: Repo[] | undefined): number[] | null {
 }
 
 /**
+ * The workers the signed-in person can start work on: their own (the install owner's when nobody
+ * signs in). /api/workers lists everyone's for the install owner, and the server refuses a worker
+ * that is not the caller's (DISP-236).
+ */
+export function ownWorkers<W extends { owner: string | null }>(workers: W[], me: Pick<Me, 'user' | 'install_owner'> | undefined): W[] {
+  const who = me?.user ?? me?.install_owner;
+  return who ? workers.filter((w) => w.owner === who) : workers;
+}
+
+/** The worker list for a form: only the caller's own workers. */
+function useOwnWorkers() {
+  const { data } = useWorkers();
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/me') });
+  return { workers: ownWorkers(data?.workers ?? [], me), defaultId: data?.default_worker_id };
+}
+
+/**
  * Which worker runs the batch. `proposed`: the planner's pick (a name) and why. Shown only when
- * there is more than one worker; a project with local repos runs on a worker that has them.
+ * the caller has more than one worker; a project with local repos runs on a worker that has them.
  */
 export function WorkerField({ value, onChange, project, proposed }: {
   value: number | null;
@@ -130,20 +147,20 @@ export function WorkerField({ value, onChange, project, proposed }: {
   project: Pick<Project, 'worker_id'> & { repos?: Repo[] };
   proposed?: { name?: string; reason?: string };
 }) {
-  const { data } = useWorkers();
-  const workers = data?.workers ?? [];
+  const { workers, defaultId } = useOwnWorkers();
   if (workers.length < 2) return null;
   const able = localWorkers(project.repos);
   const choices = able ? workers.filter((w) => able.includes(w.id)) : workers;
-  const fallback = pickWorker(able, [workers.find((w) => w.name === proposed?.name)?.id, project.worker_id, data?.default_worker_id], workers);
+  // what the server picks when nothing is sent: shown, so the field says where the batch runs
+  const fallback = pickWorker(able, [workers.find((w) => w.name === proposed?.name)?.id, project.worker_id, defaultId], workers);
   const chosen = choices.find((w) => w.id === (value ?? fallback));
   const hint = able
-    ? able.length ? (able.length === 1 ? 'Only this worker has a working copy of this project’s local repos, so its sessions run there.' : 'Workers with a working copy of this project’s local repos.')
-      : 'No worker has a working copy of this project’s local repos. Check their copies in the project settings.'
+    ? choices.length ? (choices.length === 1 ? 'Only this worker has a working copy of this project’s local repos, so its sessions run there.' : 'Workers with a working copy of this project’s local repos.')
+      : 'No worker of yours has a working copy of this project’s local repos. Check their copies in the project settings.'
     : proposed?.reason ? `Planner: ${proposed.reason}` : undefined;
   return (
     <Field label="Worker" group hint={hint}>
-      <select className={inputCls} value={chosen?.id ?? ''} disabled={!!able && able.length <= 1} onChange={(e) => onChange(Number(e.target.value))} aria-label="Worker">
+      <select className={inputCls} value={chosen?.id ?? ''} disabled={!!able && choices.length <= 1} onChange={(e) => onChange(Number(e.target.value))} aria-label="Worker">
         {choices.map((w) => <option key={w.id} value={w.id}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
       </select>
       {chosen && !chosen.connected && <p className="text-[12px] text-wait mt-1">{chosen.name} is offline: the session waits until it connects.</p>}
@@ -151,21 +168,39 @@ export function WorkerField({ value, onChange, project, proposed }: {
   );
 }
 
-/** The worker a form will send: the one picked, else what the field shows by default. */
-export function useChosenWorker(project: Pick<Project, 'worker_id'> & { repos?: Repo[] }, proposedName?: string) {
-  const { data } = useWorkers();
-  const [picked, setPicked] = useState<number | null>(null);
-  const workers = data?.workers ?? [];
+/**
+ * The worker a form sends. With local repos: the one picked, else the first that can run them.
+ * Without: the one picked or the planner's (if it is the caller's), else null, so the server's
+ * workerFor chooses among the caller's own workers and skips a project default that is not theirs
+ * (DISP-236).
+ */
+export function chosenWorker(
+  project: Pick<Project, 'worker_id'> & { repos?: Repo[] },
+  workers: { id: number; name: string; connected: boolean }[],
+  defaultId: number | null | undefined,
+  picked: number | null,
+  proposedName?: string,
+): number | null {
   const able = localWorkers(project.repos);
-  const id = able ? pickWorker(able, [picked, workers.find((w) => w.name === proposedName)?.id, project.worker_id, data?.default_worker_id], workers)
-    : picked ?? workers.find((w) => w.name === proposedName)?.id ?? project.worker_id ?? null;
-  return [id, setPicked] as const;
+  const proposed = workers.find((w) => w.name === proposedName)?.id;
+  if (able) return pickWorker(able, [picked, proposed, project.worker_id, defaultId], workers);
+  return picked ?? proposed ?? null;
 }
 
-/** The first preferred worker that can run the project, else a connected one that can, else any that can. */
-function pickWorker(able: number[] | null, preferred: (number | null | undefined)[], workers: { id: number; connected: boolean }[]): number | null {
-  const ok = (id: number | null | undefined): id is number => id != null && (!able || able.includes(id));
-  return preferred.find(ok) ?? (able ? workers.find((w) => w.connected && able.includes(w.id))?.id ?? able[0] ?? null : null);
+/** The worker a form will send (see chosenWorker), and a setter for the one picked. */
+export function useChosenWorker(project: Pick<Project, 'worker_id'> & { repos?: Repo[] }, proposedName?: string) {
+  const { workers, defaultId } = useOwnWorkers();
+  const [picked, setPicked] = useState<number | null>(null);
+  return [chosenWorker(project, workers, defaultId, picked, proposedName), setPicked] as const;
+}
+
+/**
+ * The first preferred worker in `workers` (the caller's own) that can run the project, else a
+ * connected one that can, else any that can; null when none can.
+ */
+export function pickWorker(able: number[] | null, preferred: (number | null | undefined)[], workers: { id: number; connected: boolean }[]): number | null {
+  const can = (id: number | null | undefined): id is number => id != null && workers.some((w) => w.id === id) && (!able || able.includes(id));
+  return preferred.find(can) ?? workers.find((w) => w.connected && can(w.id))?.id ?? workers.find((w) => can(w.id))?.id ?? null;
 }
 
 /**
