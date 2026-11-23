@@ -61,6 +61,51 @@ describe('hosted repos on the server', () => {
     expect((await h.branchDiff(r, 'dispatch/x-1', sha)).map((f) => [f.filename, f.status, f.additions])).toEqual([['b.txt', 'added', 1]]);
   });
 
+  it('shows files with non-ASCII names, quotes, tabs and glob characters, with their patches (DISP-240)', async () => {
+    const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
+    const r = repo(2);
+    await h.create(r, 'main');
+    const w = workClone(h, r);
+    git(w, 'checkout', '--quiet', '-b', 'names');
+    const names = ['åäö.md', 'say "hi".txt', 'tab\there.txt', '*.txt'];
+    for (const n of names) commit(w, n, `in ${n}\n`);
+    git(w, 'push', '--quiet', 'origin', 'names');
+    const files = await h.branchDiff(r, 'names');
+    expect(files.map((f) => f.filename).sort()).toEqual([...names].sort());
+    for (const f of files) {
+      expect(f).toMatchObject({ status: 'added', additions: 1 });
+      expect(f.patch).toBe(`@@ -0,0 +1 @@\n+in ${f.filename}`);
+    }
+  });
+
+  it('shows a fast-forward merge from where the branch left, and tells a deleted merged branch from a dropped one (DISP-248)', async () => {
+    const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
+    const r = repo(3);
+    await h.create(r, 'main');
+    const w = workClone(h, r);
+    git(w, 'checkout', '--quiet', '-b', 'ff');
+    commit(w, 'b.txt', 'two\n');
+    git(w, 'push', '--quiet', 'origin', 'ff');
+    const st = await h.branchStatus(r, 'ff');
+    expect(st.fork_sha).toBe(git(h.dir(r), 'rev-parse', 'refs/heads/main'));
+    // merged by hand as a fast-forward, then main moves on
+    git(w, 'push', '--quiet', 'origin', 'ff:main');
+    commit(w, 'c.txt', 'later\n');
+    git(w, 'push', '--quiet', 'origin', 'HEAD:main');
+    const sha = st.head_sha!;
+    expect(await h.branchDiff(r, 'ff', sha)).toEqual([]); // nothing marks where it started
+    expect((await h.branchDiff(r, 'ff', sha, st.fork_sha)).map((f) => f.filename)).toEqual(['b.txt']);
+
+    await h.deleteBranch(r, 'ff');
+    expect(await h.branchStatus(r, 'ff', sha)).toMatchObject({ exists: false, merged: true });
+    git(w, 'checkout', '--quiet', '-b', 'dropped');
+    commit(w, 'd.txt', 'never merged\n');
+    git(w, 'push', '--quiet', 'origin', 'dropped');
+    const dropped = git(h.dir(r), 'rev-parse', 'refs/heads/dropped');
+    await h.deleteBranch(r, 'dropped');
+    expect(await h.branchStatus(r, 'dropped', dropped)).toMatchObject({ exists: false, merged: false });
+  });
+
   it('a squash merge makes one commit; a conflict leaves the default branch where it was', async () => {
     const h = new HostedGit(mkdtempSync(join(tmpdir(), 'dsp-hd-')));
     const r = repo(2);

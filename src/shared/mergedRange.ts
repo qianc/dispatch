@@ -30,7 +30,10 @@ export async function diffFiles(git: (args: string[]) => Promise<string>, range:
   for (const entry of stat.split('\0').filter(Boolean)) {
     const [add, del, ...rest] = entry.split('\t');
     const filename = rest.join('\t');
-    const patch = add === '-' ? null : (await git(['diff', '--no-renames', range, '--', `:(literal)${filename}`])).split('\n').slice(4).join('\n') || null;
+    const diff = add === '-' ? '' : await git(['diff', '--no-renames', range, '--', `:(literal)${filename}`]);
+    // from the first hunk, like GitHub's patch (an added or removed file has one more header line)
+    const at = diff.indexOf('\n@@');
+    const patch = at < 0 ? null : diff.slice(at + 1);
     files.push({ filename, status: status.get(filename) ?? 'modified', additions: Number(add) || 0, deletions: Number(del) || 0, patch: patch && patch.length > 200_000 ? null : patch });
   }
   return files;

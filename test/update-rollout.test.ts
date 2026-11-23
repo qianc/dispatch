@@ -250,7 +250,9 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect(s.ctx.sessions.hold).toBeNull();
 
       await s.call('POST', '/update/start', {});
+      let fetches = 0;
       s.ctx.updates.verify = async () => {
+        fetches++;
         throw new Refusal('ahead', 'This version already runs.');
       };
       await s.ctx.updates.tick();
@@ -258,6 +260,14 @@ describe('the rollout of an update: the server first, then the workers, each in 
       expect(await log()).toHaveLength(1);
       expect(await info()).toMatchObject({ rollout: null });
       expect(s.ctx.sessions.hold).toBeNull();
+      // auto-update does not hold sessions and fetch again every tick for that target (DISP-241)
+      await s.ctx.updates.tick();
+      await s.ctx.updates.tick();
+      expect(fetches).toBe(1);
+      // "Update now" tries it again
+      await s.call('POST', '/update/start', {});
+      await s.ctx.updates.tick();
+      expect(fetches).toBe(2);
     });
 
     it('says why it cannot update: no launcher, and no worker with an update command', async () => {
