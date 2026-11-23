@@ -1426,7 +1426,7 @@ export class Sessions {
     if (method === 'cross_project') return this.crossProject(s, p);
     if (s.kind === 'discuss' && !['get_item', 'list_items', 'get_image', 'propose'].includes(method)) throw new Error('A discussion is read-only.');
     if (s.kind === 'discuss' && method === 'propose' && (p as { type?: string }).type !== 'item_update') throw new Error('A discussion can only suggest item changes.');
-    if (s.kind === 'release' && !['get_item', 'list_items', 'get_image', 'add_comment', 'release_items'].includes(method)) throw new Error(`A release session cannot call ${method}.`);
+    if (s.kind === 'release' && !['get_item', 'list_items', 'get_image', 'add_comment', 'create_item', 'release_items'].includes(method)) throw new Error(`A release session cannot call ${method}.`);
     if (method === 'release_items' && (s.kind !== 'release' || !s.release)) throw new Error('Only a release session labels released items.');
     const project = this.store.project(s.project_id!)!;
     const byKey = (key: unknown) => this.itemByKey(key, project);

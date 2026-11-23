@@ -331,6 +331,11 @@ describe('releases from the interface', () => {
     const open = s.ctx.store.createItem(s.ctx.store.projectByKey('REL')!.id, { title: 'Open', type: 'bug', body_md: '', status: 'todo', importance: 2, effort: null, source_id: null, labels: [] });
     await expect(sessions.rpc(res.data.id, 'release_items', { keys: [open.key] })).rejects.toThrow(/Only done items/);
     await expect(sessions.rpc(res.data.id, 'propose', {})).rejects.toThrow(/release session cannot/);
+    // the sweep files what it finds, in its own project, linked to the session (DISP-249)
+    const filed = (await sessions.rpc(res.data.id, 'create_item', { type: 'bug', title: 'Found while releasing', body_md: 'x', importance: 2, effort: null })) as { id: number };
+    const found = s.ctx.store.item(filed.id)!;
+    expect(found.project_id).toBe(s.ctx.store.projectByKey('REL')!.id);
+    expect(s.ctx.store.source(found.source_id!)).toMatchObject({ kind: 'agent_session', session_id: res.data.id });
     expect(await sessions.rpc(res.data.id, 'release_items', { keys: [feat.key, other.key] })).toEqual({ released: [feat.key, other.key], label: 'rel:v1.5.0' });
     expect(s.ctx.store.item(feat.id)!.labels).toEqual(['rel:v1.5.0']);
     const work = (await s.call('POST', '/projects/REL/batches', { prompt: 'x' })).data;
