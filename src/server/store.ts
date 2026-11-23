@@ -168,6 +168,7 @@ function toPr(r: Row): PullRequest {
     github_login: (r.github_login as string | null) ?? null,
     author: (r.author as string | null) ?? null,
     base_ref: (r.base_ref as string | null) ?? null,
+    fork_sha: (r.fork_sha as string | null) ?? null,
     draft: bool(r.draft),
     changed_files: numOrNull(r.changed_files),
     ci_state: (r.ci_state as CiState | null) ?? null,
@@ -615,12 +616,13 @@ export class Store {
     const params: (string | number)[] = [];
     const terms = searchTerms(f.q ?? '');
     const likes = terms.map((t) => `%${t.replace(/[\\%_]/g, '\\$&')}%`);
-    const text = "json_extract(e.body, '$.text')";
-    const message = "json_extract(e.body, '$.kind') IN ('user', 'assistant')";
-    for (const like of likes) {
-      where.push(`(s.title LIKE ? ESCAPE '\\' OR s.initial_prompt LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = s.id AND ${message} AND ${text} LIKE ? ESCAPE '\\'))`);
-      params.push(like, like, like);
-    }
+    // a word (or quoted phrase) as an FTS5 prefix phrase: "zeb" finds "Zebra"
+    const phrases = terms.map((t) => `"${t.replace(/"/g, '""')}"*`);
+    const inText = (q: string) => `text : (${q})`;
+    terms.forEach((_, i) => {
+      where.push(`(ulower(s.title) LIKE ? ESCAPE '\\' OR ulower(s.initial_prompt) LIKE ? ESCAPE '\\' OR s.id IN (SELECT session_id FROM session_event_text WHERE session_event_text MATCH ?))`);
+      params.push(likes[i], likes[i], inText(phrases[i]));
+    });
     if (f.project_id) { where.push('s.project_id = ?'); params.push(f.project_id); }
     if (f.kind) { where.push('s.kind = ?'); params.push(f.kind); }
     if (f.from) { where.push('s.created_at >= ?'); params.push(f.from); }
@@ -630,14 +632,15 @@ export class Store {
       `${SESSION_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.updated_at DESC, s.id DESC LIMIT ? OFFSET ?`,
       ...params, limit + 1, Math.max(f.offset ?? 0, 0),
     );
-    const best = likes.length
-      ? `SELECT ${text} AS text FROM session_events e WHERE e.session_id = ? AND ${message} AND (${likes.map(() => `${text} LIKE ? ESCAPE '\\'`).join(' OR ')})
-          ORDER BY ${likes.map(() => `(${text} LIKE ? ESCAPE '\\')`).join(' + ')} DESC, e.seq DESC LIMIT 1`
-      : '';
+    // the message with the most words of the query, the newest among equals
+    const words = (text: string) => terms.filter((t) => text.toLowerCase().includes(t)).length;
     return {
       sessions: rows.slice(0, limit).map((r) => {
         const s = this.toSession(r);
-        const hit = best ? this.db.get<{ text: string }>(best, s.id, ...likes, ...likes) : undefined;
+        const hits = terms.length
+          ? this.db.all<{ text: string }>('SELECT text FROM session_event_text WHERE session_event_text MATCH ? ORDER BY rowid DESC', `session_id : "${s.id}" AND ${inText(phrases.join(' OR '))}`)
+          : [];
+        const hit = hits.reduce<{ text: string } | undefined>((a, h) => (!a || words(h.text) > words(a.text) ? h : a), undefined);
         const from = hit?.text ?? (terms.some((t) => s.initial_prompt.toLowerCase().includes(t)) ? s.initial_prompt : null);
         return { ...s, snippet: from ? snippetOf(from, terms) : null };
       }),
@@ -1049,6 +1052,8 @@ export class Store {
     return this.db.tx(() => {
       const seq = Number(this.db.get<{ n: number }>('SELECT coalesce(max(seq), 0) + 1 AS n FROM session_events WHERE session_id = ?', sessionId)!.n);
       const { lastId } = this.db.run('INSERT INTO session_events (session_id, seq, body) VALUES (?, ?, ?)', sessionId, seq, JSON.stringify(body));
+      // the owner's and Claude's messages are what Activity's search looks in (DISP-244)
+      if ((body.kind === 'user' || body.kind === 'assistant') && body.text) this.db.run('INSERT INTO session_event_text (rowid, text, session_id) VALUES (?, ?, ?)', lastId, body.text, sessionId);
       return { id: lastId, session_id: sessionId, seq, body, created_at: now() };
     });
   }
@@ -1177,15 +1182,17 @@ export class Store {
     return r && toPr(r);
   }
   /** One row per PR of a repo. Only a row with no session takes `session_id`: a row that has one keeps it. */
-  upsertPr(p: { session_id: number | null; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null }): PullRequest {
+  /** `fork_sha`: given only while known (an open local review); a row keeps its last one. */
+  upsertPr(p: { session_id: number | null; repo_id: number; number: number; url: string; title: string; state: PullRequest['state']; mergeable: boolean | null; mergeable_state: string | null; head_ref: string; head_sha: string | null; fork_sha?: string | null }): PullRequest {
     this.db.run(
-      `INSERT INTO pull_requests (session_id, repo_id, number, url, title, state, mergeable, mergeable_state, head_ref, head_sha, last_synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO pull_requests (session_id, repo_id, number, url, title, state, mergeable, mergeable_state, head_ref, head_sha, fork_sha, last_synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(repo_id, number) DO UPDATE SET url = excluded.url, title = excluded.title, state = excluded.state,
          mergeable = excluded.mergeable, mergeable_state = excluded.mergeable_state, head_ref = excluded.head_ref,
          head_sha = excluded.head_sha, last_synced = excluded.last_synced,
+         fork_sha = COALESCE(excluded.fork_sha, pull_requests.fork_sha),
          session_id = COALESCE(pull_requests.session_id, excluded.session_id)`,
-      p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, now(),
+      p.session_id, p.repo_id, p.number, p.url, p.title, p.state, p.mergeable === null ? null : p.mergeable ? 1 : 0, p.mergeable_state, p.head_ref, p.head_sha, p.fork_sha ?? null, now(),
     );
     return toPr(this.db.get(`${PR_SELECT} WHERE pr.repo_id = ? AND pr.number = ?`, p.repo_id, p.number)!);
   }

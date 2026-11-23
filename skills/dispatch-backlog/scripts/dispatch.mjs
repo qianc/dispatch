@@ -23,6 +23,7 @@ const STATUSES = [...OPEN, 'hold', 'done', 'canceled'];
 const MANY_RELEASE_ITEMS = 36;
 
 const HELP = `dispatch.mjs <command> [args] [--project KEY]
+  A value may be given as --flag=value. Words after -- are text, never flags.
 
 Setup
   init [--project KEY] [--url URL]
@@ -63,17 +64,22 @@ Sources (retros, reports)
   source show ID                 the source and its items`;
 
 // ---------- args ----------
+// `--` ends the flags; `--k=v` takes any value; a word like "--force is needed" is text, not a flag
+const BOOL_FLAGS = new Set(['all', 'json', 'unreleased']);
+const FLAG_RE = /^--([a-z][a-z-]*)(?:=([\s\S]*))?$/;
 const argv = process.argv.slice(2);
 const flags = {};
 const pos = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
-  if (a.startsWith('--')) {
-    const k = a.slice(2);
-    const next = argv[i + 1];
-    if (next === undefined || next.startsWith('--')) flags[k] = true;
-    else flags[k] = argv[++i];
-  } else pos.push(a);
+  const m = FLAG_RE.exec(a);
+  if (a === '--') {
+    pos.push(...argv.slice(i + 1));
+    break;
+  } else if (!m) pos.push(a);
+  else if (m[2] !== undefined) flags[m[1]] = m[2];
+  else if (BOOL_FLAGS.has(m[1]) || argv[i + 1] === undefined || argv[i + 1] === '--' || FLAG_RE.test(argv[i + 1])) flags[m[1]] = true;
+  else flags[m[1]] = argv[++i];
 }
 const list = (v) => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : []);
 const die = (msg) => {
@@ -315,7 +321,20 @@ function compareVersions(a, b) {
   if (pa.pre === pb.pre) return 0;
   if (pa.pre === null) return 1;
   if (pb.pre === null) return -1;
-  return pa.pre < pb.pre ? -1 : 1;
+  return comparePre(pa.pre, pb.pre);
+}
+
+function comparePre(a, b) {
+  const pa = a.split('.'), pb = b.split('.');
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i], y = pb[i];
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
+    if (nx && ny) return Number(x) - Number(y) || (x < y ? -1 : 1);
+    if (nx !== ny) return nx ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return pa.length - pb.length;
 }
 
 const releaseVersions = (i) => i.labels.filter((l) => l.startsWith(RELEASE_PREFIX)).map((l) => l.slice(RELEASE_PREFIX.length));

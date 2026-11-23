@@ -11,6 +11,8 @@ export class Db {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
     this.raw = new DatabaseSync(file);
     this.raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    // SQLite's lower() and LIKE fold ASCII only: 'Åtgärd' would not match 'åtgärd' (DISP-244)
+    this.raw.function('ulower', { deterministic: true }, (s) => (typeof s === 'string' ? s.toLowerCase() : s));
     this.migrate();
   }
 

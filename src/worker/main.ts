@@ -8,7 +8,7 @@ import { ServerLink, Slots } from './serverLink.ts';
 import { setAgentPath } from './toolPath.ts';
 import { Logins } from './login.ts';
 import { makeTitle } from './title.ts';
-import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, sessionAgentEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
+import { claudeAccounts, claudeConfigDir, claudeEnv, githubAccounts, githubEnv, pick, pickGithub, sessionAgentEnv, type ClaudeAccountInfo } from '../shared/accounts.ts';
 import { Secrets } from './secrets.ts';
 import { APP_DIR, runningVersion } from '../update/version.ts';
 import { onReleaseBranch } from '../update/apply.ts';
@@ -94,7 +94,7 @@ const launcher = launcherLink();
 const version: WorkerVersion = { sha: runningVersion().sha, updatable: launcher.available, ...(launcher.why ? { why: launcher.why } : {}) };
 // Dispatch's own repo: its release branch, and the GitHub account that reads it (UPDATE_GITHUB_ACCOUNT, else the first)
 const updateBranch = env.UPDATE_BRANCH?.trim() || 'main';
-const updateGitEnv = { ...env, ...githubEnv(pick(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) };
+const updateGitEnv = { ...env, ...githubEnv(pickGithub(ghAccounts, env.UPDATE_GITHUB_ACCOUNT)) };
 const minutes = (v: string | undefined, dflt: number) => (Number(v) > 0 ? Number(v) : dflt) * 60_000;
 for (const s of cfg.servers) secrets.add(s.token);
 const links = cfg.servers.map((entry) => new ServerLink(entry, {
@@ -108,7 +108,7 @@ const links = cfg.servers.map((entry) => new ServerLink(entry, {
   ...(FAKE ? {} : { makeTitle: (goal: string, projects: string[], account: string | null) =>
     makeTitle(goal, projects, { model: opts.assistantModel, env: claudeEnv(account ? pick(clAccounts, account) : undefined, process.env, (name) => join(configRoot, name)) }) }),
   githubAccounts: ghAccounts.map((a) => a.name),
-  gitEnv: (repo) => githubEnv(pick(ghAccounts, repo.github_account)),
+  gitEnv: (repo) => githubEnv(pickGithub(ghAccounts, repo.github_account)),
   remoteBase: env.GIT_REMOTE_BASE ?? 'https://github.com',
   secrets,
   version,

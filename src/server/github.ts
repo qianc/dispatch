@@ -2,7 +2,7 @@
 import { Octokit } from '@octokit/rest';
 import { createHash } from 'node:crypto';
 import type { GithubCred } from '../shared/protocol.ts';
-import type { GithubAccount } from '../shared/accounts.ts';
+import { pickGithub, type GithubAccount } from '../shared/accounts.ts';
 import type { BranchFile, BranchStatus, CiState, MergeEvent, Project, PullRequest, Repo, Session } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import { CheckRuns } from './checkRuns.ts';
@@ -166,22 +166,26 @@ export class GitHub {
    * reads the token from the environment, so it is in no URL, argument or file.
    */
   gitEnv(repo: Pick<Repo, 'github_account'>): Record<string, string> {
-    const account = this.accounts.find((a) => a.name === repo.github_account) ?? this.accounts[0];
+    const account = pickGithub(this.accounts, repo.github_account);
     return account ? this.gitEnvForToken(account.token) : {};
   }
 
-  /** gitEnv for one token (a user's own, DISP-63). */
+  /**
+   * gitEnv for one token (a user's own, DISP-63). The helper answers only for GitHub's address, so
+   * a remote on another host (a self-update origin on Gitea) never gets the token (DISP-241).
+   */
   gitEnvForToken(token: string): Record<string, string> {
     return {
       DISPATCH_GH_TOKEN: token,
       GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_KEY_0: /^https?:\/\//.test(this.gitBase) ? `credential.${this.gitBase}.helper` : 'credential.helper',
       GIT_CONFIG_VALUE_0: '!f() { echo username=x-access-token; echo "password=$DISPATCH_GH_TOKEN"; }; f',
     };
   }
 
   clientFor(repo: Pick<Repo, 'github_account'> | null): Octokit | null {
-    return (repo?.github_account && this.clients.get(repo.github_account)) || this.octo;
+    // a removed account gives none (the "not configured" error), not the first account's identity (DISP-248)
+    return repo?.github_account ? this.clients.get(repo.github_account) ?? null : this.octo;
   }
 
   private mustClient(c: Octokit | null, repo: Pick<Repo, 'github_account'> | null) {
@@ -311,8 +315,10 @@ export class GitHub {
   private syncingAll = false;
 
   /**
-   * Sessions worth checking: work sessions with a branch, not ended more than 14 days ago. One
-   * session that fails (a sleeping worker, a deleted repo) is skipped, not the rest (DISP-230).
+   * Sessions worth checking: work sessions with a branch, not ended more than 14 days ago. An idle
+   * work session never ends, so one with no open PR and nothing new for 14 days is left too
+   * (DISP-241: each costs GitHub calls every tick). One session that fails (a sleeping worker, a
+   * deleted repo) is skipped, not the rest (DISP-230).
    */
   async syncAll() {
     if (this.syncingAll) return;
@@ -324,7 +330,7 @@ export class GitHub {
       );
       for (const s of sessions) {
         const open = this.store.prs({ session_id: s.id });
-        if (open.length && open.every((p) => p.state !== 'open') && s.ended_at) continue;
+        if (open.every((p) => p.state !== 'open') && ((open.length && s.ended_at) || Date.parse(s.updated_at) < cutoff)) continue;
         try {
           await this.syncSession(s);
         } catch (e) {
@@ -460,14 +466,23 @@ export class GitHub {
    * branch lacks, is shown as a review entry (number = -session id) until it is merged.
    */
   private async syncLocal(s: Session, repo: Repo): Promise<PullRequest | null> {
-    const st = await this.hub.cmd<BranchStatus>(s.worker_id, { c: 'branch_status', repo, branch: s.branch! }, 120_000);
     const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id);
+    const st = await this.hub.cmd<BranchStatus>(s.worker_id, { c: 'branch_status', repo, branch: s.branch!, last_sha: known?.head_sha }, 120_000);
+    return this.recordBranch(s, repo, st, known);
+  }
+
+  /** A local or hosted review entry from its branch's state. */
+  private async recordBranch(s: Session, repo: Repo, st: BranchStatus, known: PullRequest | undefined): Promise<PullRequest | null> {
+    // the branch was deleted: an open review ends, merged when its last commit is in the default branch (DISP-248)
+    if (!st.exists && known?.state === 'open') {
+      return this.recordRow(s, repo, { ...known, state: st.merged ? 'merged' : 'closed' });
+    }
     if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
     if (st.merged && !known) return null; // nothing was ever offered for review
     if (!st.differs && !known) return null; // same tree as the default branch (rewritten under it): nothing to review, DISP-33
     return this.recordRow(s, repo, {
       number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
-      mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
+      mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha, fork_sha: st.fork_sha,
     });
   }
 
@@ -479,14 +494,7 @@ export class GitHub {
   private async syncHosted(s: Session, repo: Repo): Promise<PullRequest | null> {
     const known = this.store.prs({ session_id: s.id }).find((p) => p.repo_id === repo.id && p.number < 0);
     if (known && known.state !== 'open') return known;
-    const st = await this.hosted!.branchStatus(repo, s.branch!);
-    if (!st.exists || (!st.merged && st.ahead === 0)) return known ?? null;
-    if (st.merged && !known) return null;
-    if (!st.differs && !known) return null; // same tree as the default branch: nothing to review, DISP-33
-    return this.recordRow(s, repo, {
-      number: -s.id, url: '', title: s.title, state: st.merged ? 'merged' : 'open',
-      mergeable: !st.conflicts, mergeable_state: st.conflicts ? 'dirty' : 'clean', head_ref: s.branch!, head_sha: st.head_sha,
-    });
+    return this.recordBranch(s, repo, await this.hosted!.branchStatus(repo, s.branch!, known?.head_sha), known);
   }
 
   /** Merges pushed to a hosted repo's upstream that failed, told once each. */
@@ -938,16 +946,14 @@ export class GitHub {
         url: `/pr/${pr.id}`, tag: `pr-${pr.id}`, project_id: s.project_id ?? undefined,
       }, 'routine');
     }
-    if (pr.state === 'closed') {
+    if (pr.state !== 'open') {
       const all = this.store.prs({ session_id: s.id });
-      if (!all.some((p) => p.state !== 'closed')) {
-        for (const it of items) if (it.status === 'in_review') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
-      }
-    }
-    if (pr.state === 'merged') {
-      const all = this.store.prs({ session_id: s.id });
-      if (all.every((p) => p.state !== 'open')) {
+      if (all.some((p) => p.state === 'open')) return;
+      // one PR merged and the others closed (in either order) is done too (DISP-241)
+      if (all.some((p) => p.state === 'merged')) {
         for (const it of items) if (it.status !== 'done' && it.status !== 'canceled') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'done' }) });
+      } else {
+        for (const it of items) if (it.status === 'in_review') this.bus.emit({ t: 'item', item: this.store.updateItem(it.id, { status: 'todo' }) });
       }
     }
   }
@@ -965,11 +971,11 @@ export class GitHub {
     // merged: the branch is in the default branch (and may be deleted); show it from its last commit
     const merged_sha = pr.state === 'merged' && pr.head_sha ? pr.head_sha : undefined;
     if (repo.local_path) {
-      const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref, merged_sha }, 120_000);
+      const files = await this.hub.cmd<BranchFile[]>(this.workerOf(pr), { c: 'branch_diff', repo, branch: pr.head_ref, merged_sha, fork_sha: pr.fork_sha }, 120_000);
       return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge, ...merge };
     }
     if (repo.kind === 'hosted' && pr.local) {
-      const files = await this.hosted!.branchDiff(repo, pr.head_ref, merged_sha);
+      const files = await this.hosted!.branchDiff(repo, pr.head_ref, merged_sha, pr.fork_sha);
       return { pr, repo: this.repoSummary(repo), hands, body: '', base_ref: repo.default_branch, files, checks: [], auto_merge, ...merge };
     }
     const o = this.mustTarget(repo);
@@ -1158,7 +1164,7 @@ export class GitHub {
       const res = await this.mergeOnWorker(pr, repo, message, sha);
       if (!res.ok) return { ok: false as const, conflict: !!res.conflict, output: res.output ?? '' };
     } else {
-      const res = await this.hosted!.merge(repo, pr.head_ref, method === 'squash' ? `${pr.title} (${pr.head_ref})` : message, method === 'squash' ? 'squash' : 'merge', authorEnv(this.credOf(s)), sha);
+      const res = await this.hosted!.merge(repo, pr.head_ref, message, method === 'squash' ? 'squash' : 'merge', authorEnv(this.credOf(s)), sha);
       if (!res.ok && res.moved) throw moved();
       if (!res.ok) return { ok: false as const, conflict: res.conflict, output: res.output };
     }

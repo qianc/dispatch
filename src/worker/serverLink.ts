@@ -598,9 +598,9 @@ export class ServerLink {
       case 'merge_local':
         return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github, cmd.sha);
       case 'branch_status':
-        return ws.branchStatus(cmd.repo, cmd.branch);
+        return ws.branchStatus(cmd.repo, cmd.branch, cmd.last_sha);
       case 'branch_diff':
-        return ws.branchDiff(cmd.repo, cmd.branch, cmd.merged_sha);
+        return ws.branchDiff(cmd.repo, cmd.branch, cmd.merged_sha, cmd.fork_sha);
       case 'inspect_local_repo': {
         const path = resolve(cmd.path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'));
         const allowed = this.entry.local_repo_dirs;

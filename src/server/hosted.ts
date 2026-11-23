@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BranchFile, BranchStatus, Repo } from '../shared/types.ts';
-import { mergedRange } from '../shared/mergedRange.ts';
+import { diffFiles, mergedRange } from '../shared/mergedRange.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -197,37 +197,30 @@ export class HostedGit {
     return `refs/heads/${repo.default_branch}`;
   }
 
-  async branchStatus(repo: Repo, branch: string): Promise<BranchStatus> {
+  /** `lastSha`: the branch's last known commit, to tell whether a deleted branch was merged. */
+  async branchStatus(repo: Repo, branch: string, lastSha?: string | null): Promise<BranchStatus> {
     const dir = this.dir(repo);
     const head = `refs/heads/${branch}`;
-    const sha = await git(dir, ['rev-parse', '--verify', '--quiet', head]);
-    if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, differs: false, head_sha: null };
     const base = this.base(repo);
+    const sha = await git(dir, ['rev-parse', '--verify', '--quiet', head]);
+    if (sha.code !== 0) {
+      const merged = !!lastSha && (await git(dir, ['merge-base', '--is-ancestor', lastSha, base])).code === 0;
+      return { exists: false, ahead: 0, behind: 0, merged, conflicts: false, differs: false, head_sha: null };
+    }
     const counts = (await must(dir, ['rev-list', '--left-right', '--count', `${base}...${head}`])).split(/\s+/).map(Number);
     const merged = (await git(dir, ['merge-base', '--is-ancestor', head, base])).code === 0;
     const conflicts = !merged && (await git(dir, ['merge-tree', '--write-tree', base, head])).code === 1;
     // same tree as the default branch: nothing to review, even if the commits differ (DISP-33)
     const differs = (await must(dir, ['rev-parse', `${base}^{tree}`])) !== (await must(dir, ['rev-parse', `${head}^{tree}`]));
-    return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim() };
+    const fork_sha = merged ? null : (await git(dir, ['merge-base', base, head])).out.trim() || null;
+    return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim(), fork_sha };
   }
 
   /** `mergedSha`: the branch is merged; show it from that last commit (the branch may be gone). */
-  async branchDiff(repo: Repo, branch: string, mergedSha?: string): Promise<BranchFile[]> {
+  async branchDiff(repo: Repo, branch: string, mergedSha?: string, forkSha?: string | null): Promise<BranchFile[]> {
     const dir = this.dir(repo);
-    const range = mergedSha ? await mergedRange((a) => must(dir, a), this.base(repo), mergedSha) : `${this.base(repo)}...refs/heads/${branch}`;
-    const stat = await must(dir, ['diff', '--numstat', '--no-renames', range]);
-    const names = await must(dir, ['diff', '--name-status', '--no-renames', range]);
-    const status = new Map(names.split('\n').filter(Boolean).map((l) => {
-      const [s, f] = l.split('\t');
-      return [f, ({ A: 'added', D: 'removed', M: 'modified' } as Record<string, string>)[s[0]] ?? 'changed'];
-    }));
-    const files: BranchFile[] = [];
-    for (const line of stat.split('\n').filter(Boolean)) {
-      const [add, del, filename] = line.split('\t');
-      const patch = add === '-' ? null : (await must(dir, ['diff', '--no-renames', range, '--', filename])).split('\n').slice(4).join('\n') || null;
-      files.push({ filename, status: status.get(filename) ?? 'modified', additions: Number(add) || 0, deletions: Number(del) || 0, patch: patch && patch.length > 200_000 ? null : patch });
-    }
-    return files;
+    const range = mergedSha ? await mergedRange((a) => must(dir, a), this.base(repo), mergedSha, forkSha) : `${this.base(repo)}...refs/heads/${branch}`;
+    return diffFiles((a) => must(dir, a), range);
   }
 
   /** A file as it is on the default branch. */

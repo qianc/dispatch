@@ -70,6 +70,15 @@ export function searchQuery(f: SessionFilter, offset = 0, limit = 30): string {
   return p.toString();
 }
 
+/**
+ * The search's pages as one list. Pages are fetched by offset, so a chat that moved up between
+ * two pages comes again on the next one: it is shown once, where it was first (DISP-248).
+ */
+export function searchHits<T extends { id: number }>(pages: { sessions: T[] }[]): T[] {
+  const seen = new Set<number>();
+  return pages.flatMap((p) => p.sessions).filter((s) => !seen.has(s.id) && !!seen.add(s.id));
+}
+
 /** The statuses of a session that is not finished: the Live list, and open discussions (DISP-58). */
 export const OPEN_STATUSES = 'queued,running,waiting_input,idle';
 

@@ -13,7 +13,7 @@ import { githubCredEnv } from '../shared/accounts.ts';
 import type { GithubCred, StartSpec } from '../shared/protocol.ts';
 import { repoFolder, type Repo } from '../shared/types.ts';
 import { maxVersion, VERSION_RE } from '../shared/release.ts';
-import { mergedRange } from '../shared/mergedRange.ts';
+import { diffFiles, mergedRange } from '../shared/mergedRange.ts';
 
 /**
  * Extra environment for commands run on behalf of a repo (its GitHub account's token and commit
@@ -682,18 +682,22 @@ export class Workspaces {
     }
   }
 
-  /** A session branch compared with the default branch. */
-  branchStatus(repo: Repo, branch: string): Promise<import('../shared/types.ts').BranchStatus> {
+  /** A session branch compared with the default branch. `lastSha`: its last known commit, to tell whether a deleted branch was merged. */
+  branchStatus(repo: Repo, branch: string, lastSha?: string | null): Promise<import('../shared/types.ts').BranchStatus> {
     return this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
       const sha = await run('git', ['rev-parse', '--verify', '--quiet', head], dir);
-      if (sha.code !== 0) return { exists: false, ahead: 0, behind: 0, merged: false, conflicts: false, differs: false, head_sha: null };
+      if (sha.code !== 0) {
+        const merged = !!lastSha && (await run('git', ['merge-base', '--is-ancestor', lastSha, base], dir)).code === 0;
+        return { exists: false, ahead: 0, behind: 0, merged, conflicts: false, differs: false, head_sha: null };
+      }
       const counts = (await git(['rev-list', '--left-right', '--count', `${base}...${head}`], dir)).split(/\s+/).map(Number);
       const merged = (await run('git', ['merge-base', '--is-ancestor', head, base], dir)).code === 0;
       const conflicts = !merged && (await run('git', ['merge-tree', '--write-tree', base, head], dir)).code === 1;
       // same tree as the default branch: nothing to review, even if the commits differ (DISP-33)
       const differs = (await git(['rev-parse', `${base}^{tree}`], dir)) !== (await git(['rev-parse', `${head}^{tree}`], dir));
-      return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim() };
+      const fork_sha = merged ? null : (await run('git', ['merge-base', base, head], dir)).out || null;
+      return { exists: true, behind: counts[0], ahead: counts[1], merged, conflicts, differs, head_sha: sha.out.trim(), fork_sha };
     });
   }
 
@@ -701,23 +705,11 @@ export class Workspaces {
    * Files changed on the branch since it left the default branch, with patches (like a PR's files).
    * `mergedSha`: the branch is merged; show it from that last commit (the branch may be gone).
    */
-  branchDiff(repo: Repo, branch: string, mergedSha?: string): Promise<import('../shared/types.ts').BranchFile[]> {
+  branchDiff(repo: Repo, branch: string, mergedSha?: string, forkSha?: string | null): Promise<import('../shared/types.ts').BranchFile[]> {
     return this.withRepo(repo, async () => {
       const { dir, base, head } = await this.refs(repo, branch);
-      const range = mergedSha ? await mergedRange((a) => git(a, dir), base, mergedSha) : `${base}...${head}`;
-      const stat = await git(['diff', '--numstat', '--no-renames', range], dir);
-      const names = await git(['diff', '--name-status', '--no-renames', range], dir);
-      const status = new Map(names.split('\n').filter(Boolean).map((l) => {
-        const [s, f] = l.split('\t');
-        return [f, ({ A: 'added', D: 'removed', M: 'modified' } as Record<string, string>)[s[0]] ?? 'changed'];
-      }));
-      const files = [];
-      for (const line of stat.split('\n').filter(Boolean)) {
-        const [add, del, filename] = line.split('\t');
-        const patch = add === '-' ? null : (await git(['diff', '--no-renames', range, '--', filename], dir)).split('\n').slice(4).join('\n') || null;
-        files.push({ filename, status: status.get(filename) ?? 'modified', additions: Number(add) || 0, deletions: Number(del) || 0, patch: patch && patch.length > 200_000 ? null : patch });
-      }
-      return files;
+      const range = mergedSha ? await mergedRange((a) => git(a, dir), base, mergedSha, forkSha) : `${base}...${head}`;
+      return diffFiles((a) => git(a, dir), range);
     });
   }
 

@@ -1,5 +1,6 @@
 // Adding a repo to a project: a GitHub repo (owner/name or URL), or a local folder on the worker host.
 import type { Project, Repo } from '../shared/types.ts';
+import { REPO_NAME } from '../shared/types.ts';
 import type { Store } from './store.ts';
 import { HttpError } from './routes/ctx.ts';
 import type { WorkerHub } from './workerHub.ts';
@@ -131,7 +132,6 @@ export function mergeNote(info: LocalRepoInfo) {
 }
 
 const OWNER_NAME = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/;
-export const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 /** "owner/name" → its parts, or an error the owner can read. */
 export function ownerName(v: string): { owner: string; name: string } {

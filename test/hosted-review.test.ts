@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Repo, type RunOptions } from '../src/shared/types.ts';
 import { startServer, OWNER } from './helpers.ts';
 import { fakeGithub } from './github.ts';
@@ -111,6 +111,84 @@ describe('review and merge of hosted repos in Dispatch', () => {
       expect(r.data).toMatchObject({ ok: true, pr: { state: 'merged' } });
       expect((await s.ctx.hosted.readFile(repo, 'b.txt')).toString()).toBe('two\n');
       expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a squash merge names the items in its message, not the branch (DISP-248)', async () => {
+    const { s, repo, session } = await setup();
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      expect((await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'squash' })).status).toBe(200);
+      expect(git(s.ctx.hosted.dir(repo), 'log', '-1', '--format=%s', 'main')).toBe('Merge HV-1: Add b');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a branch fast-forwarded into main by hand is merged, and its page still shows its files (DISP-248)', async () => {
+    const { s, repo, session, item, w } = await setup();
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      const bare = s.ctx.hosted.dir(repo);
+      git(bare, 'update-ref', 'refs/heads/main', git(bare, 'rev-parse', session.branch!));
+      git(w, 'push', '--quiet', 'origin', '--delete', session.branch!);
+      const [merged] = await s.ctx.github.syncSession(session);
+      expect(merged).toMatchObject({ id: row.id, state: 'merged' });
+      expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
+      const detail = (await s.call('GET', `/prs/${row.id}`)).data;
+      expect(detail.files.map((f: { filename: string }) => f.filename)).toEqual(['b.txt']);
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a review whose branch was deleted unmerged is closed, not open for good (DISP-248)', async () => {
+    const { s, session, item, w } = await setup();
+    try {
+      await s.call('PATCH', `/items/${item.id}`, { status: 'in_progress' });
+      await s.ctx.github.syncSession(session);
+      expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('in_review');
+      git(w, 'push', '--quiet', 'origin', '--delete', session.branch!);
+      const [row] = await s.ctx.github.syncSession(session);
+      expect(row.state).toBe('closed');
+      expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('todo');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('one PR merged and the other closed after it: the items are done (DISP-241)', async () => {
+    const { s, session, item, w } = await setup();
+    try {
+      await s.call('PATCH', `/items/${item.id}`, { status: 'in_progress' });
+      await s.ctx.github.syncSession(session);
+      // the session's other repo: its review merged while this one was still open
+      const other = s.ctx.store.addRepo(session.project_id!, { github_owner: 'hosted', github_name: 'other', default_branch: 'main', check_command: null, kind: 'hosted' });
+      s.ctx.store.upsertPr({ session_id: session.id, repo_id: other.id, number: -session.id, url: '', title: 'Add b', state: 'merged', mergeable: true, mergeable_state: 'clean', head_ref: session.branch!, head_sha: null });
+      expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('in_review');
+      git(w, 'push', '--quiet', 'origin', '--delete', session.branch!); // this one is dropped
+      await s.ctx.github.syncSession(session);
+      expect((await s.call('GET', `/items/${item.id}`)).data.status).toBe('done');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('an idle session with no open PR and nothing new for 14 days is not polled (DISP-241)', async () => {
+    const { s, session } = await setup();
+    try {
+      const sync = vi.spyOn(s.ctx.github, 'syncSession');
+      await s.ctx.github.syncAll();
+      expect(sync).toHaveBeenCalledTimes(1); // open review, recent
+      const old = new Date(Date.now() - 15 * 86400_000).toISOString();
+      s.ctx.store.db.run('UPDATE sessions SET updated_at = ? WHERE id = ?', old, session.id);
+      await s.ctx.github.syncAll();
+      expect(sync).toHaveBeenCalledTimes(2); // its review is still open
+      s.ctx.store.db.run("UPDATE pull_requests SET state = 'merged' WHERE session_id = ?", session.id);
+      await s.ctx.github.syncAll();
+      expect(sync).toHaveBeenCalledTimes(2);
     } finally {
       await s.app.close();
     }
