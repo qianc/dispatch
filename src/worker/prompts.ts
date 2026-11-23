@@ -413,6 +413,7 @@ export function releasePrompt(spec: StartSpec, context: { label: string; text: s
     '',
     `- Never pick another version yourself. If \`${r.version}\` is taken or the repo needs another format, ask the owner.`,
     '- No other code changes, no branches or pull requests, no force-push, no deleting tags.',
+    '- Work you find that should be tracked (a follow-up, a leftover, a problem seen while releasing): file it with `create_item` instead of fixing it.',
   ];
   if (context.length) lines.push('', "## The project's own instructions", '', ...context.flatMap((c) => [`### ${c.label}`, '', c.text.trim(), '']));
   return lines.join('\n');

@@ -471,6 +471,7 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
       tool('release_items', 'Label these items as released, with the version of this release. Call it only after the release succeeded (the release command exited 0, and the commit and tag are pushed); never after a failure.', {
         keys: z.array(z.string()).min(1).describe('Keys of the done items in this release, e.g. ["HC-3"]'),
       }, call(rpc, 'release_items')),
+      createItem(rpc, 'File a new backlog item or bug you found during this release (a follow-up, a leftover, a problem). It is linked to this session.', []),
     );
   } else if (kind === 'work') {
     tools.push(
