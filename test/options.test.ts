@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RUN_OPTIONS, type Session } from '../src/shared/types.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import type { StartSpec } from '../src/shared/protocol.ts';
@@ -76,7 +76,7 @@ describe('start modes', () => {
 
 describe('auto-merge', () => {
   type Check = { name: string; status: string; conclusion: string | null; html_url: null };
-  const setup = async (checks: Check[], mergeable: boolean | null = true, behind = 0) => {
+  const setup = async (checks: Check[], mergeable: boolean | null = true, behind = 0, mergeableState = 'clean') => {
     const s = await startServer();
     await s.call('POST', '/projects', { key: 'AM', name: 'AM' });
     await s.call('POST', '/projects/AM/repos', { github_owner: 'me', github_name: 'r' });
@@ -87,7 +87,7 @@ describe('auto-merge', () => {
     });
     let merged = false;
     const merges: unknown[] = [];
-    const pr = () => ({ number: 7, html_url: 'u', title: 'PR', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable, mergeable_state: 'clean', head: { ref: 'dispatch/am-1-x', sha: 'abc' }, base: { ref: 'main' }, body: '' });
+    const pr = () => ({ number: 7, html_url: 'u', title: 'PR', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable, mergeable_state: mergeableState, head: { ref: 'dispatch/am-1-x', sha: 'abc' }, base: { ref: 'main' }, body: '' });
     const fake = {
       pulls: {
         list: async () => ({ data: [pr()] }),
@@ -333,6 +333,134 @@ describe('auto-merge', () => {
     await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
     expect(merges).toHaveLength(1);
     await s.app.close();
+  });
+
+  describe('commit statuses (Woodpecker, Jenkins) count like check runs (DISP-231)', () => {
+    type Status = { context: string; state: string; target_url: string | null };
+    const withStatuses = async (statuses: Status[], mergeableState = 'clean') => {
+      const t = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }], true, 0, mergeableState);
+      (t.fake.repos as Record<string, unknown>).getCombinedStatusForRef = async () => ({ data: { state: 'pending', total_count: statuses.length, statuses } });
+      return t;
+    };
+
+    it('does not merge on a failing or erroring status, and says why once', async () => {
+      for (const state of ['failure', 'error']) {
+        const { s, session, merges } = await withStatuses([{ context: 'ci/woodpecker/push', state, target_url: 'w' }]);
+        await s.ctx.github.syncSession(session);
+        await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+        expect(merges).toHaveLength(0);
+        expect(s.ctx.notifier.sent.filter((n) => n.body.includes('checks failed (ci/woodpecker/push)'))).toHaveLength(1);
+        await s.app.close();
+      }
+    });
+
+    it('waits for a pending status, then merges once it passed', async () => {
+      const statuses: Status[] = [{ context: 'ci/woodpecker/push', state: 'pending', target_url: 'w' }];
+      const { s, session, merges } = await withStatuses(statuses);
+      await s.ctx.github.syncSession(session);
+      expect(merges).toHaveLength(0);
+      expect(s.ctx.notifier.sent.some((n) => n.title.includes('not auto-merged'))).toBe(false);
+      statuses[0] = { ...statuses[0], state: 'success' };
+      await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(merges).toHaveLength(1);
+      await s.app.close();
+    });
+
+    it('does not merge a PR GitHub calls unstable, even when it shows nothing red', async () => {
+      const { s, session, merges } = await withStatuses([], 'unstable');
+      await s.ctx.github.syncSession(session);
+      expect(merges).toHaveLength(0);
+      expect(s.ctx.store.prs({ session_id: session.id })[0].blocked).toMatch(/not all green/);
+      await s.app.close();
+    });
+
+    it('a token that may not read statuses still merges (GitHub\'s unstable state covers it)', async () => {
+      const { s, session, merges, fake } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+      (fake.repos as Record<string, unknown>).getCombinedStatusForRef = async () => { throw Object.assign(new Error('Resource not accessible'), { status: 403 }); };
+      await s.ctx.github.syncSession(session);
+      expect(merges).toHaveLength(1);
+      await s.app.close();
+    });
+  });
+
+  it('reads every page of check runs: a failure on the second page stops the merge (DISP-231)', async () => {
+    const { s, session, merges, fake } = await setup([]);
+    const runs = [...Array.from({ length: 100 }, (_, i) => ({ name: `ok${i}`, status: 'completed', conclusion: 'success', html_url: null })),
+      { name: 'late', status: 'completed', conclusion: 'failure', html_url: null }];
+    fake.checks = { listForRef: async ({ page = 1, per_page }: { page?: number; per_page: number }) => ({ data: { total_count: runs.length, check_runs: runs.slice((page - 1) * per_page, page * per_page) } }) };
+    await s.ctx.github.syncSession(session);
+    expect(merges).toHaveLength(0);
+    expect(s.ctx.store.prs({ session_id: session.id })[0].blocked).toBe('checks failed (late)');
+    await s.app.close();
+  });
+
+  it('in a repo with CI, a new head without checks yet waits for them (CHECKS_MAY_START_MS, DISP-231)', async () => {
+    const { s, session, merges } = await setup([]);
+    // an earlier PR of the repo had checks
+    const repo = s.ctx.store.repos(session.project_id!)[0];
+    const old = s.ctx.store.upsertPr({ session_id: null, repo_id: repo.id, number: 1, url: 'u', title: 'old', state: 'merged', mergeable: true, mergeable_state: 'clean', head_ref: 'old', head_sha: 'old' });
+    s.ctx.store.setPrMeta(old.id, { ci_state: 'success' });
+    await s.ctx.github.syncSession(session);
+    expect(merges).toHaveLength(0);
+    // half an hour on, still none: the repo runs no CI for this branch
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 31 * 60_000);
+    try {
+      await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(merges).toHaveLength(1);
+    await s.app.close();
+  });
+
+  it('merges a fresh head with no checks at once in a repo that never had CI', async () => {
+    const { s, session, merges } = await setup([]);
+    await s.ctx.github.syncSession(session);
+    expect(merges).toHaveLength(1);
+    await s.app.close();
+  });
+
+  describe('the poll of every session (DISP-230)', () => {
+    it('one session whose sync fails does not stop the others', async () => {
+      const { s, session, fake } = await setup([{ name: 'test', status: 'completed', conclusion: 'success', html_url: null }]);
+      // a newer session (synced first) in a repo GitHub no longer has
+      s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
+        project_id: session.project_id, kind: 'work', title: 'gone', status: 'idle', force_plan: false, branch: 'dispatch/am-2-gone',
+        initial_prompt: '', source_id: null, item_ids: [], options: { ...DEFAULT_RUN_OPTIONS },
+      });
+      const pulls = fake.pulls as Record<string, (a: { head: string }) => Promise<unknown>>;
+      const list = pulls.list;
+      pulls.list = async (a) => { if (a.head.endsWith('gone')) throw Object.assign(new Error('Not Found'), { status: 404 }); return list(a); };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await s.ctx.github.syncAll();
+        expect(s.ctx.store.prs({ session_id: session.id })).toHaveLength(1);
+        expect(warn.mock.calls.flat().join(' ')).toMatch(/Not Found/);
+      } finally {
+        warn.mockRestore();
+      }
+      await s.app.close();
+    });
+
+    it('a tick that starts while the last one still runs is skipped', async () => {
+      const { s, session, fake } = await setup([{ name: 'test', status: 'in_progress', conclusion: null, html_url: null }]);
+      const pulls = fake.pulls as Record<string, (a: unknown) => Promise<unknown>>;
+      const list = pulls.list;
+      let calls = 0;
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      pulls.list = async (a) => { calls++; await held; return list(a); };
+      const first = s.ctx.github.syncAll();
+      await s.ctx.github.syncAll(); // the next tick: returns at once
+      expect(calls).toBe(1);
+      release();
+      await first;
+      await s.ctx.github.syncAll(); // the one after runs again
+      expect(calls).toBe(2);
+      expect(s.ctx.store.prs({ session_id: session.id })).toHaveLength(1);
+      await s.app.close();
+    });
   });
 
   it('waits while the agent is still working', async () => {

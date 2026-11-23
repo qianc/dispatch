@@ -307,16 +307,32 @@ export class GitHub {
     if (this.prTimer) clearInterval(this.prTimer);
   }
 
-  /** Sessions worth checking: work sessions with a branch, not ended more than 14 days ago. */
+  /** The poll that runs now: a tick that meets it is skipped (DISP-230). */
+  private syncingAll = false;
+
+  /**
+   * Sessions worth checking: work sessions with a branch, not ended more than 14 days ago. One
+   * session that fails (a sleeping worker, a deleted repo) is skipped, not the rest (DISP-230).
+   */
   async syncAll() {
-    const cutoff = Date.now() - 14 * 86400_000;
-    const sessions = this.store.sessions({ kind: 'work', limit: 500 }).filter(
-      (s) => s.branch && s.status !== 'queued' && (!s.ended_at || Date.parse(s.ended_at) > cutoff),
-    );
-    for (const s of sessions) {
-      const open = this.store.prs({ session_id: s.id });
-      if (open.length && open.every((p) => p.state !== 'open') && s.ended_at) continue;
-      await this.syncSession(s);
+    if (this.syncingAll) return;
+    this.syncingAll = true;
+    try {
+      const cutoff = Date.now() - 14 * 86400_000;
+      const sessions = this.store.sessions({ kind: 'work', limit: 500 }).filter(
+        (s) => s.branch && s.status !== 'queued' && (!s.ended_at || Date.parse(s.ended_at) > cutoff),
+      );
+      for (const s of sessions) {
+        const open = this.store.prs({ session_id: s.id });
+        if (open.length && open.every((p) => p.state !== 'open') && s.ended_at) continue;
+        try {
+          await this.syncSession(s);
+        } catch (e) {
+          console.warn(`github sync of session #${s.id} failed:`, (e as Error).message);
+        }
+      }
+    } finally {
+      this.syncingAll = false;
     }
   }
 
@@ -664,6 +680,7 @@ export class GitHub {
   /**
    * The CI results for a commit: GitHub's check runs, or, when the token may not read them (a
    * fine-grained PAT has no Checks permission), the GitHub Actions runs for the commit (Actions: read).
+   * Every page of them, and the commit statuses too (Woodpecker, Jenkins: DISP-231).
    */
   private checkRuns(s: Session | null | undefined, repo: Repo, sha: string, perPage = 100): Promise<Check[]> {
     return this.checkRunsWith(this.client(s, repo, 'read'), repo, sha, perPage);
@@ -671,13 +688,42 @@ export class GitHub {
 
   private async checkRunsWith(octo: Octokit, repo: Repo, sha: string, perPage = 100): Promise<Check[]> {
     const t = this.mustTarget(repo);
+    const [runs, statuses] = await Promise.all([this.runsOf(octo, t, sha, perPage), this.statusesOf(octo, t, sha)]);
+    return [...runs, ...statuses];
+  }
+
+  private async runsOf(octo: Octokit, t: { owner: string; repo: string }, sha: string, perPage: number): Promise<Check[]> {
     try {
-      return (await octo.checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage })).data.check_runs;
+      return await allPages(perPage, async (page) => {
+        const { data } = await octo.checks.listForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: perPage, page });
+        return { items: data.check_runs, total: data.total_count };
+      });
     } catch (e) {
       if ((e as { status?: number }).status !== 403) throw e;
-      const { data } = await octo.actions.listWorkflowRunsForRepo({ owner: t.owner, repo: t.repo, head_sha: sha, per_page: perPage });
-      return data.workflow_runs.map((r) => ({ name: r.name ?? 'workflow', status: r.status ?? 'queued', conclusion: r.conclusion ?? null, html_url: r.html_url }));
+      const runs = await allPages(perPage, async (page) => {
+        const { data } = await octo.actions.listWorkflowRunsForRepo({ owner: t.owner, repo: t.repo, head_sha: sha, per_page: perPage, page });
+        return { items: data.workflow_runs, total: data.total_count };
+      });
+      return runs.map((r) => ({ name: r.name ?? 'workflow', status: r.status ?? 'queued', conclusion: r.conclusion ?? null, html_url: r.html_url }));
     }
+  }
+
+  /**
+   * A commit's statuses (the latest per context), as checks: pending runs, failure and error fail.
+   * A token that may not read them gives none; auto-merge still sees GitHub's `unstable` state.
+   */
+  private async statusesOf(octo: Octokit, t: { owner: string; repo: string }, sha: string): Promise<Check[]> {
+    let statuses: { context: string; state: string; target_url?: string | null }[];
+    try {
+      statuses = (await octo.repos.getCombinedStatusForRef({ owner: t.owner, repo: t.repo, ref: sha, per_page: 100 })).data.statuses;
+    } catch (e) {
+      if ((e as { status?: number }).status !== 403) throw e;
+      return [];
+    }
+    return statuses.map((x) => ({
+      name: x.context, status: x.state === 'pending' ? 'in_progress' : 'completed',
+      conclusion: x.state === 'pending' ? null : x.state, html_url: x.target_url ?? null,
+    }));
   }
 
   /** The worker that holds a PR's branch: its session's. */
@@ -740,6 +786,28 @@ export class GitHub {
     }
   }
 
+  /** The refusal for a session whose starter was taken off AUTH_USERS (DISP-200, DISP-226); null while they may act. */
+  private starterRemoved(s: Session): IdentityRefusal | null {
+    const id = this.identityOf(s);
+    return isRefusal(id) && id.code === 'user_removed' ? id : null;
+  }
+
+  /** When auto-merge first saw a PR head with no checks, by `prId:sha`. */
+  private noChecksSince = new Map<string, number>();
+
+  /**
+   * A head with no checks yet in a repo whose PRs had checks before: they may still start, for
+   * CHECKS_MAY_START_MS after auto-merge first saw it. A repo without CI merges at once.
+   */
+  private checksMayStart(repo: Repo, pr: PullRequest): boolean {
+    const hasCi = this.store.prs({ repo_id: repo.id }).some((p) => p.id !== pr.id && p.ci_state !== null && p.ci_state !== 'none');
+    if (!hasCi) return false;
+    const key = `${pr.id}:${pr.head_sha}`;
+    const since = this.noChecksSince.get(key) ?? Date.now();
+    this.noChecksSince.set(key, since);
+    return Date.now() - since < CHECKS_MAY_START_MS;
+  }
+
   private async autoMerge(s: Session, pr: PullRequest) {
     const how = s.options.auto_merge;
     if (how === 'off' || pr.state !== 'open') return;
@@ -758,6 +826,9 @@ export class GitHub {
       this.tell(s.id);
       this.queueMergeNotice(s, { stopped: label, why, prId: pr.id });
     };
+    // a starter taken off AUTH_USERS: nothing merges or deploys for them, in any kind of repo (DISP-226)
+    const removed = this.starterRemoved(s);
+    if (removed) return note(removed.message);
     // only a clean turn end merges by itself: not one that an error or an interrupted wait for the usage limit ended (DISP-108)
     if (s.unclean) return note(`${UNCLEAN}: ${s.unclean}. It waits for you`);
     if (pr.blocked?.startsWith(UNCLEAN)) {
@@ -766,7 +837,8 @@ export class GitHub {
     }
     if (pr.mergeable === null) return; // GitHub is still computing it
     if (pr.mergeable === false) return note('it has merge conflicts');
-    // GitHub refused to merge this head already (DISP-209): no more calls until the head moves
+    // GitHub refused to merge this head already (DISP-209), or the merge failed here (DISP-233):
+    // no more tries until the head moves (the owner's own merge is not held back)
     const refusedKey = `${pr.id}:${pr.head_sha}:refused`;
     if (this.autoMergeNoted.has(refusedKey)) return;
     const repo = this.store.repo(pr.repo_id)!;
@@ -789,9 +861,17 @@ export class GitHub {
       }
     }
     const checks = pr.head_sha && !pr.local ? await this.checkRuns(s, repo, pr.head_sha) : [];
+    if (pr.head_sha && !pr.local) {
+      const ci = ciStateOf(checks);
+      this.store.setPrMeta(pr.id, { ci_state: ci });
+      // a head pushed just before the turn ended: its runs may not be registered yet (DISP-231)
+      if (ci === 'none' && this.checksMayStart(repo, pr)) return;
+    }
     if (checks.some((c) => c.status !== 'completed')) return; // wait for them
     const bad = checks.filter((c) => !['success', 'neutral', 'skipped'].includes(c.conclusion ?? ''));
     if (bad.length) return note(`checks failed (${bad.map((c) => c.name).join(', ')})`);
+    // GitHub sees a status or check that is not green, which this read did not (DISP-231)
+    if (pr.mergeable_state === 'unstable') return note('GitHub says its checks are not all green (unstable)');
     let res: Awaited<ReturnType<GitHub['merge']>>;
     try {
       // pinned to the head whose checks were read (DISP-210): GitHub refuses it if the branch moved on
@@ -806,7 +886,10 @@ export class GitHub {
       this.autoMergeNoted.add(refusedKey);
       return note(`GitHub refused the merge: ${(e as Error).message.slice(0, 200)}`);
     }
-    if (!res.ok) return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
+    if (!res.ok) {
+      this.autoMergeNoted.add(refusedKey);
+      return note(res.conflict ? 'local merge hit conflicts' : `local merge failed: ${res.output.slice(0, 200)}`);
+    }
     this.store.addEvent(s.id, { kind: 'system', text: `Auto-merged into ${repoName}: ${ref} (${how === 'github' && !pr.local ? 'squash on GitHub' : 'local merge'}).` });
     this.tell(s.id);
     this.queueMergeNotice(s, { merged: label, deploys: !!repo.deploy_command });
@@ -1097,6 +1180,17 @@ export class GitHub {
     const { data } = await this.mustClient(acting!.octo, repo).pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
     return this.record(s, repo, data as GhPull);
   }
+}
+
+/** Page after page of a GitHub list, until a short page or the total (at most 10 pages). */
+async function allPages<T>(perPage: number, read: (page: number) => Promise<{ items: T[]; total?: number }>): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const { items, total } = await read(page);
+    out.push(...items);
+    if (items.length < perPage || out.length >= (total ?? out.length)) break;
+  }
+  return out;
 }
 
 /** A commit's author and committer: the user's own name and email (null: the server's, as before). */

@@ -14,7 +14,7 @@ const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: 
  * A server with a hosted repo (one commit on main), a work session on it, and the session's branch
  * pushed into the server's repo, as a worker would. `gh` is a folder standing in for github.com.
  */
-async function setup(opts: { upstream?: boolean; check?: string; options?: Partial<RunOptions> } = {}) {
+async function setup(opts: { upstream?: boolean; check?: string; options?: Partial<RunOptions>; startedBy?: string } = {}) {
   const gh = mkdtempSync(join(tmpdir(), 'dsp-hrgh-'));
   const upstream = join(gh, 'me', 'app.git');
   execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', upstream]);
@@ -30,7 +30,7 @@ async function setup(opts: { upstream?: boolean; check?: string; options?: Parti
   await s.ctx.hosted.importFrom(repo, seed, {});
   repo = s.ctx.store.repo(repo.id)!;
   const item = (await s.call('POST', '/projects/HV/items', { title: 'Add b' })).data;
-  const session = s.ctx.store.createSession({ started_by: OWNER, worker_id: s.ctx.store.defaultWorkerId(),
+  const session = s.ctx.store.createSession({ started_by: opts.startedBy ?? OWNER, worker_id: s.ctx.store.defaultWorkerId(),
     project_id: p.id, kind: 'work', title: 'Add b', status: 'idle', force_plan: false, branch: 'dispatch/hv-1-add-b',
     initial_prompt: '', source_id: null, item_ids: [item.id], options: { ...DEFAULT_RUN_OPTIONS, ...opts.options },
   });
@@ -307,6 +307,58 @@ describe('review and merge of hosted repos in Dispatch', () => {
       expect(git(upstream, 'rev-parse', 'refs/heads/main')).toBe(git(bare, 'rev-parse', 'refs/heads/main'));
       expect(s.ctx.store.prs({ session_id: session.id }).find((p) => p.number === 12)?.state).toBe('merged');
       expect(deploys).toHaveLength(1);
+    } finally {
+      await s.app.close();
+    }
+  });
+});
+
+describe('auto-merge safety in hosted repos', () => {
+  it('nothing merges or deploys for a starter taken off AUTH_USERS (DISP-226)', async () => {
+    const { s, repo, session } = await setup({ startedBy: 'bob', options: { auto_merge: 'local' } });
+    try {
+      s.ctx.store.updateRepo(repo.id, { deploy_command: 'npm run deploy' });
+      const sent: string[] = [];
+      s.ctx.hub.send = ((_w: unknown, m: { t: string }) => { sent.push(m.t); return true; }) as typeof s.ctx.hub.send;
+      const main = git(s.ctx.hosted.dir(repo), 'rev-parse', 'refs/heads/main');
+      s.ctx.cfg.authUsers = [OWNER]; // the owner takes bob off the list
+      const [row] = await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(row.state).toBe('open');
+      expect(git(s.ctx.hosted.dir(repo), 'rev-parse', 'refs/heads/main')).toBe(main);
+      expect(sent).not.toContain('deploy');
+      expect(s.ctx.store.pr(row.id)!.blocked).toMatch(/bob may no longer use this install/);
+      // back on the list: the next sync merges
+      s.ctx.cfg.authUsers = [OWNER, 'bob'];
+      await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(s.ctx.store.pr(row.id)!.state).toBe('merged');
+      expect(sent).toContain('deploy');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a failed merge on the worker is tried once per head, not at every poll (DISP-233)', async () => {
+    const { s, session, w } = await setup({ check: 'npm test', options: { auto_merge: 'local' } });
+    try {
+      let runs = 0;
+      s.ctx.hub.cmd = (async (_w: unknown, cmd: { c: string }) => {
+        if (cmd.c === 'merge_local') runs++;
+        return { ok: false, output: '1 test failed' };
+      }) as typeof s.ctx.hub.cmd;
+      for (let i = 0; i < 3; i++) await s.ctx.github.syncSession(s.ctx.store.session(session.id)!); // the poller
+      expect(runs).toBe(1);
+      const pr = s.ctx.store.prs({ session_id: session.id })[0];
+      expect(pr.blocked).toBe('local merge failed: 1 test failed');
+      expect(s.ctx.notifier.sent.filter((n) => n.body.includes('1 test failed'))).toHaveLength(1);
+      // the agent pushes a fix: the new head is tried
+      writeFileSync(join(w, 'b.txt'), 'three\n');
+      git(w, 'commit', '--quiet', '-am', 'fix');
+      git(w, 'push', '--quiet', 'origin', session.branch!);
+      for (let i = 0; i < 2; i++) await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(runs).toBe(2);
+      // the owner merges by hand: not held back by the remembered failure
+      await s.ctx.github.merge(pr.id, 'local', 'merge');
+      expect(runs).toBe(3);
     } finally {
       await s.app.close();
     }
