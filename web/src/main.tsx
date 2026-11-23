@@ -8,7 +8,7 @@ import { api, ApiError, type Me } from './api.ts';
 import { connectLive, liveHealthy } from './live.ts';
 import { trackPresence } from './presence.ts';
 import { initTheme } from './theme.ts';
-import { Layout } from './components/Layout.tsx';
+import { layoutRoute } from './components/Layout.tsx';
 import { Login, SignedOut } from './pages/Login.tsx';
 import { Pair } from './pages/Pair.tsx';
 import { Inbox } from './pages/Inbox.tsx';
@@ -46,26 +46,23 @@ const qc = new QueryClient({
 });
 
 const router = createBrowserRouter([
-  {
-    element: <Layout />,
-    children: [
-      { path: '/', element: <Inbox /> },
-      { path: '/activity', element: <Activity /> },
-      { path: '/projects', element: <Projects /> },
-      { path: '/p/:key', element: <Project /> },
-      { path: '/p/:key/costs', element: <ProjectCostsPage /> },
-      { path: '/costs', element: <Costs /> },
-      { path: '/items/:id', element: <ItemDetail /> },
-      { path: '/s/:id', element: <SessionView /> },
-      { path: '/sources/:id', element: <SourceView /> },
-      { path: '/pr/:id', element: <PrView /> },
-      { path: '/settings', element: <Settings /> },
-      { path: '/settings/worker-setup', element: <WorkerSetup /> },
-      { path: '/assistant', element: <Assistant /> },
-      { path: '/items/:id/discuss', element: <Discuss /> },
-      { path: '/files/:key', element: <FileView /> },
-    ],
-  },
+  layoutRoute([
+    { path: '/', element: <Inbox /> },
+    { path: '/activity', element: <Activity /> },
+    { path: '/projects', element: <Projects /> },
+    { path: '/p/:key', element: <Project /> },
+    { path: '/p/:key/costs', element: <ProjectCostsPage /> },
+    { path: '/costs', element: <Costs /> },
+    { path: '/items/:id', element: <ItemDetail /> },
+    { path: '/s/:id', element: <SessionView /> },
+    { path: '/sources/:id', element: <SourceView /> },
+    { path: '/pr/:id', element: <PrView /> },
+    { path: '/settings', element: <Settings /> },
+    { path: '/settings/worker-setup', element: <WorkerSetup /> },
+    { path: '/assistant', element: <Assistant /> },
+    { path: '/items/:id/discuss', element: <Discuss /> },
+    { path: '/files/:key', element: <FileView /> },
+  ]),
 ]);
 
 // a tapped notification: the service worker asks this window to show the chat it is about

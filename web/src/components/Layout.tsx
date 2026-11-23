@@ -1,6 +1,6 @@
 import { ProjectBadge, ProjectKey } from './ProjectBadge.tsx';
 import type { ReactNode } from 'react';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router';
+import { Link, Outlet, useLocation, useNavigate, useRouteError, type RouteObject } from 'react-router';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { savedScroll, saveScroll, tabTarget, trackLocation, type Tab } from '../nav.ts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +46,32 @@ function TabLink({ tab, current, label, icon, badge, badgeTone = 'wait' }: { tab
       </span>
       {label}
     </a>
+  );
+}
+
+/**
+ * The app's pages inside the Layout. A page that throws while it renders (or loads) shows
+ * PageError in the Layout's place for pages, so the tab bar and the menu stay (DISP-223). The
+ * Layout's own errorElement is for an error in the Layout itself.
+ */
+export const layoutRoute = (pages: RouteObject[]): RouteObject => ({
+  element: <Layout />,
+  errorElement: <PageError />,
+  children: [{ errorElement: <PageError />, children: pages }],
+});
+
+/** What a page shows instead of itself when it threw. */
+export function PageError() {
+  const error = useRouteError();
+  const nav = useNavigate();
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  return (
+    <div role="alert" className="p-4 max-w-xl">
+      <h1 className="text-[17px] font-semibold mb-1">This page could not be shown</h1>
+      <p className="text-muted text-[14px]">Something on it broke the page. The other tabs still work.</p>
+      {message && <p className="text-bad text-sm my-2 break-words">{message}</p>}
+      <button type="button" className="text-accent font-medium underline text-[14px]" onClick={() => nav(-1)}>Back</button>
+    </div>
   );
 }
 
