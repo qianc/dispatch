@@ -25,7 +25,7 @@ async function hostedServer(extraEnv: Record<string, string> = {}) {
   const s = await startServer({ DATA_DIR: mkdtempSync(join(tmpdir(), 'dsp-p2r-')), ...extraEnv });
   await s.call('POST', '/projects', { key: 'PR2', name: 'Phase 2 review' });
   const repo = (await s.call('POST', '/projects/PR2/repos', { hosted: { name: 'app' } })).data as Repo;
-  const secret = s.ctx.workers.create('linux', '', OWNER).secret;
+  const { worker, secret } = s.ctx.workers.create('linux', '', OWNER);
   const url = `${s.base}/git/r${repo.id}.git`;
   const w = mkdtempSync(join(tmpdir(), 'dsp-p2w-'));
   const auth = ['-c', `http.extraHeader=Authorization: Bearer ${secret}`];
@@ -33,8 +33,10 @@ async function hostedServer(extraEnv: Record<string, string> = {}) {
   writeFileSync(join(w, 'a.txt'), 'one\n');
   git(w, 'add', '.');
   git(w, 'commit', '--quiet', '-m', 'one');
-  expect((await gitAsync(w, ...auth, 'push', '--quiet', 'origin', 'main')).code).toBe(0);
-  return { s, repo, secret, url, w, auth };
+  // main moves only in a Dispatch merge on this worker (DISP-224)
+  const pushMain = (...a: string[]) => s.ctx.hosted.whileMerging(repo, worker.id, () => gitAsync(w, ...auth, 'push', '--quiet', ...a, 'origin', 'main'));
+  expect((await pushMain()).code).toBe(0);
+  return { s, repo, secret, url, w, auth, worker, pushMain };
 }
 
 describe('phase 2 review fixes', () => {
@@ -55,12 +57,12 @@ describe('phase 2 review fixes', () => {
   });
 
   it('#2 a clone of a large repo streams (and works)', async () => {
-    const { s, url, w, auth } = await hostedServer();
+    const { s, url, w, auth, pushMain } = await hostedServer();
     try {
       writeFileSync(join(w, 'big.bin'), randomBytes(6 * 1024 * 1024));
       git(w, 'add', '.');
       git(w, 'commit', '--quiet', '-m', 'big');
-      expect((await gitAsync(w, ...auth, 'push', '--quiet', 'origin', 'main')).code).toBe(0);
+      expect((await pushMain()).code).toBe(0);
       const c = mkdtempSync(join(tmpdir(), 'dsp-p2c-'));
       expect((await gitAsync(c, ...auth, 'clone', '--quiet', url, '.')).code).toBe(0);
       expect(git(c, 'log', '--oneline', '-1')).toContain('big');
@@ -107,12 +109,14 @@ describe('phase 2 review fixes', () => {
   });
 
   it('#4 the default branch cannot be force-pushed or deleted, and ref changes are logged', async () => {
-    const { s, repo, w, auth } = await hostedServer();
+    const { s, repo, w, auth, worker, pushMain } = await hostedServer();
     try {
       git(w, 'commit', '--quiet', '--amend', '-m', 'rewritten');
-      const force = await gitAsync(w, ...auth, 'push', '--quiet', '--force', 'origin', 'main');
+      // not even during a merge
+      const force = await pushMain('--force');
       expect(force.code).not.toBe(0);
-      const del = await gitAsync(w, ...auth, 'push', '--quiet', 'origin', ':main');
+      expect(force.out).toMatch(/only moves forward/);
+      const del = await s.ctx.hosted.whileMerging(repo, worker.id, () => gitAsync(w, ...auth, 'push', '--quiet', 'origin', ':main'));
       expect(del.code).not.toBe(0);
       // other branches: normal, also deleting them
       git(w, 'checkout', '--quiet', '-b', 'topic');

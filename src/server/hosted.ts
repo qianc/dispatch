@@ -52,14 +52,19 @@ async function must(gitDir: string | null, args: string[], env: Env = {}, cwd?: 
 
 /**
  * pre-receive hook: the default branch only moves forward. A push cannot rewrite it (force-push)
- * or delete it; other branches are free. The server's own merges (update-ref) do not run hooks.
+ * or delete it; other branches are free. A push may move it only while the server runs a merge on
+ * the pushing worker (DISPATCH_ALLOW_DEFAULT=1, set by routes/git.ts, DISP-224). The server's own
+ * merges (update-ref) do not run hooks.
  */
 const GUARD_HOOK = `#!/bin/sh
-# Dispatch: the default branch only moves forward (no force-push, no delete)
+# Dispatch: the default branch only moves forward (no force-push, no delete), and only in a Dispatch merge
 default=$(git symbolic-ref --short HEAD)
 while read old new ref; do
   [ "$ref" = "refs/heads/$default" ] || continue
   case "$new" in *[!0]*) ;; *) echo "Dispatch: $default cannot be deleted" >&2; exit 1;; esac
+  if [ "$DISPATCH_ALLOW_DEFAULT" != 1 ]; then
+    echo "Dispatch: $default changes only through a merge in Dispatch" >&2; exit 1
+  fi
   case "$old" in *[!0]*) ;; *) continue;; esac
   if ! git merge-base --is-ancestor "$old" "$new"; then
     echo "Dispatch: $default only moves forward here (no force-push)" >&2; exit 1
@@ -68,7 +73,10 @@ done
 exit 0
 `;
 
-export type MergeResult = { ok: true; sha: string } | { ok: false; conflict: boolean; output: string };
+/** `moved`: the branch is not at the commit the caller looked at (DISP-232). */
+export type MergeResult = { ok: true; sha: string } | { ok: false; conflict: boolean; output: string; moved?: boolean };
+
+export const BRANCH_MOVED = 'The branch has new commits since it was looked at; nothing was merged.';
 
 export class HostedGit {
   readonly root: string;
@@ -95,6 +103,31 @@ export class HostedGit {
   }
 
   private safe = new Set<number>();
+  /** Merges running on a worker, per repo: worker id → how many (DISP-224). */
+  private merging = new Map<number, Map<number, number>>();
+
+  /**
+   * While `fn` runs, `workerId` may push the repo's default branch (a merge with a check command
+   * runs on the session's worker, which pushes the result here). Other pushes to it are refused.
+   */
+  async whileMerging<T>(repo: Pick<Repo, 'id'>, workerId: number, fn: () => Promise<T>): Promise<T> {
+    const byWorker = this.merging.get(repo.id) ?? new Map<number, number>();
+    this.merging.set(repo.id, byWorker);
+    byWorker.set(workerId, (byWorker.get(workerId) ?? 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      const n = (byWorker.get(workerId) ?? 1) - 1;
+      if (n > 0) byWorker.set(workerId, n);
+      else byWorker.delete(workerId);
+      if (!byWorker.size && this.merging.get(repo.id) === byWorker) this.merging.delete(repo.id);
+    }
+  }
+
+  /** May this worker's push move the default branch now (whileMerging)? */
+  mayPushDefault(repo: Pick<Repo, 'id'>, workerId: number) {
+    return (this.merging.get(repo.id)?.get(workerId) ?? 0) > 0;
+  }
 
   /** The guard hook and a ref log, also for repos made before they existed (once per process). */
   async ensureSafe(repo: Pick<Repo, 'id'>) {
@@ -154,7 +187,9 @@ export class HostedGit {
   }
 
   /** Keep the data when a repo is removed from a project. */
-  async retire(repo: Repo) {
+  async retire(repo: Pick<Repo, 'id'>) {
+    // a new repo with this id (an older database without AUTOINCREMENT) gets its own guard hook (DISP-238)
+    this.safe.delete(repo.id);
     if (this.exists(repo)) await rename(this.dir(repo), join(this.root, `r${repo.id}.deleted-${Date.now()}.git`));
   }
 
@@ -206,13 +241,17 @@ export class HostedGit {
    * Merge a branch into the default branch without a working tree: merge-tree makes the result,
    * commit-tree the commit, and update-ref moves the branch only if nobody else moved it meanwhile.
    */
-  /** `author`: GIT_AUTHOR_* / GIT_COMMITTER_* for the merge commit (the session's user, DISP-63); else the server's. */
-  merge(repo: Repo, branch: string, message: string, method: 'merge' | 'squash', author?: Env): Promise<MergeResult> {
+  /**
+   * `author`: GIT_AUTHOR_* / GIT_COMMITTER_* for the merge commit (the session's user, DISP-63); else the server's.
+   * `sha`: the branch commit the caller looked at; a branch that moved on since is not merged (DISP-232).
+   */
+  merge(repo: Repo, branch: string, message: string, method: 'merge' | 'squash', author?: Env, sha?: string): Promise<MergeResult> {
     return this.serial(repo, async () => {
       const dir = this.dir(repo);
       const baseRef = this.base(repo);
       const base = await must(dir, ['rev-parse', '--verify', baseRef]);
       const head = await must(dir, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+      if (sha && head !== sha) return { ok: false, conflict: false, moved: true, output: BRANCH_MOVED };
       if ((await git(dir, ['merge-base', '--is-ancestor', head, base])).code === 0) return { ok: true, sha: base };
       const mt = await git(dir, ['merge-tree', '--write-tree', '--name-only', base, head]);
       if (mt.code === 1) return { ok: false, conflict: true, output: mt.out.trim() };

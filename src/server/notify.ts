@@ -1,4 +1,5 @@
 import webpush from 'web-push';
+import { pushEndpointProblem } from './pushEndpoint.ts';
 import type { Bus } from './bus.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
@@ -66,6 +67,9 @@ export class Notifier {
 
   /** Sends one push; tests replace it. */
   deliver = async (endpoint: string, keys: { p256dh: string; auth: string }, payload: string) => {
+    // checked again: a name can resolve elsewhere now, and rows from before the check exist (DISP-225)
+    const problem = await pushEndpointProblem(endpoint);
+    if (problem) throw new Error(`push endpoint refused: ${problem}`);
     await webpush.sendNotification({ endpoint, keys }, payload, { TTL: 3600 });
   };
 

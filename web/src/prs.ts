@@ -25,12 +25,13 @@ type MergeMethod = 'squash' | 'merge' | 'rebase';
 
 /**
  * What the Merge button sends. A local review merges on the worker. A PR with no session has no
- * worker: it merges on GitHub, and only at the commit the page shows.
+ * worker: it merges on GitHub. Each merges only the commit the page shows (DISP-232).
  */
 export function mergeBody(pr: Pick<PullRequest, 'local' | 'session_id' | 'head_sha'>, how: MergeHow, method: MergeMethod): { how: MergeHow; method: MergeMethod; sha?: string } {
-  if (pr.local) return { how: 'local', method };
-  if (pr.session_id === null) return { how: 'github', method, ...(pr.head_sha ? { sha: pr.head_sha } : {}) };
-  return { how, method };
+  const sha = pr.head_sha ? { sha: pr.head_sha } : {};
+  if (pr.local) return { how: 'local', method, ...sha };
+  if (pr.session_id === null) return { how: 'github', method, ...sha };
+  return { how, method, ...sha };
 }
 
 /** An open PR page shows one commit's diff: true when the PR is not at that commit, or in that state, any more. */

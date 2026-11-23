@@ -285,12 +285,14 @@ describe('review and merge of hosted repos in Dispatch', () => {
       });
       // the worker's merge: into the hosted repo's main
       const worker: string[] = [];
-      s.ctx.hub.cmd = (async (_w: unknown, cmd: { c: string; branch: string }) => {
+      s.ctx.hub.cmd = (async (w: number, cmd: { c: string; branch: string }) => {
         worker.push(cmd.c);
         const m = mkdtempSync(join(tmpdir(), 'dsp-hrm-'));
         git(m, 'clone', '--quiet', bare, '.');
         git(m, 'merge', '--quiet', '--no-ff', '-m', 'merge', `origin/${cmd.branch}`);
-        git(m, 'push', '--quiet', 'origin', 'main');
+        // as routes/git.ts lets it through: main moves only during the server's merge job on this worker (DISP-224)
+        const allow = s.ctx.hosted.mayPushDefault(repo, w) ? { DISPATCH_ALLOW_DEFAULT: '1' } : {};
+        execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: m, env: { ...ENV, ...allow } });
         return { ok: true };
       }) as typeof s.ctx.hub.cmd;
       const deploys: unknown[] = [];
@@ -307,6 +309,52 @@ describe('review and merge of hosted repos in Dispatch', () => {
       expect(git(upstream, 'rev-parse', 'refs/heads/main')).toBe(git(bare, 'rev-parse', 'refs/heads/main'));
       expect(s.ctx.store.prs({ session_id: session.id }).find((p) => p.number === 12)?.state).toBe('merged');
       expect(deploys).toHaveLength(1);
+    } finally {
+      await s.app.close();
+    }
+  });
+});
+
+describe('a merge takes the commit that was reviewed (DISP-232)', () => {
+  it('a hosted review whose branch moved on after it was opened is refused (409), and main stays', async () => {
+    const { s, repo, session, w } = await setup();
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      const reviewed = row.head_sha!;
+      // the agent's next turn pushes another commit within the poll window
+      writeFileSync(join(w, 'c.txt'), 'unreviewed\n');
+      git(w, 'add', '.');
+      git(w, 'commit', '--quiet', '-m', 'later');
+      git(w, 'push', '--quiet', 'origin', session.branch!);
+      const bare = s.ctx.hosted.dir(repo);
+      const main = git(bare, 'rev-parse', 'refs/heads/main');
+      const r = await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge', sha: reviewed });
+      expect(r.status).toBe(409);
+      expect(git(bare, 'rev-parse', 'refs/heads/main')).toBe(main);
+      expect(s.ctx.store.pr(row.id)!.state).toBe('open');
+      // once the page shows the new head, it merges
+      const [now] = await s.ctx.github.syncSession(s.ctx.store.session(session.id)!);
+      expect(now.head_sha).not.toBe(reviewed);
+      expect((await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge', sha: now.head_sha })).status).toBe(200);
+      expect((await s.ctx.hosted.readFile(repo, 'c.txt')).toString()).toBe('unreviewed\n');
+    } finally {
+      await s.app.close();
+    }
+  });
+
+  it('a merge on the worker gets the reviewed commit, and a moved branch is refused (409)', async () => {
+    const { s, session } = await setup({ check: 'npm test' });
+    try {
+      const [row] = await s.ctx.github.syncSession(session);
+      const sent: { c: string; sha?: string }[] = [];
+      s.ctx.hub.cmd = (async (_w: unknown, cmd: { c: string; sha?: string }) => {
+        sent.push(cmd);
+        return { ok: false, moved: true, output: 'moved' };
+      }) as typeof s.ctx.hub.cmd;
+      const r = await s.call('POST', `/prs/${row.id}/merge`, { how: 'local', method: 'merge', sha: row.head_sha });
+      expect(r.status).toBe(409);
+      expect(sent).toEqual([expect.objectContaining({ c: 'merge_local', sha: row.head_sha })]);
+      expect(s.ctx.store.pr(row.id)!.state).toBe('open');
     } finally {
       await s.app.close();
     }

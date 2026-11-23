@@ -162,6 +162,8 @@ export interface MergeResult {
   ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number };
   /** the check did not run: the session's check already passed on exactly the merged tree */
   check_reused?: boolean;
+  /** nothing merged: the branch is not at the commit the caller looked at (DISP-232) */
+  moved?: boolean;
 }
 
 export interface Leftover {
@@ -551,14 +553,19 @@ export class Workspaces {
    * Merge `branch` into the default branch locally, run the check command, push. The repo is
    * locked only for the merge and the push: a check can run for an hour, and the repo's diffs,
    * branch status and pushes must not wait for it. If the default branch moved on meanwhile,
-   * nothing is pushed: the check did not test what would land.
+   * nothing is pushed: the check did not test what would land. `sha`: the branch commit the caller
+   * looked at; a branch that is elsewhere now is not merged (DISP-232).
    */
-  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = [], cred?: GithubCred | null): Promise<MergeResult> {
+  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = [], cred?: GithubCred | null, sha?: string): Promise<MergeResult> {
     const tmp = join(this.root, 'merge', randomUUID());
     const prep = await this.withRepo(repo, async () => {
-      const { dir, base, head } = await this.refs(repo, branch);
+      const refs = await this.refs(repo, branch);
+      const { dir, base } = refs;
       await mkdir(join(this.root, 'merge'), { recursive: true });
       const baseSha = await git(['rev-parse', base], dir);
+      // the commit, not the ref: what is checked and merged is the commit looked at here
+      const head = (await git(['rev-parse', '--verify', `${refs.head}^{commit}`], dir)).trim();
+      if (sha && head !== sha) return { dir, base, baseSha, failed: { ok: false, moved: true, output: `${branch} has new commits since it was looked at; nothing was merged.` } as MergeResult };
       // only the generate command writes its files (DISP-56): a branch that edits them is refused
       const paths = repo.generated_paths ?? [];
       const edited = paths.length ? (await git(['diff', '--name-only', '--no-renames', `${baseSha}...${head}`, '--', ...paths], dir)).split('\n').filter(Boolean) : [];

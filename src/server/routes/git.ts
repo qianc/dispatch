@@ -41,6 +41,8 @@ export function gitRoutes(app: FastifyInstance, { cfg, store, workers, hosted }:
         QUERY_STRING: query,
         CONTENT_TYPE: req.headers['content-type'] ?? '',
         REMOTE_USER: `worker:${worker.name}`,
+        // the guard hook lets a push move the default branch only during a Dispatch merge on this worker (DISP-224)
+        ...(hosted.mayPushDefault(repo, worker.id) ? { DISPATCH_ALLOW_DEFAULT: '1' } : {}),
         REMOTE_ADDR: req.ip,
         ...(req.headers['content-encoding'] ? { HTTP_CONTENT_ENCODING: String(req.headers['content-encoding']) } : {}),
         ...(req.headers['git-protocol'] ? { GIT_PROTOCOL: String(req.headers['git-protocol']) } : {}),

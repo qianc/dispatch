@@ -20,6 +20,7 @@ const gitAuth = (cwd: string, token: string | null, ...a: string[]) =>
 describe('git over HTTP for workers', () => {
   let s: Awaited<ReturnType<typeof startServer>>;
   let secret: string;
+  let workerId: number;
   let repoId: number;
   let githubRepoId: number;
   let url: string;
@@ -30,7 +31,7 @@ describe('git over HTTP for workers', () => {
     await s.ctx.hosted.create(repo, 'main');
     repoId = repo.id;
     githubRepoId = s.ctx.store.addRepo(p.id, { github_owner: 'me', github_name: 'gh', default_branch: 'main', check_command: null }).id;
-    secret = s.ctx.workers.create('linux', '', OWNER).secret;
+    ({ secret, worker: { id: workerId } } = s.ctx.workers.create('linux', '', OWNER));
     url = `${s.base}/git/r${repoId}.git`;
   });
   afterAll(() => s.app.close());
@@ -41,7 +42,8 @@ describe('git over HTTP for workers', () => {
     writeFileSync(join(w, 'a.txt'), 'one\n');
     git(w, 'add', '.');
     git(w, 'commit', '--quiet', '-m', 'one');
-    expect((await gitAuth(w, secret, 'push', '--quiet', 'origin', 'main')).code).toBe(0);
+    // main: only while the server runs a merge on this worker (DISP-224)
+    expect((await s.ctx.hosted.whileMerging({ id: repoId }, workerId, () => gitAuth(w, secret, 'push', '--quiet', 'origin', 'main'))).code).toBe(0);
     git(w, 'checkout', '--quiet', '-b', 'dispatch/gh-1-x');
     writeFileSync(join(w, 'b.txt'), 'two\n');
     git(w, 'add', '.');
@@ -52,6 +54,33 @@ describe('git over HTTP for workers', () => {
     const again = mkdtempSync(join(tmpdir(), 'dsp-gh-w2-'));
     expect((await gitAuth(again, s.ctx.workers.legacy() ? 'test-token' : secret, 'clone', '--quiet', url, '.')).code).toBe(0); // the legacy worker too
     expect(git(again, 'log', '--oneline', '-1')).toContain('one');
+  });
+
+  it('refuses a fast-forward of the default branch from a worker with no merge job for the repo (DISP-224)', async () => {
+    const bare = s.ctx.hosted.dir({ id: repoId });
+    const w = mkdtempSync(join(tmpdir(), 'dsp-gh-ff-'));
+    expect((await gitAuth(w, secret, 'clone', '--quiet', url, '.')).code).toBe(0);
+    writeFileSync(join(w, 'sneak.txt'), 'unreviewed\n');
+    git(w, 'add', '.');
+    git(w, 'commit', '--quiet', '-m', 'sneak');
+    const before = git(bare, 'rev-parse', 'refs/heads/main');
+    // any signed-in person can make a worker and use its token
+    const other = s.ctx.workers.create('stranger', '', OWNER);
+    for (const token of [secret, other.secret]) {
+      const r = await gitAuth(w, token, 'push', '--quiet', 'origin', 'HEAD:main');
+      expect(r.code).not.toBe(0);
+      expect(r.out).toMatch(/changes only through a merge in Dispatch/);
+    }
+    // a merge job on another worker, or for another repo, does not open it either
+    const viaOther = await s.ctx.hosted.whileMerging({ id: repoId }, other.worker.id, () => gitAuth(w, secret, 'push', '--quiet', 'origin', 'HEAD:main'));
+    expect(viaOther.code).not.toBe(0);
+    const otherRepo = await s.ctx.hosted.whileMerging({ id: repoId + 1000 }, workerId, () => gitAuth(w, secret, 'push', '--quiet', 'origin', 'HEAD:main'));
+    expect(otherRepo.code).not.toBe(0);
+    expect(git(bare, 'rev-parse', 'refs/heads/main')).toBe(before);
+    // once the merge is over, the window is closed again
+    expect(s.ctx.hosted.mayPushDefault({ id: repoId }, workerId)).toBe(false);
+    // a session branch is still free to push
+    expect((await gitAuth(w, secret, 'push', '--quiet', 'origin', 'HEAD:dispatch/gh-2-y')).code).toBe(0);
   });
 
   it('refuses no token, a wrong token and a personal token', async () => {

@@ -207,6 +207,8 @@ export class AssistantTools {
         const repo = this.store.repos(project.id).find((r) => r.github_owner.toLowerCase() === owner.toLowerCase() && r.github_name.toLowerCase() === name.toLowerCase());
         if (!repo) throw new Error(`${owner}/${name} is not in ${project.key}`);
         this.store.deleteRepo(repo.id);
+        // as the Settings route does: the data stays on disk, renamed out of the next repo's way (DISP-238)
+        if (repo.kind === 'hosted') await this.github.hosted?.retire(repo);
         return `Removed ${owner}/${name} from ${project.key}`;
       }
 
