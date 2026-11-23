@@ -281,7 +281,7 @@ export class Store {
     this.db.run(
       'UPDATE projects SET name = ?, description = ?, default_force_plan = ?, importance_scale = ?, effort_scale = ?, github_account = ?, claude_account = ?, claude_allowed = ?, color = ?, icon = ?, worker_id = ?, placement_md = ?, agents_edit_items = ? WHERE id = ?',
       n.name, n.description, n.default_force_plan ? 1 : 0, JSON.stringify(n.importance_scale), JSON.stringify(n.effort_scale),
-      n.github_account, n.claude_account, n.claude_allowed ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, n.agents_edit_items ? 1 : 0, id,
+      n.github_account, n.claude_account, n.claude_allowed?.length ? JSON.stringify(n.claude_allowed) : null, n.color, n.icon, n.worker_id, n.placement_md, n.agents_edit_items ? 1 : 0, id,
     );
     return this.project(id)!;
   }
@@ -371,8 +371,12 @@ export class Store {
       n.upstream_owner ?? null, n.upstream_name ?? null, n.deploy_command ?? null, n.generate_command ?? null, n.generated_paths?.length ? JSON.stringify(n.generated_paths) : null, id);
     return this.repo(id)!;
   }
+  /** Merged PRs stay with no repo (DISP-248): releases of the other repos must still see where their items went. */
   deleteRepo(id: number) {
-    this.db.run('DELETE FROM repos WHERE id = ?', id);
+    this.db.tx(() => {
+      this.db.run("DELETE FROM pull_requests WHERE repo_id = ? AND state != 'merged'", id);
+      this.db.run('DELETE FROM repos WHERE id = ?', id);
+    });
   }
 
   // ---------- sources ----------
@@ -1265,10 +1269,10 @@ export class Store {
       : this.db.all<PushSubscription>('SELECT endpoint, p256dh, auth, user FROM push_subscriptions WHERE user = ?', user);
   }
   /** A device subscribes for `user`; subscribing again on the same device (another person signed in there) moves it to them. */
-  addPushSubscription(endpoint: string, p256dh: string, auth: string, ua: string | null, user: string) {
+  addPushSubscription(endpoint: string, p256dh: string, auth: string, user: string) {
     this.db.run(
-      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, user) VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user = excluded.user',
-      endpoint, p256dh, auth, ua, user,
+      'INSERT INTO push_subscriptions (endpoint, p256dh, auth, user) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, user = excluded.user',
+      endpoint, p256dh, auth, user,
     );
   }
   /** Removes the subscription; with `user`, only if it is theirs. Returns whether a row went. */

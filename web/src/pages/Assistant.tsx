@@ -92,7 +92,7 @@ export function Assistant() {
 }
 
 /** Pending messages of an Assistant chat that does not exist yet: they move to it once it does. */
-export const NEW_ASSISTANT = 'assistant:new';
+const NEW_ASSISTANT = 'assistant:new';
 
 export function EmptyChat({ projects, notice, prefill = null, onPrefilled }: { projects: ProjectSummary[]; notice?: ReactNode; prefill?: string | null; onPrefilled?: () => void }) {
   const qc = useQueryClient();

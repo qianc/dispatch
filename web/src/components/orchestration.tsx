@@ -242,7 +242,6 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
       onDone();
     },
   });
-  const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
   // a project in its scope stays listed also when it was disabled since
   const shown = projects.filter((p) => !p.disabled || o.project_keys.includes(p.key));
   return (
@@ -267,22 +266,30 @@ export function OrchestrationSettings({ o, onDone }: { o: Orchestration; onDone:
       <Field label="When a step's batch is done" group hint={mergeHint(o, merge)}>
         <Segmented value={merge} onChange={setMerge} options={opts('auto_merge')} />
       </Field>
-      <Field label="Projects it may work in" group>
-        <div className="flex flex-wrap gap-1.5">
-          {shown.map((p) => {
-            const locked = fixed.includes(p.key);
-            return (
-              <button key={p.key} type="button" role="checkbox" aria-checked={keys.includes(p.key)} disabled={locked} onClick={() => toggle(p.key)}
-                className={cx('rounded-lg border px-2.5 h-8 text-[13px]', keys.includes(p.key) ? 'border-accent bg-accent/15 text-accent' : 'border-line-strong text-fg', locked && 'opacity-70')}>
-                {p.key} <span className="text-muted">{p.name}{locked && ' (a step works here)'}</span>
-              </button>
-            );
-          })}
-        </div>
-      </Field>
+      <ProjectChips projects={shown} keys={keys} setKeys={setKeys} locked={fixed} />
       <ErrorText error={save.error} />
       <Button type="submit" variant="primary" className="w-full" disabled={save.isPending || amount === undefined || !keys.length}>Save</Button>
     </form>
+  );
+}
+
+/** The projects an orchestrator may work in, as chips to tick; a `locked` one (a step works there) can't be taken off. */
+function ProjectChips({ projects, keys, setKeys, locked = [] }: { projects: ProjectSummary[]; keys: string[]; setKeys: (f: (k: string[]) => string[]) => void; locked?: string[] }) {
+  const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
+  return (
+    <Field label="Projects it may work in" group>
+      <div className="flex flex-wrap gap-1.5">
+        {projects.map((p) => {
+          const fixed = locked.includes(p.key);
+          return (
+            <button key={p.key} type="button" role="checkbox" aria-checked={keys.includes(p.key)} disabled={fixed} onClick={() => toggle(p.key)}
+              className={cx('rounded-lg border px-2.5 h-8 text-[13px]', keys.includes(p.key) ? 'border-accent bg-accent/15 text-accent' : 'border-line-strong text-fg', fixed && 'opacity-70')}>
+              {p.key} <span className="text-muted">{p.name}{fixed && ' (a step works here)'}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Field>
   );
 }
 
@@ -379,23 +386,13 @@ export function NewOrchestrationForm({ onDone }: { onDone: () => void }) {
     },
   });
   const problem = orchestrationProblem(goal, keys);
-  const toggle = (key: string) => setKeys((k) => (k.includes(key) ? k.filter((x) => x !== key) : [...k, key]));
   return (
     <form onSubmit={(e) => { e.preventDefault(); if (!problem && amount !== undefined) start.mutate(); }}>
       <p className="text-[13px] text-muted mb-3">An orchestrator plans a larger goal as steps, over one or more projects. You approve the plan; then it starts each step as a batch and goes on by itself when one is merged.</p>
       <Field label="Goal" hint="What should be true at the end. It asks you about the rest.">
         <textarea className={cx(inputCls, 'min-h-28')} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Move sign-in to the new tokens in the app and the admin tool" aria-label="Goal" />
       </Field>
-      <Field label="Projects it may work in" group>
-        <div className="flex flex-wrap gap-1.5">
-          {projects.filter((p) => !p.disabled).map((p) => (
-            <button key={p.key} type="button" role="checkbox" aria-checked={keys.includes(p.key)} onClick={() => toggle(p.key)}
-              className={cx('rounded-lg border px-2.5 h-8 text-[13px]', keys.includes(p.key) ? 'border-accent bg-accent/15 text-accent' : 'border-line-strong text-fg')}>
-              {p.key} <span className="text-muted">{p.name}</span>
-            </button>
-          ))}
-        </div>
-      </Field>
+      <ProjectChips projects={projects.filter((p) => !p.disabled)} keys={keys} setKeys={setKeys} />
       <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted mt-4 mb-2">The orchestrator itself</h3>
       <Field label="Model" group hint="It plans, starts the steps and answers its batches. Default: the server's default model. Your usual choice is in Settings.">
         <Segmented value={model} onChange={(v) => setOwn((o) => ({ ...o, model: v }))} options={opts('orchestratorModel')} />

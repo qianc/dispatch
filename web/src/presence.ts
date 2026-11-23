@@ -5,7 +5,7 @@ import { currentSubscription } from './push.ts';
 /** The server forgets focus after 45 s without a renewal, so a closed app gets notifications again. */
 const RENEW_MS = 20_000;
 
-export const appFocused = () => document.visibilityState === 'visible' && document.hasFocus();
+const appFocused = () => document.visibilityState === 'visible' && document.hasFocus();
 
 export function trackPresence(): () => void {
   let endpoint: string | null = null;

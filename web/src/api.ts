@@ -196,7 +196,6 @@ export interface Accounts {
   assistant_claude_account: string | null;
 }
 
-/** A connected worker that can release one of the project's repos (from its own config). */
 /** A scheduled planner run, with its next run and its last run's session. */
 export type ScheduleView = Schedule & {
   /** the server's time zone: at_time and the runs are in it */

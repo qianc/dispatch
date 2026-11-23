@@ -4,8 +4,8 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { ITEM_STATUSES, type ItemStatus } from '../../src/shared/types.ts';
 import { api, type Item } from './api.ts';
 
-export type ItemView = 'open' | 'closed';
-export const CLOSED_STATUSES: readonly ItemStatus[] = ['done', 'canceled'];
+type ItemView = 'open' | 'closed';
+const CLOSED_STATUSES: readonly ItemStatus[] = ['done', 'canceled'];
 const OPEN_STATUSES = ITEM_STATUSES.filter((s) => !CLOSED_STATUSES.includes(s));
 
 export const itemsKey = (projectId: number | undefined, view: ItemView) => ['items', projectId, view];

@@ -441,7 +441,7 @@ function ItemUpdateCard({ eventId, done, proposal, session, project, readOnly }:
   const show = (field: string, v: unknown): string => {
     if (v === null || v === undefined || (Array.isArray(v) && !v.length)) return '—';
     if (field === 'importance') return project.importance_scale[Number(v) - 1] ?? String(v);
-    if (field === 'effort') return project.effort_scale[Number(v)] ?? String(v);
+    if (field === 'effort') return effortLabel(project, Number(v))!;
     if (field === 'status') return ITEM_STATUS_LABEL[v as keyof typeof ITEM_STATUS_LABEL] ?? String(v);
     if (Array.isArray(v)) return v.join(', ');
     return String(v);

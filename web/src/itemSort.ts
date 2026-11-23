@@ -1,5 +1,5 @@
 export type ItemSort = 'importance-desc' | 'importance-asc' | 'effort-asc' | 'effort-desc' | 'created-desc' | 'created-asc';
-export interface ItemSortOption { value: ItemSort; /** on the button */ short: string; /** in the menu */ label: string }
+interface ItemSortOption { value: ItemSort; /** on the button */ short: string; /** in the menu */ label: string }
 
 export const DEFAULT_ITEM_SORT: ItemSort = 'importance-desc';
 

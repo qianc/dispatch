@@ -9,7 +9,7 @@ import { useVeryWide, useWide } from '../wide.ts';
 import { Icon, icons } from './icons.tsx';
 import { cx } from './ui.tsx';
 import { Notices } from './Notices.tsx';
-import { liveGroups, waitingCount } from '../activity.ts';
+import { liveGroups, OPEN_STATUSES, waitingCount } from '../activity.ts';
 import { byName } from '../projectOrder.ts';
 
 
@@ -88,7 +88,7 @@ export function Layout() {
   // a session whose checks and merge still run does not need you
   const waiting = waitingCount(inbox);
   // same query as the Activity page, so they share one cache entry
-  const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>('/sessions?status=queued,running,waiting_input,idle') });
+  const { data: live = [] } = useQuery({ queryKey: ['sessions', 'live'], queryFn: () => api.get<Session[]>(`/sessions?status=${OPEN_STATUSES}`) });
   const running = live.filter((s) => s.status === 'running').length;
   // same query as the Assistant page, which marks the replies read
   const { data: assistant } = useQuery({ queryKey: ['assistant'], queryFn: () => api.get<AssistantChat>('/assistant') });

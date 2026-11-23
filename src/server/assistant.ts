@@ -1,6 +1,6 @@
 // Tools for the assistant chat: manage projects, repos, items and sources across the whole app.
 // Creating and changing things happens at once; starting agent sessions goes through a proposal card.
-import { dirname, isAbsolute } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { detectScales, type MdSection } from '../shared/markdownSections.ts';
 import { DEFAULT_EFFORT_SCALE, DEFAULT_IMPORTANCE_SCALE, ITEM_STATUSES, OPEN_ITEM_STATUSES, SOURCE_KINDS, tagList, type Project, type Session } from '../shared/types.ts';
@@ -16,7 +16,7 @@ import { isRefusal } from './identity.ts';
 
 /** "https://github.com/o/r(.git)", "git@github.com:o/r.git", "github.com/o/r" or "o/r" → { owner, name } */
 export function parseRepo(input: string): { owner: string; name: string } {
-  const m = input.trim().match(/(?:github\.com[/:])?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+  const m = input.trim().match(/^(?:(?:https?:\/\/)?(?:www\.)?github\.com[/:]|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
   if (!m) throw new Error(`Not a GitHub repo: ${input}. Use owner/name or a github.com URL.`);
   return { owner: m[1], name: m[2] };
 }
@@ -294,7 +294,7 @@ export class AssistantTools {
         const src = p.source as { title: string; body_md: string; reporter?: string | null; version_tag?: string | null; dir?: string };
         // the folder of the imported file; the only place a source gets one (DISP-131). It is a folder
         // on the worker this session runs on, and is read there only (DISP-174)
-        const baseDir = src.dir && isAbsolute(src.dir) ? src.dir : isAbsolute(src.title) ? dirname(src.title) : null;
+        const baseDir = src.dir && isAbsolute(src.dir) ? src.dir : null;
         // several imports from one file (e.g. one per group) share one source
         const source = this.store.sources(project.id).find((x) => x.title === src.title && x.body_md === src.body_md) ??
           this.store.createSource(project.id, {

@@ -2,7 +2,7 @@
 // GitHub call: the person who started it, with their own connection. The install owner may use the
 // env accounts (today's behaviour); a session with no user uses the shared env account. Never
 // another user's token.
-import type { Project } from '../shared/types.ts';
+import type { Project, Repo } from '../shared/types.ts';
 import type { GithubCredential, Identities } from './identities.ts';
 import type { Store } from './store.ts';
 
@@ -48,10 +48,19 @@ export function removedStarter(authUsers: string[], startedBy: string | null): I
   return { refused: true, code: 'user_removed', user: startedBy, message: `${startedBy} may no longer use this install (not in AUTH_USERS), so their sessions do not run.`, connect_url: '/settings' };
 }
 
-/** Does work in this project reach GitHub? GitHub repos, and hosted repos with an upstream, do. */
+/** The GitHub repos a project's work reaches: GitHub repos and hosted repos' upstreams ("owner/name"). */
+export function githubRepos(repos: Repo[]): { owner: string; repo: string }[] {
+  return repos.flatMap((r) => {
+    const kind = r.kind ?? (r.local_path ? 'local' : 'github');
+    if (kind === 'github') return [{ owner: r.github_owner, repo: r.github_name }];
+    if (kind === 'hosted' && r.upstream_owner && r.upstream_name) return [{ owner: r.upstream_owner, repo: r.upstream_name }];
+    return [];
+  });
+}
+
+/** Does work in this project reach GitHub? */
 export function needsGithub(store: Pick<Store, 'repos'>, project: Pick<Project, 'id'> | null | undefined): boolean {
-  if (!project) return false;
-  return store.repos(project.id).some((r) => (r.kind ?? (r.local_path ? 'local' : 'github')) === 'github' || (r.kind === 'hosted' && !!r.upstream_owner && !!r.upstream_name));
+  return !!project && githubRepos(store.repos(project.id)).length > 0;
 }
 
 /** Where to connect GitHub: the OAuth sign-in (back to `to`), else Settings. */

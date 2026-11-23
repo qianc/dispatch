@@ -472,7 +472,8 @@ The sheet shows:
 - a warning when the tags cannot be fetched, or when the worker has no tag for the version in the
   `VERSION` file
 
-An item is in the list once: an item with a release label of any line is not listed, and an item
+An item is in the list once: an item with a release label of any line (a label such as
+`rel:v1.2.0`; a tag like `electron-33.0.1`, with `-` or `_` before the version, is not one) is not listed, and an item
 merged only into another repo of the project is not listed for this one. An item with no merged pull
 request and no release label shows for each repo of the project, so the release session leaves out
 what belongs to another repo.

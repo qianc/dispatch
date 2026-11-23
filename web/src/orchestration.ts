@@ -12,7 +12,7 @@ export const doneCount = (o: Pick<Orchestration, 'steps'>) => o.steps.filter((s)
 export const isOpen = (o: Pick<Orchestration, 'phase'>) => o.phase !== 'done' && o.phase !== 'stopped';
 
 /** The failed step that keeps `step` from starting, directly or through the steps between. */
-export function holderOf(step: OrchestrationStep, o: Pick<Orchestration, 'steps'>): OrchestrationStep | null {
+function holderOf(step: OrchestrationStep, o: Pick<Orchestration, 'steps'>): OrchestrationStep | null {
   const byId = new Map(o.steps.map((s) => [s.id, s]));
   const seen = new Set<number>();
   const find = (s: OrchestrationStep): OrchestrationStep | null => {
@@ -51,7 +51,7 @@ export function stepRight(step: OrchestrationStep, o: Pick<Orchestration, 'steps
   return [child, what].filter(Boolean).join(' ');
 }
 
-export type StepAction = 'retry' | 'skip' | 'open';
+type StepAction = 'retry' | 'skip' | 'open';
 
 /** What the owner can do with a step from its menu. */
 export function stepActions(step: OrchestrationStep, o: Pick<Orchestration, 'phase'>): StepAction[] {
@@ -147,7 +147,7 @@ export function costText(o: Pick<Orchestration, 'cost_usd' | 'cost_limit_usd'>):
   return `$${o.cost_usd.toFixed(2)}${o.cost_limit_usd !== null ? ` of $${o.cost_limit_usd.toFixed(2)}` : ''}`;
 }
 
-export interface LiveRow { s: Session; /** its batches that need the owner himself: always shown */ needs: Session[]; /** its other batches: folded */ children: Session[] }
+interface LiveRow { s: Session; /** its batches that need the owner himself: always shown */ needs: Session[]; /** its other batches: folded */ children: Session[] }
 
 /**
  * Activity's Live list with each orchestrator's batches under it. A batch whose orchestrator is in

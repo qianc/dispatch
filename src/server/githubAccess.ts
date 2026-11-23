@@ -2,10 +2,10 @@
 // whether the caller can start work there. With `verify`, each account's permission on each of the
 // project's GitHub repos is asked of GitHub (as that account), and kept 10 minutes. No token leaves.
 import type { Octokit } from '@octokit/rest';
-import type { GithubAccess, GithubAccessAccount, GithubPermission, Project, Repo } from '../shared/types.ts';
+import type { GithubAccess, GithubAccessAccount, GithubPermission, Project } from '../shared/types.ts';
 import type { GitHub } from './github.ts';
 import type { Identities } from './identities.ts';
-import { isRefusal, isRemovedUser, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
+import { githubRepos, isRefusal, isRemovedUser, needsGithub, type GithubIdentity, type IdentityRefusal } from './identity.ts';
 import type { Store } from './store.ts';
 
 const CACHE_MS = 10 * 60_000;
@@ -19,16 +19,6 @@ export interface GithubAccessDeps {
   authUsers: string[];
   /** as whom `user` acts in `project` (resolveGithubIdentity) */
   identity: (user: string | null, project: Project) => GithubIdentity | IdentityRefusal;
-}
-
-/** The GitHub repos a project's work reaches: GitHub repos and hosted repos' upstreams ("owner/name"). */
-function githubRepos(repos: Repo[]): { owner: string; repo: string }[] {
-  return repos.flatMap((r) => {
-    const kind = r.kind ?? (r.local_path ? 'local' : 'github');
-    if (kind === 'github') return [{ owner: r.github_owner, repo: r.github_name }];
-    if (kind === 'hosted' && r.upstream_owner && r.upstream_name) return [{ owner: r.upstream_owner, repo: r.upstream_name }];
-    return [];
-  });
 }
 
 /** GitHub's permissions object as one level. */
