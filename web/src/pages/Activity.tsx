@@ -3,7 +3,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@t
 import { searchTerms } from '../../../src/shared/search.ts';
 import type { Orchestration, SessionSearch } from '../../../src/shared/types.ts';
 import { partOfIndex } from '../orchestration.ts';
-import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchQuery, type SessionFilter } from '../activity.ts';
+import { NO_FILTER, OPEN_STATUSES, filtering, recentDiscussions, searchHits, searchQuery, type SessionFilter } from '../activity.ts';
 import { Link } from 'react-router';
 import { api, type FailedSession, type Inbox, type ProjectSummary, type Session } from '../api.ts';
 import { ProjectKey } from '../components/ProjectBadge.tsx';
@@ -199,7 +199,7 @@ function Results({ filter }: { filter: SessionFilter }) {
     getNextPageParam: (last, pages) => (last.has_more ? pages.length * PAGE : undefined),
     placeholderData: keepPreviousData,
   });
-  const hits = data?.pages.flatMap((p) => p.sessions) ?? [];
+  const hits = searchHits(data?.pages ?? []);
   return (
     <Section title={isPending ? 'Searching…' : `Found${hasNextPage ? ` (${hits.length}+)` : ` (${hits.length})`}`}>
       <ErrorText error={error} />
