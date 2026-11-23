@@ -165,6 +165,35 @@ describe('the queue with workers that come and go', () => {
     wb.close();
   });
 
+  it('a lost start that carried a waiting reply sends that reply again on the next hello (DISP-229)', async () => {
+    s.ctx.workers.setDefault(b.id);
+    let wb = await rawWorker(s.port, b.secret);
+    const job = (await s.call('POST', '/projects/QW/batches', { prompt: 'first' })).data;
+    await waitFor(() => wb.starts().includes(job.id), 'started');
+    wb.send({ t: 'status', session_id: job.id, status: 'running', sdk_session_id: 'sdk-7' });
+    wb.send({ t: 'status', session_id: job.id, status: 'idle' });
+    await waitFor(async () => (await get(job.id)).status === 'idle', 'idle');
+    wb.close();
+    await waitFor(() => !s.ctx.hub.isConnected(b.id), 'b gone');
+    expect((await s.call('POST', `/sessions/${job.id}/messages`, { text: 'my reply' })).status).toBe(200);
+
+    // the start with the reply goes out, then is lost: the worker goes before it runs it
+    wb = await rawWorker(s.port, b.secret);
+    await waitFor(() => wb.starts().includes(job.id), 'start with the reply');
+    expect(await get(job.id)).toMatchObject({ status: 'running', pending_prompt: 'my reply' });
+    wb.close();
+    await waitFor(() => !s.ctx.hub.isConnected(b.id), 'b gone again');
+
+    // it comes back without the session: the lost one is resumed with the reply, not the resume note
+    wb = await rawWorker(s.port, b.secret);
+    await waitFor(() => wb.starts().includes(job.id), 'resumed');
+    const start = wb.got.find((m) => m.t === 'start')!;
+    expect(start.spec).toMatchObject({ session_id: job.id, resume: 'sdk-7', prompt: 'my reply', resume_note: null });
+    wb.send({ t: 'status', session_id: job.id, status: 'running', sdk_session_id: 'sdk-7' });
+    await waitFor(async () => (await get(job.id)).pending_prompt === null, 'delivered');
+    wb.close();
+  });
+
   it('a running session whose worker drops shows that it waits for it, and clears when it is back', async () => {
     s.ctx.workers.setDefault(b.id);
     let wb = await rawWorker(s.port, b.secret);

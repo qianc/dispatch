@@ -1087,9 +1087,10 @@ export class Sessions {
         this.setStatus(s.id, 'queued');
         continue;
       }
-      const note = RESUME_NOTE;
+      // a lost start that carried the owner's waiting reply sends that reply again, not the note (DISP-229)
+      const note = s.pending_prompt ? null : RESUME_NOTE;
       this.addEvent(s.id, { kind: 'system', text: 'Worker restarted — session resumed.' });
-      this.sendTurn(workerId, { t: 'start', spec: this.spec(s, note, s.sdk_session_id, note, identity) });
+      this.sendTurn(workerId, { t: 'start', spec: this.spec(s, s.pending_prompt ?? RESUME_NOTE, s.sdk_session_id, note, identity) });
       this.setStatus(s.id, 'running', { waiting_reason: null });
     }
     this.dispatch();
