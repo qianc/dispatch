@@ -90,6 +90,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/orchestrations/:id/stop': 'sessions',
   'POST /api/orchestration-steps/:id/skip': 'sessions',
   'POST /api/orchestration-steps/:id/retry': 'sessions',
+  'POST /api/orchestration-steps/:id/worker': 'sessions',
   'POST /api/projects/:key/releases': 'sessions',
   'POST /api/assistant/messages': 'sessions',
   'POST /api/assistant/new': 'sessions',

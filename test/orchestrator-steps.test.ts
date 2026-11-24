@@ -36,6 +36,21 @@ describe('orchestrator: steps', () => {
     expect(work()[0]).toMatchObject({ worker_id: worker.id, options: { worker_id: worker.id } });
   });
 
+  it('the owner sets the worker of a step that has not started; the orchestrator is told (DISP-254)', async () => {
+    t.s.ctx.workers.create('render', '', OWNER);
+    const p = await t.approved();
+    t.status(p.id, 'running'); t.status(p.id, 'idle');
+    const set = (id: number, worker: string | null) => t.s.call<{ steps: { worker: string | null }[] }>('POST', `/orchestration-steps/${id}/worker`, { worker });
+    expect((await set(p.second.id, 'nope')).status).toBe(400);
+    expect((await set(p.second.id, 'render')).data.steps[1].worker).toBe('render');
+    expect(t.store.step(p.second.id)!.worker).toBe('render');
+    expect(t.events(p.id)).toContain('system: Step 2 set to run on worker render by the owner.');
+    expect(t.events(p.id).some((e) => e.startsWith('system: (From Dispatch') && e.includes('The owner set step 2 ("Use the tokens") to run on worker render.'))).toBe(true);
+    expect((await set(p.second.id, null)).data.steps[1].worker).toBeNull();
+    await t.rpc(p.id, 'start_step', { step_id: p.first.id });
+    expect((await set(p.first.id, 'render')).status).toBe(409);
+  });
+
   it('a step on a worker drops the plugins that worker does not have, and says so (DISP-252)', async () => {
     const { worker } = t.s.ctx.workers.create('render', '', OWNER);
     t.s.ctx.workers.seen(worker.id, { os: 'linux', hostname: 'r', slots: 1, free_slots: 1, claude_accounts: [], github_accounts: [], local_repo_dirs: [], optional_plugins: ['ponytail'] });

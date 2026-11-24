@@ -117,6 +117,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/orchestrations/:id/stop': null,
   'POST /api/orchestration-steps/:id/skip': null,
   'POST /api/orchestration-steps/:id/retry': null,
+  'POST /api/orchestration-steps/:id/worker': null,
   'POST /api/chat-images': null,
   'POST /api/cleanup': null,
   'POST /api/cleanup/check': null,

@@ -785,6 +785,8 @@ export class Store {
   // ---------- orchestrations ----------
   private toStep(r: Row): OrchestrationStep {
     const itemIds = json<number[]>(r.item_ids, []);
+    // in the order of item_ids, so the app can link each key to its item (DISP-255)
+    const keys = new Map(this.itemsByIds(itemIds).map((i) => [i.id, i.key]));
     return {
       id: Number(r.id),
       orchestration_id: Number(r.orchestration_id),
@@ -794,7 +796,7 @@ export class Store {
       project_key: String(r.project_key),
       prompt_md: String(r.prompt_md),
       item_ids: itemIds,
-      item_keys: this.itemsByIds(itemIds).map((i) => i.key),
+      item_keys: itemIds.map((id) => keys.get(id) ?? `deleted item ${id}`),
       worker: (r.worker as string | null) ?? null,
       depends_on: json<number[]>(r.depends_on, []),
       state: r.state as OrchestrationStep['state'],
@@ -927,7 +929,7 @@ export class Store {
     const r = this.db.get(`${STEP_SELECT} WHERE st.child_session_id = ?`, sessionId);
     return r && this.toStep(r);
   }
-  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'deploys_started' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
+  updateStep(id: number, patch: Partial<Pick<OrchestrationStep, 'state' | 'worker' | 'note' | 'child_session_id' | 'seen' | 'deploys' | 'deploys_started' | 'messages_sent' | 'offer' | 'offer_messages' | 'offered_at'>>): OrchestrationStep {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length) {
       this.db.run(`UPDATE orchestration_steps SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`,
