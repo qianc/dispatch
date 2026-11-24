@@ -304,7 +304,7 @@ export const InputCard = memo(function InputCard({ input, readOnly = false }: { 
         </>
       ) : p.kind === 'cross_project' ? (
         <>
-          <div className="text-[12px] font-semibold uppercase tracking-wide text-wait mb-1">Access to project {p.project_key}</div>
+          <div className="text-[12px] font-semibold uppercase tracking-wide text-wait mb-1">{p.action === 'transcript' ? 'Read a session' : `Access to project ${p.project_key}`}</div>
           <div className="text-[14px] font-medium">{crossProjectSummary(p)}</div>
           {p.reason && <p className="mt-1 text-[13px] text-muted">{p.reason}</p>}
           {p.action === 'comment' && (
