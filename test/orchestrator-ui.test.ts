@@ -44,9 +44,9 @@ describe('the orchestration panel', () => {
     expect(text).toContain('AA · BB');
     expect(text).toContain('1 of 3 steps');
     expect(text).toContain('Waiting for #12 (checking, then auto-merge) in AA');
-    expect(text).toMatch(/1 AA Token store AA-1 · #11 done/);
-    expect(text).toMatch(/2 AA Session refresh AA-2 · #12 checking, then auto-merge/);
-    expect(text).toMatch(/3 BB Use the new tokens BB-90 · after 2/);
+    expect(text).toMatch(/1 AA Token store · on default worker AA-1 · #11 done/);
+    expect(text).toMatch(/2 AA Session refresh · on default worker AA-2 · #12 checking, then auto-merge/);
+    expect(text).toMatch(/3 BB Use the new tokens · on default worker BB-90 · after 2/);
     expect(text).toContain('The plan in full');
     expect(text).toMatch(/Pause/);
     expect(text).toMatch(/Stop/);
@@ -84,6 +84,29 @@ describe('the orchestration panel', () => {
     expect(stepActions(step(1, { state: 'done', child_session_id: 9 }), o)).toEqual(['open']);
     expect(stepActions(step(1, { state: 'failed', child_session_id: 9 }), orch({ phase: 'stopped' }))).toEqual(['open']);
     expect(doneCount(orch({ steps: [step(1, { state: 'done' }), step(2, { state: 'skipped' }), step(3)] }))).toBe(2);
+  });
+
+  it('shows the projects in scope and each step\'s worker, the default when it names none (DISP-254)', () => {
+    const text = panel(orch({ steps: [step(1, { worker: 'render' }), step(2)] }));
+    expect(text).toContain('Projects in scope: AA · BB');
+    expect(text).toMatch(/Step 1 · on render/);
+    expect(text).toMatch(/Step 2 · on default worker/);
+  });
+
+  it('a step not started shows what it is set to do, with links to its items and a worker to pick (DISP-254, DISP-255)', () => {
+    const o = orch({ steps: [step(1, { state: 'running', child_session_id: 9 }), step(2, { item_ids: [40, 41], item_keys: ['AA-7', 'AA-8'], prompt_md: 'Keep the old tokens.', depends_on: [1], optional: true })] });
+    const html = renderPage(createElement(ui.StepDetails, { step: o.steps[1], o, mine: true }));
+    const text = textOf(html);
+    expect(html).toContain('href="/items/40"');
+    expect(html).toContain('href="/items/41"');
+    expect(text).toMatch(/AA-7 ?, AA-8/);
+    expect(text).toContain('Keep the old tokens.');
+    expect(text).toContain('step 1 (Step 1)');
+    expect(text).toContain('Yes: the orchestrator may skip it');
+    expect(html).toContain('aria-label="Worker"');
+    // started, or not the caller's: the worker is shown, not picked
+    expect(renderPage(createElement(ui.StepDetails, { step: o.steps[0], o, mine: true }))).not.toContain('aria-label="Worker"');
+    expect(renderPage(createElement(ui.StepDetails, { step: o.steps[1], o, mine: false }))).not.toContain('aria-label="Worker"');
   });
 
   it('a new orchestration needs a goal and a project', () => {

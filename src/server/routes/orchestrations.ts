@@ -1,5 +1,5 @@
 // Orchestrations: start one, read it with its steps, and the owner's actions on it (approve the
-// plan or a change of it, decline a change, pause, resume, stop; skip or retry a step). An orchestration belongs to whoever started it
+// plan or a change of it, decline a change, pause, resume, stop; skip or retry a step, set its worker). An orchestration belongs to whoever started it
 // and starts work as them; everyone can read it.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -76,4 +76,9 @@ export function orchestrationRoutes(app: FastifyInstance, { store, orchestrator,
 
   app.post('/api/orchestration-steps/:id/skip', async (req) => orchestrator.skipStep(stepOf(req).id));
   app.post('/api/orchestration-steps/:id/retry', async (req) => orchestrator.retryStep(stepOf(req).id));
+  // the worker of a step that has not started; null: the default (DISP-254)
+  app.post('/api/orchestration-steps/:id/worker', async (req) => {
+    const { worker } = z.object({ worker: z.string().trim().min(1).nullable() }).parse(req.body ?? {});
+    return orchestrator.setStepWorker(stepOf(req).id, worker);
+  });
 }

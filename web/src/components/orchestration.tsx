@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_RUN_OPTIONS, type Attention, type NotifyOwner, type OrchestratorDefaults, type Orchestration, type OrchestrationStep, type OrchPhase, type RunOptions, type Session, type StepState } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary, type SessionDetail } from '../api.ts';
+import { useWorkers, workerName } from '../workers.ts';
 import { STEP_LABEL, STEP_MARK, changeLine, costText, doneCount, foldLive, isOpen, mergeHint, orchestrationProblem, parseLimit, partOfIndex, proposalLines, stepActions, stepRight } from '../orchestration.ts';
 import { SessionRow } from './items.tsx';
 import { RunOptionsFields, opts } from './batch.tsx';
@@ -61,7 +62,6 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         {/* a phone has no room for both in one row: the actions wrap to a row of their own */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[13px]">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-muted truncate">{o.project_keys.join(' · ')}</span>
             {o.steps.length > 0 && <span className="text-muted shrink-0">{doneCount(o)} of {o.steps.length} steps</span>}
             <Chip tone={PHASE[o.phase].tone}>{PHASE[o.phase].label}</Chip>
             {costText(o) && <span className="text-muted shrink-0 tabular-nums">{costText(o)}</span>}
@@ -76,6 +76,8 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
             </div>
           )}
         </div>
+        {/* in full, not cut: the owner reads here which projects it may touch (DISP-254) */}
+        <p className="mt-1 text-[12px] text-muted break-words">Projects in scope: {o.project_keys.join(' · ')}</p>
         {o.waiting && <p className={cx('mt-1 text-[13px]', /failed|limit reached/.test(o.waiting) ? 'text-bad' : 'text-fg')}>{o.waiting}</p>}
         {o.next_wake && <p className="mt-0.5 text-[12px] text-muted">Wakes itself {new Date(o.next_wake).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>}
         {planWaits && mine && <Button variant="primary" className="w-full mt-2" disabled={act.isPending} onClick={() => act.mutate({ path: `${base}/approve`, body: { plan_version: o.plan_version } })}>Approve plan</Button>}
@@ -90,7 +92,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
             const right = stepRight(s, o);
             const body = (
               <>
-                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}{s.optional && <span className="text-faint"> · optional</span>}{s.worker && <span className="text-faint"> · on {s.worker}</span>}</span>
+                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}{s.optional && <span className="text-faint"> · optional</span>}<span className="text-faint"> · on {s.worker ?? 'default worker'}</span></span>
                 <span className={cx('block truncate text-[12px]', s.state === 'failed' ? 'text-bad' : 'text-muted')}>{[s.item_keys.join(', '), right].filter(Boolean).join(' · ')}</span>
               </>
             );
@@ -101,8 +103,8 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
                 <span className="shrink-0 text-faint">{s.project_key}</span>
                 {s.child_session_id
                   ? <Link to={`/s/${s.child_session_id}`} className="flex-1 min-w-0 active:opacity-70">{body}</Link>
-                  : <span className="flex-1 min-w-0">{body}</span>}
-                {actions.length > 0 && <button type="button" className="shrink-0 size-8 rounded-lg text-muted hover:bg-raised" aria-label={`Step ${s.position} actions`} onClick={() => setMenu(s)}>⋯</button>}
+                  : <button type="button" className="flex-1 min-w-0 text-left active:opacity-70" onClick={() => setMenu(s)}>{body}</button>}
+                <button type="button" className={cx('shrink-0 size-8 rounded-lg hover:bg-raised', actions.length ? 'text-muted' : 'text-faint')} aria-label={`Step ${s.position} details`} onClick={() => setMenu(s)}>⋯</button>
               </li>
             );
           })}
@@ -151,6 +153,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
       <Sheet open={!!menu} onClose={() => setMenu(null)} title={menu ? `Step ${menu.position}: ${menu.title}` : 'Step'}>
         {menu && (
           <div className="space-y-2">
+            <StepDetails step={o.steps.find((x) => x.id === menu.id) ?? menu} o={o} mine={mine} />
             {stepActions(menu, o).includes('retry') && <Button variant="primary" className="w-full" onClick={() => step('retry')}>Retry as a new session</Button>}
             {stepActions(menu, o).includes('skip') && <Button className="w-full" onClick={() => step('skip')}>Skip this step</Button>}
             {menu.child_session_id && <Link to={`/s/${menu.child_session_id}`} className="block"><Button className="w-full">Open session #{menu.child_session_id}</Button></Link>}
@@ -174,6 +177,39 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
         </div>
       </Sheet>
     </section>
+  );
+}
+
+/** What a step is set to do, started or not (DISP-255); the owner can change the worker of one that has not started (DISP-254). */
+export function StepDetails({ step, o, mine }: { step: OrchestrationStep; o: Orchestration; mine: boolean }) {
+  const act = useOrchestrationAction();
+  const { data } = useWorkers();
+  const canPick = mine && isOpen(o) && step.state === 'pending';
+  // no worker of its own: the orchestration's, else the project's or the owner's default
+  const fallback = o.options.worker_id ? `Default: ${workerName(data?.workers, o.options.worker_id)}` : "Default: the project's or your default worker";
+  const waits = o.steps.filter((x) => step.depends_on.includes(x.id));
+  const row = (label: string, value: ReactNode) => <div className="flex gap-2 text-[13px]"><span className="w-24 shrink-0 text-muted">{label}</span><div className="min-w-0 flex-1 break-words">{value}</div></div>;
+  return (
+    <div className="space-y-1.5 pb-2">
+      {row('State', [STEP_LABEL[step.state], stepRight(step, o)].filter(Boolean).join(' · '))}
+      {row('Project', step.project_key)}
+      {row('Items', step.item_ids.length
+        ? step.item_ids.map((id, i) => <span key={id}>{i > 0 && ', '}<Link to={`/items/${id}`} className="text-accent">{step.item_keys[i]}</Link></span>)
+        : 'None')}
+      {row('Worker', canPick ? (
+        <select className={inputCls} aria-label="Worker" value={step.worker ?? ''} disabled={act.isPending}
+          onChange={(e) => act.mutate({ path: `/orchestration-steps/${step.id}/worker`, body: { worker: e.target.value || null } })}>
+          <option value="">{fallback}</option>
+          {/* a worker the plan named stays listed also when it is gone */}
+          {step.worker && !data?.workers.some((w) => w.name === step.worker) && <option value={step.worker}>{step.worker}</option>}
+          {data?.workers.filter((w) => !w.revoked_at).map((w) => <option key={w.id} value={w.name}>{w.name}{w.connected ? '' : ' (offline)'}</option>)}
+        </select>
+      ) : step.worker ?? fallback)}
+      {row('Waits for', waits.length ? waits.map((x) => `step ${x.position} (${x.title})`).join(', ') : 'Nothing')}
+      {row('Optional', step.optional ? 'Yes: the orchestrator may skip it' : 'No')}
+      {row('Prompt', step.prompt_md.trim() ? <Md>{step.prompt_md}</Md> : <span className="text-muted">Nothing beyond its items</span>)}
+      <ErrorText error={act.error} />
+    </div>
   );
 }
 

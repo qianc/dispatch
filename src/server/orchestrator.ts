@@ -877,6 +877,20 @@ export class Orchestrator {
     return this.view(o.session_id);
   }
 
+  /** The owner sets the worker of a step that has not started; null: the default (DISP-254). The orchestrator is told. */
+  setStepWorker(stepId: number, worker: string | null): Orchestration {
+    const { o, step } = this.openStep(stepId);
+    if (step.state !== 'pending') throw new SessionError(`Step ${step.position} has started: its worker can no longer change.`, 409);
+    if (worker && !new Workers(this.store.db).byName(worker)) throw new SessionError(`No worker "${worker}".`, 400);
+    if (worker === step.worker) return this.view(o.session_id);
+    this.store.updateStep(step.id, { worker });
+    const on = worker ? `worker ${worker}` : 'the default worker';
+    this.sessions.systemNote(o.session_id, `Step ${step.position} set to run on ${on} by the owner.`);
+    this.emit(o.session_id);
+    this.wake(o.session_id, `The owner set step ${step.position} ("${step.title}") to run on ${on}. Keep that when you change the plan.`);
+    return this.view(o.session_id);
+  }
+
   /** Run a failed step again as a new batch: it is pending again, and the orchestrator starts it. */
   retryStep(stepId: number): Orchestration {
     const { o, step } = this.openStep(stepId);

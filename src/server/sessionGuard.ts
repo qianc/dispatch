@@ -73,6 +73,7 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   'POST /api/orchestrations/:id/stop': null,
   'POST /api/orchestration-steps/:id/skip': null,
   'POST /api/orchestration-steps/:id/retry': null,
+  'POST /api/orchestration-steps/:id/worker': null,
   'POST /api/cleanup': null,
   'POST /api/cleanup/check': null,
 };
