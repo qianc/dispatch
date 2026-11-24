@@ -358,8 +358,12 @@ const resetMs = (at: number) => at * (at < 1e12 ? 1000 : 1);
 export const LIMIT_MARGIN_MS = 60_000;
 /** A wake-up counts as set until this long after its time: the turn it starts shows by then. */
 const WAKE_MARGIN_MS = 60_000;
-/** A turn that ended with only background shells left (a dev server) is the owner's after this (DISP-239 #29). */
-export const SHELL_IDLE_MS = 10 * 60_000;
+/**
+ * A turn that ended with only background shells left (a dev server) is the owner's after this (DISP-239 #29).
+ * Claude stops a background shell at its timeout (2 hours at most), and the agent often waits for one (a
+ * long test run, DISP-253): so this is only for a shell that Claude did not stop.
+ */
+export const SHELL_IDLE_MS = 2 * 60 * 60_000 + 10 * 60_000;
 /** The reset time is not known: try again after this time. */
 export const LIMIT_RETRY_MS = 15 * 60_000;
 /** What the session is sent when its usage limit has reset (DISP-108). */

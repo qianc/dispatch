@@ -46,7 +46,10 @@ describe('ClaudeRunner with background tasks left after its turn', () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(statuses()).not.toContain('idle');
     expect(runner.activity()).toBe('has background tasks running');
-    await vi.advanceTimersByTimeAsync(SHELL_IDLE_MS);
+    // DISP-253: a long test run the agent waits for is not done after minutes
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(statuses()).not.toContain('idle');
+    await vi.advanceTimersByTimeAsync(SHELL_IDLE_MS - 60 * 60_000);
     expect(statuses().at(-1)).toBe('idle');
     expect(sent).toContainEqual(expect.objectContaining({ t: 'event', body: expect.objectContaining({ kind: 'system', text: expect.stringMatching(/turn counts as done: only a background command runs \(npm run dev\)/) }) }));
     expect(runner.activity()).toBeNull();
