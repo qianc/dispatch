@@ -34,6 +34,9 @@ export function suggestKey(name: string, taken: (k: string) => boolean): string 
 /** The assistant's tools that create or change projects and their repos. */
 const PROJECT_TOOLS = ['create_project', 'update_project', 'set_project_state', 'add_repo', 'remove_repo'];
 
+/** How much of a transcript read_session gives back, in characters. */
+const TRANSCRIPT_MAX = 60_000;
+
 export class AssistantTools {
   private store: Store;
   private bus: Bus;
@@ -330,6 +333,9 @@ export class AssistantTools {
         };
       }
 
+      case 'read_session':
+        return this.readSession(s, p);
+
       case 'propose_session': {
         if (p.type === 'orchestration') {
           // a card the owner starts: an orchestrator that plans the goal over these projects
@@ -357,6 +363,38 @@ export class AssistantTools {
       default:
         throw new Error(`Unknown assistant tool ${method}`);
     }
+  }
+
+  /**
+   * One session's transcript, for the assistant only (DISP-257). It runs with the owner's approval of
+   * exactly this session (`approval`: the local id of the answered request), once.
+   */
+  private readSession(s: Session, p: Record<string, unknown>) {
+    const input = this.store.inputs(s.id).find((i) => i.local_id === String(p.approval ?? ''));
+    const asked = input?.payload.kind === 'cross_project' && input.payload.action === 'transcript' ? input.payload : null;
+    if (!input || !asked) throw new Error('No approval to read this session: ask the owner first.');
+    if (input.answer?.kind !== 'cross_project' || !input.answer.approve) throw new Error('The owner did not approve reading this session.');
+    if (asked.session_id !== Number(p.session_id)) throw new Error('This is not the session the owner approved.');
+    const target = this.store.session(asked.session_id);
+    if (!target) throw new Error(`No session #${asked.session_id}`);
+    // stored: a restart does not make it valid again
+    if (!this.store.useInput(input.id)) throw new Error('This approval was already used: ask again.');
+    const cut = (t: string, max: number) => (t.length > max ? `${t.slice(0, max)}…` : t);
+    const who = { user: 'Owner', assistant: 'Claude', error: 'Error', system: 'Dispatch' } as const;
+    const lines = this.store.events(target.id).flatMap((e) => {
+      const b = e.body;
+      if (b.kind === 'tool_use') return [`[${e.created_at}] Tool ${b.name}: ${cut(b.summary, 300)}`];
+      return b.kind in who ? [`[${e.created_at}] **${who[b.kind as keyof typeof who]}:** ${cut((b as { text: string }).text.trim(), 4000)}`] : [];
+    });
+    // the newest part when it is long: why a session stopped is at its end
+    let text = '';
+    let i = lines.length;
+    while (i > 0 && text.length < TRANSCRIPT_MAX) text = `${lines[--i]}\n\n${text}`;
+    return {
+      session: { id: target.id, title: target.title, kind: target.kind, project: target.project_key, status: target.status, link: `/s/${target.id}` },
+      left_out: i > 0 ? 'Older messages were left out: this is the end of the transcript.' : undefined,
+      transcript: text.trim(),
+    };
   }
 
   private async addRepo(s: Session, project: Project, input: string, branch: string | undefined, check: string | null) {

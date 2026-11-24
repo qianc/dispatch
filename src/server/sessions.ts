@@ -1974,7 +1974,7 @@ export class Sessions {
   /** The push that says a session asks its owner something. */
   tellOwnerInput(s: Session, input: PendingInput) {
     const p = input.payload;
-    const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? `approve access to ${p.project_key}?` : 'question';
+    const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? (p.action === 'transcript' ? `read session #${p.session_id}?` : `approve access to ${p.project_key}?`) : 'question';
     this.notify(s, `${pushName(s)}: ${what}`, inputReason(p), `input-${input.id}`);
   }
 

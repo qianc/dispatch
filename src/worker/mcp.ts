@@ -146,7 +146,7 @@ export async function listFolder(dir: string, name?: string): Promise<{ path: st
 
 type ListFolder = (path: string, name?: string) => ReturnType<typeof listFolder>;
 
-const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, list: ListFolder, cwd?: string): SdkMcpToolDefinition<any>[] => {
+const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, list: ListFolder, cwd?: string, ask?: AskCrossProject): SdkMcpToolDefinition<any>[] => {
   const label = z.union([z.number(), z.string()]);
   const newItem = z.object({
     type: z.enum(['backlog', 'bug']).default('backlog'),
@@ -262,6 +262,22 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       }
     }),
     tool('list_sessions', 'Show running and waiting agent sessions across projects.', {}, call(rpc, 'list_sessions')),
+    // DISP-257: the owner approves each session; the server checks that approval again before it reads
+    tool('read_session', 'Read the transcript of one session (its messages and tool calls, the newest part when it is long), to answer what it did and why. Only when the owner asks about that session: they approve it on a card first, and you wait for their answer. Say which session you read. Keep the transcript to this chat: do not write it into items, sources or other sessions unless the owner asks.', {
+      session_id: z.number().describe('The session number, e.g. 503 for /s/503'),
+      reason: z.string().optional().describe('Why you want to read it, in one line for the owner'),
+    }, async (p) => {
+      try {
+        if (!ask) throw new Error('Reading sessions is not available here.');
+        const req = { action: 'transcript' as const, project_key: '', session_id: p.session_id };
+        const answer = await ask({ ...req, ...(p.reason?.trim() ? { reason: p.reason.trim() } : {}) });
+        if (!answer) return ok(`The request was cancelled. Session #${p.session_id} was not read.`);
+        if (!answer.approved) return ok(`The owner denied reading session #${p.session_id}. It was not read. Do not ask again unless the owner asks you to.`);
+        return ok(await rpc('read_session', { session_id: p.session_id, approval: answer.local_id }));
+      } catch (e) {
+        return fail(e);
+      }
+    }),
     tool('propose_session', 'Propose starting an agent session. The owner sees a card and starts it. type batch = work on items (one branch, one PR); planner = a planning chat for the project; orchestration = an orchestrator for a larger goal that takes several batches, also over several projects: it plans the goal as steps with the owner and then runs them (give goal and project_keys).', {
       type: z.enum(['batch', 'planner', 'orchestration']),
       project_key: z.string().optional().describe('For batch and planner: the project'),
@@ -420,7 +436,7 @@ const noFiles = async () => {
  */
 export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false, neighbours: Neighbour[] = []) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
-  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd) });
+  if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd, cross?.ask) });
   if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc, editItems) });
   if (kind === 'discuss') {
     return createSdkMcpServer({

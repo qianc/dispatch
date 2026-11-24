@@ -622,6 +622,9 @@ export class ClaudeRunner implements AgentRunner {
     return { approved: answer.approve, local_id: localId };
   }
 
+  /** read_session calls whose result is not stored (DISP-257) */
+  private unstored = new Set<string>();
+
   private noticed = new Set<string>();
 
   /** Tell the owner once per kind: shown in the session and sent as a push. */
@@ -712,6 +715,7 @@ export class ClaudeRunner implements AgentRunner {
         if (c.type === 'tool_use') {
           const input = (c.input ?? {}) as Record<string, unknown>;
           if (c.name === 'ScheduleWakeup' && typeof input.delaySeconds === 'number') this.wakeAt = Date.now() + input.delaySeconds * 1000;
+          if (c.name === 'mcp__dispatch__read_session') this.unstored.add(c.id);
           this.event({ kind: 'tool_use', tool_use_id: c.id, name: c.name, summary: summarizeToolInput(c.name, input), input: c.name === 'Write' ? { file_path: input.file_path } : input });
         }
       }
@@ -720,7 +724,11 @@ export class ClaudeRunner implements AgentRunner {
     if (m.type === 'user' && !m.parent_tool_use_id && Array.isArray(m.message.content)) {
       for (const c of m.message.content) {
         if (typeof c === 'object' && c.type === 'tool_result') {
-          const body: SessionEventBody = { kind: 'tool_result', tool_use_id: c.tool_use_id, is_error: !!c.is_error, text: toolResultText(c.content).slice(0, MAX_TOOL_TEXT) };
+          // a session transcript the owner let the assistant read stays in its context only, not in this chat's log (DISP-257)
+          // (a denial or an error is plain text, and is kept)
+          const full = toolResultText(c.content);
+          const text = this.unstored.delete(c.tool_use_id) && full.startsWith('{') ? 'Read (the transcript is not kept in this chat).' : full.slice(0, MAX_TOOL_TEXT);
+          const body: SessionEventBody = { kind: 'tool_result', tool_use_id: c.tool_use_id, is_error: !!c.is_error, text };
           const images = toolResultImages(c.content);
           this.deps.emit({ t: 'event', session_id: this.sessionId, body, ...(images.length ? { images } : {}) });
         }

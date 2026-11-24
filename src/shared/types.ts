@@ -466,7 +466,8 @@ export interface Question { question: string; header: string; options: QuestionO
  * A planner or discussion chat asks to reach into another project (DISP-55): search it, read one
  * of its items, or comment on one (e.g. to link it). Each request is approved on its own.
  */
-export type CrossProjectAction = 'search' | 'read' | 'comment';
+/** transcript: the assistant reads one session's transcript (DISP-257), with project_key '' */
+export type CrossProjectAction = 'search' | 'read' | 'comment' | 'transcript';
 export interface CrossProjectRequest {
   action: CrossProjectAction;
   project_key: string;
@@ -476,6 +477,8 @@ export interface CrossProjectRequest {
   key?: string;
   /** comment: the exact text that will be added */
   body?: string;
+  /** transcript: the session */
+  session_id?: number;
 }
 
 export type PendingInputPayload =
@@ -492,6 +495,7 @@ export type InputAnswer =
 export function crossProjectSummary(r: CrossProjectRequest): string {
   if (r.action === 'search') return `Search ${r.project_key} for "${r.query ?? ''}"`;
   if (r.action === 'read') return `Read ${r.key} (project ${r.project_key})`;
+  if (r.action === 'transcript') return `Read the transcript of session #${r.session_id}`;
   return `Comment on ${r.key} (project ${r.project_key})`;
 }
 

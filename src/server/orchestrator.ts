@@ -998,6 +998,8 @@ export class Orchestrator {
 
   /** The orchestrator session's turn ended: tell the owner what needs them, close it if it finished, else give it its events. */
   onIdle(s: Session) {
+    // a stopped orchestration answered the owner's message: it closes again, not "Your turn" for ever (DISP-256)
+    if (this.store.orchestration(s.id)?.phase === 'stopped') return this.sessions.finish(s.id, 'stopped');
     const acted = this.acted.delete(s.id);
     const planned = this.notifyPlan(s);
     const mine = this.store.orchestration(s.id);

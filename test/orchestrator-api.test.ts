@@ -156,6 +156,19 @@ describe('orchestrator: API', () => {
     expect(retry.status).toBe(400);
     expect(retry.data.error).toMatch(/Write to the orchestrator/);
   });
+
+  it('a stopped orchestrator the owner writes to answers, then closes again (DISP-256)', async () => {
+    const p = await t.approved();
+    turn(p.id);
+    await post(`/orchestrations/${p.id}/stop`);
+    expect((await t.s.call('POST', `/sessions/${p.id}/messages`, { text: 'Why did it stop?' })).status).toBe(200);
+    expect(t.store.session(p.id)!.status).not.toBe('stopped');
+    turn(p.id);
+    expect(t.store.session(p.id)!.status).toBe('stopped');
+    expect(t.s.ctx.orchestrator.view(p.id).phase).toBe('stopped');
+    const inbox = (await t.s.call<{ idle: { id: number }[] }>('GET', '/inbox')).data;
+    expect(inbox.idle.map((s) => s.id)).not.toContain(p.id);
+  });
 });
 
 describe('orchestrator: several people', () => {
