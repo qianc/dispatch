@@ -474,7 +474,9 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
           )}
           {/* an orchestrator is paused and stopped from its plan, which also asks about its running sessions */}
           {data.orchestration && !sidePanel && <Button className="w-full" onClick={() => { setMenu(false); toPlan(); }}>Go to the plan</Button>}
-          {data.orchestration && !final && <p className="text-[13px] text-muted">Pause or stop it from the plan{sidePanel ? ' on its page' : ''}.</p>}
+          {data.orchestration && !final && data.orchestration.phase !== 'stopped' && <p className="text-[13px] text-muted">Pause or stop it from the plan{sidePanel ? ' on its page' : ''}.</p>}
+          {/* a stopped orchestration the owner wrote to again: its chat closes here (DISP-256) */}
+          {stop && !final && data.orchestration?.phase === 'stopped' && <Button className="w-full" onClick={() => finish.mutate({ status: 'stopped', cleanup: false })}>Close session</Button>}
           {data.part_of && <Button className="w-full" onClick={() => { setMenu(false); nav(planLink(data.part_of!.orchestrator_id)); }}>Open the orchestrator's plan</Button>}
           {data.part_of && <p className="text-[13px] text-muted">{partOfText(data.part_of)}</p>}
           {stop && !final && !data.orchestration && <Button variant="primary" className="w-full" onClick={() => finish.mutate({ status: 'completed', cleanup: false })}>Mark complete</Button>}
