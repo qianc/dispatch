@@ -119,6 +119,7 @@ describe('review fixes', () => {
     await waitFor(() => wb.starts().length === 1, 'started');
     const moved = await s.call('POST', `/sessions/${job.id}/move`, { worker_id: s.ctx.workers.legacy().id });
     expect(moved.status).toBe(200);
+    await waitFor(() => wb.got.some((m) => m.t === 'close'), 'closed');
     const order = wb.got.filter((m) => m.t === 'cmd' || m.t === 'close').map((m) => m.t === 'cmd' ? m.cmd!.c : m.t);
     expect(order).toEqual(['push_branch', 'close']);
     // an ended session cannot be moved
