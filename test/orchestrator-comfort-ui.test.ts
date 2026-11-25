@@ -27,7 +27,7 @@ const orch = (over: Partial<Orchestration> = {}): Orchestration => ({
 const session = (id: number, over: Partial<Session> = {}): Session => ({
   id, project_id: 1, project_key: 'AA', kind: 'work', title: `S${id}`, status: 'running', force_plan: false, branch: null, sdk_session_id: null, run_model: null, initial_prompt: '', source_id: null,
   waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1, paused: false, pending_prompt: null, moved_from: null, item_ids: [],
-  release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null, closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,
+  release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null, closed_at: null, closed_reason: null, retry_of: null, about_session: null, github_check: false, orchestrator_id: null,
   created_at: '', updated_at: '', ended_at: null, ...over,
 });
 const panel = (o: Orchestration, mine = true) => textOf(renderPage(createElement(ui.OrchestrationPanel, { o, mine }), { qc: new QueryClient() }));

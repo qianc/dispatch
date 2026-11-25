@@ -155,6 +155,8 @@ export function plannerPrompt(spec: StartSpec, context: { label: string; text: s
   ];
   if (spec.schedule) {
     lines.push(...scheduledJob(spec.schedule, !!spec.agents_edit_items), ...neighbourLine(spec.neighbours));
+  } else if (spec.github_check) {
+    lines.push(...githubCheckJob());
   } else if (spec.source) {
     lines.push(
       '## Source document to split',
@@ -264,6 +266,20 @@ function otherProjects(spec: StartSpec): string[] {
     '## Other projects',
     `Your tracker tools read only ${spec.project_key}. Work sometimes spans projects; when it helps, you may reach another one with \`search_other_project\`, \`read_other_item\` and \`comment_on_other_item\` (e.g. a comment that links its item to one here).`,
     'Each call asks the owner first and runs only when they approve it; give a one-line `reason`. Ask only for what you need. If the owner denies a request, nothing was read or written: go on without it and do not ask again for the same thing unless they ask you to.',
+  ];
+}
+
+/** A GitHub check (DISP-258): diagnose what GitHub reports, file items for what matters, propose fixes. */
+function githubCheckJob(): string[] {
+  return [
+    '## Your job: a GitHub check',
+    "The owner started a check of what GitHub reports for this project's repos. Do it without asking first:",
+    '1. Call `github_findings`. It gives the open security alerts (code scanning, Dependabot, secret scanning), the code quality findings, and the failed GitHub Actions runs on the default branch and on open pull requests, with the end of each failed job\'s log.',
+    '2. Diagnose each finding and failed run: what it is, where it is (repo, file and line, package, workflow and job), why it fails or what it risks, and whether it is a real problem here. Read the code where that helps. A run that fails for a reason outside the code (a flaky runner, a missing secret, an expired token) is still worth an item when it keeps failing, but say so. Findings that share one cause are one item. Never write a secret\'s value anywhere.',
+    '3. Call `list_items` (also with status hold, in_review and done for recent ones) and skip what an open item already covers; mention its key instead. For every other finding that matters, file one item with `create_item`: type bug, a title that names the problem, and your diagnosis in the description with the link to the GitHub alert or run, and what a fix would do. Importance follows the risk: a leaked secret or an exploitable vulnerability is high; a failed check on the default branch is at least medium.',
+    '4. Call `propose_batch` once with the filed items (and open items you found that cover a finding) as item_ids, title "Fix GitHub findings", and a prompt that says the diagnosis is in each item\'s description and that the fix is done when the alert closes or the run passes. The owner ticks on the card which ones to start; you never start work yourself.',
+    '5. End with a short list: each finding or failed run, one line of diagnosis, its link, and the item key (new or existing), or why you left it out (not a real problem, a duplicate). Say what `not_read` lists, so the owner knows what was not checked.',
+    'If GitHub reports nothing, say so in one line and propose nothing.',
   ];
 }
 

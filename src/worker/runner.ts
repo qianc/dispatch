@@ -467,7 +467,7 @@ export class ClaudeRunner implements AgentRunner {
         // a scheduled run has nobody to answer a question
         // an orchestrator reads and plans, as a planner does: it changes no files and runs no commands
         disallowedTools: orchestrator ? PLANNER_TOOLS_DENIED : planner ? [...PLANNER_TOOLS_DENIED, ...(this.spec.schedule ? ['AskUserQuestion'] : [])] : this.spec.options.subagents === 'none' && !chat ? ['Task', 'Agent'] : [],
-        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }, this.deps.cwd, !!this.spec.agents_edit_items, this.spec.neighbours ?? []) },
+        mcpServers: { dispatch: dispatchMcp(this.spec.kind, this.deps.rpc, (p) => this.readAllowed(p), (p, name) => this.listAllowed(p, name), !!this.spec.schedule, { ownKey: this.spec.project_key, ask: (req) => this.askCrossProject(req) }, this.deps.cwd, !!this.spec.agents_edit_items, this.spec.neighbours ?? [], !!this.spec.github_check) },
         canUseTool: this.canUseTool,
         ...(discuss ? { hooks: { PreToolUse: [{ matcher: 'Read|Glob', hooks: [discussPathHook(this.deps.cwd, this.extraDirs())] }] } } : {}),
         ...(env ? { env } : {}),

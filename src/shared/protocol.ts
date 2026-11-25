@@ -38,6 +38,8 @@ export interface StartSpec {
   neighbours?: { key: string; name: string; importance_scale: string[]; effort_scale: string[] }[];
   /** a scheduled planner run (DISP-13): it starts what it picks, within this scope, unwatched */
   schedule?: { name: string; scope_md: string; max_batches: number };
+  /** a GitHub check (DISP-258): a planner that reads GitHub's findings, files items and proposes fixes */
+  github_check?: boolean;
   /** release sessions: what to release (the worker takes command and notes from its own config) */
   release?: ReleaseInfo;
   /** orchestrator sessions: the goal, the projects it spans, and the plan as it stands */
@@ -202,6 +204,8 @@ export type RpcMethod = 'list_items' | 'get_item' | 'get_image' | 'add_to_batch'
   | 'get_chat_image' | 'attach_image'
   /** planner and discussion chats reach another project, each call approved by the owner (DISP-55) */
   | 'cross_project' | AssistantMethod
+  /** a GitHub check reads what GitHub reports for its project's repos (DISP-258) */
+  | 'github_findings'
   /** an orchestrator's plan and its steps */
   | 'set_plan' | 'start_step' | 'update_step' | 'get_session' | 'finish'
   /** an orchestrator changes its approved plan by itself when the change is minor, or retries a failed step once (DISP-119) */

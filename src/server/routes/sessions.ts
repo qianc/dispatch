@@ -112,6 +112,10 @@ export function sessionRoutes(app: FastifyInstance, { store, sessions, hub, work
     return sessions.startPlanner(project((req.params as { key: string }).key), input, who(req).user);
   });
 
+  /** A project's latest GitHub check (DISP-258), and starting one (an open one is given back). */
+  app.get('/api/projects/:key/github-check', async (req) => ({ session: sessions.githubCheck(project((req.params as { key: string }).key).id) ?? null }));
+  app.post('/api/projects/:key/github-check', async (req) => sessions.startGithubCheck(project((req.params as { key: string }).key), who(req).user));
+
   /** Your assistant chat: the open thread (or null) with its unread replies, send a message, start a new thread. */
   app.get('/api/assistant', async (req) => {
     const cur = sessions.currentAssistant(who(req).user);

@@ -315,6 +315,8 @@ export interface Session {
   retry_of: number | null;
   /** a discussion of why this session failed (DISP-81) */
   about_session: number | null;
+  /** a planner that checks what GitHub reports for the project's repos (DISP-258) */
+  github_check: boolean;
   /** the orchestrator session this work session is a step of */
   orchestrator_id: number | null;
   created_at: string;

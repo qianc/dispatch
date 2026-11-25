@@ -585,6 +585,7 @@ export class Store {
       closed_reason: (r.closed_reason as Session['closed_reason']) ?? null,
       retry_of: numOrNull(r.retry_of),
       about_session: numOrNull(r.about_session),
+      github_check: bool(r.github_check),
       orchestrator_id: numOrNull(r.orchestrator_id),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
@@ -662,12 +663,12 @@ export class Store {
       .map((r) => this.toSession(r));
   }
   /** `started_by`: the user who started it (null: no user); `worker_id`: the worker it runs on. */
-  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: SessionOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null; retry_of?: number | null; about_session?: number | null }): Session {
+  createSession(s: { project_id: number | null; kind: SessionKind; title: string; status: SessionStatus; force_plan: boolean; branch: string | null; initial_prompt: string; source_id: number | null; item_ids: number[]; options?: SessionOptions; claude_account?: string | null; worker_id: number; started_by: string | null; moved_from?: number | null; release?: ReleaseInfo | null; schedule_id?: number | null; retry_of?: number | null; about_session?: number | null; github_check?: boolean }): Session {
     return this.db.tx(() => {
       const { lastId } = this.db.run(
-        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by, retry_of, about_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (project_id, kind, title, status, force_plan, branch, initial_prompt, source_id, options, claude_account, worker_id, moved_from, release_info, schedule_id, started_by, retry_of, about_session, github_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         s.project_id, s.kind, s.title, s.status, s.force_plan ? 1 : 0, s.branch, s.initial_prompt, s.source_id, JSON.stringify(s.options ?? DEFAULT_RUN_OPTIONS), s.claude_account ?? null,
-        s.worker_id, s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null, s.started_by, s.retry_of ?? null, s.about_session ?? null,
+        s.worker_id, s.moved_from ?? null, s.release ? JSON.stringify(s.release) : null, s.schedule_id ?? null, s.started_by, s.retry_of ?? null, s.about_session ?? null, s.github_check ? 1 : 0,
       );
       for (const id of s.item_ids) this.db.run('INSERT INTO session_items (session_id, item_id) VALUES (?, ?)', lastId, id);
       return this.session(lastId)!;

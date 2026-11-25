@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProjectPr, ProjectPrList, PrApproval, Repo } from '../src/shared/types.ts';
+import type { ProjectPr, ProjectPrList, PrApproval, Repo, Session } from '../src/shared/types.ts';
 import type { PrDetail, ProjectSummary } from '../web/src/api.ts';
 import { approvalView, ciLook, linkLabels, mergeBody, prPageStale } from '../web/src/prs.ts';
 import { renderPage, stubBrowser, textOf } from './web-render.ts';
@@ -129,6 +129,25 @@ describe("a project's open pull requests (DISP-111)", () => {
     expect(text).toContain('app#41 · dependabot[bot] · 2 files');
     expect(text).toContain('api#7');
     expect(text).toContain('Approved earlier');
+  });
+
+  it('under the list: the GitHub check, with its chat and batch card once it ran (DISP-258)', () => {
+    const none = textOf(listHtml(prList()));
+    expect(none).toContain('GitHub findings');
+    expect(none).toContain('Check GitHub');
+    const qc = new QueryClient();
+    const check = { id: 9, kind: 'planner', title: 'GitHub check', status: 'idle', github_check: true, project_id: 1, project_key: 'PP', source_id: null, options: {} } as unknown as Session;
+    qc.setQueryData(['project-prs', 'PP'], prList());
+    qc.setQueryData(['github-check', 'PP'], { session: check });
+    qc.setQueryData(['session', 9], {
+      session: check, inputs: [], items: [], prs: [], repos: [], source: null, project: project(), access: { drive: true, stop: true, read: true },
+      events: [{ id: 1, seq: 1, session_id: 9, created_at: '2026-11-20T00:00:00Z', body: { kind: 'assistant', text: 'One failed run: the test job fails on main. Filed PP-3.' } }],
+    });
+    const html = renderPage(createElement(list.ProjectPrs, { project: project() }), { qc });
+    const text = textOf(html);
+    expect(text).toContain('Check again');
+    expect(text).toContain('Filed PP-3.');
+    expect(html).toContain('href="/s/9"');
   });
 
   it('the list says when there is nothing to show', () => {
