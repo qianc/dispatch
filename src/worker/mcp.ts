@@ -395,8 +395,9 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       state: z.enum(['done', 'skipped']),
       note: z.string().optional().describe('Why, in one line'),
     }, call(rpc, 'update_step')),
-    tool('get_session', "Read the state of one of your steps' batches: status, what it waits for, its last message and its pull requests.", {
+    tool('get_session', "Read the state of one of your steps' batches: status, what it waits for, its whole last message and its pull requests with their branches. With diff: also the changes of each pull request (files and patches), merged or not: to check a step against its items' \"Done when\".", {
       session_id: z.number().int().describe('The session number from "The plan now"'),
+      diff: z.boolean().optional().describe('Also give the changes of its pull requests'),
     }, call(rpc, 'get_session')),
     tool('answer_session', "Answer a question or a plan approval that one of your batches asked you (Dispatch gives you its input_id). Only when the plan, the items or what the owner told you settle it. The owner sees your answer in the batch's chat and can overrule it.", {
       input_id: z.number().int().describe('The input_id from the message that told you about it'),

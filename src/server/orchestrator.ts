@@ -3,7 +3,7 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason, finishGaps, finishedAttention } from '../shared/attention.ts';
-import { FINAL_STATUSES, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type StepOffer, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, type BranchFile, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type StepOffer, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import { cleanTitle, firstWordsTitle } from '../shared/orchestrationTitle.ts';
@@ -19,6 +19,11 @@ import { Workers } from './workers.ts';
 const ITEM_KEY = /^([A-Z][A-Z0-9]*)-(\d+)$/;
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/** How much of a batch's last message, and of its diff, get_session gives (DISP-259). */
+const MESSAGE_MAX = 20_000;
+const DIFF_MAX = 60_000;
+const cut = (t: string, max: number) => (t.length > max ? `${t.slice(0, max)}…` : t);
 /** Money is compared as it is shown: to the cent. */
 const cents = (n: number) => Math.round(n * 100);
 
@@ -59,10 +64,14 @@ export class Orchestrator {
    */
   private makeTitle: ((s: Session, goal: string, projects: string[]) => Promise<string>) | undefined;
 
+  /** The files a pull request changes, with patches (app.ts: as the PR page shows them). */
+  private prFiles: (prId: number) => Promise<BranchFile[]>;
+
   /** Run a merged batch's deploy of a repo again (app.ts: GitHub's deploy of its merged PR). False: nothing to deploy. */
   private redeploy: (s: Session, repoId: number) => boolean;
 
-  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string>; redeploy?: (s: Session, repoId: number) => boolean }) {
+  constructor(deps: { store: Store; bus: Bus; sessions: Sessions; notifier: Notifier; merging?: () => ReadonlySet<number>; makeTitle?: (s: Session, goal: string, projects: string[]) => Promise<string>; redeploy?: (s: Session, repoId: number) => boolean; prFiles?: (prId: number) => Promise<BranchFile[]> }) {
+    this.prFiles = deps.prFiles ?? (async () => []);
     this.makeTitle = deps.makeTitle;
     this.redeploy = deps.redeploy ?? (() => false);
     this.store = deps.store;
@@ -421,7 +430,7 @@ export class Orchestrator {
       case 'update_step':
         return this.updateStep(s, o, this.stepOf(o, p.step_id), p);
       case 'get_session':
-        return this.childView(o, Number(p.session_id));
+        return this.childView(o, Number(p.session_id), p.diff === true);
       case 'finish':
         return this.finish(s, o, String(p.result ?? '').trim());
       case 'answer_session':
@@ -680,14 +689,33 @@ export class Orchestrator {
     return { step_id: updated.id, state: updated.state, note: updated.note };
   }
 
-  /** One of this orchestration's batches, as its orchestrator may see it. */
-  private childView(o: Orchestration, sessionId: number) {
+  /**
+   * One of this orchestration's batches, as its orchestrator may see it: its whole last message, and
+   * with `diff` the changes of its pull requests, merged or not, local or on GitHub (DISP-259).
+   */
+  private async childView(o: Orchestration, sessionId: number, diff: boolean) {
     const child = this.store.session(sessionId);
     const step = child ? this.store.stepOfChild(child.id) : undefined;
     if (!child || child.orchestrator_id !== o.session_id) throw new Error(`Session #${sessionId} is not a step of this orchestration.`);
+    const last = this.store.events(child.id).findLast((e) => e.body.kind === 'assistant')?.body as { text: string } | undefined;
+    const prs = this.store.prs({ session_id: child.id });
+    let budget = DIFF_MAX;
+    const changes = async (pr: (typeof prs)[number]) => {
+      const files = await this.prFiles(pr.id).catch((e) => (e as Error).message);
+      if (typeof files === 'string') return { error: `Could not read its changes: ${files}` };
+      return files.map((f) => {
+        const patch = f.patch && f.patch.length <= budget ? f.patch : null;
+        budget -= patch?.length ?? 0;
+        return { file: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: patch ?? (f.patch ? '(left out: the diff is too long)' : null) };
+      });
+    };
     return {
-      id: child.id, title: child.title, status: child.status, waiting_reason: child.waiting_reason, last_text: child.last_text,
-      prs: this.store.prs({ session_id: child.id }).map((pr) => ({ repo: pr.repo_full_name, number: pr.number, state: pr.state, blocked: pr.blocked, mergeable: pr.mergeable })),
+      id: child.id, title: child.title, status: child.status, waiting_reason: child.waiting_reason,
+      last_message: last ? cut(last.text, MESSAGE_MAX) : child.last_text,
+      prs: await Promise.all(prs.map(async (pr) => ({
+        repo: pr.repo_full_name, number: pr.number, branch: pr.head_ref, state: pr.state, blocked: pr.blocked, mergeable: pr.mergeable,
+        ...(diff ? { changes: await changes(pr) } : {}),
+      }))),
       step_id: step?.id ?? null, step_state: step?.state ?? null,
     };
   }

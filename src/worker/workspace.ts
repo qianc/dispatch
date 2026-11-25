@@ -421,6 +421,36 @@ export class Workspaces {
     return spec.repos.length === 1 ? this.repoDir(spec.session_id, spec.repos[0]) : this.sessionDir(spec.session_id);
   }
 
+  /** The commit each of a session's checkouts is on (null: none yet). */
+  async heads(spec: StartSpec): Promise<Map<number, string | null>> {
+    const out = new Map<number, string | null>();
+    for (const repo of spec.repos) {
+      const wt = this.repoDir(spec.session_id, repo);
+      out.set(repo.id, existsSync(wt) ? (await run('git', ['rev-parse', 'HEAD'], wt)).out.trim() || null : null);
+    }
+    return out;
+  }
+
+  /**
+   * What came into an orchestrator's checkouts since `before` (DISP-259): per repo that moved, the
+   * commits and the files they changed, so it can say what changed in the default branch.
+   */
+  async moved(spec: StartSpec, before: Map<number, string | null>): Promise<string[]> {
+    const out: string[] = [];
+    for (const repo of spec.repos) {
+      const old = before.get(repo.id);
+      const wt = this.repoDir(spec.session_id, repo);
+      if (!old || !existsSync(wt)) continue;
+      const now = (await run('git', ['rev-parse', 'HEAD'], wt)).out.trim();
+      if (!now || now === old) continue;
+      const log = (await run('git', ['log', '--oneline', '--max-count=30', `${old}..${now}`], wt)).out.trim();
+      const stat = (await run('git', ['diff', '--stat=120', old, now], wt)).out.trim().split('\n');
+      const files = stat.length > 41 ? [...stat.slice(0, 40), `  … ${stat.at(-1)?.trim()}`] : stat;
+      out.push(`- ${repo.github_name} (./${repoFolder(repo)}): ${repo.default_branch} moved from ${old.slice(0, 10)} to ${now.slice(0, 10)}. Commits:\n${log || '(none: the branch was rewritten)'}\nFiles:\n${files.join('\n')}`);
+    }
+    return out;
+  }
+
   /**
    * Where a release runs; returns the cwd. A local repo: the owner's own checkout (its remotes and
    * the machine's credentials are there), which must be on the default branch with no uncommitted

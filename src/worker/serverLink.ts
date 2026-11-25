@@ -31,6 +31,11 @@ async function ruleFiles(dirs: string[], names = ['CLAUDE.md', 'AGENTS.md']) {
 }
 
 /** Agent sessions running on this worker, over all servers. Chats take no slot (as on the server). */
+/** An orchestrator's turn text, after what came into its checkouts since its last turn (DISP-259). */
+export function movedNote(moved: string[], text: string) {
+  return moved.length ? `Note from Dispatch: your checkouts are on the newest default branches now. What came in since your last turn:\n${moved.join('\n')}\n\n${text}` : text;
+}
+
 /** What an orchestrator's checkouts and prompt are made of: its projects and their repos' folders (DISP-167). */
 function scopeOf(spec: StartSpec) {
   return JSON.stringify([spec.orchestration?.projects.map((p) => [p.key, p.name, p.repos, p.importance_scale, p.effort_scale]), spec.repos.map((r) => [r.id, repoFolder(r)])]);
@@ -352,6 +357,26 @@ export class ServerLink {
     await this.workspaces.tidy(id, gone, null, { deleteMerged: false, force: true, keepDir: true }).catch((e) => console.warn(`removing old checkouts of session ${id} failed:`, (e as Error).message));
   }
 
+  /** Checkouts on disk: always, except in fake mode, where only an orchestrator over offline repos has them. */
+  private realCheckouts(spec: StartSpec) {
+    return !this.shared.fake || (spec.kind === 'orchestrator' && spec.repos.every((r) => this.workspaces.offline(r)));
+  }
+
+  /**
+   * Before an orchestrator's turn: its checkouts moved to the newest default branches, also after a
+   * merge on GitHub, and the text says what came in (DISP-259). A failed fetch keeps them as they were.
+   */
+  private async freshCheckouts(spec: StartSpec, text: string): Promise<string> {
+    try {
+      const before = await this.workspaces.heads(spec);
+      await this.workspaces.prepare(spec);
+      return movedNote(await this.workspaces.moved(spec, before), text);
+    } catch (e) {
+      console.warn(`refreshing the checkouts of session ${spec.session_id} failed:`, (e as Error).message);
+      return text;
+    }
+  }
+
   /** Before a turn: fetch hosted repos, so the agent can merge origin/<base> without network access. */
   private async fetchHosted(spec: StartSpec) {
     for (const repo of spec.repos.filter((r) => r.kind === 'hosted')) {
@@ -412,7 +437,8 @@ export class ServerLink {
     if (live) {
       this.turnChecks.get(id)?.ownerTurn();
       // counted as work: a restart during the fetch would lose the message
-      if (!this.shared.fake) await this.job(`session ${id} gets a message`, () => this.fetchHosted(spec));
+      if (spec.kind === 'orchestrator' && this.realCheckouts(spec)) text = await this.job(`session ${id} gets a message`, () => this.freshCheckouts(spec, text));
+      else if (!this.shared.fake) await this.job(`session ${id} gets a message`, () => this.fetchHosted(spec));
       // it closed during the fetch (idle close, crash): the message starts it again, unless the server closed it
       if (this.runners.get(id) !== live) return this.dropped.has(live) ? undefined : this.launch(spec, text, false, turnId);
       take(turnId);
@@ -461,14 +487,16 @@ export class ServerLink {
       } else if (spec.kind === 'release' && (!this.shared.fake || spec.repos.every((r) => r.local_path))) {
         cwd = goOn(await this.workspaces.prepareRelease(spec));
         extra = { context: goOn(await ruleFiles([cwd], ['AGENTS.md', '.dispatch.md'])) };
-      } else if (this.shared.fake && !(spec.kind === 'orchestrator' && spec.repos.every((r) => this.workspaces.offline(r)))) cwd = process.cwd();
+      } else if (!this.realCheckouts(spec)) cwd = process.cwd();
       else if (spec.kind === 'assistant') {
         // the assistant reads only allow-listed folders; give it an empty working dir
         cwd = join(this.workspaces.root, 'assistant');
         goOn(await mkdir(cwd, { recursive: true }));
       } else {
         const created: { repo: StartSpec['repos'][number]; wt: string }[] = [];
+        const before = spec.kind === 'orchestrator' ? goOn(await this.workspaces.heads(spec)) : null;
         cwd = goOn(await this.workspaces.prepare(spec, created));
+        if (before) text = movedNote(goOn(await this.workspaces.moved(spec, before)), text);
         // a planner files items: it gets the project's own rules for them (CLAUDE.md of every repo, not only the cwd's)
         if (spec.kind === 'planner' || spec.kind === 'orchestrator') extra = { context: goOn(await ruleFiles(spec.repos.map((r) => this.workspaces.repoDir(spec.session_id, r)))) };
         // the prompt needs to know which worktrees live in the owner's repo (no push needed there)
