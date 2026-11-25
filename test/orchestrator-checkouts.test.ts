@@ -143,6 +143,71 @@ describe("an orchestrator's checkouts on the worker", () => {
   });
 });
 
+describe("an orchestrator's checkouts before each turn (DISP-259)", () => {
+  it('a merge on GitHub and a local merge reach its checkouts before its next turn, and its turn says what came in', async () => {
+    const remoteRoot = mkdtempSync(join(tmpdir(), 'dsp-oc-remote-'));
+    const bare = join(remoteRoot, 'acme', 'web.git');
+    execFileSync('git', ['init', '--bare', '-b', 'main', bare]);
+    const commit = (dir: string, file: string, msg: string) => {
+      writeFileSync(join(dir, file), `${msg}\n`);
+      git(dir, 'add', '.');
+      git(dir, 'commit', '-m', msg);
+    };
+    const seed = mkdtempSync(join(tmpdir(), 'dsp-oc-seed-'));
+    git(seed, 'init', '-b', 'main');
+    commit(seed, 'README.md', 'init');
+    git(seed, 'push', bare, 'main');
+    // the owner's own local repo
+    const local = mkdtempSync(join(tmpdir(), 'dsp-oc-local-'));
+    git(local, 'init', '-b', 'main');
+    commit(local, 'README.md', 'init');
+    const entry = { name: 'default', url: 'ws://127.0.0.1:1/worker', token: 'dsw_t', local_repo_dirs: [local], read_dirs: [], claude_accounts: null, github_accounts: null, releases: [], repo_env_dir: '/nonexistent' };
+    const link = new ServerLink(entry, {
+      fake: true, opts: { assistantReadDirs: [] } as never,
+      workspacesDir: mkdtempSync(join(tmpdir(), 'dsp-oc-ws-')), slots: new Slots(2),
+      claudeAccounts: () => [], githubAccounts: [], remoteBase: `file://${remoteRoot}`, secrets: new Secrets(), gitEnv: () => ({}),
+    });
+    const sent: WorkerToServer[] = [];
+    (link as unknown as { ws: unknown }).ws = { readyState: WebSocket.OPEN, send: (d: string) => sent.push(JSON.parse(d)) };
+    const onMessage = (m: unknown) => (link as unknown as { onMessage: (m: unknown) => Promise<void> }).onMessage(m);
+    const ws = (link as unknown as { workspaces: { repoDir: (id: number, r: Repo) => string } }).workspaces;
+    const runners = (link as unknown as { runners: Map<number, { push: (t: string) => void }> }).runners;
+    process.env.FAKE_DELAY_MS = '1';
+    const repos = [repo(1, 'acme', 'web'), repo(2, 'local', 'notes', { local_path: local })];
+    const spec: StartSpec = {
+      session_id: 11, kind: 'orchestrator', project_key: '', project_name: '', importance_scale: [], effort_scale: [], title: 'Goal', branch: null,
+      repos, items: [], source: null, prompt: '[fake:env]', force_plan: false, options: { ...DEFAULT_RUN_OPTIONS, model: 'opus' }, claude_account: null,
+      github_account: null, resume: 'sdk-11', resume_note: null,
+      orchestration: { goal: 'Goal', phase: 'run', projects: [], max_children: 2, status_md: 'No plan yet.' },
+    };
+    await onMessage({ t: 'start', spec: { ...spec, resume: null } });
+    await waitFor(() => sent.some((m) => m.t === 'status' && m.status === 'idle'), 'first turn');
+    const pushed: string[] = [];
+    runners.get(11)!.push = (t) => pushed.push(t);
+
+    // nothing moved: the text goes as it is
+    await onMessage({ t: 'send', session_id: 11, text: 'nothing new', spec });
+    expect(pushed.at(-1)).toBe('nothing new');
+
+    // step 1 merged on GitHub, and a step merged locally into the owner's main
+    commit(seed, 'step1.md', 'Step 1: probe findings');
+    git(seed, 'push', bare, 'main');
+    commit(local, 'notes.md', 'Step 2: notes');
+    await onMessage({ t: 'send', session_id: 11, text: 'step 1 is done', spec });
+    const text = pushed.at(-1)!;
+    expect(text).toMatch(/^Note from Dispatch: your checkouts are on the newest default branches now/);
+    expect(text).toContain('- web (./web): main moved from');
+    expect(text).toContain('Step 1: probe findings');
+    expect(text).toContain('step1.md');
+    expect(text).toContain('- notes (./notes): main moved from');
+    expect(text).toContain('Step 2: notes');
+    expect(text).toMatch(/step 1 is done$/);
+    expect(git(ws.repoDir(11, repos[0]), 'show', 'HEAD:step1.md')).toBe('Step 1: probe findings');
+    expect(git(ws.repoDir(11, repos[1]), 'show', 'HEAD:notes.md')).toBe('Step 2: notes');
+    await onMessage({ t: 'close', session_id: 11 });
+  });
+});
+
 describe('an orchestrator on the server (DISP-167)', () => {
   let s: Server | null = null;
   afterEach(() => { s?.ctx.orchestrator.stop(); return s?.app.close(); });

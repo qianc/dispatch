@@ -140,6 +140,27 @@ describe('orchestrator: steps', () => {
     await expect(t.rpc(p.id, 'get_session', { session_id: other.id })).rejects.toThrow(`Session #${other.id} is not a step of this orchestration.`);
   });
 
+  it('get_session gives the whole last message, and with diff the changes of its pull requests (DISP-259)', async () => {
+    const p = await t.approved();
+    const child = await t.startStep(p.id, p.first.id);
+    const long = `Done. ${'x'.repeat(1000)} Probe findings recorded.`;
+    t.store.addEvent(child, { kind: 'assistant', text: 'first' });
+    t.store.addEvent(child, { kind: 'assistant', text: long });
+    t.pr(child, 'open');
+    const asked: number[] = [];
+    (t.s.ctx.orchestrator as unknown as { prFiles: (id: number) => Promise<unknown> }).prFiles = async (id) => {
+      asked.push(id);
+      return [{ filename: 'spec.md', status: 'modified', additions: 1, deletions: 0, patch: '+Probe findings' }, { filename: 'big.ts', status: 'added', additions: 9, deletions: 0, patch: 'y'.repeat(70_000) }];
+    };
+    const plain = await t.rpc(p.id, 'get_session', { session_id: child }) as { last_message: string; prs: object[] };
+    expect(plain.last_message).toBe(long);
+    expect(plain.prs[0]).not.toHaveProperty('changes');
+    expect(asked).toEqual([]);
+    expect(await t.rpc(p.id, 'get_session', { session_id: child, diff: true })).toMatchObject({
+      prs: [{ repo: 'me/aa', state: 'open', changes: [{ file: 'spec.md', patch: '+Probe findings' }, { file: 'big.ts', patch: '(left out: the diff is too long)' }] }],
+    });
+  });
+
   it('finish is refused while a step runs; with all steps settled it waits for the owner to mark it complete (DISP-121)', async () => {
     const p = await t.approved();
     await t.startStep(p.id, p.first.id);

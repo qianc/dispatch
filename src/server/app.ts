@@ -216,6 +216,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
       if (pr) github.deploy(pr);
       return !!pr;
     },
+    prFiles: async (id) => (await github.detail(id)).files,
   });
   sessions.onOrchestratorIdle = (s) => orchestrator.onIdle(s);
   sessions.delegateInput = (s, input) => orchestrator.delegate(s, input);
