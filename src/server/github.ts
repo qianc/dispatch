@@ -1193,6 +1193,94 @@ export class GitHub {
     const { data } = await this.mustClient(acting!.octo, repo).pulls.create({ owner: repo.github_owner, repo: repo.github_name, head: s.branch, base: repo.default_branch, title: s.title, body });
     return this.record(s, repo, data as GhPull);
   }
+
+  /**
+   * What GitHub reports for a GitHub check's repos (DISP-258), read as the session's starter: open
+   * code scanning, Dependabot and secret scanning alerts, and the failed Actions runs on the default
+   * branch and on open PRs (the latest run per workflow there, with the tail of its failed jobs' logs).
+   * A feature that is off or out of the token's reach is named in `not_read`, and the rest goes on.
+   */
+  async findings(s: Session, repos: Repo[]) {
+    return Promise.all(repos.filter((r) => this.target(r)).map((repo) => this.repoFindings(s, repo)));
+  }
+
+  private async repoFindings(s: Session, repo: Repo) {
+    const t = this.mustTarget(repo);
+    const octo = this.client(s, repo, 'read') as any;
+    const not_read: string[] = [];
+    const read = async <T>(what: string, fn: () => Promise<T>, none: T): Promise<T> => {
+      try {
+        return await fn();
+      } catch (e) {
+        not_read.push(`${what}: ${(e as Error).message}`);
+        return none;
+      }
+    };
+    const open = { ...t, state: 'open', per_page: 100 };
+    const [scanning, dependabot, secrets] = await Promise.all([
+      read('code scanning', async () => (await octo.codeScanning.listAlertsForRepo(open)).data as any[], []),
+      read('Dependabot alerts', async () => (await octo.dependabot.listAlertsForRepo(open)).data as any[], []),
+      read('secret scanning', async () => (await octo.secretScanning.listAlertsForRepo(open)).data as any[], []),
+    ]);
+    const alert = (a: any) => ({
+      number: a.number, url: a.html_url, tool: a.tool?.name, rule: a.rule?.id, description: a.rule?.description,
+      severity: a.rule?.security_severity_level ?? a.rule?.severity, path: a.most_recent_instance?.location?.path,
+      line: a.most_recent_instance?.location?.start_line, message: a.most_recent_instance?.message?.text,
+    });
+    // shortcut: a code scanning alert without a security severity counts as code quality; read GitHub's own code quality API once it has a REST one
+    const quality = scanning.filter((a) => !a.rule?.security_severity_level);
+
+    // the latest run of each workflow on a ref; failed ones only
+    const failedLatest = async (where: string, q: Record<string, unknown>) => {
+      const runs = (await read(`Actions runs (${where})`, async () => (await octo.actions.listWorkflowRunsForRepo({ ...t, ...q, per_page: 100 })).data.workflow_runs as any[], []))
+        .filter((r) => r.status === 'completed');
+      const latest = new Map<number, any>();
+      for (const r of runs) if (!latest.has(r.workflow_id)) latest.set(r.workflow_id, r);
+      return [...latest.values()].filter((r) => ['failure', 'timed_out', 'startup_failure'].includes(r.conclusion)).map((r) => ({ where, run: r }));
+    };
+    const prs = this.store.prs({ repo_id: repo.id, open_only: true }).filter((p) => p.number > 0 && p.head_sha).slice(0, MAX_CHECKED_PRS);
+    const failed = (await Promise.all([
+      failedLatest(`${repo.default_branch} branch`, { branch: repo.default_branch }),
+      ...prs.map((p) => failedLatest(`PR #${p.number}`, { head_sha: p.head_sha })),
+    ])).flat();
+    const failed_runs = await Promise.all(failed.map(async ({ where, run }) => {
+      const jobs = (await read(`jobs of run ${run.id}`, async () => (await octo.actions.listJobsForWorkflowRun({ ...t, run_id: run.id, filter: 'latest' })).data.jobs as any[], []))
+        .filter((j) => j.conclusion === 'failure' || j.conclusion === 'timed_out');
+      return {
+        workflow: run.name, where, branch: run.head_branch, sha: String(run.head_sha ?? '').slice(0, 7), url: run.html_url, conclusion: run.conclusion, at: run.updated_at,
+        failed_jobs: await Promise.all(jobs.map(async (j) => ({
+          name: j.name, url: j.html_url,
+          failed_steps: (j.steps ?? []).filter((st: any) => st.conclusion === 'failure').map((st: any) => st.name),
+          log_tail: await read(`log of job ${j.id}`, async () => logTail(String((await octo.actions.downloadJobLogsForWorkflowRun({ ...t, job_id: j.id })).data ?? '')), ''),
+        }))),
+      };
+    }));
+    return {
+      repo: `${t.owner}/${t.repo}`,
+      default_branch: repo.default_branch,
+      code_scanning: scanning.filter((a) => a.rule?.security_severity_level).map(alert),
+      code_quality: quality.map(alert),
+      dependabot: dependabot.map((a) => ({
+        number: a.number, url: a.html_url, package: a.dependency?.package?.name, ecosystem: a.dependency?.package?.ecosystem, manifest: a.dependency?.manifest_path,
+        severity: a.security_advisory?.severity, summary: a.security_advisory?.summary, advisory: a.security_advisory?.ghsa_id, fixed_in: a.security_vulnerability?.first_patched_version?.identifier ?? null,
+      })),
+      // never the secret itself: what kind it is and where to see it on GitHub
+      secret_scanning: secrets.map((a) => ({ number: a.number, url: a.html_url, type: a.secret_type_display_name ?? a.secret_type, created_at: a.created_at })),
+      failed_runs,
+      not_read,
+    };
+  }
+}
+
+/** A GitHub check reads the runs of at most this many open PRs per repo (DISP-258). */
+const MAX_CHECKED_PRS = 20;
+const LOG_TAIL_LINES = 80;
+const LOG_TAIL_CHARS = 6000;
+
+/** The end of a job log, where it failed: its last lines, without GitHub's timestamps. */
+export function logTail(log: string): string {
+  const lines = log.replace(/\r/g, '').split('\n').map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, '')).filter((l) => l.trim());
+  return lines.slice(-LOG_TAIL_LINES).join('\n').slice(-LOG_TAIL_CHARS);
 }
 
 /** Page after page of a GitHub list, until a short page or the total (at most 10 pages). */

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ProjectPr, ProjectPrList } from '../../../src/shared/types.ts';
 import { api, type ProjectSummary } from '../api.ts';
 import { approvalView, ciLook, linkLabels } from '../prs.ts';
+import { GithubCheck } from './githubCheck.tsx';
 import { Button, Card, Chip, Empty, ErrorText, Section, cx, timeAgo } from './ui.tsx';
 
 /** The server syncs a list older than this when it is read. */
@@ -57,24 +58,27 @@ export function ProjectPrs({ project }: { project: ProjectSummary }) {
   if (!data.github_repos) return <Empty>This project has no GitHub repo.</Empty>;
   const synced = !data.synced_at ? 'not synced yet' : timeAgo(data.synced_at) === 'now' ? 'synced just now' : `synced ${timeAgo(data.synced_at)} ago`;
   return (
-    <Section
-      title="Open pull requests"
-      action={(
-        <span className="flex items-center gap-1 text-[12px] text-muted">
-          {sync.isPending ? 'syncing…' : synced}
-          <Button small variant="ghost" aria-label="Refresh pull requests" disabled={sync.isPending || project.disabled} onClick={() => sync.mutate()}>↻</Button>
-        </span>
-      )}
-    >
-      {(data.error || sync.error) && (
-        <div className="px-4">
-          {data.error && <p className="text-bad text-sm my-2 break-words">GitHub did not answer for every repo: {data.error}</p>}
-          <ErrorText error={sync.error} />
-        </div>
-      )}
-      {data.prs.length
-        ? <Card className="overflow-hidden">{data.prs.map((pr) => <PrRow key={pr.id} pr={pr} showRepo={data.github_repos > 1} />)}</Card>
-        : <Empty>No open pull requests.</Empty>}
-    </Section>
+    <>
+      <Section
+        title="Open pull requests"
+        action={(
+          <span className="flex items-center gap-1 text-[12px] text-muted">
+            {sync.isPending ? 'syncing…' : synced}
+            <Button small variant="ghost" aria-label="Refresh pull requests" disabled={sync.isPending || project.disabled} onClick={() => sync.mutate()}>↻</Button>
+          </span>
+        )}
+      >
+        {(data.error || sync.error) && (
+          <div className="px-4">
+            {data.error && <p className="text-bad text-sm my-2 break-words">GitHub did not answer for every repo: {data.error}</p>}
+            <ErrorText error={sync.error} />
+          </div>
+        )}
+        {data.prs.length
+          ? <Card className="overflow-hidden">{data.prs.map((pr) => <PrRow key={pr.id} pr={pr} showRepo={data.github_repos > 1} />)}</Card>
+          : <Empty>No open pull requests.</Empty>}
+      </Section>
+      <GithubCheck project={project} />
+    </>
   );
 }

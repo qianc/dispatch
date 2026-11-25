@@ -44,6 +44,7 @@ export const PROJECT_WRITES: Record<string, ((store: Store, params: Params) => n
   'POST /api/projects/:key/sources': byKey,
   'POST /api/projects/:key/batches': byKey,
   'POST /api/projects/:key/planner': byKey,
+  'POST /api/projects/:key/github-check': byKey,
   'POST /api/projects/:key/schedules': byKey,
   'POST /api/projects/:key/releases': byKey,
   'POST /api/projects/:key/repos': byKey,

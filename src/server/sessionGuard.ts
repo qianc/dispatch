@@ -48,6 +48,7 @@ export const SESSION_ROUTES: Record<string, { find: (store: Store, params: Param
   // new work: the handler checks the proposal card it comes from, if any
   'POST /api/projects/:key/batches': null,
   'POST /api/projects/:key/planner': null,
+  'POST /api/projects/:key/github-check': null,
   'POST /api/projects/:key/releases': null,
   // the caller's own chats
   'POST /api/assistant/messages': null,

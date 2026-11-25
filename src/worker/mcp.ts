@@ -433,8 +433,9 @@ const noFiles = async () => {
  * cross-project tools (DISP-55). `cwd`: the session checkout, where attach_image may take files from (DISP-74).
  * `editItems`: the project lets agents change item titles and descriptions (DISP-93).
  * `neighbours`: the projects work sessions and scheduled runs may also file items into (DISP-126).
+ * `githubCheck`: a planner that reads GitHub's findings and files items for them itself (DISP-258).
  */
-export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false, neighbours: Neighbour[] = []) {
+export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string) => Promise<string> = noFiles, list: ListFolder = noFiles, scheduled = false, cross?: { ownKey: string; ask: AskCrossProject }, cwd?: string, editItems = false, neighbours: Neighbour[] = [], githubCheck = false) {
   const crossTools = cross && !scheduled && (kind === 'planner' || kind === 'discuss') ? crossProjectTools(rpc, cross.ownKey, cross.ask) : [];
   if (kind === 'assistant') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: assistantTools(rpc, readFile, list, cwd, cross?.ask) });
   if (kind === 'orchestrator') return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools: orchestratorTools(rpc, editItems) });
@@ -546,6 +547,12 @@ export function dispatchMcp(kind: SessionKind, rpc: Rpc, readFile: (path: string
         items: z.array(z.object(itemShape)).min(1),
       }, async (p) => call(rpc, 'propose')({ type: 'items', ...p })),
     );
+    if (githubCheck) {
+      tools.push(
+        tool('github_findings', "Read what GitHub reports for this project's repos: open code scanning (security and code quality), Dependabot and secret scanning alerts, and the failed GitHub Actions runs on the default branch and on open pull requests (the latest run per workflow, with the end of each failed job's log). `not_read` names what GitHub did not give (a feature that is off, or no access).", {}, call(rpc, 'github_findings')),
+        createItem(rpc, 'File a tracker item for a GitHub finding, with your diagnosis and the link to the alert or run in its description. It is not started unless the owner starts it from your batch card.', []),
+      );
+    }
   }
   tools.push(...crossTools);
   return createSdkMcpServer({ name: 'dispatch', version: '1.0.0', tools });

@@ -207,6 +207,8 @@ export class Sessions {
   private neighbourRulesShown = new Set<string>();
   /** The orchestrator's tools (set by app.ts). */
   orchestratorRpc: ((s: Session, method: string, p: Record<string, unknown>) => Promise<unknown>) | null = null;
+  /** What GitHub reports for a GitHub check's project (DISP-258; set by app.ts). */
+  githubFindings: ((s: Session, project: Project) => Promise<unknown>) | null = null;
   /**
    * What an orchestrator session spans (set by app.ts): the repos of its projects, the project it
    * acts as on GitHub for its own read-only checkouts, and its part of the start spec.
@@ -646,6 +648,37 @@ export class Sessions {
     this.emitSession(session);
     this.dispatch();
     return this.store.session(session.id)!;
+  }
+
+  /**
+   * A GitHub check (DISP-258): a planner that reads what GitHub reports for the project's repos,
+   * files an item for each finding that matters and proposes fixes. One check per project at a
+   * time: starting it while one works gives that one; a finished one (idle) is closed for the new one.
+   */
+  startGithubCheck(project: Project, startedBy: string | null): Session {
+    assertWritable(this.store, project.id);
+    const last = this.githubCheck(project.id);
+    if (last && !FINAL_STATUSES.includes(last.status)) {
+      if (last.status !== 'idle') return last;
+      this.finish(last.id, 'completed');
+    }
+    if (!this.store.repos(project.id).some((r) => !r.local_path)) throw new SessionError('This project has no GitHub repo.');
+    const workerId = this.workerFor(project, null, startedBy);
+    this.preflight(startedBy, project, workerId);
+    const session = this.store.createSession({
+      project_id: project.id, kind: 'planner', title: 'GitHub check', status: 'queued', force_plan: false, branch: null,
+      initial_prompt: "Check what GitHub reports for this project's repos and deal with it, as your instructions say.",
+      source_id: null, item_ids: [], claude_account: this.claudeAccountFor(project, null, undefined, workerId),
+      worker_id: workerId, started_by: startedBy, github_check: true,
+    });
+    this.emitSession(session);
+    this.dispatch();
+    return this.store.session(session.id)!;
+  }
+
+  /** The project's latest GitHub check (DISP-258), open or not. */
+  githubCheck(projectId: number): Session | undefined {
+    return this.store.sessions({ project_id: projectId, kind: 'planner', limit: null }).filter((s) => s.github_check).sort((a, b) => b.id - a.id)[0];
   }
 
   /**
@@ -1481,6 +1514,9 @@ export class Sessions {
       }
       case 'update_item':
         return this.agentItemUpdate(s, project, byKey(p.key), p);
+      case 'github_findings':
+        if (!s.github_check || !this.githubFindings) throw new Error('Only a GitHub check reads GitHub findings.');
+        return this.githubFindings(s, project);
       case 'propose':
         return this.propose(s, p);
       default:
@@ -2056,6 +2092,7 @@ export class Sessions {
       ...(project?.agents_edit_items || orchestration?.spec.projects.some((p) => p.agents_edit_items) ? { agents_edit_items: true } : {}),
       ...(schedule ? { schedule: { name: schedule.name, scope_md: schedule.scope_md, max_batches: schedule.max_batches } } : {}),
       ...(s.release ? { release: s.release } : {}),
+      ...(s.github_check ? { github_check: true } : {}),
       ...(orchestration ? { orchestration: orchestration.spec } : {}),
     };
   }

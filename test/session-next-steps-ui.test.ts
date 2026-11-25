@@ -22,7 +22,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   id: 7, project_id: 1, project_key: 'P', kind: 'work', title: 'Release 1.2', status: 'idle', force_plan: false, branch: null, sdk_session_id: null, run_model: null,
   initial_prompt: 'Release', source_id: null, waiting_reason: null, last_text: null, usage: null, options: DEFAULT_RUN_OPTIONS, claude_account: null, worker_id: 1,
   paused: false, pending_prompt: null, moved_from: null, item_ids: [], release: null, schedule_id: null, login_needed: null, limit_wait: null, unclean: null, started_by: null, github_login: null,
-  closed_at: null, closed_reason: null, retry_of: null, about_session: null, orchestrator_id: null,
+  closed_at: null, closed_reason: null, retry_of: null, about_session: null, github_check: false, orchestrator_id: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: null, ...over,
 });
 const html = (s: Session) => {
