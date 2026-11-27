@@ -1,6 +1,6 @@
 // System prompt text appended to Claude Code's own prompt for each session.
 import type { StartSpec } from '../shared/protocol.ts';
-import { repoFolder, type Item, type Source } from '../shared/types.ts';
+import { repoFolder, type Item, type Repo, type Source } from '../shared/types.ts';
 
 function sourceLine(s: Source) {
   const parts = [`${s.kind} "${s.title}"`];
@@ -108,8 +108,21 @@ export function workPrompt(spec: StartSpec): string {
   }[spec.options.subagents];
   lines.push(exec);
   const checked = spec.options.turn_check ? spec.repos.filter((r) => r.check_command) : [];
+  const commands = (rs: Repo[]) => rs.map((r) => `${r.github_name}: \`${r.check_command}\``).join(', ');
+  // DISP-261: an agent that runs a slow suite itself doubles the time the check takes after it
+  const onlyYours = 'Run only the tests for what you changed.';
   if (checked.length) {
-    lines.push(`- When your turn ends, Dispatch runs the repo's check command (${checked.map((r) => `${r.github_name}: \`${r.check_command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
+    lines.push(`- When your turn ends, Dispatch runs the repo's check command (${commands(checked)}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again. Do not run that command yourself; Dispatch runs it after your turn. ${onlyYours}`);
+  }
+  // a merge in Dispatch runs the check (github.ts mergeOpen); GitHub's own merge does not
+  const localMerge = (r: Repo) => spec.options.auto_merge === 'local' || !!r.local_path || !!r.generate_command || r.kind === 'hosted';
+  const mergeChecked = auto ? spec.repos.filter((r) => r.check_command && localMerge(r) && !checked.includes(r)) : [];
+  if (mergeChecked.length) {
+    lines.push(`- Dispatch runs the repo's check command (${commands(mergeChecked)}) before it merges. Do not run that command yourself. ${onlyYours}`);
+  }
+  const ci = spec.repos.filter((r) => r.ci && !checked.includes(r) && !mergeChecked.includes(r));
+  if (ci.length) {
+    lines.push(`- GitHub CI runs the test suite on the PR in ${ci.map((r) => r.github_name).join(', ')}. Do not run the full suite yourself; CI runs it on the PR. ${onlyYours}`);
   }
   // DISP-56: these files are written at merge, from the items; a branch that edits them is refused
   const generated = spec.repos.filter((r) => r.generate_command && r.generated_paths?.length);
