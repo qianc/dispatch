@@ -88,7 +88,7 @@ function App() {
   const signedOut = meError instanceof ApiError && meError.foreign && (!me || meError.status === 401);
   const authed = !!me?.authed && !signedOut;
   useEffect(() => (authed ? connectLive(client) : undefined), [authed, client]);
-  useEffect(() => (authed ? trackPresence() : undefined), [authed]);
+  useEffect(() => (authed ? trackPresence((fn) => router.subscribe(fn)) : undefined), [authed]);
   if (signedOut) return <SignedOut />;
   if (!me) return null;
   if (!me.authed) return <Login passwordLogin={me.password_login} />;

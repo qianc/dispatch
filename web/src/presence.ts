@@ -1,5 +1,6 @@
-// Tells the server whether this device has the app in focus: while it has, the server sends this
-// device no system notifications (the open app shows them itself, see Notices in Layout.tsx).
+// Tells the server whether this device has the app in focus, and on which page: while it has, the
+// server sends this device no system notifications (the open app shows them itself, see Notices in
+// Layout.tsx), and the owner's other devices none for what that page shows (DISP-266).
 import { currentSubscription } from './push.ts';
 
 /** The server forgets focus after 45 s without a renewal, so a closed app gets notifications again. */
@@ -7,19 +8,22 @@ const RENEW_MS = 20_000;
 
 const appFocused = () => document.visibilityState === 'visible' && document.hasFocus();
 
-export function trackPresence(): () => void {
+/** `onNavigate`: subscribes to the app's page changes, so the server knows the page at once. */
+export function trackPresence(onNavigate: (fn: () => void) => () => void): () => void {
   let endpoint: string | null = null;
   let reported: boolean | null = null;
+  let page: string | null = null;
   let timer: number | undefined;
 
   const send = (active: boolean) => {
     if (!endpoint || (!active && reported === false)) return;
     reported = active;
+    page = location.pathname;
     // keepalive: going to the background, the page may be frozen before an ordinary request leaves
     void fetch('/api/push/presence', {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, active }),
+      body: JSON.stringify({ endpoint, active, path: page }),
       credentials: 'same-origin',
       redirect: 'manual', // signed out at a sign-in proxy: do not follow it to its login
       keepalive: true,
@@ -44,12 +48,16 @@ export function trackPresence(): () => void {
   };
 
   report();
+  const stopNavigate = onNavigate(() => {
+    if (reported && location.pathname !== page) report();
+  });
   const events = ['focus', 'blur', 'pagehide', 'pageshow'] as const;
   document.addEventListener('visibilitychange', report);
   for (const e of events) window.addEventListener(e, report);
   return () => {
     clearTimeout(timer);
     send(false);
+    stopNavigate();
     document.removeEventListener('visibilitychange', report);
     for (const e of events) window.removeEventListener(e, report);
   };

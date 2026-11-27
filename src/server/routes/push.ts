@@ -22,10 +22,10 @@ export function pushRoutes(app: FastifyInstance, { store, notifier, users }: Ctx
     if (removed) notifier.setActive(endpoint, false, me(req));
     return { ok: true, removed: removed ? 1 : 0 };
   });
-  /** This device's app gained or lost focus (renewed every 20 s while it has it): no system notifications while focused. */
+  /** This device's app gained or lost focus (renewed every 20 s while it has it): no system notifications while focused. `path`: the page it shows (DISP-266). */
   app.post('/api/push/presence', async (req) => {
-    const { endpoint, active } = z.object({ endpoint: z.string(), active: z.boolean() }).parse(req.body);
-    notifier.setActive(endpoint, active, me(req));
+    const { endpoint, active, path } = z.object({ endpoint: z.string(), active: z.boolean(), path: z.string().max(500).optional() }).parse(req.body);
+    notifier.setActive(endpoint, active, me(req), path);
     return { ok: true };
   });
   /** How many of this person's devices get notifications (an old, removed app install can still count here). */

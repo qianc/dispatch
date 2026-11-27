@@ -132,21 +132,40 @@ describe('orchestrator: tools for its batches', () => {
     expect(input.delegated_to).toBe(p.id);
   });
 
-  it('a stopped merge: one try for the orchestrator, then the owner', async () => {
+  it('a stopped merge: the orchestrator tries first while it has messages left, then the owner', async () => {
     const p = await running({ options: { auto_merge: 'github' } });
     const needs = () => t.pushes.filter((x) => x.title === 'Rework auth: step 1 needs you');
     t.status(p.child, 'idle');
     t.pr(p.child, 'open', { blocked: 'the check failed' });
     expect(t.store.step(p.first.id)).toMatchObject({ state: 'review', note: 'the check failed' });
-    expect(told(p.id).at(-1)).toContain('the check failed. You may tell its session once how to fix it (send_to_session). If you cannot, say so to the owner.');
+    expect(told(p.id).at(-1)).toContain('the check failed. You may tell its session how to fix it (send_to_session, 3 messages left). If you cannot, say so to the owner.');
     expect(needs()).toEqual([]);
-    await t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'The check fails on lint: fix it.' });
+    for (let i = 0; i < 3; i++) {
+      await t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'The check fails on lint: fix it.' });
+      t.status(p.id, 'idle');
+      t.status(p.child, 'idle'); // the batch tried, and the merge is stopped again
+    }
+    expect(told(p.id).at(-1)).toContain('the check failed. You have no messages left for it: the owner is told.');
+    expect(needs()).toEqual([expect.objectContaining({ body: 'The check failed.', url: `/s/${p.child}` })]);
+  });
+
+  it('a new stop after a message is offered again: the owner is not told when the orchestrator acts (DISP-265)', async () => {
+    const p = await running({ options: { auto_merge: 'github' } });
+    const needs = () => t.pushes.filter((x) => x.title === 'Rework auth: step 1 needs you');
+    t.status(p.child, 'idle');
+    t.pr(p.child, 'open', { mergeable: false });
+    expect(t.store.step(p.first.id)).toMatchObject({ note: 'it has merge conflicts', offer: 'fix_merge' });
+    await t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'Rebase on main.' });
+    t.status(p.id, 'idle');
+    // the conflict is gone, but its checks are red now
+    t.pr(p.child, 'open', { blocked: 'not all green (unstable)' });
+    t.status(p.child, 'idle');
+    expect(t.store.step(p.first.id)).toMatchObject({ note: 'not all green (unstable)', offer: 'fix_merge', offer_messages: 1 });
+    expect(told(p.id).at(-1)).toContain('2 messages left');
+    t.status(p.id, 'running');
+    await t.rpc(p.id, 'send_to_session', { session_id: p.child, text: 'Fix the CodeQL finding.' });
     t.status(p.id, 'idle');
     expect(needs()).toEqual([]);
-    // the batch tried, and the merge is stopped again
-    t.status(p.child, 'idle');
-    expect(needs()).toEqual([expect.objectContaining({ body: 'The check failed.', url: `/s/${p.child}` })]);
-    expect(told(p.id).at(-1)).toContain('the check failed. Your message did not clear it: the owner is told.');
   });
 
   it('a stopped merge it does not act on reaches the owner at its turn end', async () => {
