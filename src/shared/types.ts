@@ -1094,6 +1094,31 @@ export interface QuietLogEntry {
   created_at: string;
 }
 
+/**
+ * One notice Dispatch sent or held back (DISP-267). outcome: pushed (to at least one device),
+ * app_only (shown in open apps only: no device took a push), held (not sent; `reason` says why).
+ */
+export interface NoticeLogEntry {
+  id: number;
+  created_at: string;
+  users: string[];
+  title: string;
+  body: string;
+  url: string;
+  tag: string | null;
+  project_id: number | null;
+  session_id: number | null;
+  orchestration_id: number | null;
+  /** the code path that sent it, e.g. `orchestrator.needsOwner` */
+  source: string;
+  outcome: 'pushed' | 'app_only' | 'held';
+  reason: string | null;
+  /** per device: its push service and what happened (`201`, `in focus: no push`, an error) */
+  devices: { service: string; result: string }[];
+  /** a newer notice with the same tag, which took its place on the devices */
+  replaced_by: number | null;
+}
+
 /** One entry of the plan's history. */
 export interface PlanChange {
   id: number;

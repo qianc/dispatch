@@ -6,6 +6,7 @@ import type { Db } from './db.ts';
 import { isRemovedUser } from './identity.ts';
 import type { Store } from './store.ts';
 import type { Users } from './users.ts';
+import type { NoticeLogEntry } from '../shared/types.ts';
 
 export interface Notice {
   title: string;
@@ -13,7 +14,14 @@ export interface Notice {
   url: string;
   tag?: string;
   project_id?: number;
+  /** the session it is about; its orchestration is found from it (DISP-267) */
+  session_id?: number;
+  /** the code path that sends it, for the notice log (DISP-267), e.g. `orchestrator.needsOwner` */
+  source: string;
 }
+
+/** How long the notice log keeps a notice (DISP-267). */
+const KEEP_MS = 30 * 24 * 3_600_000;
 
 /**
  * What a step's batch's notice means for its orchestration (DISP-122). routine: news the step's
@@ -35,6 +43,7 @@ export class Notifier {
   /** Last notices, for tests and the debug endpoint; `to`: the users they went to. */
   readonly sent: (Notice & { to: string[] })[] = [];
   private store: Store;
+  private db: Db;
   private bus: Bus;
   private users: Pick<Users, 'installOwner'>;
   private cfg: Pick<Config, 'authUsers'>;
@@ -43,6 +52,7 @@ export class Notifier {
 
   constructor(cfg: Config, db: Db, store: Store, bus: Bus, users: Pick<Users, 'installOwner'>) {
     this.store = store;
+    this.db = db;
     this.bus = bus;
     this.users = users;
     this.cfg = cfg;
@@ -68,12 +78,12 @@ export class Notifier {
     return this.active.size;
   }
 
-  /** Sends one push; tests replace it. */
-  deliver = async (endpoint: string, keys: { p256dh: string; auth: string }, payload: string) => {
+  /** Sends one push; tests replace it. The push service's answer, when there is one. */
+  deliver = async (endpoint: string, keys: { p256dh: string; auth: string }, payload: string): Promise<unknown> => {
     // checked again: a name can resolve elsewhere now, and rows from before the check exist (DISP-225)
     const problem = await pushEndpointProblem(endpoint);
     if (problem) throw new Error(`push endpoint refused: ${problem}`);
-    await webpush.sendNotification({ endpoint, keys }, payload, { TTL: 3600 });
+    return webpush.sendNotification({ endpoint, keys }, payload, { TTL: 3600 });
   };
 
   /** The users a target names; nobody named, or someone taken off AUTH_USERS (DISP-237): the install owner. */
@@ -85,8 +95,9 @@ export class Notifier {
 
   /** Tells `to` (see NoticeTarget) on every device of theirs, and in their open apps. */
   async send(n: Notice, to?: NoticeTarget) {
-    if (n.project_id && this.store.isMuted(n.project_id)) return;
     const users = this.targets(to);
+    if (n.project_id && this.store.isMuted(n.project_id)) return void this.log(n, users, 'held', 'project muted');
+    const id = this.log(n, users, 'app_only', null);
     this.sent.push({ ...n, to: users });
     if (this.sent.length > 50) this.sent.shift();
     const notice = { title: n.title, body: n.body, url: n.url, tag: n.tag };
@@ -95,12 +106,19 @@ export class Notifier {
     this.activeCount(); // drops expired focus
     const payload = JSON.stringify(notice);
     const subs = users.flatMap((u) => this.store.pushSubscriptions(u));
+    const devices: NoticeLogEntry['devices'] = [];
+    let pushed = 0;
     await Promise.all(
-      subs.filter((s) => !this.active.has(s.endpoint)).map(async (s) => {
+      subs.map(async (s) => {
+        const service = serviceOf(s.endpoint);
+        if (this.active.has(s.endpoint)) return void devices.push({ service, result: 'in focus: no push' });
         try {
-          await this.deliver(s.endpoint, { p256dh: s.p256dh, auth: s.auth }, payload);
+          const r = await this.deliver(s.endpoint, { p256dh: s.p256dh, auth: s.auth }, payload);
+          pushed++;
+          devices.push({ service, result: String((r as { statusCode?: number } | undefined)?.statusCode ?? 'sent') });
         } catch (e) {
           const code = (e as { statusCode?: number }).statusCode;
+          devices.push({ service, result: `failed${code ? ` ${code}` : ''}: ${(e as Error).message}${code === 404 || code === 410 ? ' (device removed)' : ''}`.slice(0, 300) });
           if (code === 404 || code === 410) {
             this.store.removePushSubscription(s.endpoint);
             this.active.delete(s.endpoint);
@@ -109,5 +127,54 @@ export class Notifier {
         }
       }),
     );
+    const reason = pushed ? null : !subs.length ? 'no device gets notifications' : devices.every((d) => d.result.startsWith('in focus')) ? 'the app is in focus on every device' : 'no push went through';
+    this.db.run('UPDATE notice_log SET outcome = ?, reason = ?, devices = ? WHERE id = ?', pushed ? 'pushed' : 'app_only', reason, JSON.stringify(devices), id);
+  }
+
+  /** A notice that is not sent (DISP-267): only logged, with why (the orchestrator took it, a newer one replaced it). */
+  hold(n: Notice, to: NoticeTarget, reason: string) {
+    this.log(n, this.targets(to), 'held', reason);
+  }
+
+  /** Keep a notice in the log; a pushed one with the same tag is replaced on the devices by this one. Prunes old ones. */
+  private log(n: Notice, users: string[], outcome: NoticeLogEntry['outcome'], reason: string | null): number {
+    const s = n.session_id ? this.store.session(n.session_id) : undefined;
+    const orch = s ? (s.kind === 'orchestrator' ? s.id : s.orchestrator_id ?? null) : null;
+    this.db.run('DELETE FROM notice_log WHERE created_at < ?', new Date(Date.now() - KEEP_MS).toISOString());
+    const { lastId } = this.db.run(
+      'INSERT INTO notice_log (users, title, body, url, tag, project_id, session_id, orchestration_id, source, outcome, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      JSON.stringify(users), n.title, n.body, n.url, n.tag ?? null, n.project_id ?? s?.project_id ?? null, n.session_id ?? null, orch, n.source, outcome, reason,
+    );
+    if (n.tag && outcome !== 'held') this.db.run("UPDATE notice_log SET replaced_by = ? WHERE tag = ? AND id < ? AND replaced_by IS NULL AND outcome != 'held'", lastId, n.tag, lastId);
+    return lastId;
+  }
+
+  /**
+   * The notice log, newest first. `user`: only notices to them. `session_id`: that session's;
+   * `orchestration_id`: the orchestration's own and its batches'.
+   */
+  notices(f: { user?: string; session_id?: number; orchestration_id?: number; limit?: number }): NoticeLogEntry[] {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (f.user !== undefined) { where.push('EXISTS (SELECT 1 FROM json_each(users) WHERE value = ?)'); args.push(f.user); }
+    if (f.session_id !== undefined) { where.push('session_id = ?'); args.push(f.session_id); }
+    if (f.orchestration_id !== undefined) { where.push('(orchestration_id = ? OR session_id = ?)'); args.push(f.orchestration_id, f.orchestration_id); }
+    const rows = this.db.all(`SELECT * FROM notice_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`, ...args, f.limit ?? 200);
+    const num = (v: unknown) => (v === null ? null : Number(v));
+    return rows.map((r) => ({
+      id: Number(r.id), created_at: String(r.created_at), users: JSON.parse(String(r.users)), title: String(r.title), body: String(r.body), url: String(r.url),
+      tag: r.tag === null ? null : String(r.tag), project_id: num(r.project_id), session_id: num(r.session_id), orchestration_id: num(r.orchestration_id),
+      source: String(r.source), outcome: String(r.outcome) as NoticeLogEntry['outcome'], reason: r.reason === null ? null : String(r.reason),
+      devices: JSON.parse(String(r.devices)), replaced_by: num(r.replaced_by),
+    }));
   }
 }
+
+/** A push endpoint's service, to name a device in the log without its secret URL. */
+const serviceOf = (endpoint: string) => {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return 'unknown';
+  }
+};

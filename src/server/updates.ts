@@ -309,7 +309,7 @@ export class Updates {
     this.db.setSetting('update_notified', t.sha);
     const what = `${t.tag ?? short(t.sha)} is ${plural(behind, 'commit')} newer than the version that runs (${short(this.version.sha)}).`;
     const then = this.settings().auto ? 'Dispatch installs it when no session is working.' : 'Open Settings to install it.';
-    void this.notifier.send({ title: 'Dispatch: a new version', body: `${what} ${then}`, url: '/settings#updates', tag: 'update' });
+    void this.notifier.send({ title: 'Dispatch: a new version', body: `${what} ${then}`, url: '/settings#updates', tag: 'update', source: 'updates.tellNew' });
   }
 
   /**
@@ -414,7 +414,7 @@ export class Updates {
   }
 
   private tell(title: string, body: string) {
-    void this.notifier.send({ title, body, url: '/settings#updates', tag: 'update' });
+    void this.notifier.send({ title, body, url: '/settings#updates', tag: 'update', source: 'updates.tell' });
   }
 
   private workerName(id: number | null | undefined) {

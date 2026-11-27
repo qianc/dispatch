@@ -1,6 +1,7 @@
 import { OrchestratorDefaults } from '../components/orchestration.tsx';
 import { ModelDefaultsSection } from '../components/modelDefaults.tsx';
 import { UpdatesSection } from '../components/updates.tsx';
+import { NoticeLogSection } from '../components/noticeLog.tsx';
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
@@ -71,6 +72,7 @@ export function Settings() {
           )}
         </Card>
       </Section>
+      <NoticeLogSection />
       <YourGithubSection me={me} />
       {me?.is_owner && <ServerGithubSection />}
       <WorkersSection me={me} />

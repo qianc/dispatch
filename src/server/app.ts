@@ -152,6 +152,7 @@ export async function buildApp(cfg: Config, opts: { dbFile?: string; logger?: bo
   github.hosted = hosted;
   const assistant = new AssistantTools(store, bus, github, sessions, hub, users);
   assistant.rules = (p) => projectRules({ store, hub, hosted }, p);
+  assistant.notices = (f) => notifier.notices(f);
   sessions.rules = assistant.rules;
   const attachments = new Attachments(cfg.dataDir);
   sessions.attachments = attachments;
