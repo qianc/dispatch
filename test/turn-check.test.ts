@@ -168,6 +168,34 @@ describe('the level a turn check runs (DISP-260)', () => {
     expect(turnChecks([{ ...quick, ci: true }, repo(2, 'docs', null)], on)).toEqual([{ repo: { ...quick, ci: true }, level: 'quick', command: 'npm run lint' }]);
   });
 
+  it("follows the batch's check_level, falling back where the repo lacks the command (DISP-262)", () => {
+    const ci = { ...quick, ci: true };
+    expect(turnCheckLevel(ci, { ...on, check_level: 'full' })).toBe('full');
+    expect(turnCheckLevel(quick, { ...on, check_level: 'quick' })).toBe('quick');
+    expect(turnCheckLevel(quick, { ...on, check_level: 'none' })).toBe('none');
+    expect(turnCheckLevel({ ...repo(1, 'app', null), quick_check_command: 'lint' }, { ...on, check_level: 'full' })).toBe('quick');
+    expect(turnCheckLevel(repo(1, 'app'), { ...on, check_level: 'quick' })).toBe('none');
+    expect(turnCheckLevel(ci, { turn_check: false, check_level: 'full' })).toBe('none');
+  });
+
+  it('a running session takes a changed level at its next turn, also on an unchanged tree (DISP-262)', async () => {
+    const r = { ...quick, ci: true };
+    const h = harness({ repos: [r] });
+    h.tc.use(turnChecks([r], { ...on, check_level: 'quick' }));
+    h.results.push(h.ok());
+    expect(await h.tc.gate()).toBeNull();
+    expect(texts(h.sent)).toContain('Running the quick check of app before the turn is reported done: npm run lint');
+    h.tc.use(turnChecks([r], { ...on, check_level: 'full' }));
+    h.results.push(h.ok());
+    expect(await h.tc.gate()).toBeNull();
+    expect(texts(h.sent)).toContain('Running the full check of app before the turn is reported done: npm test');
+    expect(h.runs()).toBe(2);
+    h.tc.use(turnChecks([r], { ...on, check_level: 'none' }));
+    h.state.set(1, 'v2');
+    expect(await h.tc.gate()).toBeNull();
+    expect(h.runs()).toBe(2);
+  });
+
   it("knows the agent's own run of a check command", () => {
     const repos = [quick, repo(2, 'api', 'pytest -q')];
     expect(agentCheck(repos, 'npm test')).toEqual({ repo: quick, command: 'npm test' });
@@ -300,8 +328,10 @@ describe('Workspaces turn state', () => {
     const lines = readFileSync(log, 'utf8').trim().split('\n');
     expect(lines.map((l) => l.split(' ')[0])).toEqual(['start', 'end', 'start', 'end']);
     expect(lines.filter((l) => l.startsWith('start'))).toHaveLength(2); // the stopped check never ran
-    expect(stages[1]).not.toContain(CHECK_WAITS);
-    expect(stages[2][0]).toBe(CHECK_WAITS);
+    // which of sessions 1 and 2 reaches the queue first is not fixed (DISP-269): one waits, the other never
+    const [waited, first] = stages[1][0] === CHECK_WAITS ? [stages[1], stages[2]] : [stages[2], stages[1]];
+    expect(waited[0]).toBe(CHECK_WAITS);
+    expect(first).not.toContain(CHECK_WAITS);
     expect(stages[3]).toEqual([CHECK_WAITS]);
   });
 });

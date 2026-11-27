@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { MAX_IMAGE_BYTES, sniffImage } from '../shared/chatImages.ts';
 import { groupCounts, parseSections } from '../shared/markdownSections.ts';
 import type { RpcMethod } from '../shared/protocol.ts';
-import { FIX_TOUCHES, ITEM_STATUSES, MINOR_CHANGES, crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
+import { CHECK_LEVELS, FIX_TOUCHES, ITEM_STATUSES, MINOR_CHANGES, crossProjectSummary, type CrossProjectRequest, type SessionKind } from '../shared/types.ts';
 
 export type Rpc = (method: RpcMethod, params: unknown) => Promise<unknown>;
 
@@ -346,6 +346,7 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
     after: z.array(z.number().int().min(1)).default([]).describe('Places in this list (from 1) of the steps that must be merged first'),
     optional: z.boolean().default(false).describe('You may skip it later without asking (nice to have, not needed for the goal)'),
     worker: z.string().optional().describe("The worker its batch runs on, by name, when the owner wants one; leave out for the project's default"),
+    check_level: z.enum(CHECK_LEVELS).optional().describe("How much Dispatch tests after each turn of its batch: full (the repo's check), quick (its quick check), none. Leave out for the repo's default (see Repo checks in the plan)"),
   })).min(1);
   const step_id = z.number().int().describe('The step_id from "The plan now" (not its place in the list)');
   return [
@@ -374,11 +375,11 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       plan_md: z.string().describe('The reasoning the owner should read: why these steps, in this order (markdown)'),
       steps: planSteps,
     }, call(rpc, 'set_plan')),
-    tool('amend_plan', 'Change the approved plan by yourself, without asking, for a minor change only: a step that fixes a blocker you diagnosed (touching only dependency pins, lockfiles, CI config or test config), another order of steps that have not started, new wording, or a step split in parts. It applies at once and goes in the plan\'s history for the owner. Dispatch refuses a change that is not minor and says why: then propose it with set_plan.', {
+    tool('amend_plan', 'Change the approved plan by yourself, without asking, for a minor change only: a step that fixes a blocker you diagnosed (touching only dependency pins, lockfiles, CI config or test config), another order of steps that have not started, new wording, a step split in parts, or other test levels (check_level). It applies at once and goes in the plan\'s history for the owner. Dispatch refuses a change that is not minor and says why: then propose it with set_plan.', {
       plan_md: z.string().default('').describe('The reasoning, if it changes; empty keeps it'),
       steps: planSteps,
       change: z.object({
-        kind: z.enum(MINOR_CHANGES).describe('fix_blocker: add one step that fixes a blocker. reorder: steps that have not started in another order, the same steps waiting for the same steps. reword: titles or prompts, the scope the same. split: one step that has not started in two or more parts that share out its items'),
+        kind: z.enum(MINOR_CHANGES).describe('fix_blocker: add one step that fixes a blocker. reorder: steps that have not started in another order, the same steps waiting for the same steps. reword: titles or prompts, the scope the same. split: one step that has not started in two or more parts that share out its items. checks: other check_level of steps, also of a running step (from its next turn)'),
         reason: z.string().describe('Why: the blocker and its cause, or what was wrong'),
         verification: z.string().optional().describe("fix_blocker: the check that proves the fix (e.g. `npm audit --audit-level=high` passes). The fix step's batch runs it and it must pass"),
         touches: z.array(z.enum(FIX_TOUCHES)).optional().describe('fix_blocker: all that the fix changes'),

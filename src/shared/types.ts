@@ -240,6 +240,9 @@ export const MODEL_DEFAULTS: ModelDefaults = { model: 'opus', effort: 'medium' }
 export const SUBAGENT_MODES = ['auto', 'prefer', 'none'] as const;
 export const START_MODES = ['now', 'after'] as const;
 export const AUTO_MERGE = ['off', 'github', 'local'] as const;
+/** How much a batch's turn check tests (DISP-262): the repo's check command, its quick check, or nothing */
+export const CHECK_LEVELS = ['full', 'quick', 'none'] as const;
+export type CheckLevel = (typeof CHECK_LEVELS)[number];
 
 export const runOptions = z.object({
   /** Claude Code model alias; 'default' = the server's default model (`ModelDefaults`) */
@@ -255,6 +258,8 @@ export const runOptions = z.object({
   base_check: z.boolean().default(true),
   /** before a turn is reported done: run the repo's check command, and send failures back to the agent (DISP-15) */
   turn_check: z.boolean().default(true),
+  /** the level of that check (DISP-262); unset: full only where no GitHub CI runs it, else quick (DISP-260) */
+  check_level: z.enum(CHECK_LEVELS).optional(),
   /** Claude account for this batch; null = the project's default */
   claude_account: z.string().nullable().default(null),
   /** worker to run on; null = the project's (or the global) default */
@@ -899,6 +904,8 @@ export interface OrchestrationStep {
   item_keys: string[];
   /** the worker its batch runs on, by name; null: the project's or the owner's default (DISP-251) */
   worker: string | null;
+  /** how much its batch's turn check tests (DISP-262); null: the repo's default level */
+  check_level: CheckLevel | null;
   /** ids of the steps that must be done or skipped first */
   depends_on: number[];
   state: StepState;
@@ -1039,6 +1046,8 @@ export const planInput = z.object({
     optional: z.boolean().default(false),
     /** the worker its batch runs on, by name; unset: the project's or the owner's default (DISP-251) */
     worker: z.string().trim().min(1).optional(),
+    /** how much its batch's turn check tests; unset: the repo's default level (DISP-262) */
+    check_level: z.enum(CHECK_LEVELS).optional(),
   })).min(1, 'A plan needs at least one step.'),
 });
 export type PlanInput = z.infer<typeof planInput>;
@@ -1048,7 +1057,7 @@ export type PlanInput = z.infer<typeof planInput>;
  * (architecture, usage or cost, credentials, scope, a step that holds independent work) is proposed
  * with set_plan and waits for the owner.
  */
-export const MINOR_CHANGES = ['fix_blocker', 'reorder', 'reword', 'split'] as const;
+export const MINOR_CHANGES = ['fix_blocker', 'reorder', 'reword', 'split', 'checks'] as const;
 /** What a step that fixes a diagnosed blocker may touch, and nothing else. */
 export const FIX_TOUCHES = ['dependency_pins', 'lockfiles', 'ci_config', 'test_config'] as const;
 export const minorChangeInput = z.object({

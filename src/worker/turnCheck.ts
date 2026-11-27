@@ -2,7 +2,7 @@
 // its worktree. A failure goes back to the agent as a new turn, until it passes or the retry limit.
 import type { CheckProgress } from '../shared/checkProgress.ts';
 import type { WorkerToServer } from '../shared/protocol.ts';
-import type { Repo, RunOptions } from '../shared/types.ts';
+import type { CheckLevel, Repo, RunOptions } from '../shared/types.ts';
 
 export interface CheckOutcome {
   code: number;
@@ -16,8 +16,6 @@ export interface CheckOutcome {
   reused?: boolean;
 }
 
-export type CheckLevel = 'full' | 'quick' | 'none';
-
 /** A repo's check at a turn's end: which level, and its command. */
 export interface TurnCheckRepo {
   repo: Repo;
@@ -26,20 +24,24 @@ export interface TurnCheckRepo {
 }
 
 /**
- * DISP-260: the one place that decides which check a turn's end runs in a repo (DISP-262 lets a
- * batch choose). The full check only where nothing else runs it: GitHub CI runs it on a GitHub
- * repo's PR (a merge in Dispatch runs it too, unless CI passed on that tree). Elsewhere the quick
- * check, if the repo has one.
+ * DISP-260: the one place that decides which check a turn's end runs in a repo. A batch's
+ * `check_level` chooses it (DISP-262): full falls back to the quick check, quick to none, when the
+ * repo has no such command. Unset: the full check only where nothing else runs it: GitHub CI runs it
+ * on a GitHub repo's PR (a merge in Dispatch runs it too, unless CI passed on that tree). Elsewhere
+ * the quick check, if the repo has one.
  */
-export function turnCheckLevel(repo: Repo, options: Pick<RunOptions, 'turn_check'>): CheckLevel {
-  if (!options.turn_check) return 'none';
+export function turnCheckLevel(repo: Repo, options: Pick<RunOptions, 'turn_check' | 'check_level'>): CheckLevel {
+  const chosen = options.turn_check ? options.check_level : 'none';
+  if (chosen === 'none') return 'none';
+  if (chosen === 'full' && repo.check_command) return 'full';
+  if (chosen) return repo.quick_check_command ? 'quick' : 'none';
   const ci = !!repo.ci && !repo.local_path && repo.kind !== 'hosted';
   if (repo.check_command && !ci) return 'full';
   return repo.quick_check_command ? 'quick' : 'none';
 }
 
 /** The session's repos that get a check at a turn's end, with its level and command. */
-export function turnChecks(repos: Repo[], options: Pick<RunOptions, 'turn_check'>): TurnCheckRepo[] {
+export function turnChecks(repos: Repo[], options: Pick<RunOptions, 'turn_check' | 'check_level'>): TurnCheckRepo[] {
   return repos.flatMap((repo) => {
     const level = turnCheckLevel(repo, options);
     const command = level === 'full' ? repo.check_command : level === 'quick' ? repo.quick_check_command : null;
@@ -89,12 +91,17 @@ const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 export class TurnCheck {
   private d: TurnCheckDeps;
   /** per repo: the worktree state the check last ran on, and how it went (an unchanged worktree is not checked again) */
-  private checked = new Map<number, { state: string; ok: boolean; told?: boolean }>();
+  private checked = new Map<number, { state: string; command: string; ok: boolean; told?: boolean }>();
   private fixes = 0;
   private ctrl: AbortController | null = null;
 
   constructor(deps: TurnCheckDeps) {
     this.d = deps;
+  }
+
+  /** The repos and levels from the session's newest options (DISP-262): a change applies from the next turn. */
+  use(repos: TurnCheckRepo[]) {
+    this.d = { ...this.d, repos };
   }
 
   /** The owner wrote: a new request, so the fix turns count from zero again. A running check stops. */
@@ -134,7 +141,7 @@ export class TurnCheck {
         const before = await this.d.state(repo).catch(() => null);
         if (before === null) continue;
         const last = this.checked.get(repo.id);
-        if (last?.state === before) {
+        if (last?.state === before && last.command === cmd) {
           if (!last.ok && !last.told) unfixed.push(repo);
           continue;
         }
@@ -145,7 +152,7 @@ export class TurnCheck {
         const r = await this.d.check(repo, cmd, (progress) => send({ progress }), ctrl.signal);
         const tree = r.tree ? `, tree ${r.tree.slice(0, 7)}` : '';
         if (r.reused) {
-          this.checked.set(repo.id, { state: before, ok: true });
+          this.checked.set(repo.id, { state: before, command: cmd, ok: true });
           this.event('system', `${cap(name)} of ${repo.github_name} not run again: it already passed on exactly this tree (${cmd}${tree}).`);
           continue;
         }
@@ -157,7 +164,7 @@ export class TurnCheck {
         const ok = r.code === 0;
         send({ done: { ok, duration_ms: r.duration_ms, units: r.progress.units } });
         // the state after the run: files the check itself writes are no change of the agent's
-        this.checked.set(repo.id, { state: (await this.d.state(repo).catch(() => null)) ?? before, ok });
+        this.checked.set(repo.id, { state: (await this.d.state(repo).catch(() => null)) ?? before, command: cmd, ok });
         if (ok) this.event('system', `${cap(name)} passed in ${repo.github_name} (${cmd}${tree}, ${duration(r.duration_ms)}).`);
         else failed.push({ repo, command: cmd, why: r.timed_out ? `stopped after ${this.d.timeoutMin} minutes (CHECK_TIMEOUT_MIN on the worker)` : `failed (exit code ${r.code})`, out: r.out.slice(-MAX_OUTPUT) });
       }

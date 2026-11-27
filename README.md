@@ -63,6 +63,8 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   passed on: not after the agent ran the same command itself, and not at a merge in Dispatch whose
   tree a session check or a green GitHub CI run on the PR head already tested. The session says
   which level ran, on which tree, and how long it took.
+  An orchestrator sees each repo's commands and can set a step's level (full, quick or none), e.g.
+  quick in each step and full in the last; a change reaches a running step at its next turn.
 - **Generated files at merge**: a repo's generate command (repo settings) runs in the merge
   checkout after the merge and before the check, with `DISPATCH_ITEMS` set to a JSON file of the
   project's items (the merging batch's items done). Its changes to the repo's generated files

@@ -201,7 +201,7 @@ export function proposalLines(o: Pick<Orchestration, 'steps' | 'proposal'>): { h
 }
 
 const CHANGE_KIND: Record<PlanChange['kind'], string> = {
-  fix_blocker: 'Fixed a blocker', reorder: 'Reordered', reword: 'Reworded', split: 'Split a step', retry: 'Retried a step',
+  fix_blocker: 'Fixed a blocker', reorder: 'Reordered', reword: 'Reworded', split: 'Split a step', checks: 'Changed test levels', retry: 'Retried a step',
   skip: 'Skipped an optional step', approved: 'You approved', declined: 'You declined',
 };
 

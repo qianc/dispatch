@@ -92,7 +92,7 @@ export function OrchestrationPanel({ o, mine }: { o: Orchestration; mine: boolea
             const right = stepRight(s, o);
             const body = (
               <>
-                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}{s.optional && <span className="text-faint"> · optional</span>}<span className="text-faint"> · on {s.worker ?? 'default worker'}</span></span>
+                <span className={cx('block truncate', s.state === 'skipped' && 'text-muted line-through')}>{s.title}{s.optional && <span className="text-faint"> · optional</span>}<span className="text-faint"> · on {s.worker ?? 'default worker'}</span>{s.check_level && <span className="text-faint"> · {s.check_level === 'none' ? 'no check' : `${s.check_level} check`}</span>}</span>
                 <span className={cx('block truncate text-[12px]', s.state === 'failed' ? 'text-bad' : 'text-muted')}>{[s.item_keys.join(', '), right].filter(Boolean).join(' · ')}</span>
               </>
             );

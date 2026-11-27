@@ -33,7 +33,7 @@ const orch: Orchestration = {
   max_children: 2, options: DEFAULT_RUN_OPTIONS, waiting: 'Waiting for #12 (running) in AA', proposal: null, changes: [], started_by: null, status: 'idle', created_at: '', updated_at: '',
   steps: [1, 2, 3].map((n) => ({
     id: n, orchestration_id: 5, position: n, title: `Step ${n}`, project_id: 1, project_key: 'AA', prompt_md: '', item_ids: [], item_keys: [], depends_on: [],
-    state: n === 1 ? 'done' as const : n === 2 ? 'running' as const : 'pending' as const, note: null, child_session_id: n < 3 ? 10 + n : null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, worker: null, child: null,
+    state: n === 1 ? 'done' as const : n === 2 ? 'running' as const : 'pending' as const, note: null, child_session_id: n < 3 ? 10 + n : null, seen: null, deploys: {}, deploys_started: {}, messages_sent: 0, offer: null, offer_messages: null, offered_at: null, optional: false, worker: null, check_level: null, child: null,
   })),
 };
 
