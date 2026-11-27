@@ -1814,7 +1814,9 @@ export class Sessions {
     }
     const repos = s.project_id ? this.store.repos(s.project_id) : [];
     // a release works on its one repo
-    return s.release ? repos.filter((r) => r.id === s.release!.repo_id) : repos;
+    const own = s.release ? repos.filter((r) => r.id === s.release!.repo_id) : repos;
+    // same test as auto-merge's checksMayStart: a repo whose PRs had checks runs CI on this one too
+    return own.map((r) => (this.store.prs({ repo_id: r.id }).some((p) => p.ci_state !== null && p.ci_state !== 'none') ? { ...r, ci: true } : r));
   }
 
   /**

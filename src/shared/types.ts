@@ -108,6 +108,8 @@ export interface Repo {
   read_dirs?: string[];
   /** its folder in the session when not its name: repos of an orchestrator whose names collide (DISP-167) */
   dir?: string;
+  /** filled in by the server for a work session: the repo's PRs have had GitHub CI checks (DISP-261) */
+  ci?: boolean;
   /** worker only: this session's worktree is a worktree of the owner's repo itself */
   attached?: boolean;
   /** the project's GitHub account (filled in by the server; tokens stay in env) */

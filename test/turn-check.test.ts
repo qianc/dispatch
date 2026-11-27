@@ -147,6 +147,16 @@ describe('the work prompt', () => {
     expect(workPrompt(spec(true))).toContain("Dispatch runs the repo's check command (app: `npm test`)");
     expect(workPrompt(spec(false))).not.toContain("runs the repo's check command");
   });
+  it('tells the agent not to run the check or CI suite itself (DISP-261)', () => {
+    expect(workPrompt(spec(true))).toContain('Do not run that command yourself; Dispatch runs it after your turn. Run only the tests for what you changed.');
+    // no turn check, but the merge check runs it when auto-merge is on
+    const merge = workPrompt({ ...spec(false), options: { ...spec(false).options, auto_merge: 'local' } });
+    expect(workPrompt({ ...spec(false), options: { ...spec(false).options, auto_merge: 'github' } })).not.toContain('Do not run');
+    expect(merge).toContain("Dispatch runs the repo's check command (app: `npm test`) before it merges. Do not run that command yourself.");
+    expect(workPrompt(spec(false))).not.toContain('Do not run');
+    const ci = workPrompt({ ...spec(false), repos: [repo(1, 'app'), { ...repo(2, 'docs', null), ci: true }] });
+    expect(ci).toContain('GitHub CI runs the test suite on the PR in docs. Do not run the full suite yourself');
+  });
 });
 
 describe('Workspaces turn state', () => {
