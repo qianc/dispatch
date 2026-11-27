@@ -328,8 +328,10 @@ describe('Workspaces turn state', () => {
     const lines = readFileSync(log, 'utf8').trim().split('\n');
     expect(lines.map((l) => l.split(' ')[0])).toEqual(['start', 'end', 'start', 'end']);
     expect(lines.filter((l) => l.startsWith('start'))).toHaveLength(2); // the stopped check never ran
-    expect(stages[1]).not.toContain(CHECK_WAITS);
-    expect(stages[2][0]).toBe(CHECK_WAITS);
+    // which of sessions 1 and 2 reaches the queue first is not fixed (DISP-269): one waits, the other never
+    const [waited, first] = stages[1][0] === CHECK_WAITS ? [stages[1], stages[2]] : [stages[2], stages[1]];
+    expect(waited[0]).toBe(CHECK_WAITS);
+    expect(first).not.toContain(CHECK_WAITS);
     expect(stages[3]).toEqual([CHECK_WAITS]);
   });
 });
