@@ -130,6 +130,33 @@ describe('Workspaces (git)', () => {
     expect(git(join(remoteRoot, 'me', 'hc.git'), 'log', 'main', '-1', '--format=%s')).toBe('Merge #1');
   });
 
+  it('takes a green GitHub CI run on the head as the check, when the merge has exactly its tree (DISP-260)', async () => {
+    const r = { ...repo, check_command: 'echo ran >> ../check-runs; test -f b.txt' };
+    const cwd = await ws.prepare(spec('feat'));
+    writeFileSync(join(cwd, 'b.txt'), 'two\n');
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-m', 'add b');
+    await ws.pushBranch(r, 1, 'feat');
+    const res = await ws.mergeLocal(r, 'feat', 'Merge #1', undefined, [], null, undefined, true);
+    expect(res).toMatchObject({ ok: true, ci_reused: true });
+    expect(res.check).toBeUndefined();
+    // main moved on: the merge is a tree CI did not test, so the check runs
+    const cwd2 = await ws.prepare(spec('feat2', 2));
+    writeFileSync(join(cwd2, 'd.txt'), 'four\n');
+    git(cwd2, 'add', '.');
+    git(cwd2, 'commit', '-m', 'add d');
+    await ws.pushBranch(r, 2, 'feat2');
+    const other = mkdtempSync(join(tmpdir(), 'dsp-other-'));
+    git(other, 'clone', '-q', join(remoteRoot, 'me', 'hc.git'), '.');
+    writeFileSync(join(other, 'c.txt'), 'three\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'other');
+    git(other, 'push', '-q', 'origin', 'main');
+    const moved = await ws.mergeLocal(r, 'feat2', 'Merge #2', undefined, [], null, undefined, true);
+    expect(moved).toMatchObject({ ok: true, check: { ok: true } });
+    expect(moved.ci_reused).toBeUndefined();
+  });
+
   it('runs the check at merge when main moved on, or the session check ran on uncommitted changes', async () => {
     const r = { ...repo, check_command: 'test -f b.txt' };
     const cwd = await ws.prepare(spec('feat'));

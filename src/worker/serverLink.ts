@@ -15,7 +15,7 @@ import { serverRoot } from './layout.ts';
 import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { runServerUpdate, type ServerUpdateOptions } from './serverUpdate.ts';
-import { checkRetries, TurnCheck } from './turnCheck.ts';
+import { agentCheck, checkRetries, TurnCheck, turnChecks } from './turnCheck.ts';
 import { checkTimeoutMs, run, Workspaces } from './workspace.ts';
 
 /** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
@@ -517,6 +517,7 @@ export class ServerLink {
       const deps: RunnerDeps = {
         // a finished turn of work on a hosted repo: push its branch first, so the server sees it
         emit: (m) => {
+          this.watchAgentCheck(spec, m);
           // the turn a status speaks for is the one at its writing, not after the push
           if (m.t === 'status' && m.ack === undefined && this.received.has(id)) m = { ...m, ack: this.received.get(id) };
           if (hostedWork && m.t === 'status' && m.status === 'idle') {
@@ -575,19 +576,54 @@ export class ServerLink {
    */
   private turnCheck(spec: StartSpec): TurnCheck | null {
     const id = spec.session_id;
-    const repos = spec.repos.filter((r) => r.check_command);
-    if (spec.kind !== 'work' || !spec.branch || !spec.options.turn_check || !repos.length || this.shared.fake) return null;
+    const repos = turnChecks(spec.repos, spec.options);
+    if (spec.kind !== 'work' || !spec.branch || !repos.length || this.shared.fake) return null;
     let tc = this.turnChecks.get(id);
     if (!tc) {
       tc = new TurnCheck({
         sessionId: id, repos, retries: checkRetries(), timeoutMin: Math.round(checkTimeoutMs() / 60_000),
         state: (repo) => this.workspaces.turnState(repo, id),
-        check: (repo, onProgress, signal) => this.workspaces.sessionCheck(repo, id, onProgress, signal, this.creds.get(id)),
+        // the agent's own check runs are remembered first (watchAgentCheck)
+        check: async (repo, command, onProgress, signal) => {
+          await this.agentChecks.get(id);
+          return this.workspaces.sessionCheck(repo, id, onProgress, signal, this.creds.get(id), command);
+        },
         send: (m) => this.send(m),
       });
       this.turnChecks.set(id, tc);
     }
     return tc;
+  }
+
+  /** DISP-260: the agent's Bash calls that run a check command, by tool use id: the tree they started on */
+  private agentRuns = new Map<string, Promise<{ repo: Repo; command: string; tree: string | null }>>();
+  /** per session: the agent's finished check runs still being remembered */
+  private agentChecks = new Map<number, Promise<void>>();
+
+  /**
+   * The agent ran a repo's check command itself (DISP-260): a pass on files that did not change
+   * while it ran is remembered by their tree, so the turn's check does not run it again on them.
+   */
+  private watchAgentCheck(spec: StartSpec, m: WorkerToServer) {
+    if (m.t !== 'event' || spec.kind !== 'work' || !spec.branch || this.shared.fake) return;
+    const b = m.body;
+    if (b.kind === 'tool_use' && b.name === 'Bash') {
+      const input = (b.input ?? {}) as { command?: unknown; run_in_background?: unknown };
+      // a background run answers before the command ends
+      const hit = input.run_in_background ? null : agentCheck(spec.repos, String(input.command ?? ''));
+      if (hit) this.agentRuns.set(b.tool_use_id, this.workspaces.sessionTree(hit.repo, spec.session_id).then((tree) => ({ ...hit, tree })));
+    } else if (b.kind === 'tool_result') {
+      const started = this.agentRuns.get(b.tool_use_id);
+      if (!started) return;
+      this.agentRuns.delete(b.tool_use_id);
+      if (b.is_error) return;
+      const id = spec.session_id;
+      const done = (this.agentChecks.get(id) ?? Promise.resolve()).then(async () => {
+        const { repo, command, tree } = await started;
+        if (tree && (await this.workspaces.sessionTree(repo, id)) === tree) this.workspaces.rememberPass(repo, command, tree);
+      }).catch(() => {});
+      this.agentChecks.set(id, done);
+    }
   }
 
   /** `onProgress`: a long command's progress, sent to the server as it runs */
@@ -624,7 +660,7 @@ export class ServerLink {
         await ws.pushBranch(cmd.repo, cmd.session_id, cmd.branch, 'github' in cmd ? cmd.github : this.creds.get(cmd.session_id));
         return { ok: true };
       case 'merge_local':
-        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github, cmd.sha);
+        return ws.mergeLocal(cmd.repo, cmd.branch, cmd.message, onProgress, cmd.items, cmd.github, cmd.sha, cmd.ci_green);
       case 'branch_status':
         return ws.branchStatus(cmd.repo, cmd.branch, cmd.last_sha);
       case 'branch_diff':
@@ -684,6 +720,7 @@ export class ServerLink {
         this.startAborts.delete(msg.session_id);
         this.turnChecks.get(msg.session_id)?.cancel();
         this.turnChecks.delete(msg.session_id);
+        this.agentChecks.delete(msg.session_id);
         this.creds.delete(msg.session_id);
         this.received.delete(msg.session_id);
         this.lastStatus.delete(msg.session_id);

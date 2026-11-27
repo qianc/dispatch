@@ -54,6 +54,12 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   progress). A failure goes back to the agent with its output as the next turn, up to
   `CHECK_RETRIES` fix turns; then you get a push that it still fails. An unchanged worktree is not
   checked again. A batch can turn this off ("Run the repo's check before done").
+- **Check levels**: a repo can also have a quick check command (lint plus a smoke set). Where
+  GitHub CI runs the full suite on the PR, a turn's end runs only the quick check (or none); local,
+  hosted and CI-less repos run the full check. A check does not run again on files it already
+  passed on: not after the agent ran the same command itself, and not at a merge in Dispatch whose
+  tree a session check or a green GitHub CI run on the PR head already tested. The session says
+  which level ran, on which tree, and how long it took.
 - **Generated files at merge**: a repo's generate command (repo settings) runs in the merge
   checkout after the merge and before the check, with `DISPATCH_ITEMS` set to a JSON file of the
   project's items (the merging batch's items done). Its changes to the repo's generated files

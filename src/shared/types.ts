@@ -88,6 +88,8 @@ export interface Repo {
   github_name: string;
   default_branch: string;
   check_command: string | null;
+  /** DISP-260: a faster check (lint plus a smoke set) for a turn's end, where the full check waits for CI */
+  quick_check_command?: string | null;
   /** set for a local-only repo: a git folder on the worker host (github_owner is then 'local') */
   local_path: string | null;
   /** local repos: make session worktrees in the repo itself (default) or in a separate clone */
@@ -796,6 +798,7 @@ export const repoPatch = z.object({
   github_name: z.string().regex(REPO_NAME, 'A repo name is letters, digits, dots, dashes and underscores.').optional(),
   default_branch: z.string().min(1).optional(),
   check_command: z.string().nullable().optional(),
+  quick_check_command: z.string().nullable().optional(),
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
   setup_command: z.string().nullable().optional(),
   deploy_command: z.string().nullable().optional(),

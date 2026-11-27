@@ -962,6 +962,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
   const [f, setF] = useState({
     default_branch: repo.default_branch,
     check_command: repo.check_command ?? '',
+    quick_check_command: repo.quick_check_command ?? '',
     deploy_command: repo.deploy_command ?? '',
     generate_command: repo.generate_command ?? '',
     generated_paths: (repo.generated_paths ?? []).join('\n'),
@@ -974,6 +975,7 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     mutationFn: () => api.patch(`/repos/${repo.id}`, {
       default_branch: f.default_branch,
       check_command: f.check_command.trim() || null,
+      quick_check_command: f.quick_check_command.trim() || null,
       deploy_command: f.deploy_command.trim() || null,
       generate_command: f.generate_command.trim() || null,
       generated_paths: f.generated_paths.split('\n').map((d) => d.trim()).filter(Boolean),
@@ -1015,8 +1017,11 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
           <textarea className={cx(inputCls, 'min-h-16 font-mono text-[14px]')} value={f.read_dirs} onChange={(e) => setF({ ...f, read_dirs: e.target.value })} placeholder="reference-decks/library-work" />
         </Field>
       )}
-      <Field label="Check command (optional)" hint="Must pass before a local merge.">
+      <Field label="Check command (optional)" hint="The full check. Must pass before a merge in Dispatch, unless GitHub CI passed on the same tree. Runs after each turn too where no GitHub CI runs it.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.check_command} onChange={(e) => setF({ ...f, check_command: e.target.value })} placeholder="npm test" />
+      </Field>
+      <Field label="Quick check command (optional)" hint="Runs after each turn where GitHub CI runs the full check on the PR, e.g. lint plus a smoke set. Without one, such a turn runs no check.">
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.quick_check_command} onChange={(e) => setF({ ...f, quick_check_command: e.target.value })} placeholder="npm run lint" aria-label="Quick check command" />
       </Field>
       <Field
         label="Generate command (optional)"

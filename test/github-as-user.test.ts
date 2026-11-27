@@ -22,7 +22,7 @@ async function rawWorker(port: number, token: string, caps: string[] | null = ['
   ws.on('message', (d) => {
     const m = JSON.parse(String(d));
     got.push(m);
-    if (m.t === 'cmd') ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: m.cmd.c === 'merge_local' ? { ok: true } : {} }));
+    if (m.t === 'cmd') ws.send(JSON.stringify({ t: 'cmd_result', req_id: m.req_id, ok: true, data: m.cmd.c === 'merge_local' ? { ok: true, ...(m.cmd.ci_green ? { ci_reused: true } : {}) } : {} }));
   });
   await new Promise((r) => ws.once('open', r));
   const facts = { os: 'linux', hostname: 'h', slots: 2, free_slots: 2, claude_accounts: [], github_accounts: [], local_repo_dirs: [], ...(caps ? { caps } : {}) };
@@ -35,7 +35,7 @@ async function rawWorker(port: number, token: string, caps: string[] | null = ['
 }
 
 /** GitHub as the tests need it: one open PR #5 on me/gh, merged once merged. */
-function github(s: Server) {
+function github(s: Server, checkRuns: unknown[] = []) {
   let merged = false;
   const pr = () => ({ number: 5, html_url: 'https://github.com/me/gh/pull/5', title: 'PR', state: merged ? 'closed' : 'open', merged_at: merged ? 'now' : null, mergeable: true, mergeable_state: 'clean', head: { ref: 'b', sha: 'abc' }, base: { ref: 'main' }, body: '' });
   return fakeGithub(s.ctx, {
@@ -47,7 +47,7 @@ function github(s: Server) {
       listFiles: async () => ({ data: [] }),
     },
     git: { deleteRef: async () => ({ data: {} }) },
-    checks: { listForRef: async () => ({ data: { check_runs: [] } }) },
+    checks: { listForRef: async () => ({ data: { check_runs: checkRuns, total_count: checkRuns.length } }) },
     repos: { compareCommits: async () => ({ data: { behind_by: 0 } }) },
     paginate: async (fn: (a: unknown) => Promise<{ data: unknown }>, args: unknown) => (await fn(args)).data,
   });
@@ -183,6 +183,24 @@ describe('acting on GitHub as the session starter', () => {
     await s.ctx.github.syncSession(s.ctx.store.session(job.id)!);
     expect(gh.by(BOB_TOKEN)).toContain('pulls.merge');
     warn.mockRestore();
+  });
+
+  it('a merge on the worker takes a green GitHub CI run on the PR head as the check (DISP-260)', async () => {
+    await setup();
+    const w = await bobsWorker();
+    await connectBob();
+    const p = s.ctx.store.projectByKey('GH')!;
+    const saved = await s.call('PATCH', `/repos/${s.ctx.store.repos(p.id)[0].id}`, { check_command: 'npm test', quick_check_command: 'npm run lint' }, as('alice'));
+    expect(saved.data).toMatchObject({ check_command: 'npm test', quick_check_command: 'npm run lint' });
+    github(s, [{ name: 'test', status: 'completed', conclusion: 'success' }]);
+    const job = s.ctx.store.createSession({
+      project_id: p.id, kind: 'work', title: 'bob', status: 'idle', force_plan: false, branch: 'b', initial_prompt: 'go',
+      source_id: null, item_ids: [], worker_id: w.id, started_by: 'bob', options: { ...DEFAULT_RUN_OPTIONS, auto_merge: 'local' },
+    });
+    await s.ctx.github.syncSession(job);
+    expect(w.cmds('merge_local')[0]).toMatchObject({ sha: 'abc', ci_green: true });
+    const events = s.ctx.store.events(job.id).map((e) => ('text' in e.body ? e.body.text : ''));
+    expect(events).toContain('Check of gh not run for the merge: GitHub CI passed on the PR head (abc), and the merge has exactly its tree.');
   });
 
   it('GitHub turning the token away marks the connection, naming the account', async () => {

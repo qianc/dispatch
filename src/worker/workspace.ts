@@ -4,7 +4,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
 import type { GeneratorItem } from '../shared/generatorItems.ts';
@@ -41,9 +41,9 @@ export interface RunResult {
   out: string;
 }
 
-export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 60_000): Promise<RunResult> {
+export function run(cmd: string, args: string[], cwd?: string, timeoutMs = 10 * 60_000, env: NodeJS.ProcessEnv = procEnv()): Promise<RunResult> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, env: procEnv() }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, env }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       resolve({ code, out: `${stdout}${stderr}`.trim() });
     });
@@ -162,6 +162,8 @@ export interface MergeResult {
   ok: boolean; conflict?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number };
   /** the check did not run: the session's check already passed on exactly the merged tree */
   check_reused?: boolean;
+  /** the check did not run: GitHub CI passed on the PR head, and the merge is exactly its tree (DISP-260) */
+  ci_reused?: boolean;
   /** nothing merged: the branch is not at the commit the caller looked at (DISP-232) */
   moved?: boolean;
 }
@@ -537,16 +539,25 @@ export class Workspaces {
   }
 
   /**
-   * Run a repo's check command in a session's worktree, as its account (DISP-15). A pass on a
-   * clean worktree is remembered by its tree, so the merge does not run the same check again.
+   * Run a check command (the full or the quick one) in a session's worktree, as its account
+   * (DISP-15). A pass is remembered by the tree of the files, so the merge does not run the same
+   * check again; a tree it already passed on (here, at a merge, or in the agent's own run) is not
+   * checked again (DISP-260).
    */
-  async sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal, cred?: GithubCred | null) {
+  async sessionCheck(repo: Repo, sessionId: number, onProgress?: (p: CheckProgress) => void, signal?: AbortSignal, cred?: GithubCred | null, command = repo.check_command!) {
     const wt = this.repoDir(sessionId, repo);
-    const command = repo.check_command!;
-    const tree = await this.cleanTree(wt);
+    const tree = await this.contentTree(wt);
+    if (tree && this.hasPassed(repo, command, tree)) {
+      return { code: 0, out: '', timed_out: false, duration_ms: 0, progress: { stage: null, current: null, passed: 0, failed: 0, skipped: 0, units: 0, total: null, elapsed_ms: 0 }, tree, reused: true };
+    }
     const r = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(command, wt, checkTimeoutMs(), onProgress, signal));
-    if (r.code === 0 && tree && (await this.cleanTree(wt)) === tree) this.rememberPass(repo, command, tree);
-    return r;
+    if (r.code === 0 && tree && (await this.contentTree(wt)) === tree) this.rememberPass(repo, command, tree);
+    return { ...r, tree };
+  }
+
+  /** The tree of a session worktree's files now (DISP-260): to remember a check the agent ran itself. */
+  async sessionTree(repo: Repo, sessionId: number) {
+    return this.contentTree(this.repoDir(sessionId, repo));
   }
 
   /** Trees whose check passed, per repo and check command: newest last, a few per repo. */
@@ -556,7 +567,7 @@ export class Workspaces {
     return `${repo.github_owner}/${repo.github_name}\0${command}`;
   }
 
-  private rememberPass(repo: Repo, command: string, tree: string) {
+  rememberPass(repo: Repo, command: string, tree: string) {
     const key = this.passKey(repo, command);
     const trees = (this.passed.get(key) ?? []).filter((t) => t !== tree);
     trees.push(tree);
@@ -567,12 +578,23 @@ export class Workspaces {
     return this.passed.get(this.passKey(repo, command))?.includes(tree) ?? false;
   }
 
-  /** The tree of HEAD when the working tree has no changes against it (the check then tests exactly that tree), else null. */
-  private async cleanTree(dir: string): Promise<string | null> {
-    const status = await run('git', ['status', '--porcelain'], dir);
-    if (status.code !== 0 || status.out) return null;
-    const tree = await run('git', ['rev-parse', 'HEAD^{tree}'], dir);
-    return tree.code === 0 && tree.out ? tree.out : null;
+  /**
+   * The tree of the files as they are, committed or not (untracked ones too, ignored ones not):
+   * what a check run there tests. Written with a copy of the index, so git's own stays as it is.
+   */
+  private async contentTree(dir: string): Promise<string | null> {
+    const index = await run('git', ['rev-parse', '--path-format=absolute', '--git-path', 'index'], dir);
+    if (index.code !== 0 || !index.out) return null;
+    const tmp = join(tmpdir(), `dsp-index-${randomUUID()}`);
+    try {
+      await copyFile(index.out, tmp).catch(() => {}); // a fresh worktree may have none: built from scratch then
+      const env = { ...procEnv(), GIT_INDEX_FILE: tmp };
+      if ((await run('git', ['add', '-A'], dir, undefined, env)).code !== 0) return null;
+      const tree = await run('git', ['write-tree'], dir, undefined, env);
+      return tree.code === 0 && tree.out ? tree.out : null;
+    } finally {
+      await rm(tmp, { force: true });
+    }
   }
 
   async pushBranch(repo: Repo, sessionId: number, branch: string, cred?: GithubCred | null) {
@@ -589,7 +611,7 @@ export class Workspaces {
    * nothing is pushed: the check did not test what would land. `sha`: the branch commit the caller
    * looked at; a branch that is elsewhere now is not merged (DISP-232).
    */
-  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = [], cred?: GithubCred | null, sha?: string): Promise<MergeResult> {
+  async mergeLocal(repo: Repo, branch: string, message: string, onProgress?: (p: CheckProgress) => void, items: GeneratorItem[] = [], cred?: GithubCred | null, sha?: string, ciGreen = false): Promise<MergeResult> {
     const tmp = join(this.root, 'merge', randomUUID());
     const prep = await this.withRepo(repo, async () => {
       const refs = await this.refs(repo, branch);
@@ -598,22 +620,24 @@ export class Workspaces {
       const baseSha = await git(['rev-parse', base], dir);
       // the commit, not the ref: what is checked and merged is the commit looked at here
       const head = (await git(['rev-parse', '--verify', `${refs.head}^{commit}`], dir)).trim();
-      if (sha && head !== sha) return { dir, base, baseSha, failed: { ok: false, moved: true, output: `${branch} has new commits since it was looked at; nothing was merged.` } as MergeResult };
+      if (sha && head !== sha) return { dir, base, baseSha, headTree: null, failed: { ok: false, moved: true, output: `${branch} has new commits since it was looked at; nothing was merged.` } as MergeResult };
       // only the generate command writes its files (DISP-56): a branch that edits them is refused
       const paths = repo.generated_paths ?? [];
       const edited = paths.length ? (await git(['diff', '--name-only', '--no-renames', `${baseSha}...${head}`, '--', ...paths], dir)).split('\n').filter(Boolean) : [];
-      if (edited.length) return { dir, base, baseSha, failed: { ok: false, output: handEdited(repo, branch, edited) } as MergeResult };
+      if (edited.length) return { dir, base, baseSha, headTree: null, failed: { ok: false, output: handEdited(repo, branch, edited) } as MergeResult };
+      // GitHub CI passed on this head (`ciGreen`, DISP-260): a merge with exactly its tree needs no check here
+      const headTree = ciGreen ? (await git(['rev-parse', `${head}^{tree}`], dir)).trim() : null;
       await git(['worktree', 'add', '--detach', tmp, baseSha], dir);
       const m = await run('git', ['merge', '--no-ff', '-m', withoutPrivateWords(message), head], tmp);
       if (m.code !== 0) {
         await run('git', ['merge', '--abort'], tmp);
-        return { dir, base, baseSha, failed: { ok: false, conflict: true, output: m.out } as MergeResult };
+        return { dir, base, baseSha, headTree, failed: { ok: false, conflict: true, output: m.out } as MergeResult };
       }
-      return { dir, base, baseSha, failed: null };
+      return { dir, base, baseSha, headTree, failed: null };
     }, cred);
     const { dir, base, baseSha } = prep;
     let check: MergeResult['check'];
-    let reused = false;
+    let reused: 'session' | 'ci' | null = null;
     try {
       if (prep.failed) return prep.failed;
       if (repo.check_command || repo.generate_command) {
@@ -627,9 +651,11 @@ export class Workspaces {
       }
       // the merge result is a tree the session's check already passed (the branch was up to date
       // with the default branch, and generating changed nothing): running it again tests nothing new
-      const tree = repo.check_command ? await this.cleanTree(tmp) : null;
+      const tree = repo.check_command ? await this.contentTree(tmp) : null;
       if (repo.check_command && tree && this.hasPassed(repo, repo.check_command, tree)) {
-        reused = true;
+        reused = 'session';
+      } else if (repo.check_command && tree && tree === prep.headTree) {
+        reused = 'ci';
       } else if (repo.check_command) {
         // the repo's account and hosted-git access, as the locked commands have them
         const c = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
@@ -652,7 +678,7 @@ export class Workspaces {
             : '';
           return { ok: false, output: why + push.out, check };
         }
-        return check ? { ok: true, check } : reused ? { ok: true, check_reused: true } : { ok: true };
+        return check ? { ok: true, check } : reused === 'session' ? { ok: true, check_reused: true } : reused === 'ci' ? { ok: true, ci_reused: true } : { ok: true };
       }, cred);
     } finally {
       await this.withRepo(repo, () => run('git', ['worktree', 'remove', '--force', tmp], dir));
