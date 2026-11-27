@@ -1632,13 +1632,13 @@ export class Orchestrator {
 
   /**
    * An offer the orchestrator did not take up is cleared, and the owner is told if the step still
-   * needs them: its merge still stopped and no message sent to its batch, its turn still ended with
+   * needs them: its merge still stopped and no message sent to its batch since the offer, its turn still ended with
    * no pull request and no message since, or its deploy still failed. True: they were told.
    */
   private offerToOwner(own: Pick<Session, 'id' | 'title' | 'started_by'> | undefined, step: OrchestrationStep, deployWhy = 'its deploy failed'): boolean {
     this.clearOffer(step.id);
     if (!own || !step.child_session_id) return false;
-    if (step.offer === 'fix_merge' && step.state === 'review' && step.messages_sent === 0) this.needsOwner(own, step, step.note ?? 'its merge stopped');
+    if (step.offer === 'fix_merge' && step.state === 'review' && step.messages_sent === step.offer_messages) this.needsOwner(own, step, step.note ?? 'its merge stopped');
     else if (step.offer === 'no_pr' && step.state === 'running' && step.note === 'turn ended, no PR yet' && step.messages_sent === step.offer_messages) {
       const child = this.store.session(step.child_session_id);
       this.tellOwner(own.id, { title: `${own.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}`, session_id: own.id, source: 'orchestrator.stepReview' });
@@ -1882,10 +1882,11 @@ export class Orchestrator {
       const completed = merged && this.completeQuietly(o, step, child);
       events.push(`${name}: ${merged ? 'merged' : `done (${note})`}.${completed ? ' Its session is completed, and the owner was not told: check its result against the step and its items\' "Done when".' : ''}`);
     } else if (state === 'review' && (step.state !== 'review' || note !== step.note)) {
-      // a stopped merge: the orchestrator may write to its batch once before the owner is asked
-      const tryFirst = stoppedMerge && o.answer_children && step.messages_sent === 0;
-      const more = tryFirst ? ' You may tell its session once how to fix it (send_to_session). If you cannot, say so to the owner.'
-        : stoppedMerge && o.answer_children ? ' Your message did not clear it: the owner is told.' : '';
+      // a stopped merge: each new stop is the orchestrator's first while it has messages left; the owner is asked if it does not act (DISP-265)
+      const left = Orchestrator.MAX_MESSAGES - step.messages_sent;
+      const tryFirst = stoppedMerge && o.answer_children && left > 0;
+      const more = tryFirst ? ` You may tell its session how to fix it (send_to_session, ${left} message${left === 1 ? '' : 's'} left). If you cannot, say so to the owner.`
+        : stoppedMerge && o.answer_children ? ' You have no messages left for it: the owner is told.' : '';
       events.push(`${name}: ${note}.${more}`);
       if (tryFirst) this.offer(step, 'fix_merge');
       else if (note === "waits for the owner's review") {
