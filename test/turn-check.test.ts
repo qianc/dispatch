@@ -377,7 +377,10 @@ describe('Workspaces turn state', () => {
     const stages: Record<number, (string | null)[]> = { 1: [], 2: [], 3: [] };
     const seen = (id: number) => (p: CheckProgress) => stages[id].push(p.stage);
     const ctrl = new AbortController();
-    const runs = [1, 2, 3].map((id) => ws.sessionCheck(timed, id, seen(id), id === 3 ? ctrl.signal : undefined));
+    const runs = [1, 2].map((id) => ws.sessionCheck(timed, id, seen(id)));
+    // session 3 comes once a check runs, so it always finds the queue taken (its tree can be ready before theirs)
+    while (!existsSync(log)) await new Promise((res) => setTimeout(res, 10));
+    runs.push(ws.sessionCheck(timed, 3, seen(3), ctrl.signal));
     const stopped = Date.now();
     ctrl.abort();
     expect((await runs[2]).code).not.toBe(0);
