@@ -1,6 +1,7 @@
 // System prompt text appended to Claude Code's own prompt for each session.
 import type { StartSpec } from '../shared/protocol.ts';
 import { repoFolder, type Item, type Repo, type Source } from '../shared/types.ts';
+import { turnChecks } from './turnCheck.ts';
 
 function sourceLine(s: Source) {
   const parts = [`${s.kind} "${s.title}"`];
@@ -107,20 +108,26 @@ export function workPrompt(spec: StartSpec): string {
     none: '- Implementation: do not use subagents. Run the plan inline yourself (superpowers:executing-plans). Do not ask the owner which execution method to use.',
   }[spec.options.subagents];
   lines.push(exec);
-  const checked = spec.options.turn_check ? spec.repos.filter((r) => r.check_command) : [];
+  // DISP-260: the level each repo's turn check runs (turnChecks decides it)
+  const turn = turnChecks(spec.repos, spec.options);
+  const full = turn.filter((c) => c.level === 'full').map((c) => c.repo);
+  const quick = turn.filter((c) => c.level === 'quick');
   const commands = (rs: Repo[]) => rs.map((r) => `${r.github_name}: \`${r.check_command}\``).join(', ');
   // DISP-261: an agent that runs a slow suite itself doubles the time the check takes after it
   const onlyYours = 'Run only the tests for what you changed.';
-  if (checked.length) {
-    lines.push(`- When your turn ends, Dispatch runs the repo's check command (${commands(checked)}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again. Do not run that command yourself; Dispatch runs it after your turn. ${onlyYours}`);
+  if (full.length) {
+    lines.push(`- When your turn ends, Dispatch runs the repo's check command (${commands(full)}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again. Do not run that command yourself; Dispatch runs it after your turn. ${onlyYours}`);
+  }
+  if (quick.length) {
+    lines.push(`- When your turn ends, Dispatch runs the repo's quick check command (${quick.map((c) => `${c.repo.github_name}: \`${c.command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
   }
   // a merge in Dispatch runs the check (github.ts mergeOpen); GitHub's own merge does not
   const localMerge = (r: Repo) => spec.options.auto_merge === 'local' || !!r.local_path || !!r.generate_command || r.kind === 'hosted';
-  const mergeChecked = auto ? spec.repos.filter((r) => r.check_command && localMerge(r) && !checked.includes(r)) : [];
+  const mergeChecked = auto ? spec.repos.filter((r) => r.check_command && localMerge(r) && !full.includes(r)) : [];
   if (mergeChecked.length) {
     lines.push(`- Dispatch runs the repo's check command (${commands(mergeChecked)}) before it merges. Do not run that command yourself. ${onlyYours}`);
   }
-  const ci = spec.repos.filter((r) => r.ci && !checked.includes(r) && !mergeChecked.includes(r));
+  const ci = spec.repos.filter((r) => r.ci && !full.includes(r) && !mergeChecked.includes(r));
   if (ci.length) {
     lines.push(`- GitHub CI runs the test suite on the PR in ${ci.map((r) => r.github_name).join(', ')}. Do not run the full suite yourself; CI runs it on the PR. ${onlyYours}`);
   }

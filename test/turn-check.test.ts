@@ -8,7 +8,7 @@ import type { CheckProgress } from '../src/shared/checkProgress.ts';
 import type { StartSpec, WorkerToServer } from '../src/shared/protocol.ts';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
-import { TurnCheck, type CheckOutcome } from '../src/worker/turnCheck.ts';
+import { agentCheck, TurnCheck, turnCheckLevel, turnChecks, type CheckOutcome } from '../src/worker/turnCheck.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 
 const progress: CheckProgress = { stage: null, current: null, passed: 0, failed: 0, skipped: 0, units: 3, total: null, elapsed_ms: 1200 };
@@ -24,9 +24,9 @@ function harness(opts: { retries?: number; repos?: Repo[] } = {}) {
   const repos = opts.repos ?? [repo(1, 'app')];
   for (const r of repos) state.set(r.id, 'v1');
   const tc = new TurnCheck({
-    sessionId: 7, repos, retries: opts.retries ?? 2, timeoutMin: 120,
+    sessionId: 7, repos: repos.map((r) => ({ repo: r, level: r.check_command ? 'full' as const : 'quick' as const, command: r.check_command ?? r.quick_check_command! })), retries: opts.retries ?? 2, timeoutMin: 120,
     state: async (r) => state.get(r.id) ?? null,
-    check: (_r, onProgress, signal) => {
+    check: (_r, _command, onProgress, signal) => {
       runs++;
       onProgress(progress);
       const next = results.shift();
@@ -58,13 +58,13 @@ describe('TurnCheck', () => {
     expect(texts(h.sent).some((t) => t.startsWith('Check failed (exit code 1) in app'))).toBe(true);
     // live progress for the page, then how it went
     expect(h.sent.filter((m) => m.t === 'session_check')).toEqual([
-      { t: 'session_check', session_id: 7, repo_id: 1, progress },
-      { t: 'session_check', session_id: 7, repo_id: 1, done: { ok: false, duration_ms: 3000, units: 3 } },
+      { t: 'session_check', session_id: 7, repo_id: 1, command: 'npm test', progress },
+      { t: 'session_check', session_id: 7, repo_id: 1, command: 'npm test', done: { ok: false, duration_ms: 3000, units: 3 } },
     ]);
     h.state.set(1, 'v2'); // the agent fixed it
     h.results.push(h.ok());
     expect(await h.tc.gate()).toBeNull();
-    expect(texts(h.sent)).toContain('Check passed in app (npm test, 1 min 5 s).');
+    expect(texts(h.sent)).toContain('Full check passed in app (npm test, 1 min 5 s).');
     expect(notices(h.sent)).toEqual([]);
   });
 
@@ -129,11 +129,52 @@ describe('TurnCheck', () => {
     await new Promise((r) => setTimeout(r, 10));
     h.tc.cancel();
     expect(await gate).toBeNull();
-    expect(h.sent.filter((m) => m.t === 'session_check').at(-1)).toEqual({ t: 'session_check', session_id: 7, repo_id: 1 });
+    expect(h.sent.filter((m) => m.t === 'session_check').at(-1)).toEqual({ t: 'session_check', session_id: 7, repo_id: 1, command: 'npm test' });
     expect(texts(h.sent)).toContain('Check of app stopped.');
     h.results.push(h.ok());
     expect(await h.tc.gate()).toBeNull();
     expect(h.runs()).toBe(2);
+  });
+
+  it('names the level and the tree, and does not run a check again on a tree it passed on (DISP-260)', async () => {
+    const h = harness({ repos: [{ ...repo(1, 'app', null), quick_check_command: 'npm run lint' }] });
+    h.results.push({ ...h.ok(), tree: 'abcdef1234' });
+    expect(await h.tc.gate()).toBeNull();
+    expect(texts(h.sent)).toContain('Running the quick check of app before the turn is reported done: npm run lint');
+    expect(texts(h.sent)).toContain('Quick check passed in app (npm run lint, tree abcdef1, 1 min 5 s).');
+    // the agent ran it itself on this tree: the worker says so, nothing runs and nothing is kept as a run
+    h.state.set(1, 'v2');
+    const before = h.sent.length;
+    h.results.push({ ...h.ok(), duration_ms: 0, tree: '1234567890', reused: true });
+    expect(await h.tc.gate()).toBeNull();
+    expect(h.sent.slice(before).filter((m) => m.t === 'session_check' && m.done)).toEqual([]);
+    expect(texts(h.sent)).toContain('Quick check of app not run again: it already passed on exactly this tree (npm run lint, tree 1234567).');
+  });
+});
+
+describe('the level a turn check runs (DISP-260)', () => {
+  const on = { turn_check: true };
+  const quick = { ...repo(1, 'app'), quick_check_command: 'npm run lint' };
+  it('runs the full check only where no GitHub CI runs it, else the quick one', () => {
+    expect(turnCheckLevel(repo(1, 'app'), on)).toBe('full');
+    expect(turnCheckLevel(quick, on)).toBe('full'); // no CI: the full check covers the quick one
+    expect(turnCheckLevel({ ...quick, ci: true }, on)).toBe('quick');
+    expect(turnCheckLevel({ ...repo(1, 'app'), ci: true }, on)).toBe('none');
+    expect(turnCheckLevel({ ...quick, ci: true, local_path: '/r' }, on)).toBe('full');
+    expect(turnCheckLevel({ ...quick, ci: true, kind: 'hosted' }, on)).toBe('full');
+    expect(turnCheckLevel({ ...repo(1, 'app', null), quick_check_command: 'lint' }, on)).toBe('quick');
+    expect(turnCheckLevel(quick, { turn_check: false })).toBe('none');
+    expect(turnChecks([{ ...quick, ci: true }, repo(2, 'docs', null)], on)).toEqual([{ repo: { ...quick, ci: true }, level: 'quick', command: 'npm run lint' }]);
+  });
+
+  it("knows the agent's own run of a check command", () => {
+    const repos = [quick, repo(2, 'api', 'pytest -q')];
+    expect(agentCheck(repos, 'npm test')).toEqual({ repo: quick, command: 'npm test' });
+    expect(agentCheck(repos, 'cd api && pytest -q 2>&1')).toEqual({ repo: repos[1], command: 'pytest -q' });
+    expect(agentCheck(repos, 'npm run lint')).toEqual({ repo: quick, command: 'npm run lint' });
+    expect(agentCheck(repos, 'npm test | tail -5')).toBeNull(); // the exit code is tail's
+    expect(agentCheck(repos, 'npm test -- a.test.ts')).toBeNull();
+    expect(agentCheck([repo(1, 'a'), repo(2, 'b')], 'npm test')).toBeNull(); // which repo is not known
   });
 });
 
@@ -156,6 +197,12 @@ describe('the work prompt', () => {
     expect(workPrompt(spec(false))).not.toContain('Do not run');
     const ci = workPrompt({ ...spec(false), repos: [repo(1, 'app'), { ...repo(2, 'docs', null), ci: true }] });
     expect(ci).toContain('GitHub CI runs the test suite on the PR in docs. Do not run the full suite yourself');
+  });
+  it('names the level that runs after the turn (DISP-260)', () => {
+    const withCi = workPrompt({ ...spec(true), repos: [{ ...repo(1, 'app'), ci: true, quick_check_command: 'npm run lint' }] });
+    expect(withCi).toContain("Dispatch runs the repo's quick check command (app: `npm run lint`) in your checkout");
+    expect(withCi).not.toContain("runs the repo's check command");
+    expect(withCi).toContain('GitHub CI runs the test suite on the PR in app. Do not run the full suite yourself');
   });
 });
 
@@ -202,6 +249,25 @@ describe('Workspaces turn state', () => {
     expect((await ws.sessionCheck(r, 1)).code).toBe(0);
     writeFileSync(join(cwd, 'a.txt'), 'two\n');
     expect((await ws.sessionCheck(r, 1)).code).not.toBe(0);
+  });
+
+  it('does not run a check again on files it, or the agent, already passed on (DISP-260)', async () => {
+    const cwd = await ws.prepare(spec);
+    const counted = { ...r, check_command: 'echo ran >> ../runs; test "$(cat a.txt)" = two' };
+    writeFileSync(join(cwd, 'a.txt'), 'two\n');
+    const first = await ws.sessionCheck(counted, 1);
+    expect(first).toMatchObject({ code: 0 });
+    expect(first.reused).toBeUndefined();
+    // committed as it was checked: the same files, so the same tree
+    git(cwd, 'commit', '-am', 'two');
+    expect(await ws.sessionCheck(counted, 1)).toMatchObject({ code: 0, reused: true, tree: first.tree });
+    // the agent ran the quick check itself on new files: remembered, then not run again
+    writeFileSync(join(cwd, 'new.txt'), 'x\n');
+    const tree = (await ws.sessionTree(r, 1))!;
+    ws.rememberPass(r, 'npm run lint', tree);
+    expect(await ws.sessionCheck(r, 1, undefined, undefined, null, 'npm run lint')).toMatchObject({ reused: true, tree });
+    // the index git keeps is not touched
+    expect(git(cwd, 'status', '--porcelain')).toBe('?? new.txt');
   });
 
   it('stops a check when aborted', async () => {

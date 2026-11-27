@@ -23,19 +23,21 @@ export class CheckRuns {
 
   /** A progress report from the worker. The first one starts the run. */
   progress(pr: PullRequest, repo: Repo, p: CheckProgress) {
-    if (pr.session_id !== null) this.update(`pr:${pr.id}`, pr.session_id, pr.id, repo, p);
+    if (pr.session_id !== null && repo.check_command) this.update(`pr:${pr.id}`, pr.session_id, pr.id, repo, repo.check_command, p);
   }
 
   /** The merge returned: keep how the check went (if it ran), and take the run off the page. */
   finish(pr: PullRequest, repo: Repo, check: { ok: boolean; duration_ms: number; units: number } | undefined) {
-    if (pr.session_id !== null) this.end(`pr:${pr.id}`, pr.session_id, repo, check);
+    if (pr.session_id !== null && repo.check_command) this.end(`pr:${pr.id}`, pr.session_id, repo, repo.check_command, check);
   }
 
-  /** A turn's check (DISP-15): progress while it runs, then how it went (none: it was stopped). */
-  turn(sessionId: number, repo: Repo, msg: { progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }) {
+  /** A turn's check (DISP-15): progress while it runs, then how it went (none: it was stopped). Its command is the full or the quick check (DISP-260). */
+  turn(sessionId: number, repo: Repo, msg: { command?: string; progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }) {
     const key = `turn:${sessionId}:${repo.id}`;
-    if (msg.progress && !msg.done) this.update(key, sessionId, null, repo, msg.progress);
-    else this.end(key, sessionId, repo, msg.done);
+    const command = msg.command ?? repo.check_command;
+    if (!command) return;
+    if (msg.progress && !msg.done) this.update(key, sessionId, null, repo, command, msg.progress);
+    else this.end(key, sessionId, repo, command, msg.done);
   }
 
   /** The session ended: its turn checks are off the page (the worker's last report may never come, DISP-149). */
@@ -46,22 +48,21 @@ export class CheckRuns {
     if (dropped) this.emit(sessionId);
   }
 
-  private update(key: string, sessionId: number, prId: number | null, repo: Repo, p: CheckProgress) {
-    if (!repo.check_command) return;
+  private update(key: string, sessionId: number, prId: number | null, repo: Repo, command: string, p: CheckProgress) {
     let run = this.live.get(key);
     if (!run) {
       run = {
-        session_id: sessionId, pr_id: prId, repo: repo.github_name, command: repo.check_command,
+        session_id: sessionId, pr_id: prId, repo: repo.github_name, command,
         started_at: new Date(Date.now() - p.elapsed_ms).toISOString(), progress: p,
-        expected: expectedFrom(this.store.checkHistory(repo.id, repo.check_command)),
+        expected: expectedFrom(this.store.checkHistory(repo.id, command)),
       };
       this.live.set(key, run);
     } else run.progress = p;
     this.emit(sessionId);
   }
 
-  private end(key: string, sessionId: number, repo: Repo, check: { ok: boolean; duration_ms: number; units: number } | undefined) {
-    if (check && repo.check_command) this.store.addCheckRun({ repo_id: repo.id, command: repo.check_command, ...check });
+  private end(key: string, sessionId: number, repo: Repo, command: string, check: { ok: boolean; duration_ms: number; units: number } | undefined) {
+    if (check) this.store.addCheckRun({ repo_id: repo.id, command, ...check });
     if (this.live.delete(key)) this.emit(sessionId);
   }
 

@@ -1120,20 +1120,24 @@ export class GitHub {
    * The worker limits the check's run time (CHECK_TIMEOUT_MIN); here it only has to keep reporting.
    */
   private async mergeOnWorker(pr: PullRequest, repo: Repo, message: string, sha?: string) {
-    type Res = { ok: boolean; conflict?: boolean; moved?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean };
+    type Res = { ok: boolean; conflict?: boolean; moved?: boolean; output?: string; check?: { ok: boolean; duration_ms: number; units: number }; check_reused?: boolean; ci_reused?: boolean };
     // a GitHub repo's merge is pushed to GitHub: as the starter only. Elsewhere their name goes on the commit.
     const s = this.sessionOf(pr);
     const github = this.target(repo) && repo.kind !== 'hosted' ? this.as(s, repo, 'write').cred : this.credOf(s);
     let res: Res | undefined;
     const worker = this.workerOf(pr);
+    // GitHub CI passed on exactly this head (read now, not a stale ci_state): the worker does not run the check again on its tree (DISP-260)
+    const ciGreen = !!sha && !pr.local && !!repo.check_command && !!this.target(repo)
+      && await this.checkRuns(s, repo, sha).then((c) => ciStateOf(c) === 'success', () => false);
     // a hosted repo's merge comes back as a push of its default branch: only this worker's, only now (DISP-224)
     const allowPush = <T,>(fn: () => Promise<T>) => (repo.kind === 'hosted' && this.hosted && worker !== null ? this.hosted.whileMerging(repo, worker, fn) : fn());
     try {
-      res = await allowPush(() => this.hub.cmd<Res>(worker, { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github, ...(sha ? { sha } : {}) }, 15 * 60_000,
+      res = await allowPush(() => this.hub.cmd<Res>(worker, { c: 'merge_local', repo, branch: pr.head_ref, message, items: this.generatorExport(pr, repo), github, ...(sha ? { sha } : {}), ...(ciGreen ? { ci_green: true } : {}) }, 15 * 60_000,
         (p) => this.checks.progress(pr, repo, p as CheckProgress)));
       // the branch moved on since the caller looked at it (DISP-232)
       if (res.moved) throw moved();
       if (res.ok && res.check_reused && s) this.store.addEvent(s.id, { kind: 'system', text: `Check of ${repo.github_name} not run again for the merge: it already passed on exactly this tree (${repo.check_command}).` });
+      if (res.ok && res.ci_reused && s) this.store.addEvent(s.id, { kind: 'system', text: `Check of ${repo.github_name} not run for the merge: GitHub CI passed on the PR head (${sha!.slice(0, 7)}), and the merge has exactly its tree.` });
       return res;
     } finally {
       this.checks.finish(pr, repo, res?.check);

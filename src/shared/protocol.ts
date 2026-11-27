@@ -107,7 +107,7 @@ export type WorkerCommand =
   | { c: 'push_branch'; repo: Repo; session_id: number; branch: string; github?: GithubCred | null }
   /** `items`: the export for the repo's generate command (DISP-56), when it has one */
   /** sha: the branch commit the caller looked at; the worker refuses (moved) when the branch is elsewhere (DISP-232) */
-  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null; sha?: string }
+  | { c: 'merge_local'; repo: Repo; branch: string; message: string; items?: GeneratorItem[]; github?: GithubCred | null; sha?: string; ci_green?: boolean }
   /** last_sha: the branch's last known commit (merged or not, once the branch is deleted) */
   | { c: 'branch_status'; repo: Repo; branch: string; last_sha?: string | null }
   /** a file from a repo's default branch, or from a host folder (must be in ASSISTANT_READ_DIRS) */
@@ -184,7 +184,7 @@ export type WorkerToServer =
    * the repo's check command, run in the session's worktree before a turn is reported done (DISP-15):
    * its progress while it runs, then `done` (no `done` and no progress: it was stopped)
    */
-  | { t: 'session_check'; session_id: number; repo_id: number; progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }
+  | { t: 'session_check'; session_id: number; repo_id: number; command?: string; progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }
   | { t: 'rpc'; req_id: string; session_id: number; method: RpcMethod; params: unknown }
   | { t: 'cmd_result'; req_id: string; ok: boolean; data?: unknown; error?: string }
   /** a long command's progress so far (merge_local: its check command's test progress, DISP-5) */

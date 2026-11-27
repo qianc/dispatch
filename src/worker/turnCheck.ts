@@ -2,7 +2,7 @@
 // its worktree. A failure goes back to the agent as a new turn, until it passes or the retry limit.
 import type { CheckProgress } from '../shared/checkProgress.ts';
 import type { WorkerToServer } from '../shared/protocol.ts';
-import type { Repo } from '../shared/types.ts';
+import type { Repo, RunOptions } from '../shared/types.ts';
 
 export interface CheckOutcome {
   code: number;
@@ -10,19 +10,65 @@ export interface CheckOutcome {
   timed_out: boolean;
   duration_ms: number;
   progress: CheckProgress;
+  /** the tree of the files the check ran on (DISP-260), when known */
+  tree?: string | null;
+  /** not run: the same command already passed on exactly this tree */
+  reused?: boolean;
+}
+
+export type CheckLevel = 'full' | 'quick' | 'none';
+
+/** A repo's check at a turn's end: which level, and its command. */
+export interface TurnCheckRepo {
+  repo: Repo;
+  level: Exclude<CheckLevel, 'none'>;
+  command: string;
+}
+
+/**
+ * DISP-260: the one place that decides which check a turn's end runs in a repo (DISP-262 lets a
+ * batch choose). The full check only where nothing else runs it: GitHub CI runs it on a GitHub
+ * repo's PR (a merge in Dispatch runs it too, unless CI passed on that tree). Elsewhere the quick
+ * check, if the repo has one.
+ */
+export function turnCheckLevel(repo: Repo, options: Pick<RunOptions, 'turn_check'>): CheckLevel {
+  if (!options.turn_check) return 'none';
+  const ci = !!repo.ci && !repo.local_path && repo.kind !== 'hosted';
+  if (repo.check_command && !ci) return 'full';
+  return repo.quick_check_command ? 'quick' : 'none';
+}
+
+/** The session's repos that get a check at a turn's end, with its level and command. */
+export function turnChecks(repos: Repo[], options: Pick<RunOptions, 'turn_check'>): TurnCheckRepo[] {
+  return repos.flatMap((repo) => {
+    const level = turnCheckLevel(repo, options);
+    const command = level === 'full' ? repo.check_command : level === 'quick' ? repo.quick_check_command : null;
+    return level !== 'none' && command ? [{ repo, level, command }] : [];
+  });
 }
 
 export interface TurnCheckDeps {
   sessionId: number;
-  /** the session's repos that have a check command */
-  repos: Repo[];
+  /** the session's repos that get a check, from turnChecks */
+  repos: TurnCheckRepo[];
   /** fix turns after a failed check before the owner is told instead */
   retries: number;
   /** the worktree's state (HEAD and changes), or null when it has nothing to check */
   state(repo: Repo): Promise<string | null>;
-  check(repo: Repo, onProgress: (p: CheckProgress) => void, signal: AbortSignal): Promise<CheckOutcome>;
+  check(repo: Repo, command: string, onProgress: (p: CheckProgress) => void, signal: AbortSignal): Promise<CheckOutcome>;
   send(msg: WorkerToServer): void;
   timeoutMin: number;
+}
+
+/**
+ * The repo whose full or quick check a Bash command of the agent runs (DISP-260): the command
+ * alone, or after a `cd`. shortcut: a command piped or chained with others is not counted (its exit
+ * code may not be the check's), nor one several repos share; match more forms if agents miss it often.
+ */
+export function agentCheck(repos: Repo[], bash: string): { repo: Repo; command: string } | null {
+  const cmd = bash.trim().replace(/^cd\s+\S+\s*&&\s*/, '').replace(/\s*2>&1$/, '').trim();
+  const hits = repos.flatMap((repo) => [repo.check_command, repo.quick_check_command].flatMap((c) => (c && c.trim() === cmd ? [{ repo, command: c }] : [])));
+  return hits.length === 1 ? hits[0] : null;
 }
 
 const MAX_OUTPUT = 4000;
@@ -37,6 +83,8 @@ export function duration(ms: number) {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
+
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 export class TurnCheck {
   private d: TurnCheckDeps;
@@ -77,11 +125,11 @@ export class TurnCheck {
   async gate(): Promise<string | null> {
     const ctrl = new AbortController();
     this.ctrl = ctrl;
-    const failed: { repo: Repo; why: string; out: string }[] = [];
+    const failed: { repo: Repo; command: string; why: string; out: string }[] = [];
     /** failed before and unchanged since: Claude ended its turn without a fix */
     const unfixed: Repo[] = [];
     try {
-      for (const repo of this.d.repos) {
+      for (const { repo, level, command: cmd } of this.d.repos) {
         if (ctrl.signal.aborted) return null;
         const before = await this.d.state(repo).catch(() => null);
         if (before === null) continue;
@@ -90,11 +138,17 @@ export class TurnCheck {
           if (!last.ok && !last.told) unfixed.push(repo);
           continue;
         }
-        const cmd = repo.check_command!;
-        this.event('system', `Running the check of ${repo.github_name} before the turn is reported done: ${cmd}`);
+        const name = `${level} check`;
+        this.event('system', `Running the ${name} of ${repo.github_name} before the turn is reported done: ${cmd}`);
         const send = (extra: { progress?: CheckProgress; done?: { ok: boolean; duration_ms: number; units: number } }) =>
-          this.d.send({ t: 'session_check', session_id: this.d.sessionId, repo_id: repo.id, ...extra });
-        const r = await this.d.check(repo, (progress) => send({ progress }), ctrl.signal);
+          this.d.send({ t: 'session_check', session_id: this.d.sessionId, repo_id: repo.id, command: cmd, ...extra });
+        const r = await this.d.check(repo, cmd, (progress) => send({ progress }), ctrl.signal);
+        const tree = r.tree ? `, tree ${r.tree.slice(0, 7)}` : '';
+        if (r.reused) {
+          this.checked.set(repo.id, { state: before, ok: true });
+          this.event('system', `${cap(name)} of ${repo.github_name} not run again: it already passed on exactly this tree (${cmd}${tree}).`);
+          continue;
+        }
         if (ctrl.signal.aborted) {
           send({});
           this.event('system', `Check of ${repo.github_name} stopped.`);
@@ -104,8 +158,8 @@ export class TurnCheck {
         send({ done: { ok, duration_ms: r.duration_ms, units: r.progress.units } });
         // the state after the run: files the check itself writes are no change of the agent's
         this.checked.set(repo.id, { state: (await this.d.state(repo).catch(() => null)) ?? before, ok });
-        if (ok) this.event('system', `Check passed in ${repo.github_name} (${cmd}, ${duration(r.duration_ms)}).`);
-        else failed.push({ repo, why: r.timed_out ? `stopped after ${this.d.timeoutMin} minutes (CHECK_TIMEOUT_MIN on the worker)` : `failed (exit code ${r.code})`, out: r.out.slice(-MAX_OUTPUT) });
+        if (ok) this.event('system', `${cap(name)} passed in ${repo.github_name} (${cmd}${tree}, ${duration(r.duration_ms)}).`);
+        else failed.push({ repo, command: cmd, why: r.timed_out ? `stopped after ${this.d.timeoutMin} minutes (CHECK_TIMEOUT_MIN on the worker)` : `failed (exit code ${r.code})`, out: r.out.slice(-MAX_OUTPUT) });
       }
     } finally {
       if (this.ctrl === ctrl) this.ctrl = null;
@@ -130,16 +184,16 @@ export class TurnCheck {
       this.d.send({
         t: 'notice', session_id: this.d.sessionId,
         title: `Check still fails in ${names}`,
-        body: `${failed.map((f) => `${f.repo.github_name}: \`${f.repo.check_command}\` ${f.why}`).join('\n')}\nClaude had ${tries}${this.d.retries ? '' : ' (CHECK_RETRIES is 0)'}. It waits for you.`,
+        body: `${failed.map((f) => `${f.repo.github_name}: \`${f.command}\` ${f.why}`).join('\n')}\nClaude had ${tries}${this.d.retries ? '' : ' (CHECK_RETRIES is 0)'}. It waits for you.`,
       });
       return null;
     }
     this.fixes++;
     const attempt = `fix turn ${this.fixes} of ${this.d.retries}`;
-    for (const f of failed) this.event('error', `Check ${f.why} in ${f.repo.github_name} (${f.repo.check_command}). Sent back to Claude (${attempt}).\n${f.out.slice(-1500)}`);
+    for (const f of failed) this.event('error', `Check ${f.why} in ${f.repo.github_name} (${f.command}). Sent back to Claude (${attempt}).\n${f.out.slice(-1500)}`);
     return [
       `(From Dispatch, not the owner:) the repo's check command failed after your turn, so the work is not reported done yet (${attempt}).`,
-      ...failed.map((f) => `\n${f.repo.github_name}: \`${f.repo.check_command}\` ${f.why}. The end of its output:\n\n\`\`\`\n${f.out}\n\`\`\``),
+      ...failed.map((f) => `\n${f.repo.github_name}: \`${f.command}\` ${f.why}. The end of its output:\n\n\`\`\`\n${f.out}\n\`\`\``),
       '',
       'Fix the cause, commit, and end your turn: Dispatch runs the check again. If the failure is not caused by this batch, or you stopped to wait for the owner, say so in one or two sentences and end your turn without changes.',
     ].join('\n');
