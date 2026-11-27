@@ -1,12 +1,13 @@
 // DISP-15: the repo's check command runs before a work session's turn is reported done.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { CheckProgress } from '../src/shared/checkProgress.ts';
+import { CHECK_WAITS, type CheckProgress } from '../src/shared/checkProgress.ts';
 import type { StartSpec, WorkerToServer } from '../src/shared/protocol.ts';
 import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
+import { CheckQueue } from '../src/worker/checkQueue.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
 import { agentCheck, TurnCheck, turnCheckLevel, turnChecks, type CheckOutcome } from '../src/worker/turnCheck.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
@@ -307,9 +308,75 @@ describe('Workspaces turn state', () => {
     expect((await run).code).not.toBe(0);
     expect(Date.now() - started).toBeLessThan(10_000);
   });
+
+  it('runs one check at a time on the worker: the other waits and says so, and a stop ends its wait (DISP-264)', async () => {
+    await ws.prepare(spec);
+    await ws.prepare({ ...spec, session_id: 2, branch: 'feat2' });
+    await ws.prepare({ ...spec, session_id: 3, branch: 'feat3' });
+    const log = join(mkdtempSync(join(tmpdir(), 'dsp-log-')), 'log');
+    const timed = { ...r, check_command: `echo start $PWD >> ${log}; sleep 0.5; echo end >> ${log}` };
+    const stages: Record<number, (string | null)[]> = { 1: [], 2: [], 3: [] };
+    const seen = (id: number) => (p: CheckProgress) => stages[id].push(p.stage);
+    const ctrl = new AbortController();
+    const runs = [1, 2, 3].map((id) => ws.sessionCheck(timed, id, seen(id), id === 3 ? ctrl.signal : undefined));
+    const stopped = Date.now();
+    ctrl.abort();
+    expect((await runs[2]).code).not.toBe(0);
+    expect(Date.now() - stopped).toBeLessThan(400); // it did not wait for the running check
+    expect((await runs[0]).code).toBe(0);
+    expect((await runs[1]).code).toBe(0);
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+    expect(lines.map((l) => l.split(' ')[0])).toEqual(['start', 'end', 'start', 'end']);
+    expect(lines.filter((l) => l.startsWith('start'))).toHaveLength(2); // the stopped check never ran
+    expect(stages[1]).not.toContain(CHECK_WAITS);
+    expect(stages[2][0]).toBe(CHECK_WAITS);
+    expect(stages[3]).toEqual([CHECK_WAITS]);
+  });
+});
+
+describe('CheckQueue (DISP-264)', () => {
+  it('runs as many at once as the setting allows, in turn', async () => {
+    const q = new CheckQueue(() => 2);
+    let now = 0;
+    let most = 0;
+    const waited: number[] = [];
+    const order: number[] = [];
+    const job = (i: number) => q.run(async () => {
+      most = Math.max(most, ++now);
+      await new Promise((r) => setTimeout(r, 20));
+      now--;
+      order.push(i);
+    }, () => waited.push(i));
+    await Promise.all([1, 2, 3, 4, 5].map(job));
+    expect(most).toBe(2);
+    expect(waited).toEqual([3, 4, 5]);
+    expect(order.slice(2)).toEqual([3, 4, 5]);
+    // all places are free again
+    await job(6);
+    expect(waited).toEqual([3, 4, 5]);
+  });
+
+  it('lets a failed check free its place', async () => {
+    const q = new CheckQueue(() => 1);
+    await expect(q.run(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    const waited: number[] = [];
+    await q.run(async () => {}, () => waited.push(1));
+    expect(waited).toEqual([]);
+  });
 });
 
 describe('CheckRuns for a turn check', () => {
+  it('starts the clock of a waiting check when it runs (DISP-264)', async () => {
+    const { CheckRuns } = await import('../src/server/checkRuns.ts');
+    const runs = new CheckRuns({ checkHistory: () => [], addCheckRun: () => {} } as never, { emit: () => {} } as never);
+    const r = repo(4, 'app');
+    runs.turn(9, r, { progress: { ...progress, stage: CHECK_WAITS, elapsed_ms: 0 } });
+    const waitStart = runs.of(9)[0].started_at;
+    await new Promise((res) => setTimeout(res, 20));
+    runs.turn(9, r, { progress: { ...progress, elapsed_ms: 0 } });
+    expect(runs.of(9)[0].started_at > waitStart).toBe(true);
+  });
+
   it('shows the run on the session page while it runs, then keeps how it went', async () => {
     const { CheckRuns } = await import('../src/server/checkRuns.ts');
     const added: unknown[] = [];

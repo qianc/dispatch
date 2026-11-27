@@ -1,7 +1,7 @@
 // The check commands running now for local merges (DISP-5) and for a session's turn before it is
 // reported done (DISP-15): their live progress goes to the session's page, and each finished run
 // is kept so the next run of the same command can say how long it will take.
-import { expectedFrom, type CheckProgress, type CheckRun } from '../shared/checkProgress.ts';
+import { CHECK_WAITS, expectedFrom, type CheckProgress, type CheckRun } from '../shared/checkProgress.ts';
 import type { PullRequest, Repo } from '../shared/types.ts';
 import type { Bus } from './bus.ts';
 import type { Store } from './store.ts';
@@ -57,7 +57,11 @@ export class CheckRuns {
         expected: expectedFrom(this.store.checkHistory(repo.id, command)),
       };
       this.live.set(key, run);
-    } else run.progress = p;
+    } else {
+      // it waited for another check on the worker (DISP-264): its run starts now
+      if (run.progress.stage === CHECK_WAITS && p.stage !== CHECK_WAITS) run.started_at = new Date(Date.now() - p.elapsed_ms).toISOString();
+      run.progress = p;
+    }
     this.emit(sessionId);
   }
 
