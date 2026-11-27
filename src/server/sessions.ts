@@ -770,6 +770,22 @@ export class Sessions {
   }
 
   /**
+   * A message from Dispatch to a session that works (DISP-263): it goes into the running turn, and
+   * Claude reads it after its current tool step, as a message typed while Claude Code works. False
+   * when that cannot be done now (its worker is away, or an update holds it): nothing was sent, and
+   * the caller keeps the message for the turn's end.
+   */
+  sendDuringTurn(sessionId: number, text: string): boolean {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'running') throw new SessionError(`Session #${s.id} is ${s.status}: only a session that works takes a message during its turn.`, 409);
+    const identity = this.identityOf(s);
+    if (isRefusal(identity)) throw refusalError(identity);
+    if (this.held(s) || !this.sendTurn(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) return false;
+    this.addEvent(s.id, { kind: 'system', text });
+    return true;
+  }
+
+  /**
    * A scheduled run's propose_batch: the batch starts at once, with the schedule's run options.
    * Items it may not start are left out; past the schedule's cap nothing starts. The card stays in
    * the transcript with what happened, and the planner gets the same answer.

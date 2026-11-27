@@ -1458,8 +1458,9 @@ export class Orchestrator {
 
   /**
    * The orchestrator writes to one of its batches: what is missing, or how to fix a stopped merge.
-   * A batch whose turn ended gets it at once. For one that works it is queued, and the batch gets
-   * it when its turn ends (DISP-105). It counts as sent when it is queued.
+   * A batch whose turn ended gets it at once, one that works during its turn (DISP-263). Only when
+   * that cannot be done is it queued, and the batch gets it when its turn ends (DISP-105). It
+   * counts as sent when it is queued.
    */
   private sendToSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
@@ -1475,17 +1476,22 @@ export class Orchestrator {
     if (step.messages_sent >= Orchestrator.MAX_MESSAGES) throw new Error(`You already sent ${Orchestrator.MAX_MESSAGES} messages to this step's batch: tell the owner instead.`);
     const message = `(From the orchestrator of "${s.title}", not the owner:) ${text}`;
     const count = `message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step`;
-    // one that works is not interrupted; an idle one with messages still waiting takes this one after them
-    const queue = child.status !== 'idle' || this.store.queuedOrchMessages(child.id).length > 0;
+    // one that works reads it after its current tool step (DISP-263); messages still waiting go first, so this one waits after them
+    const waiting = this.store.queuedOrchMessages(child.id).length > 0;
+    const midTurn = !waiting && child.status === 'running' && this.sessions.sendDuringTurn(child.id, message);
+    const queue = !midTurn && (child.status !== 'idle' || waiting);
     if (queue) this.store.queueOrchMessage(step.id, child.id, message);
-    else this.sessions.sendFromDispatch(child.id, message);
+    else if (!midTurn) this.sessions.sendFromDispatch(child.id, message);
     this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
     this.acted.add(s.id);
     this.tookUpDeploys(o.session_id, step.id);
     this.emit(o.session_id);
-    if (!queue) return `Sent to session #${child.id} (${count}). End your turn: Dispatch wakes you when it changes.`;
+    const end = 'End your turn: Dispatch wakes you when it changes.';
+    if (midTurn) return `Sent to session #${child.id} while it works (${count}): it reads this after its current tool step. ${end}`;
+    if (!queue) return `Sent to session #${child.id} (${count}). ${end}`;
     if (child.status === 'idle') this.deliverQueued(child.id);
-    return `Queued for session #${child.id} (${count}): it works now and gets this when its turn ends. End your turn: Dispatch wakes you when it changes.`;
+    const why = waiting ? 'your earlier messages to it still wait' : child.status === 'running' ? 'it works, and its worker cannot take a message during the turn now' : 'it waits for its worker';
+    return `Queued for session #${child.id} (${count}): ${why}, so it gets this when its turn ends. ${end}`;
   }
 
   /**

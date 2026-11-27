@@ -411,7 +411,7 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       input_id: z.number().int(),
       reason: z.string().optional().describe('One line for the owner: why this is theirs'),
     }, call(rpc, 'hand_to_owner')),
-    tool('send_to_session', 'Write to one of your batches: how to fix a stopped merge, or what is missing. A batch whose turn ended gets it at once. For a batch that works it is queued: the batch gets it when its turn ends, and you are told if it closed or asked a question first. At most 3 messages per step, queued ones too. Not for a batch that waits for an answer or is closed.', {
+    tool('send_to_session', 'Write to one of your batches: how to fix a stopped merge, or what is missing. A batch whose turn ended gets it at once. A batch that works reads it during its turn, after its current tool step. Only when that cannot be done (its worker is away) is it queued: the batch gets it when its turn ends, and you are told if it closed or asked a question first. The answer says which happened. At most 3 messages per step, queued ones too. Not for a batch that waits for an answer or is closed.', {
       session_id: z.number().int().describe('The session number of the batch'),
       text: z.string().describe('What it should do, complete enough to act on'),
     }, call(rpc, 'send_to_session')),
