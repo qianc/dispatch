@@ -3,12 +3,13 @@
 // its scope, the owner's approval of the plan, the order of the steps and the number at once.
 import type { StartSpec } from '../shared/protocol.ts';
 import { autoMergePending, failureReason, finishGaps, finishedAttention } from '../shared/attention.ts';
-import { FINAL_STATUSES, type BranchFile, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type StepOffer, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
+import { FINAL_STATUSES, type BranchFile, type CheckLevel, minorChangeInput, orchestratorDefaults, orchestratorModel, planInput, proposedItemSchema, sessionStatusWords, type OrchestratorDefaults, type Attention, type DeployState, type Item, type LiveEvent, type NotifyOwner, type Orchestration, type OrchestrationPatch, type OrchestrationStep, type PendingInput, type PlanProposal, type Project, type StepOffer, type Repo, type RunOptions, type Session, type StepState } from '../shared/types.ts';
 import type { z } from 'zod';
 import type { orchestrationInput } from '../shared/types.ts';
 import { cleanTitle, firstWordsTitle } from '../shared/orchestrationTitle.ts';
 import type { Bus } from './bus.ts';
 import type { ChildNoticeKind, Notice, Notifier } from './notify.ts';
+import { turnCheckLevel } from '../worker/turnCheck.ts';
 import { CHANGE_WORDS, TOUCH_WORDS, describeChange, heldByProposal, minorProblem, type NextStep } from './planChange.ts';
 import { assertWritable } from './projectLock.ts';
 import { withFolders } from './repos.ts';
@@ -40,6 +41,9 @@ const NO_DEPLOY_RESULT = 'no deploy result in 30 min';
 const deployFailed = (step: OrchestrationStep) => step.state === 'failed' && (step.note === 'deploy failed' || step.note === NO_DEPLOY_RESULT);
 /** What an orchestrator may make of an item when its step is done: closed, or the owner's to look at (DISP-98). */
 const AFTER_STEP = ['done', 'in_review', 'hold'];
+
+/** A step's test level, in words (DISP-262). */
+const CHECK_WORDS: Record<CheckLevel | 'default', string> = { full: 'the full check', quick: 'the quick check', none: 'none', default: "the repo's default" };
 
 /** The merge setting of an orchestration's batches, in words for the chat (DISP-109). */
 const MERGE_SETTING: Record<RunOptions['auto_merge'], string> = {
@@ -286,7 +290,7 @@ export class Orchestrator {
     const held = this.heldNow(o);
     const lines = o.steps.map((s) => {
       const after = s.depends_on.flatMap((d) => place.get(d) ?? []);
-      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', s.worker ? `on worker ${s.worker}` : '', held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
+      const facts = [`step_id ${s.id}`, s.optional ? 'optional' : '', s.worker ? `on worker ${s.worker}` : '', s.check_level ? `check_level ${s.check_level}` : '', held.includes(s.id) ? 'held by your change that waits for the owner' : '', s.child_session_id ? `session #${s.child_session_id}` : '', after.length ? `after ${after.join(', ')}` : ''].filter(Boolean);
       return `${s.position}. [${s.state}${s.note ? `: ${s.note}` : ''}] ${s.project_key} — ${s.title} (${facts.join(', ')})`;
     });
     const ready = this.readySteps(o);
@@ -296,7 +300,23 @@ export class Orchestrator {
       : running >= o.max_children ? 'none (limit reached)'
       : ready.map((s) => s.id).join(', ');
     const waits = o.proposal ? [`A change of the plan waits for the owner's approval: ${o.proposal.summary}. The steps it holds do not start; the others go on.`] : [];
-    return [`Plan now (phase ${o.phase}, at most ${o.max_children} at once):`, ...lines, ...waits, `Ready to start: ${can}`].join('\n');
+    return [`Plan now (phase ${o.phase}, at most ${o.max_children} at once):`, ...lines, ...waits, `Ready to start: ${can}`, ...this.checksText(o)].join('\n');
+  }
+
+  /**
+   * What a batch checks (DISP-262): the options it starts with, and each repo's commands with the
+   * level a turn's end runs when the step sets no check_level.
+   */
+  private checksText(o: Orchestration): string[] {
+    const on = (b: boolean) => (b ? 'on' : 'off');
+    const repos = this.projectsOf(o).flatMap((p) => this.store.repos(p.id).map((r) => {
+      const cmds = [`check \`${r.check_command ?? 'none'}\``, `quick check \`${r.quick_check_command ?? 'none'}\``, `setup \`${r.setup_command ?? 'none'}\``];
+      return `  ${p.key} ${r.github_name}: ${cmds.join(', ')}; after a turn by default: ${turnCheckLevel(r, o.options)}`;
+    }));
+    return [
+      `Batches start with: turn_check ${on(o.options.turn_check)}, base_check ${on(o.options.base_check)}, auto_merge ${o.options.auto_merge}. A step's check_level (full, quick, none) sets the check after each turn of its batch.`,
+      'Repo checks:', ...repos,
+    ];
   }
 
   private emit(sessionId: number) {
@@ -507,7 +527,7 @@ export class Orchestrator {
         if (a === n) throw new Error(`Step ${n} cannot come after itself.`);
         if (a > plan.steps.length) throw new Error(`Step ${n} comes after step ${a}, but the plan has no step ${a}.`);
       }
-      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)], optional: st.optional, worker: st.worker ?? null };
+      return { id: st.id, title: st.title, project_id: project.id, prompt_md: st.prompt, item_ids: items.map((it) => it.id), after: [...new Set(st.after)], optional: st.optional, worker: st.worker ?? null, check_level: st.check_level ?? null };
     });
     // no circle of steps that wait for each other
     const state = new Map<number, 'open' | 'done'>();
@@ -600,11 +620,24 @@ export class Orchestrator {
       return ids;
     });
     this.sessions.systemNote(s.id, `Plan changed without approval (${CHANGE_WORDS[change.kind]}): ${summary}. Why: ${change.reason}${change.verification ? ` Verified by: ${change.verification}` : ''}`);
+    this.applyCheckLevels(o.session_id);
     this.acted.add(s.id);
     if (change.kind === 'fix_blocker') this.tookUpDeploys(o.session_id);
     this.emit(o.session_id);
     const after = this.must(o.session_id);
     return `Changed: ${summary}. It is in the plan's history for the owner. Ready to start: ${this.readySteps(after).map((x) => x.id).join(', ') || 'none'}.`;
+  }
+
+  /**
+   * A step's test level, given to its batch while it works (DISP-262): its session's options say it
+   * from its next turn on, as a merge setting does.
+   */
+  private applyCheckLevels(sessionId: number) {
+    for (const st of this.must(sessionId).steps) {
+      const child = st.child_session_id ? this.store.session(st.child_session_id) : undefined;
+      if (!child || FINAL_STATUSES.includes(child.status) || (child.options.check_level ?? null) === st.check_level) continue;
+      this.sessions.setOptions(child.id, { check_level: st.check_level ?? undefined }, `The orchestrator changed the check after each turn to ${CHECK_WORDS[st.check_level ?? 'default']}, from the next turn on.`);
+    }
   }
 
   /** The prompt of a step that fixes a blocker: it may touch only what the change named, and its check must pass. */
@@ -655,7 +688,8 @@ export class Orchestrator {
     const plugins = has ? o.options.plugins.filter((p) => has.includes(p)) : o.options.plugins;
     const dropped = o.options.plugins.filter((p) => !plugins.includes(p));
     if (dropped.length) out.push(`plugin${dropped.length === 1 ? '' : 's'} ${dropped.join(', ')} (not on worker ${step.worker})`);
-    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options: step.worker ? { ...o.options, worker_id: null, plugins } : o.options, worker: step.worker ?? undefined }, s.started_by);
+    const options = { ...o.options, ...(step.worker ? { worker_id: null, plugins } : {}), ...(step.check_level ? { check_level: step.check_level } : {}) };
+    const child = this.sessions.startBatch(project, { title: step.title, item_ids: ok.map((it) => it.id), new_items: [], prompt: step.prompt_md, options, worker: step.worker ?? undefined }, s.started_by);
     this.store.setOrchestrator(child.id, o.session_id);
     this.acted.add(s.id);
     this.store.setTimerStreak(o.session_id, 0);
@@ -813,6 +847,7 @@ export class Orchestrator {
       this.store.addPlanChange(o.session_id, { kind: 'approved', decided_by: 'owner', summary: p.summary, reason: '', verification: null, step_id: null });
     });
     this.sessions.systemNote(o.session_id, 'Plan change approved.');
+    this.applyCheckLevels(o.session_id);
     this.emit(o.session_id);
     this.wake(o.session_id, 'The owner approved your change of the plan.');
     return this.view(o.session_id);
@@ -1304,7 +1339,7 @@ export class Orchestrator {
       for (const st of o.steps) {
         const child = st.state === 'running' && st.child_session_id ? this.store.session(st.child_session_id) : undefined;
         if (!child || FINAL_STATUSES.includes(child.status) || child.options.auto_merge === merge) continue;
-        this.sessions.setAutoMerge(child.id, merge, `The owner changed the orchestration's setting: ${MERGE_SETTING[merge]}.`);
+        this.sessions.setOptions(child.id, { auto_merge: merge }, `The owner changed the orchestration's setting: ${MERGE_SETTING[merge]}.`);
         this.sync(st.id);
       }
     }

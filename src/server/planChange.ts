@@ -14,6 +14,7 @@ export interface NextStep {
   after: number[];
   optional: boolean;
   worker?: string | null;
+  check_level?: OrchestrationStep['check_level'];
 }
 
 export const CHANGE_WORDS: Record<MinorChange['kind'], string> = {
@@ -21,6 +22,7 @@ export const CHANGE_WORDS: Record<MinorChange['kind'], string> = {
   reorder: 'steps in another order',
   reword: 'new wording',
   split: 'a step split in parts',
+  checks: 'other test levels',
 };
 
 export const TOUCH_WORDS: Record<NonNullable<MinorChange['touches']>[number], string> = {
@@ -79,7 +81,7 @@ export function heldByProposal(old: OrchestrationStep[], next: NextStep[]): numb
     const n = byId.get(o.id);
     if (!n) return true;
     return n.title !== o.title || n.prompt_md !== o.prompt_md || n.project_id !== o.project_id || n.optional !== o.optional || (n.worker ?? null) !== o.worker
-      || !sameSet(n.item_ids, o.item_ids) || !sameSet(before.get(`s${o.id}`)!, after.get(`s${o.id}`)!);
+      || (n.check_level ?? null) !== o.check_level || !sameSet(n.item_ids, o.item_ids) || !sameSet(before.get(`s${o.id}`)!, after.get(`s${o.id}`)!);
   }).map((o) => o.id);
 }
 
@@ -190,6 +192,7 @@ export function describeChange(old: OrchestrationStep[], next: NextStep[], chang
       !sameSet(n.item_ids, o.item_ids) ? 'other items' : '',
       n.optional !== o.optional ? (n.optional ? 'optional now' : 'required now') : '',
       (n.worker ?? null) !== o.worker ? `on worker ${n.worker ?? 'default'}` : '',
+      (n.check_level ?? null) !== o.check_level ? `tests ${n.check_level ?? 'at the repo default'} after each turn` : '',
       !sameSet(before.get(`s${o.id}`)!, after.get(`s${o.id}`)!) ? 'waits for other steps' : '',
       i + 1 !== o.position ? `now at place ${i + 1}` : '',
     ].filter(Boolean);

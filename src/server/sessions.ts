@@ -741,10 +741,10 @@ export class Sessions {
     this.emitSession(this.store.updateSession(this.mustGet(sessionId).id, { title }));
   }
 
-  /** Change what happens when a live session is done (its orchestration's setting changed, DISP-109): from its next merge on. */
-  setAutoMerge(sessionId: number, autoMerge: RunOptions['auto_merge'], why: string) {
+  /** Change a live session's options (its orchestration's setting or step changed, DISP-109, DISP-262): from its next merge or turn on. */
+  setOptions(sessionId: number, patch: Partial<RunOptions>, why: string) {
     const s = this.mustGet(sessionId);
-    this.emitSession(this.store.updateSession(s.id, { options: { ...s.options, auto_merge: autoMerge } }));
+    this.emitSession(this.store.updateSession(s.id, { options: { ...s.options, ...patch } }));
     this.addEvent(s.id, { kind: 'system', text: why });
   }
 

@@ -435,7 +435,7 @@ export class ServerLink {
       return started;
     }
     if (live) {
-      this.turnChecks.get(id)?.ownerTurn();
+      this.turnCheck(spec)?.ownerTurn();
       // counted as work: a restart during the fetch would lose the message
       if (spec.kind === 'orchestrator' && this.realCheckouts(spec)) text = await this.job(`session ${id} gets a message`, () => this.freshCheckouts(spec, text));
       else if (!this.shared.fake) await this.job(`session ${id} gets a message`, () => this.fetchHosted(spec));
@@ -534,7 +534,8 @@ export class ServerLink {
         },
         rpc: this.rpcFor(id),
         cwd,
-        ...(this.turnCheck(spec) ? { beforeIdle: () => this.turnCheck(spec)!.gate() } : {}),
+        // the session's TurnCheck, not this spec's: a later message may have changed its levels
+        ...(this.turnCheck(spec) ? { beforeIdle: () => this.turnChecks.get(id)?.gate() ?? Promise.resolve(null) } : {}),
         onClosed: () => {
           if (this.runners.get(id) === runner) this.runners.delete(id);
           this.shared.slots.set(this.slotKey(id), false);
@@ -571,15 +572,17 @@ export class ServerLink {
   }
 
   /**
-   * A work session's check before its turn is reported done (DISP-15): when the batch wants it
-   * and a repo has a check command. Not in fake mode: there are no worktrees to check.
+   * A work session's check before its turn is reported done (DISP-15), with the repos and levels of
+   * this spec's options: each message brings the newest, so a changed level applies from the next
+   * turn (DISP-262). Not in fake mode: there are no worktrees to check.
    */
   private turnCheck(spec: StartSpec): TurnCheck | null {
     const id = spec.session_id;
     const repos = turnChecks(spec.repos, spec.options);
-    if (spec.kind !== 'work' || !spec.branch || !repos.length || this.shared.fake) return null;
+    if (spec.kind !== 'work' || !spec.branch || this.shared.fake) return null;
     let tc = this.turnChecks.get(id);
-    if (!tc) {
+    if (tc) tc.use(repos);
+    else {
       tc = new TurnCheck({
         sessionId: id, repos, retries: checkRetries(), timeoutMin: Math.round(checkTimeoutMs() / 60_000),
         state: (repo) => this.workspaces.turnState(repo, id),
