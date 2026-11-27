@@ -6,7 +6,8 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
+import { CHECK_WAITS, CheckParser, type CheckProgress } from '../shared/checkProgress.ts';
+import { checkQueue } from './checkQueue.ts';
 import type { GeneratorItem } from '../shared/generatorItems.ts';
 import { privatePatternsFile, redactPrivate } from '../shared/mergeMessage.ts';
 import { githubCredEnv } from '../shared/accounts.ts';
@@ -120,6 +121,9 @@ export function runCheck(command: string, cwd: string, timeoutMs: number, onProg
     child.on('close', (code, signal) => done(code ?? (signal ? 137 : 1)));
   });
 }
+
+/** The progress a check reports while it waits for another check on the worker (DISP-264). */
+const waitProgress = (): CheckProgress => ({ ...new CheckParser().progress(0), stage: CHECK_WAITS });
 
 /** How long a check command may run: CHECK_TIMEOUT_MIN on the worker, 2 hours by default. */
 export function checkTimeoutMs() {
@@ -550,7 +554,7 @@ export class Workspaces {
     if (tree && this.hasPassed(repo, command, tree)) {
       return { code: 0, out: '', timed_out: false, duration_ms: 0, progress: { stage: null, current: null, passed: 0, failed: 0, skipped: 0, units: 0, total: null, elapsed_ms: 0 }, tree, reused: true };
     }
-    const r = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(command, wt, checkTimeoutMs(), onProgress, signal));
+    const r = await checkQueue.run(() => repoEnv.run(this.commandEnv(repo, cred), () => runCheck(command, wt, checkTimeoutMs(), onProgress, signal)), () => onProgress?.(waitProgress()), signal);
     if (r.code === 0 && tree && (await this.contentTree(wt)) === tree) this.rememberPass(repo, command, tree);
     return { ...r, tree };
   }
@@ -658,7 +662,7 @@ export class Workspaces {
         reused = 'ci';
       } else if (repo.check_command) {
         // the repo's account and hosted-git access, as the locked commands have them
-        const c = await repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress));
+        const c = await checkQueue.run(() => repoEnv.run(this.commandEnv(repo, cred), () => runCheck(repo.check_command!, tmp, checkTimeoutMs(), onProgress)), () => onProgress?.(waitProgress()));
         check = { ok: c.code === 0, duration_ms: c.duration_ms, units: c.progress.units };
         if (c.code !== 0) {
           const why = c.timed_out ? `Check stopped after ${Math.round(checkTimeoutMs() / 60_000)} minutes (CHECK_TIMEOUT_MIN on the worker)` : 'Check failed';

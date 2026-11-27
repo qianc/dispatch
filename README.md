@@ -54,6 +54,9 @@ A personal, Linear-style tracker for your projects that also runs **Claude Code*
   progress). A failure goes back to the agent with its output as the next turn, up to
   `CHECK_RETRIES` fix turns; then you get a push that it still fails. An unchanged worktree is not
   checked again. A batch can turn this off ("Run the repo's check before done").
+- **One check at a time**: a worker runs at most `MAX_CONCURRENT_CHECKS` turn or merge checks at
+  once (1 by default); the others wait in turn, and their session shows "check waits for another
+  check on this worker". A stop ends a waiting check. The agents' own work is not limited.
 - **Check levels**: a repo can also have a quick check command (lint plus a smoke set). Where
   GitHub CI runs the full suite on the PR, a turn's end runs only the quick check (or none); local,
   hosted and CI-less repos run the full check. A check does not run again on files it already
@@ -362,6 +365,7 @@ file: `NAME_FILE=/run/secrets/name` (swarm and Kubernetes secrets).
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_…` | | Commit identity. |
 | `CHECK_TIMEOUT_MIN` | `120` | How long a repo's check command may run (before a merge, or before a turn is reported done). |
 | `DEPLOY_TIMEOUT_MIN` | `30` | How long a repo's deploy command may run after a merge. |
+| `MAX_CONCURRENT_CHECKS` | `1` | Turn and merge checks at once on this worker (over all its servers); the others wait in turn. |
 | `CHECK_RETRIES` | `3` | Fix turns an agent gets when the check fails at the end of its turn, before you are told. |
 | `WORKSPACES_DIR` | `./data/workspaces` | Clones and session worktrees, in `servers/<name>/` per server. A worker that finds the old layout (`sessions/`, `cache/`, … right in this folder) moves it once to its first server's folder at start; the file `legacy-server` records which. |
 | `LOCAL_REPO_DIRS` | | Folders that may hold local repos (no GitHub); off when empty. |
