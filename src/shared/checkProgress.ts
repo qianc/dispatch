@@ -18,6 +18,9 @@ export interface CheckProgress {
   elapsed_ms: number;
 }
 
+/** The stage of a check that waits for its turn on the worker (DISP-264). */
+export const CHECK_WAITS = 'check waits for another check on this worker';
+
 /** A check command running now for one session's branch. */
 export interface CheckRun {
   session_id: number;

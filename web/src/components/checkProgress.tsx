@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { expectedTotal, formatLeft, timeLeft, type CheckRun } from '../../../src/shared/checkProgress.ts';
+import { CHECK_WAITS, expectedTotal, formatLeft, timeLeft, type CheckRun } from '../../../src/shared/checkProgress.ts';
 
 function clock(ms: number) {
   const s = Math.floor(ms / 1000);
@@ -26,7 +26,7 @@ export function CheckProgressCard({ run }: { run: CheckRun }) {
   return (
     <div className="mx-4 my-2 rounded-xl border border-line bg-panel px-3 py-2.5 text-[14px]" role="status" aria-label={`Tests running in ${run.repo}`}>
       <div className="flex items-baseline gap-2">
-        <span className="font-medium">Tests running in {run.repo}</span>
+        <span className="font-medium">{p.stage === CHECK_WAITS ? 'Check waits' : 'Tests running'} in {run.repo}</span>
         <span className="ml-auto text-[13px] text-muted tabular-nums">{clock(elapsed)}</span>
       </div>
       <div className="mt-2 h-1.5 rounded-full bg-raised overflow-hidden">
