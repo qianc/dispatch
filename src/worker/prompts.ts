@@ -120,6 +120,8 @@ export function workPrompt(spec: StartSpec): string {
   }
   if (quick.length) {
     lines.push(`- When your turn ends, Dispatch runs the repo's quick check command (${quick.map((c) => `${c.repo.github_name}: \`${c.command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
+    const mapped = quick.filter((c) => c.repo.quick_test_command && c.repo.quick_test_map?.length);
+    if (mapped.length) lines.push(`- After the quick check, it runs the tests for the paths you changed (${mapped.map((c) => `${c.repo.github_name}: \`${c.repo.quick_test_command} <test files>\``).join(', ')}), mapped by the repo's rules: ${mapped.flatMap((c) => c.repo.quick_test_map!).map((r) => `\`${r}\``).join(', ')}.`);
   }
   // a merge in Dispatch runs the check (github.ts mergeOpen); GitHub's own merge does not
   const localMerge = (r: Repo) => spec.options.auto_merge === 'local' || !!r.local_path || !!r.generate_command || r.kind === 'hosted';

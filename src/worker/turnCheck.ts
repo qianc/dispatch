@@ -49,6 +49,31 @@ export function turnChecks(repos: Repo[], options: Pick<RunOptions, 'turn_check'
   });
 }
 
+/**
+ * DISP-268: the test files a repo's rules map the changed paths to. A rule is `<regex> => <test
+ * file>`: the regex matches a whole path, and `$1`... in the file are its groups. Each file once,
+ * in path order; `exists` drops a file that is not there (a new module with no test yet).
+ */
+export function mappedTests(rules: string[], paths: string[], exists: (file: string) => boolean): string[] {
+  const parsed = rules.flatMap((r) => {
+    const [re, to] = r.split(' => ').map((x) => x?.trim());
+    try {
+      return re && to ? [{ re: new RegExp(`^(?:${re})$`), to }] : [];
+    } catch {
+      return [];
+    }
+  });
+  const files = paths.flatMap((p) => parsed.flatMap(({ re, to }) => (re.test(p) ? [p.replace(re, to)] : [])));
+  return [...new Set(files)].filter((f) => !f.split('/').includes('..') && !f.startsWith('/') && exists(f));
+}
+
+const shellQuote = (s: string) => (/^[\w./@=+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** The quick check with the repo's test command for `tests` after it (DISP-268); the quick check alone when there are none. */
+export function quickWithTests(repo: Repo, quick: string, tests: string[]): string {
+  return tests.length && repo.quick_test_command?.trim() ? `${quick} && ${repo.quick_test_command.trim()} ${tests.map(shellQuote).join(' ')}` : quick;
+}
+
 export interface TurnCheckDeps {
   sessionId: number;
   /** the session's repos that get a check, from turnChecks */
@@ -60,6 +85,8 @@ export interface TurnCheckDeps {
   check(repo: Repo, command: string, onProgress: (p: CheckProgress) => void, signal: AbortSignal): Promise<CheckOutcome>;
   send(msg: WorkerToServer): void;
   timeoutMin: number;
+  /** the command a repo's check runs at this turn's end, when it depends on the change (the quick check's mapped tests, DISP-268) */
+  command?(check: TurnCheckRepo): Promise<string>;
 }
 
 /**
@@ -136,8 +163,10 @@ export class TurnCheck {
     /** failed before and unchanged since: Claude ended its turn without a fix */
     const unfixed: Repo[] = [];
     try {
-      for (const { repo, level, command: cmd } of this.d.repos) {
+      for (const check of this.d.repos) {
+        const { repo, level } = check;
         if (ctrl.signal.aborted) return null;
+        const cmd = this.d.command ? await this.d.command(check).catch(() => check.command) : check.command;
         const before = await this.d.state(repo).catch(() => null);
         if (before === null) continue;
         const last = this.checked.get(repo.id);

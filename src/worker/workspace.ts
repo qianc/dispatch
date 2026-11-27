@@ -543,6 +543,23 @@ export class Workspaces {
   }
 
   /**
+   * The paths a session's worktree changes against the default branch (DISP-268): committed or
+   * not, and new files git does not ignore. A rename counts as a delete and an add.
+   */
+  async changedPaths(repo: Repo, sessionId: number): Promise<string[]> {
+    const wt = this.repoDir(sessionId, repo);
+    const base = Workspaces.isAttached(wt, repo) ? `refs/heads/${repo.default_branch}` : `origin/${repo.default_branch}`;
+    const mb = await run('git', ['merge-base', base, 'HEAD'], wt);
+    const fork = mb.code === 0 && mb.out ? mb.out : base;
+    // the output holds stderr too: only a command that worked gives paths
+    const lines = async (args: string[]) => {
+      const r = await run('git', args, wt);
+      return r.code === 0 ? r.out.split('\n').map((p) => p.trim()).filter(Boolean) : [];
+    };
+    return [...new Set([...await lines(['diff', '--name-only', '--no-renames', fork, '--']), ...await lines(['ls-files', '--others', '--exclude-standard'])])];
+  }
+
+  /**
    * Run a check command (the full or the quick one) in a session's worktree, as its account
    * (DISP-15). A pass is remembered by the tree of the files, so the merge does not run the same
    * check again; a tree it already passed on (here, at a merge, or in the agent's own run) is not
