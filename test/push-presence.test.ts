@@ -62,4 +62,48 @@ describe('notifications while the app is in focus (DISP-12)', () => {
     expect(delivered).toEqual([]);
     expect(live.filter((e) => e.t === 'notice')).toEqual([]);
   });
+
+  describe('the app in focus on another device (DISP-266)', () => {
+    const focus = (n: number, path: string) => s.call('POST', '/push/presence', { endpoint: sub(n).endpoint, active: true, path });
+    let held: (() => void)[];
+    beforeEach(() => {
+      held = [];
+      s.ctx.notifier.later = (_ms, fn) => void held.push(fn);
+    });
+    const flush = async () => {
+      for (const fn of held.splice(0)) fn();
+      await new Promise((r) => setTimeout(r, 0));
+    };
+
+    it('no push to the other devices while one shows the session the notice is about', async () => {
+      await focus(1, '/s/7');
+      await s.ctx.notifier.send({ title: 'Q', body: 'B', url: '/s/7', tag: 'input-1', session_id: 7, source: 'test' });
+      expect(delivered).toEqual([]);
+      expect(held).toEqual([]);
+      expect(live).toContainEqual(expect.objectContaining({ t: 'notice' }));
+    });
+
+    it('in focus elsewhere: the push waits, and is dropped when the session is opened meanwhile', async () => {
+      await focus(1, '/projects');
+      await s.ctx.notifier.send({ title: 'Q', body: 'B', url: '/s/7', session_id: 7, source: 'test' });
+      expect(delivered).toEqual([]);
+      await focus(1, '/s/7');
+      await flush();
+      expect(delivered).toEqual([]);
+    });
+
+    it('in focus elsewhere: the push waits, then goes to the other devices if not opened', async () => {
+      await focus(1, '/projects');
+      await s.ctx.notifier.send({ title: 'Q', body: 'B', url: '/s/7', session_id: 7, source: 'test' });
+      expect(delivered).toEqual([]);
+      await flush();
+      expect(delivered).toEqual([sub(2).endpoint]);
+    });
+
+    it('away on every device: pushes at once as before', async () => {
+      await s.ctx.notifier.send({ title: 'Q', body: 'B', url: '/s/7', session_id: 7, source: 'test' });
+      expect(delivered.sort()).toEqual([sub(1).endpoint, sub(2).endpoint]);
+      expect(held).toEqual([]);
+    });
+  });
 });

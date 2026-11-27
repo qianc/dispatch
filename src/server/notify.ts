@@ -38,6 +38,12 @@ export type NoticeTarget = string | null | undefined | (string | null | undefine
 /** How long a device's "the app is in focus" lasts without a renewal (the app renews it every 20 s). */
 const ACTIVE_FOR_MS = 45_000;
 
+/** Whether an app page (its path) shows what a notice is about: its link, or its session. */
+const shows = (path: string, n: Notice) =>
+  [n.url, n.session_id ? `/s/${n.session_id}` : ''].some((u) => u && (path === u || path.startsWith(`${u}/`)));
+
+type Sub = ReturnType<Store['pushSubscriptions']>[number];
+
 export class Notifier {
   readonly publicKey: string;
   /** Last notices, for tests and the debug endpoint; `to`: the users they went to. */
@@ -47,8 +53,14 @@ export class Notifier {
   private bus: Bus;
   private users: Pick<Users, 'installOwner'>;
   private cfg: Pick<Config, 'authUsers'>;
-  /** Devices (push endpoints) that have the app in focus, until when. */
-  private active = new Map<string, number>();
+  /** Devices (push endpoints) that have the app in focus: until when, whose, and the page it shows ('' : an app that does not say). */
+  private active = new Map<string, { until: number; user: string; path: string }>();
+  /** Per user: the pages shown in focus lately, and when (DISP-266). */
+  private shown = new Map<string, Map<string, number>>();
+  /** How long a push waits while its user has the app in focus on another page (DISP-266). */
+  holdMs = 60_000;
+  /** Run `fn` later (tests replace it). */
+  later = (ms: number, fn: () => void) => void setTimeout(fn, ms).unref();
 
   constructor(cfg: Config, db: Db, store: Store, bus: Bus, users: Pick<Users, 'installOwner'>) {
     this.store = store;
@@ -66,15 +78,23 @@ export class Notifier {
     this.publicKey = keys.publicKey;
   }
 
-  /** A device of `user` says whether the app has focus there: while it has, it gets no system notification. */
-  setActive(endpoint: string, active: boolean, user: string) {
-    if (active && this.store.pushSubscriptions(user).some((s) => s.endpoint === endpoint)) this.active.set(endpoint, Date.now() + ACTIVE_FOR_MS);
-    else this.active.delete(endpoint);
+  /**
+   * A device of `user` says whether the app has focus there, and on which page: while it has, it
+   * gets no system notification, and neither do their other devices for what that page shows (DISP-266).
+   */
+  setActive(endpoint: string, active: boolean, user: string, path = '') {
+    if (!active || !this.store.pushSubscriptions(user).some((s) => s.endpoint === endpoint)) return void this.active.delete(endpoint);
+    const now = Date.now();
+    this.active.set(endpoint, { until: now + ACTIVE_FOR_MS, user, path });
+    if (!path) return;
+    const shown = this.shown.get(user) ?? new Map<string, number>();
+    for (const [p, at] of shown) if (at < now - 2 * this.holdMs) shown.delete(p);
+    this.shown.set(user, shown.set(path, now));
   }
 
   activeCount() {
     const now = Date.now();
-    for (const [endpoint, until] of this.active) if (until <= now) this.active.delete(endpoint);
+    for (const [endpoint, a] of this.active) if (a.until <= now) this.active.delete(endpoint);
     return this.active.size;
   }
 
@@ -104,17 +124,55 @@ export class Notifier {
     // open apps show it themselves (the stream passes it to those users' tabs); devices with the app in focus get no system notification
     this.bus.emit({ t: 'notice', notice, to: users });
     this.activeCount(); // drops expired focus
-    const payload = JSON.stringify(notice);
-    const subs = users.flatMap((u) => this.store.pushSubscriptions(u));
-    const devices: NoticeLogEntry['devices'] = [];
-    let pushed = 0;
+    const out = { id, payload: JSON.stringify(notice), devices: [] as NoticeLogEntry['devices'], pushed: 0, subs: 0, held: 0 };
+    const now: Sub[] = [];
+    for (const user of users) {
+      const subs = this.store.pushSubscriptions(user);
+      out.subs += subs.length;
+      const pages = [...this.active.values()].filter((a) => a.user === user && a.path).map((a) => a.path);
+      // they look at it on one device: no push to the others (DISP-266)
+      if (pages.some((p) => shows(p, n))) {
+        for (const s of subs) out.devices.push({ service: serviceOf(s.endpoint), result: this.active.has(s.endpoint) ? 'in focus: no push' : 'open on another device: no push' });
+      } else if (pages.length && subs.length) {
+        // the app is in focus elsewhere: the push waits a while, and goes only if they did not open it or answer it meanwhile
+        out.held++;
+        const since = Date.now();
+        this.later(this.holdMs, () => void (async () => {
+          out.held--;
+          this.activeCount();
+          if (this.openedSince(user, n, since) || this.answered(n)) {
+            for (const s of subs) out.devices.push({ service: serviceOf(s.endpoint), result: 'opened or answered meanwhile: no push' });
+          } else await this.push(subs, out);
+          this.logDevices(out);
+        })().catch((e) => console.warn('held push failed', (e as Error).message)));
+      } else now.push(...subs);
+    }
+    await this.push(now, out);
+    this.logDevices(out);
+  }
+
+  /** Whether `user` had the page of a notice in focus since `since`. */
+  private openedSince(user: string, n: Notice, since: number) {
+    return [...(this.shown.get(user) ?? [])].some(([path, at]) => at >= since && shows(path, n));
+  }
+
+  /** A question's notice whose question was answered meanwhile (its tag is `input-<id>`). */
+  private answered(n: Notice) {
+    const id = /^input-(\d+)$/.exec(n.tag ?? '')?.[1];
+    const input = id ? this.store.input(Number(id)) : undefined;
+    return !!(input?.answered_at || input?.expired);
+  }
+
+  /** Pushes to these devices, but not those with the app in focus; each result goes into `out`. */
+  private async push(subs: Sub[], out: { payload: string; devices: NoticeLogEntry['devices']; pushed: number }) {
+    const { devices, payload } = out;
     await Promise.all(
       subs.map(async (s) => {
         const service = serviceOf(s.endpoint);
         if (this.active.has(s.endpoint)) return void devices.push({ service, result: 'in focus: no push' });
         try {
           const r = await this.deliver(s.endpoint, { p256dh: s.p256dh, auth: s.auth }, payload);
-          pushed++;
+          out.pushed++;
           devices.push({ service, result: String((r as { statusCode?: number } | undefined)?.statusCode ?? 'sent') });
         } catch (e) {
           const code = (e as { statusCode?: number }).statusCode;
@@ -127,7 +185,14 @@ export class Notifier {
         }
       }),
     );
-    const reason = pushed ? null : !subs.length ? 'no device gets notifications' : devices.every((d) => d.result.startsWith('in focus')) ? 'the app is in focus on every device' : 'no push went through';
+  }
+
+  /** The log row of a sent notice, with its devices so far. */
+  private logDevices({ id, devices, pushed, subs, held }: { id: number; devices: NoticeLogEntry['devices']; pushed: number; subs: number; held: number }) {
+    const reason = pushed ? null : !subs ? 'no device gets notifications' : held ? 'the app is in focus elsewhere: the push waits'
+      : devices.every((d) => d.result.startsWith('in focus')) ? 'the app is in focus on every device'
+      : devices.some((d) => d.result.startsWith('open')) ? 'open on another device'
+      : devices.some((d) => d.result.startsWith('opened')) ? 'opened or answered meanwhile' : 'no push went through';
     this.db.run('UPDATE notice_log SET outcome = ?, reason = ?, devices = ? WHERE id = ?', pushed ? 'pushed' : 'app_only', reason, JSON.stringify(devices), id);
   }
 
