@@ -1,15 +1,15 @@
 // DISP-15: the repo's check command runs before a work session's turn is reported done.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CHECK_WAITS, type CheckProgress } from '../src/shared/checkProgress.ts';
 import type { StartSpec, WorkerToServer } from '../src/shared/protocol.ts';
-import { DEFAULT_RUN_OPTIONS, type Repo } from '../src/shared/types.ts';
+import { DEFAULT_RUN_OPTIONS, repoPatch, type Repo } from '../src/shared/types.ts';
 import { CheckQueue } from '../src/worker/checkQueue.ts';
 import { workPrompt } from '../src/worker/prompts.ts';
-import { agentCheck, TurnCheck, turnCheckLevel, turnChecks, type CheckOutcome } from '../src/worker/turnCheck.ts';
+import { agentCheck, mappedTests, quickWithTests, TurnCheck, turnCheckLevel, turnChecks, type CheckOutcome } from '../src/worker/turnCheck.ts';
 import { Workspaces } from '../src/worker/workspace.ts';
 
 const progress: CheckProgress = { stage: null, current: null, passed: 0, failed: 0, skipped: 0, units: 3, total: null, elapsed_ms: 1200 };
@@ -207,6 +207,44 @@ describe('the level a turn check runs (DISP-260)', () => {
   });
 });
 
+describe('quick check with the tests for the changed paths (DISP-268)', () => {
+  const rules = ['src/(.+)\\.ts => test/$1.test.ts', '(test/.+\\.test\\.ts) => $1', 'broken( => x', 'docs/.* => ../outside.test.ts'];
+  const have = new Set(['test/a.test.ts', 'test/b.test.ts']);
+
+  it('maps changed paths to the test files that exist, each once', () => {
+    expect(mappedTests(rules, ['src/a.ts', 'test/a.test.ts', 'src/new.ts', 'test/b.test.ts', 'docs/x.md', 'README.md'], (f) => have.has(f)))
+      .toEqual(['test/a.test.ts', 'test/b.test.ts']);
+    // a rule matches the whole path only
+    expect(mappedTests(rules, ['lib/src/a.ts'], () => true)).toEqual([]);
+  });
+
+  it('runs the test command with them after the quick check; the quick check alone when none are found', () => {
+    const r = { ...repo(1, 'app', null), quick_check_command: 'npm run lint', quick_test_command: 'npx vitest run' };
+    expect(quickWithTests(r, 'npm run lint', ['test/a.test.ts', "test/it's.test.ts"])).toBe(`npm run lint && npx vitest run test/a.test.ts 'test/it'\\''s.test.ts'`);
+    expect(quickWithTests(r, 'npm run lint', [])).toBe('npm run lint');
+    expect(quickWithTests({ ...r, quick_test_command: null }, 'npm run lint', ['test/a.test.ts'])).toBe('npm run lint');
+  });
+
+  it('a repo takes only rules of the form `<regex> => <test file>`', () => {
+    expect(repoPatch.safeParse({ quick_test_map: ['src/(.+)\\.ts => test/$1.test.ts'] }).success).toBe(true);
+    for (const bad of ['src/a.ts', 'src/( => x', ' => x']) expect(repoPatch.safeParse({ quick_test_map: [bad] }).success).toBe(false);
+  });
+
+  it('a turn check runs the command that fits the change', async () => {
+    const r = { ...repo(1, 'app', null), quick_check_command: 'npm run lint' };
+    const ran: string[] = [];
+    const tc = new TurnCheck({
+      sessionId: 7, repos: [{ repo: r, level: 'quick', command: 'npm run lint' }], retries: 1, timeoutMin: 1,
+      state: async () => 'v1',
+      check: async (_r, command) => { ran.push(command); return { code: 0, out: '', timed_out: false, duration_ms: 1, progress }; },
+      send: () => undefined,
+      command: async (c) => `${c.command} && npx vitest run test/a.test.ts`,
+    });
+    expect(await tc.gate()).toBeNull();
+    expect(ran).toEqual(['npm run lint && npx vitest run test/a.test.ts']);
+  });
+});
+
 describe('the work prompt', () => {
   const spec = (turn_check: boolean): StartSpec => ({
     session_id: 1, kind: 'work', project_key: 'HC', project_name: 'HC', importance_scale: [], effort_scale: [],
@@ -273,6 +311,27 @@ describe('Workspaces turn state', () => {
     expect(await ws.turnState(r, 1)).toBe(committed);
   });
 
+  it('lists the changed paths, committed or not, and runs the tests they map to (DISP-268)', async () => {
+    const cwd = await ws.prepare(spec);
+    expect(await ws.changedPaths(r, 1)).toEqual([]);
+    mkdirSync(join(cwd, 'src'));
+    mkdirSync(join(cwd, 'test'));
+    writeFileSync(join(cwd, 'src', 'b.ts'), 'b\n');
+    writeFileSync(join(cwd, 'test', 'b.test.ts'), 'b passes\n');
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-m', 'b');
+    writeFileSync(join(cwd, 'a.txt'), 'two\n');
+    writeFileSync(join(cwd, 'new.txt'), 'x\n');
+    expect((await ws.changedPaths(r, 1)).sort()).toEqual(['a.txt', 'new.txt', 'src/b.ts', 'test/b.test.ts']);
+    const q = { ...r, quick_check_command: 'true', quick_test_command: 'grep -q passes', quick_test_map: ['src/(.+)\\.ts => test/$1.test.ts'] };
+    const tests = mappedTests(q.quick_test_map, await ws.changedPaths(q, 1), (f) => existsSync(join(cwd, f)));
+    const command = quickWithTests(q, 'true', tests);
+    expect(command).toBe('true && grep -q passes test/b.test.ts');
+    expect((await ws.sessionCheck(q, 1, undefined, undefined, null, command)).code).toBe(0);
+    writeFileSync(join(cwd, 'test', 'b.test.ts'), 'fails\n');
+    expect((await ws.sessionCheck(q, 1, undefined, undefined, null, command)).code).not.toBe(0);
+  });
+
   it('runs the check command in the session worktree', async () => {
     const cwd = await ws.prepare(spec);
     expect((await ws.sessionCheck(r, 1)).code).toBe(0);
@@ -318,7 +377,10 @@ describe('Workspaces turn state', () => {
     const stages: Record<number, (string | null)[]> = { 1: [], 2: [], 3: [] };
     const seen = (id: number) => (p: CheckProgress) => stages[id].push(p.stage);
     const ctrl = new AbortController();
-    const runs = [1, 2, 3].map((id) => ws.sessionCheck(timed, id, seen(id), id === 3 ? ctrl.signal : undefined));
+    const runs = [1, 2].map((id) => ws.sessionCheck(timed, id, seen(id)));
+    // session 3 comes once a check runs, so it always finds the queue taken (its tree can be ready before theirs)
+    while (!existsSync(log)) await new Promise((res) => setTimeout(res, 10));
+    runs.push(ws.sessionCheck(timed, 3, seen(3), ctrl.signal));
     const stopped = Date.now();
     ctrl.abort();
     expect((await runs[2]).code).not.toBe(0);

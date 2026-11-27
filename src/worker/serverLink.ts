@@ -15,7 +15,7 @@ import { serverRoot } from './layout.ts';
 import { Secrets } from './secrets.ts';
 import { ClaudeRunner, insideDirs, type AgentRunner, type RunnerDeps, type RunnerOptions } from './runner.ts';
 import { runServerUpdate, type ServerUpdateOptions } from './serverUpdate.ts';
-import { agentCheck, checkRetries, TurnCheck, turnChecks } from './turnCheck.ts';
+import { agentCheck, checkRetries, mappedTests, quickWithTests, TurnCheck, turnChecks } from './turnCheck.ts';
 import { checkTimeoutMs, run, Workspaces } from './workspace.ts';
 
 /** CLAUDE.md / AGENTS.md of these folders, as prompt context. */
@@ -592,6 +592,12 @@ export class ServerLink {
           return this.workspaces.sessionCheck(repo, id, onProgress, signal, this.creds.get(id), command);
         },
         send: (m) => this.send(m),
+        // the quick check runs the tests the changed paths map to as well (DISP-268)
+        command: async ({ repo, level, command }) => {
+          if (level !== 'quick' || !repo.quick_test_command || !repo.quick_test_map?.length) return command;
+          const wt = this.workspaces.repoDir(id, repo);
+          return quickWithTests(repo, command, mappedTests(repo.quick_test_map, await this.workspaces.changedPaths(repo, id), (f) => existsSync(join(wt, f))));
+        },
       });
       this.turnChecks.set(id, tc);
     }

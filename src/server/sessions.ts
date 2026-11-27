@@ -770,6 +770,22 @@ export class Sessions {
   }
 
   /**
+   * A message from Dispatch to a session that works (DISP-263): it goes into the running turn, and
+   * Claude reads it after its current tool step, as a message typed while Claude Code works. False
+   * when that cannot be done now (its worker is away, or an update holds it): nothing was sent, and
+   * the caller keeps the message for the turn's end.
+   */
+  sendDuringTurn(sessionId: number, text: string): boolean {
+    const s = this.mustGet(sessionId);
+    if (s.status !== 'running') throw new SessionError(`Session #${s.id} is ${s.status}: only a session that works takes a message during its turn.`, 409);
+    const identity = this.identityOf(s);
+    if (isRefusal(identity)) throw refusalError(identity);
+    if (this.held(s) || !this.sendTurn(s.worker_id, { t: 'send', session_id: s.id, text, spec: this.spec(s, text, s.sdk_session_id, null, identity) })) return false;
+    this.addEvent(s.id, { kind: 'system', text });
+    return true;
+  }
+
+  /**
    * A scheduled run's propose_batch: the batch starts at once, with the schedule's run options.
    * Items it may not start are left out; past the schedule's cap nothing starts. The card stays in
    * the transcript with what happened, and the planner gets the same answer.
@@ -1274,7 +1290,7 @@ export class Sessions {
           this.emitSession(this.store.updateSession(s.id, { login_needed: { ...msg.login, ...(worker ? { worker } : {}) } }));
           this.accountChecked(workerId, { name: msg.login.account ?? 'default', label: msg.login.label, kind: msg.login.kind, config_dir: msg.login.config_dir, logged_in: false, missing: 'Claude refused the sign-in.' });
         }
-        this.notify(s, `${s.project_key ?? 'Dispatch'}: ${msg.title}`, msg.body, `notice-${s.id}`);
+        this.notify(s, 'sessions.workerNotice', `${s.project_key ?? 'Dispatch'}: ${msg.title}`, msg.body, `notice-${s.id}`);
         return;
       }
       case 'event': {
@@ -1372,16 +1388,16 @@ export class Sessions {
         if (msg.status === 'idle' && proposed !== undefined) {
           // one notice for the turn: the proposal, with Claude's explanation
           const text = this.store.session(s.id)?.last_text || proposed;
-          this.notify(s, `${pushName(s)}: proposal ready`, text, `proposal-${s.id}`);
+          this.notify(s, 'sessions.proposalReady', `${pushName(s)}: proposal ready`, text, `proposal-${s.id}`);
         } else if (msg.status === 'idle' && was !== 'idle' && !CHAT_KINDS.includes(s.kind)) {
           const waiting = () => {
             const text = this.store.session(s.id)?.last_text ?? 'Claude finished its turn.';
-            this.notify(s, `${s.project_key}: waiting for you`, text, `idle-${s.id}`, 'turn_end');
+            this.notify(s, 'sessions.turnEnd', `${s.project_key}: waiting for you`, text, `idle-${s.id}`, 'turn_end');
           };
           if (mergeSpeaks && idleWork) void idleWork.then((told) => !told && waiting(), waiting);
           else waiting();
         }
-        if (msg.status === 'failed') this.notify(s, `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`, 'routine');
+        if (msg.status === 'failed') this.notify(s, 'sessions.failed', `${s.project_key ?? s.title}: session failed`, msg.error ?? s.title, `failed-${s.id}`, 'routine');
         if (msg.status !== 'running') this.dispatch();
         return;
       }
@@ -1427,7 +1443,7 @@ export class Sessions {
     }
     this.addEvent(s.id, { kind: 'error', text: reason });
     this.setStatus(s.id, 'failed', { ended_at: new Date().toISOString(), waiting_reason: null });
-    this.notify(s, `${s.project_key ?? 'Dispatch'}: session failed`, reason, `failed-${s.id}`, 'routine');
+    this.notify(s, 'sessions.refused', `${s.project_key ?? 'Dispatch'}: session failed`, reason, `failed-${s.id}`, 'routine');
   }
 
   /** The `dispatch` MCP tools the agent calls. `workerId`: the worker that asks (must be the session's). */
@@ -1900,7 +1916,7 @@ export class Sessions {
       if (removed) {
         this.addEvent(next.id, { kind: 'error', text: removed.message });
         this.setStatus(next.id, 'failed', { ended_at: new Date().toISOString(), waiting_reason: null, paused: false });
-        this.notify(next, `${next.project_key ?? 'Dispatch'}: session failed`, removed.message, `failed-${next.id}`, 'routine');
+        this.notify(next, 'sessions.dispatch', `${next.project_key ?? 'Dispatch'}: session failed`, removed.message, `failed-${next.id}`, 'routine');
         continue;
       }
       if (next.paused) {
@@ -1932,7 +1948,7 @@ export class Sessions {
         const away = Date.now() - (this.awaySince.get(next.worker_id ?? -1) ?? this.startedAt);
         if (!this.toldWaiting.has(next.id) && away >= this.workerGraceMs) {
           this.toldWaiting.add(next.id);
-          this.notify(next, `${next.project_key ?? 'Dispatch'}: waiting for worker ${name}`, `"${next.title}" starts when ${name} connects.`, `worker-wait-${next.id}`);
+          this.notify(next, 'sessions.workerWait', `${next.project_key ?? 'Dispatch'}: waiting for worker ${name}`, `"${next.title}" starts when ${name} connects.`, `worker-wait-${next.id}`);
         }
         continue;
       }
@@ -1954,7 +1970,7 @@ export class Sessions {
         wait(`Needs GitHub: ${identity.message}`);
         if (!this.toldGithub.has(next.id)) {
           this.toldGithub.add(next.id);
-          this.notify(next, `${next.project_key ?? 'Dispatch'}: needs GitHub`, identity.message, `github-wait-${next.id}`);
+          this.notify(next, 'sessions.githubWait', `${next.project_key ?? 'Dispatch'}: needs GitHub`, identity.message, `github-wait-${next.id}`);
         }
         continue;
       }
@@ -2013,7 +2029,7 @@ export class Sessions {
   tellOwnerInput(s: Session, input: PendingInput) {
     const p = input.payload;
     const what = p.kind === 'plan_approval' ? 'approve plan?' : p.kind === 'cross_project' ? (p.action === 'transcript' ? `read session #${p.session_id}?` : `approve access to ${p.project_key}?`) : 'question';
-    this.notify(s, `${pushName(s)}: ${what}`, inputReason(p), `input-${input.id}`);
+    this.notify(s, 'sessions.input', `${pushName(s)}: ${what}`, inputReason(p), `input-${input.id}`);
   }
 
   /** A question its orchestrator had is the owner's now: the session says what it waits for, and they are told. */
@@ -2264,7 +2280,7 @@ export class Sessions {
     } catch (e) {
       console.error(`session ${s.id}: could not turn auto-merge off:`, (e as Error).message);
     }
-    this.notify(s, `${s.project_key ?? 'Dispatch'}: chat not saved`, `Turn stopped, auto-merge off. The server could not save the chat: ${err.message}`, `unsaved-${s.id}`);
+    this.notify(s, 'sessions.chatNotSaved', `${s.project_key ?? 'Dispatch'}: chat not saved`, `Turn stopped, auto-merge off. The server could not save the chat: ${err.message}`, `unsaved-${s.id}`);
   }
 
   private emitSession(s: Session) {
@@ -2290,8 +2306,8 @@ export class Sessions {
     if (followed) return;
     const key = s.project_key ?? 'Dispatch';
     // the one notice for an auto-merge with a deploy: none was sent at the merge (DISP-40)
-    if (msg.ok) this.notify(s, `${key}: done, merged and deployed`, s.last_text ? `${s.last_text}\n${repo.github_name}${at}` : `${repo.github_name}${at}`, `merged-${s.id}`);
-    else this.notify(s, `${key}: merged, but the deploy failed`, `${repo.github_name}${at}: ${msg.output.trim().split('\n').slice(-3).join(' ')}`, `deploy-${s.id}`);
+    if (msg.ok) this.notify(s, 'sessions.deployResult', `${key}: done, merged and deployed`, s.last_text ? `${s.last_text}\n${repo.github_name}${at}` : `${repo.github_name}${at}`, `merged-${s.id}`);
+    else this.notify(s, 'sessions.deployResult', `${key}: merged, but the deploy failed`, `${repo.github_name}${at}: ${msg.output.trim().split('\n').slice(-3).join(' ')}`, `deploy-${s.id}`);
   }
 
   /**
@@ -2300,10 +2316,10 @@ export class Sessions {
    */
   childNotice: ((s: Session, n: Notice, kind: ChildNoticeKind) => boolean) | null = null;
 
-  /** `kind`: what the notice means for a step's batch (its orchestration may take it). */
-  private notify(s: Session, title: string, body: string, tag: string, kind: ChildNoticeKind = 'needs_owner') {
+  /** `kind`: what the notice means for a step's batch (its orchestration may take it). `source`: for the notice log (DISP-267). */
+  private notify(s: Session, source: string, title: string, body: string, tag: string, kind: ChildNoticeKind = 'needs_owner') {
     const url = s.kind === 'assistant' ? '/assistant' : s.kind === 'discuss' && s.item_ids.length ? `/items/${s.item_ids[0]}/discuss` : `/s/${s.id}`;
-    const notice: Notice = { title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined };
+    const notice: Notice = { title, body: body.slice(0, 180), url, tag, project_id: s.project_id ?? undefined, session_id: s.id, source };
     if (s.orchestrator_id && this.childNotice?.(s, notice, kind)) return;
     // to whoever started it (a schedule's run: the schedule's owner); nobody: the install owner
     void this.notifier.send(notice, s.started_by);

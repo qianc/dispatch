@@ -57,7 +57,7 @@ describe('a person taken off AUTH_USERS (DISP-237)', () => {
   it('17: their notices go to the install owner instead', async () => {
     const s = await startMultiUser();
     try {
-      const notice = { title: 'X: waiting for you', body: 'secret text', url: '/s/1', tag: 't' };
+      const notice = { title: 'X: waiting for you', body: 'secret text', url: '/s/1', tag: 't', source: 'test' };
       await s.ctx.notifier.send(notice, 'bob');
       expect(s.ctx.notifier.sent.at(-1)!.to).toEqual(['bob']);
       s.ctx.cfg.authUsers = ['alice'];

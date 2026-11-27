@@ -90,6 +90,10 @@ export interface Repo {
   check_command: string | null;
   /** DISP-260: a faster check (lint plus a smoke set) for a turn's end, where the full check waits for CI */
   quick_check_command?: string | null;
+  /** DISP-268: runs after the quick check with the test files the changed paths map to (appended), e.g. `npx vitest run` */
+  quick_test_command?: string | null;
+  /** DISP-268: rules `<regex> => <test file>` from a changed path to its tests, `$1` for a group; see `mappedTests` */
+  quick_test_map?: string[];
   /** set for a local-only repo: a git folder on the worker host (github_owner is then 'local') */
   local_path: string | null;
   /** local repos: make session worktrees in the repo itself (default) or in a separate clone */
@@ -798,12 +802,24 @@ export const itemPatch = z.object({
   sort_order: z.number().optional(),
 });
 
+/** A quick-test rule (DISP-268): `<regex> => <test file>`, and the regex compiles. */
+function testRuleOk(rule: string) {
+  const [re, to] = rule.split(' => ');
+  try {
+    return !!re?.trim() && !!to?.trim() && !!new RegExp(re.trim());
+  } catch {
+    return false;
+  }
+}
+
 export const repoPatch = z.object({
   github_owner: z.string().regex(REPO_OWNER, 'Not a GitHub owner name.').optional(),
   github_name: z.string().regex(REPO_NAME, 'A repo name is letters, digits, dots, dashes and underscores.').optional(),
   default_branch: z.string().min(1).optional(),
   check_command: z.string().nullable().optional(),
   quick_check_command: z.string().nullable().optional(),
+  quick_test_command: z.string().nullable().optional(),
+  quick_test_map: z.array(z.string().trim().min(1).max(300).refine(testRuleOk, 'A rule is `<regex> => <test file>`, with a valid regex.')).max(50).optional(),
   worktree_from: z.enum(['repo', 'clone']).nullable().optional(),
   setup_command: z.string().nullable().optional(),
   deploy_command: z.string().nullable().optional(),
@@ -1092,6 +1108,31 @@ export interface QuietLogEntry {
   step_id: number | null;
   text: string;
   created_at: string;
+}
+
+/**
+ * One notice Dispatch sent or held back (DISP-267). outcome: pushed (to at least one device),
+ * app_only (shown in open apps only: no device took a push), held (not sent; `reason` says why).
+ */
+export interface NoticeLogEntry {
+  id: number;
+  created_at: string;
+  users: string[];
+  title: string;
+  body: string;
+  url: string;
+  tag: string | null;
+  project_id: number | null;
+  session_id: number | null;
+  orchestration_id: number | null;
+  /** the code path that sent it, e.g. `orchestrator.needsOwner` */
+  source: string;
+  outcome: 'pushed' | 'app_only' | 'held';
+  reason: string | null;
+  /** per device: its push service and what happened (`201`, `in focus: no push`, an error) */
+  devices: { service: string; result: string }[];
+  /** a newer notice with the same tag, which took its place on the devices */
+  replaced_by: number | null;
 }
 
 /** One entry of the plan's history. */

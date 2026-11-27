@@ -282,7 +282,8 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
     this.unread++;
     this.chain = this.chain.then(async () => {
       const content = await userContent(text, this.fetchImage);
-      this.items.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '' } as SDKUserMessage);
+      // 'next': a message that comes while a turn runs is read after the current tool step, not when the turn ends (DISP-263)
+      this.items.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: '', priority: 'next' } as SDKUserMessage);
       this.wake?.();
     });
   }

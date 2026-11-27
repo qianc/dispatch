@@ -796,7 +796,7 @@ export class Orchestrator {
     const quiet = this.store.quietLog(sessionId, 1000).filter((e) => e.text.includes('session completed')).length;
     const counted = quiet ? `${quiet} batch${quiet === 1 ? '' : 'es'} completed without a push (see the quiet log). ` : '';
     const unmet = finishGaps(this.store.orchestration(sessionId)!) ? 'Goal not fully met. ' : '';
-    void this.notifier.send({ title: `${s.title}: finished`, body: `${unmet}${counted}${s.last_text ?? 'All steps are settled.'}`.slice(0, 180), url: `/s/${sessionId}`, tag: `orch-done-${sessionId}` }, s.started_by);
+    void this.notifier.send({ title: `${s.title}: finished`, body: `${unmet}${counted}${s.last_text ?? 'All steps are settled.'}`.slice(0, 180), url: `/s/${sessionId}`, tag: `orch-done-${sessionId}`, session_id: sessionId, source: 'orchestrator.finished' }, s.started_by);
     this.emit(sessionId);
   }
 
@@ -1095,7 +1095,7 @@ export class Orchestrator {
     const o = this.store.orchestration(s.id);
     const open = !!o && (o.phase === 'plan' || o.phase === 'run');
     if (open && !planned && !acted && !told && !this.waitsQuietly(o) && !this.dueEvents(s.id).length) {
-      void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}` }, s.started_by);
+      void this.notifier.send({ title: `${s.title}: waiting for you`, body: (s.last_text ?? 'Open it to reply.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-turn-${s.id}`, session_id: s.id, source: 'orchestrator.turnEnd' }, s.started_by);
     }
     this.flush(s.id);
   }
@@ -1113,7 +1113,7 @@ export class Orchestrator {
     if (!plan && !change) return false;
     this.store.updateOrchestration(s.id, { plan_notified_version: o.plan_version });
     const title = change ? `${s.title}: plan change to approve` : `${s.title}: plan ready to approve`;
-    void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}` }, s.started_by);
+    void this.notifier.send({ title, body: (s.last_text ?? 'Open it to read and approve the plan.').slice(0, 180), url: `/s/${s.id}`, tag: `orch-plan-${s.id}`, session_id: s.id, source: 'orchestrator.planReady' }, s.started_by);
     return true;
   }
 
@@ -1121,7 +1121,7 @@ export class Orchestrator {
   private needsOwner(orchestrator: Pick<Session, 'id' | 'title' | 'started_by'>, step: OrchestrationStep, note: string) {
     this.tellOwner(orchestrator.id, {
       title: `${orchestrator.title}: step ${step.position} needs you`, body: `${note.charAt(0).toUpperCase()}${note.slice(1)}.`.slice(0, 180),
-      url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}`,
+      url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}`, session_id: orchestrator.id, source: 'orchestrator.needsOwner',
     });
   }
 
@@ -1144,6 +1144,7 @@ export class Orchestrator {
     }
     const box = this.outbox.get(orchId) ?? { notices: [], timer: null };
     // the same news again (same tag): the newer one counts
+    for (const x of box.notices) if (n.tag && x.tag === n.tag) this.notifier.hold(x, o.started_by, 'replaced by a newer notice with the same tag before it went out');
     box.notices = [...box.notices.filter((x) => !n.tag || x.tag !== n.tag), n];
     if (!box.timer) {
       box.timer = setTimeout(() => {
@@ -1173,9 +1174,10 @@ export class Orchestrator {
     }
     if (!box.notices.length) return;
     const title = o?.title ?? 'Orchestration';
+    for (const n of box.notices) this.notifier.hold(n, who, `batched into "${title}: ${box.notices.length} things need you"`);
     // "<title>: step 2 failed" reads as "step 2 failed" in the list
     const line = (n: Notice) => `- ${n.title.startsWith(`${title}: `) ? n.title.slice(title.length + 2) : n.title}: ${n.body.replace(/\s+/g, ' ')}`.slice(0, 120);
-    void this.notifier.send({ title: `${title}: ${box.notices.length} things need you`, body: box.notices.map(line).join('\n').slice(0, 600), url: `/s/${orchId}`, tag: `orch-news-${orchId}` }, who);
+    void this.notifier.send({ title: `${title}: ${box.notices.length} things need you`, body: box.notices.map(line).join('\n').slice(0, 600), url: `/s/${orchId}`, tag: `orch-news-${orchId}`, session_id: orchId, source: 'orchestrator.batched' }, who);
   }
 
   /**
@@ -1196,6 +1198,7 @@ export class Orchestrator {
     const step = this.store.stepOfChild(s.id);
     const what = `${n.title}${n.body ? ` (${n.body.replace(/\s+/g, ' ').slice(0, 120)})` : ''}`;
     this.store.addQuietLog(o.session_id, { session_id: s.id, step_id: step?.id ?? null, text: `Session #${s.id}: not pushed: ${what}` });
+    this.notifier.hold(n, o.started_by, `taken by the orchestrator: in its quiet log (${kind === 'turn_end' ? 'it deals with its batches' : 'the step state tells it'})`);
     this.emit(o.session_id);
     return true;
   }
@@ -1267,7 +1270,7 @@ export class Orchestrator {
     } else {
       this.pause(sessionId, `Cost limit reached: ${used}`);
     }
-    void this.notifier.send({ title: `${o.title}: cost limit reached`, body: `${used} Running sessions go on; no new step starts. Raise the limit to go on.`, url: `/s/${sessionId}`, tag: `orch-cost-${sessionId}` }, o.started_by);
+    void this.notifier.send({ title: `${o.title}: cost limit reached`, body: `${used} Running sessions go on; no new step starts. Raise the limit to go on.`, url: `/s/${sessionId}`, tag: `orch-cost-${sessionId}`, session_id: sessionId, source: 'orchestrator.costLimit' }, o.started_by);
   }
 
   // ---------- settings ----------
@@ -1458,8 +1461,9 @@ export class Orchestrator {
 
   /**
    * The orchestrator writes to one of its batches: what is missing, or how to fix a stopped merge.
-   * A batch whose turn ended gets it at once. For one that works it is queued, and the batch gets
-   * it when its turn ends (DISP-105). It counts as sent when it is queued.
+   * A batch whose turn ended gets it at once, one that works during its turn (DISP-263). Only when
+   * that cannot be done is it queued, and the batch gets it when its turn ends (DISP-105). It
+   * counts as sent when it is queued.
    */
   private sendToSession(s: Session, o: Orchestration, p: Record<string, unknown>): string {
     if (o.phase !== 'run') throw new Error(`The orchestration is ${o.phase === 'plan' ? 'not approved yet' : o.phase}.`);
@@ -1475,17 +1479,22 @@ export class Orchestrator {
     if (step.messages_sent >= Orchestrator.MAX_MESSAGES) throw new Error(`You already sent ${Orchestrator.MAX_MESSAGES} messages to this step's batch: tell the owner instead.`);
     const message = `(From the orchestrator of "${s.title}", not the owner:) ${text}`;
     const count = `message ${step.messages_sent + 1} of ${Orchestrator.MAX_MESSAGES} for this step`;
-    // one that works is not interrupted; an idle one with messages still waiting takes this one after them
-    const queue = child.status !== 'idle' || this.store.queuedOrchMessages(child.id).length > 0;
+    // one that works reads it after its current tool step (DISP-263); messages still waiting go first, so this one waits after them
+    const waiting = this.store.queuedOrchMessages(child.id).length > 0;
+    const midTurn = !waiting && child.status === 'running' && this.sessions.sendDuringTurn(child.id, message);
+    const queue = !midTurn && (child.status !== 'idle' || waiting);
     if (queue) this.store.queueOrchMessage(step.id, child.id, message);
-    else this.sessions.sendFromDispatch(child.id, message);
+    else if (!midTurn) this.sessions.sendFromDispatch(child.id, message);
     this.store.updateStep(step.id, { messages_sent: step.messages_sent + 1 });
     this.acted.add(s.id);
     this.tookUpDeploys(o.session_id, step.id);
     this.emit(o.session_id);
-    if (!queue) return `Sent to session #${child.id} (${count}). End your turn: Dispatch wakes you when it changes.`;
+    const end = 'End your turn: Dispatch wakes you when it changes.';
+    if (midTurn) return `Sent to session #${child.id} while it works (${count}): it reads this after its current tool step. ${end}`;
+    if (!queue) return `Sent to session #${child.id} (${count}). ${end}`;
     if (child.status === 'idle') this.deliverQueued(child.id);
-    return `Queued for session #${child.id} (${count}): it works now and gets this when its turn ends. End your turn: Dispatch wakes you when it changes.`;
+    const why = waiting ? 'your earlier messages to it still wait' : child.status === 'running' ? 'it works, and its worker cannot take a message during the turn now' : 'it waits for its worker';
+    return `Queued for session #${child.id} (${count}): ${why}, so it gets this when its turn ends. ${end}`;
   }
 
   /**
@@ -1632,7 +1641,7 @@ export class Orchestrator {
     if (step.offer === 'fix_merge' && step.state === 'review' && step.messages_sent === 0) this.needsOwner(own, step, step.note ?? 'its merge stopped');
     else if (step.offer === 'no_pr' && step.state === 'running' && step.note === 'turn ended, no PR yet' && step.messages_sent === step.offer_messages) {
       const child = this.store.session(step.child_session_id);
-      this.tellOwner(own.id, { title: `${own.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}` });
+      this.tellOwner(own.id, { title: `${own.title}: step ${step.position} waits for you`, body: (child?.last_text ?? 'Its turn ended with no pull request.').slice(0, 180), url: `/s/${step.child_session_id}`, tag: `orch-review-${step.id}`, session_id: own.id, source: 'orchestrator.stepReview' });
     } else if (step.offer === 'deploy' && deployFailed(step)) this.needsOwner(own, step, deployWhy);
     else return false;
     return true;
@@ -1868,7 +1877,7 @@ export class Orchestrator {
       const more = tryFirst ? ' Its change is merged: do not run the step again. You may fix the deploy once (a step that repairs it). If you cannot, say so to the owner.' : '';
       events.push(`${name}: failed: ${note}${held.length ? ` Do not start the steps that wait for it (${held.join(', ')}).` : ''}${more}`);
       if (tryFirst) this.offer(step, 'deploy');
-      else this.tellOwner(orchId, { title: `${title}: step ${step.position} failed`, body: `${note}${/[.!?]$/.test(note ?? '') ? '' : '.'}${heldText}`.slice(0, 180), url: `/s/${orchId}`, tag: `orch-failed-${step.id}` });
+      else this.tellOwner(orchId, { title: `${title}: step ${step.position} failed`, body: `${note}${/[.!?]$/.test(note ?? '') ? '' : '.'}${heldText}`.slice(0, 180), url: `/s/${orchId}`, tag: `orch-failed-${step.id}`, session_id: orchId, source: 'orchestrator.stepFailed' });
     } else if (state === 'done' && step.state !== 'done') {
       const completed = merged && this.completeQuietly(o, step, child);
       events.push(`${name}: ${merged ? 'merged' : `done (${note})`}.${completed ? ' Its session is completed, and the owner was not told: check its result against the step and its items\' "Done when".' : ''}`);
@@ -1880,7 +1889,7 @@ export class Orchestrator {
       events.push(`${name}: ${note}.${more}`);
       if (tryFirst) this.offer(step, 'fix_merge');
       else if (note === "waits for the owner's review") {
-        this.tellOwner(orchId, { title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}` });
+        this.tellOwner(orchId, { title: `${title}: step ${step.position} waits for your review`, body: step.title, url: `/s/${child.id}`, tag: `orch-review-${step.id}`, session_id: orchId, source: 'orchestrator.reviewWait' });
       } else {
         this.needsOwner({ id: orchId, title, started_by: null }, step, note ?? 'it needs you');
       }

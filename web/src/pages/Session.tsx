@@ -20,6 +20,7 @@ import { FailedActions } from '../components/failedActions.tsx';
 import { CheckProgressCard } from '../components/checkProgress.tsx';
 import { SessionPrompt } from '../components/sessionPrompt.tsx';
 import { OrchestrationPanel } from '../components/orchestration.tsx';
+import { NoticeCount } from '../components/noticeLog.tsx';
 import { orchBusyLabel, planLink } from '../orchestration.ts';
 import { limitWaitText } from '../../../src/shared/attention.ts';
 import { busyStatus } from '../activity.ts';
@@ -276,6 +277,7 @@ export function SessionView({ chat }: { chat?: ChatMode } = {}) {
               {s.retry_of && <><dt className="text-muted">Retry of</dt><dd><Link className="text-accent" to={`/s/${s.retry_of}`}>#{s.retry_of}</Link></dd></>}
               {s.about_session && <><dt className="text-muted">About</dt><dd><Link className="text-accent" to={`/s/${s.about_session}`}>#{s.about_session}</Link> (failed)</dd></>}
               {s.usage?.cost_usd !== undefined && <><dt className="text-muted">Usage</dt><dd>${s.usage.cost_usd.toFixed(2)} · {s.usage.turns ?? 0} turns</dd></>}
+              <NoticeCount sessionId={s.id} />
             </dl>
           </div>
           {(data.items.length > 0 || data.source) && (

@@ -8,7 +8,7 @@ import type { LiveEvent } from '../src/shared/types.ts';
 import { as, dbBeforeMigration, startMultiUser } from './helpers.ts';
 
 const sub = (n: string) => ({ endpoint: `https://push.example/${n}`, keys: { p256dh: 'p', auth: 'a' } });
-const notice = { title: 'T', body: 'B', url: '/s/1' };
+const notice = { title: 'T', body: 'B', url: '/s/1', source: 'test' };
 
 describe('push notifications per user (DISP-65)', () => {
   // alice is the install owner, bob another person
@@ -119,7 +119,7 @@ describe('push notifications per user (DISP-65)', () => {
     await s.ctx.notifier.send({ ...notice, title: 'for bob' }, 'bob');
     await readUntil((e) => e.t === 'notice' && e.notice.title === 'for bob');
     const notices = seen.filter((e) => e.t === 'notice');
-    expect(notices).toEqual([{ t: 'notice', notice: { ...notice, title: 'for bob', tag: undefined } }]);
+    expect(notices).toEqual([{ t: 'notice', notice: { title: 'for bob', body: 'B', url: '/s/1' } }]);
     await reader.cancel();
   });
 

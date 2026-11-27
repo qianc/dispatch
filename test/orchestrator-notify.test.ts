@@ -39,7 +39,7 @@ describe('orchestrator: notices of its batches (DISP-122)', () => {
 
   it("a batch's own notice is logged, not pushed", async () => {
     const p = await running();
-    t.s.ctx.github['tellStarter'](t.store.session(p.one)!, { title: 'AA: done and merged', body: 'Built it.', url: `/s/${p.one}` }, 'routine');
+    t.s.ctx.github['tellStarter'](t.store.session(p.one)!, 'github.mergeNotice', { title: 'AA: done and merged', body: 'Built it.', url: `/s/${p.one}` }, 'routine');
     expect(titles()).toEqual([]);
     expect(t.s.ctx.orchestrator.view(p.id).quiet_log[0].text).toBe(`Session #${p.one}: not pushed: AA: done and merged (Built it.)`);
   });

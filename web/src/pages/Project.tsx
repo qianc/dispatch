@@ -963,6 +963,8 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
     default_branch: repo.default_branch,
     check_command: repo.check_command ?? '',
     quick_check_command: repo.quick_check_command ?? '',
+    quick_test_command: repo.quick_test_command ?? '',
+    quick_test_map: (repo.quick_test_map ?? []).join('\n'),
     deploy_command: repo.deploy_command ?? '',
     generate_command: repo.generate_command ?? '',
     generated_paths: (repo.generated_paths ?? []).join('\n'),
@@ -976,6 +978,8 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       default_branch: f.default_branch,
       check_command: f.check_command.trim() || null,
       quick_check_command: f.quick_check_command.trim() || null,
+      quick_test_command: f.quick_test_command.trim() || null,
+      quick_test_map: f.quick_test_map.split('\n').map((d) => d.trim()).filter(Boolean),
       deploy_command: f.deploy_command.trim() || null,
       generate_command: f.generate_command.trim() || null,
       generated_paths: f.generated_paths.split('\n').map((d) => d.trim()).filter(Boolean),
@@ -1022,6 +1026,12 @@ function RepoForm({ repo, onDone, onRemove }: { repo: Repo; onDone: () => void; 
       </Field>
       <Field label="Quick check command (optional)" hint="Runs after each turn where GitHub CI runs the full check on the PR, e.g. lint plus a smoke set. Without one, such a turn runs no check.">
         <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.quick_check_command} onChange={(e) => setF({ ...f, quick_check_command: e.target.value })} placeholder="npm run lint" aria-label="Quick check command" />
+      </Field>
+      <Field label="Tests for the changed paths (optional)" hint="With the quick check, this command also runs, with the test files that the rules below find for the paths a turn changed appended. Nothing runs when no test file is found.">
+        <input className={cx(inputCls, 'font-mono text-[14px]')} value={f.quick_test_command} onChange={(e) => setF({ ...f, quick_test_command: e.target.value })} placeholder="npx vitest run" aria-label="Test command for changed paths" />
+      </Field>
+      <Field label="Test rules" hint="One per line: a regex for a whole changed path => its test file, with $1 for a group. Test files that do not exist are skipped.">
+        <textarea className={cx(inputCls, 'min-h-16 font-mono text-[14px]')} value={f.quick_test_map} onChange={(e) => setF({ ...f, quick_test_map: e.target.value })} placeholder={'src/(.+)\\.ts => test/$1.test.ts\n(test/.+\\.test\\.ts) => $1'} aria-label="Test rules" />
       </Field>
       <Field
         label="Generate command (optional)"

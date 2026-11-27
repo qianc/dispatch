@@ -262,6 +262,10 @@ const assistantTools = (rpc: Rpc, readFile: (path: string) => Promise<string>, l
       }
     }),
     tool('list_sessions', 'Show running and waiting agent sessions across projects.', {}, call(rpc, 'list_sessions')),
+    // DISP-267: which notices went out, or were held back, and why
+    tool('list_notices', "The notices (pushes) Dispatch sent the owner or held back, newest first: when, the title, the code path that sent it (source), and what happened (pushed to which devices, shown in the open app only, or held back and why). Give a session number for that session's notices; an orchestration's include its batches'. Use it when the owner asks about notices they got or missed.", {
+      session_id: z.number().optional().describe('A session or orchestration number, e.g. 584 for /s/584; leave out for the latest notices'),
+    }, call(rpc, 'list_notices')),
     // DISP-257: the owner approves each session; the server checks that approval again before it reads
     tool('read_session', 'Read the transcript of one session (its messages and tool calls, the newest part when it is long), to answer what it did and why. Only when the owner asks about that session: they approve it on a card first, and you wait for their answer. Say which session you read. Keep the transcript to this chat: do not write it into items, sources or other sessions unless the owner asks.', {
       session_id: z.number().describe('The session number, e.g. 503 for /s/503'),
@@ -411,7 +415,7 @@ function orchestratorTools(rpc: Rpc, editItems: boolean): SdkMcpToolDefinition<a
       input_id: z.number().int(),
       reason: z.string().optional().describe('One line for the owner: why this is theirs'),
     }, call(rpc, 'hand_to_owner')),
-    tool('send_to_session', 'Write to one of your batches: how to fix a stopped merge, or what is missing. A batch whose turn ended gets it at once. For a batch that works it is queued: the batch gets it when its turn ends, and you are told if it closed or asked a question first. At most 3 messages per step, queued ones too. Not for a batch that waits for an answer or is closed.', {
+    tool('send_to_session', 'Write to one of your batches: how to fix a stopped merge, or what is missing. A batch whose turn ended gets it at once. A batch that works reads it during its turn, after its current tool step. Only when that cannot be done (its worker is away) is it queued: the batch gets it when its turn ends, and you are told if it closed or asked a question first. The answer says which happened. At most 3 messages per step, queued ones too. Not for a batch that waits for an answer or is closed.', {
       session_id: z.number().int().describe('The session number of the batch'),
       text: z.string().describe('What it should do, complete enough to act on'),
     }, call(rpc, 'send_to_session')),

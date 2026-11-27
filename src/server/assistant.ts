@@ -8,6 +8,7 @@ import type { Bus } from './bus.ts';
 import type { GitHub } from './github.ts';
 import type { Sessions } from './sessions.ts';
 import type { Users } from './users.ts';
+import type { Notifier } from './notify.ts';
 import type { Store } from './store.ts';
 import type { WorkerHub } from './workerHub.ts';
 import { addLocalRepo, assertNameFree, looksLikePath, mergeNote } from './repos.ts';
@@ -47,6 +48,8 @@ export class AssistantTools {
   private users: Pick<Users, 'installOwner'>;
   /** A project's own instructions (its CLAUDE.md, AGENTS.md); set by the app. */
   rules: (p: Project) => Promise<string> = async () => '';
+  /** The notice log (DISP-267); set by the app. */
+  notices: Notifier['notices'] = () => [];
   /** "session:project" pairs whose instructions the assistant has been shown. */
   private rulesShown = new Set<string>();
 
@@ -336,6 +339,13 @@ export class AssistantTools {
       case 'read_session':
         return this.readSession(s, p);
 
+      case 'list_notices': {
+        const id = Number(p.session_id);
+        const target = Number.isInteger(id) && id > 0 ? this.store.session(id) : undefined;
+        if (p.session_id !== undefined && !target) throw new Error(`No session #${String(p.session_id)}`);
+        return { notices: this.noticesOf(s, target) };
+      }
+
       case 'propose_session': {
         if (p.type === 'orchestration') {
           // a card the owner starts: an orchestrator that plans the goal over these projects
@@ -394,7 +404,17 @@ export class AssistantTools {
       session: { id: target.id, title: target.title, kind: target.kind, project: target.project_key, status: target.status, link: `/s/${target.id}` },
       left_out: i > 0 ? 'Older messages were left out: this is the end of the transcript.' : undefined,
       transcript: text.trim(),
+      notices: this.noticesOf(s, target),
     };
+  }
+
+  /** The notices sent or held back for the chat's user (DISP-267): of one session (an orchestration: with its batches'), or the latest. */
+  private noticesOf(s: Session, target?: Session) {
+    const filter = !target ? {} : target.kind === 'orchestrator' ? { orchestration_id: target.id } : { session_id: target.id };
+    return this.notices({ user: s.started_by ?? this.users.installOwner, limit: target ? 200 : 50, ...filter }).map((n) => ({
+      at: n.created_at, title: n.title, body: n.body, source: n.source, session: n.session_id, outcome: n.outcome,
+      reason: n.reason ?? undefined, devices: n.devices.length ? n.devices : undefined, replaced_by: n.replaced_by ?? undefined,
+    }));
   }
 
   private async addRepo(s: Session, project: Project, input: string, branch: string | undefined, check: string | null) {

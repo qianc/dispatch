@@ -20,13 +20,13 @@ describe('notifications while the app is in focus (DISP-12)', () => {
   afterEach(() => s.app.close());
 
   it('pushes to every device when none has the app in focus', async () => {
-    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1' });
+    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', source: 'test' });
     expect(delivered.sort()).toEqual([sub(1).endpoint, sub(2).endpoint]);
   });
 
   it('skips the device that has the app in focus, and shows the notice in the app instead', async () => {
     expect((await s.call('POST', '/push/presence', { endpoint: sub(1).endpoint, active: true })).status).toBe(200);
-    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', tag: 'x' });
+    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', tag: 'x', source: 'test' });
     expect(delivered).toEqual([sub(2).endpoint]);
     expect(live).toContainEqual({ t: 'notice', notice: { title: 'T', body: 'B', url: '/s/1', tag: 'x' }, to: [OWNER] });
   });
@@ -34,7 +34,7 @@ describe('notifications while the app is in focus (DISP-12)', () => {
   it('pushes again once the app goes to the background', async () => {
     await s.call('POST', '/push/presence', { endpoint: sub(1).endpoint, active: true });
     await s.call('POST', '/push/presence', { endpoint: sub(1).endpoint, active: false });
-    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1' });
+    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', source: 'test' });
     expect(delivered.sort()).toEqual([sub(1).endpoint, sub(2).endpoint]);
   });
 
@@ -43,7 +43,7 @@ describe('notifications while the app is in focus (DISP-12)', () => {
     const now = Date.now;
     Date.now = () => now() + 60_000;
     try {
-      await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1' });
+      await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', source: 'test' });
     } finally {
       Date.now = now;
     }
@@ -58,7 +58,7 @@ describe('notifications while the app is in focus (DISP-12)', () => {
   it('a muted project sends neither a push nor an in-app notice', async () => {
     const { data: p } = await s.call('POST', '/projects', { key: 'MU', name: 'Muted' });
     await s.call('PATCH', `/projects/MU`, { muted: true });
-    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', project_id: p.id });
+    await s.ctx.notifier.send({ title: 'T', body: 'B', url: '/s/1', project_id: p.id, source: 'test' });
     expect(delivered).toEqual([]);
     expect(live.filter((e) => e.t === 'notice')).toEqual([]);
   });

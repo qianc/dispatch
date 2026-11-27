@@ -149,6 +149,7 @@ export const ROUTE_ACCESS: Record<string, RouteAccess> = {
   'POST /api/push/presence': 'user',
   'POST /api/push/keep-only': 'user',
   'POST /api/push/test': 'user',
+  'GET /api/notices': 'read',
   'GET /api/tokens': 'user',
   'POST /api/tokens': 'user',
   'DELETE /api/tokens/:id': 'user',

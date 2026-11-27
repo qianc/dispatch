@@ -6,16 +6,24 @@ const QUESTION: PendingInputPayload = { kind: 'question', questions: [{ question
 const PLAN: PendingInputPayload = { kind: 'plan_approval', plan: '## Plan\n\n1. Add the store' };
 const FROM = '(From the orchestrator of "Rework auth", not the owner:)';
 
-// DISP-105: a message of the orchestrator to a batch that works waits in the database and goes to
-// the batch when its turn ends. A batch that closed or asks a question first does not get it.
+// DISP-263: a message of the orchestrator to a batch that works goes into its turn. DISP-105: when
+// that cannot be done, it waits in the database and goes to the batch when its turn ends. A batch
+// that closed or asks a question first does not get it.
 describe('orchestrator: messages to a batch that works', () => {
   let t: Setup;
   let n = 0;
   let sent: { t: string; session_id?: number; text?: string }[];
+  /** the worker cannot take a message during a turn now (its link is down): only then is a message queued */
+  let midTurnFails: boolean;
   beforeEach(async () => {
     t = await setup();
     sent = [];
-    t.s.ctx.hub.send = ((_id: unknown, m: { t: string }) => { sent.push(m); return true; }) as typeof t.s.ctx.hub.send;
+    midTurnFails = true;
+    t.s.ctx.hub.send = ((_id: unknown, m: { t: string; session_id?: number }) => {
+      if (midTurnFails && m.t === 'send' && t.store.session(m.session_id!)?.status === 'running') return false;
+      sent.push(m);
+      return true;
+    }) as typeof t.s.ctx.hub.send;
     t.s.ctx.orchestrator.settleMs = 0;
   });
   afterEach(() => t.s.app.close());
@@ -39,10 +47,25 @@ describe('orchestrator: messages to a batch that works', () => {
   const send = async (p: { id: number; child: number }, text: string) => String(await t.rpc(p.id, 'send_to_session', { session_id: p.child, text }));
   const toChild = (child: number) => sent.filter((m) => m.t === 'send' && m.session_id === child).map((m) => m.text);
 
-  it('a message to a working batch is queued, and the batch gets it when its turn ends', async () => {
+  it('a message to a working batch reaches it during its turn, and nothing waits for the turn end', async () => {
+    midTurnFails = false;
     const p = await running();
     sent = [];
-    expect(await send(p, 'Rebase on main and fix the test.')).toBe(`Queued for session #${p.child} (message 1 of 3 for this step): it works now and gets this when its turn ends. End your turn: Dispatch wakes you when it changes.`);
+    expect(await send(p, 'Only run the targeted tests.')).toBe(`Sent to session #${p.child} while it works (message 1 of 3 for this step): it reads this after its current tool step. End your turn: Dispatch wakes you when it changes.`);
+    expect(toChild(p.child)).toEqual([`${FROM} Only run the targeted tests.`]);
+    expect(t.events(p.child)).toContain(`system: ${FROM} Only run the targeted tests.`);
+    expect(t.store.session(p.child)!.status).toBe('running');
+    expect(t.store.step(p.first.id)!.messages_sent).toBe(1);
+    expect(t.store.queuedOrchMessages()).toEqual([]);
+    // its turn end sends nothing again
+    t.status(p.child, 'idle');
+    expect(toChild(p.child)).toHaveLength(1);
+  });
+
+  it('a message the batch cannot take during its turn is queued, and the batch gets it when its turn ends', async () => {
+    const p = await running();
+    sent = [];
+    expect(await send(p, 'Rebase on main and fix the test.')).toBe(`Queued for session #${p.child} (message 1 of 3 for this step): it works, and its worker cannot take a message during the turn now, so it gets this when its turn ends. End your turn: Dispatch wakes you when it changes.`);
     expect(toChild(p.child)).toEqual([]);
     expect(t.store.step(p.first.id)!.messages_sent).toBe(1);
     expect(t.events(p.child).some((e) => e.includes('Rebase on main'))).toBe(false);

@@ -120,6 +120,8 @@ export function workPrompt(spec: StartSpec): string {
   }
   if (quick.length) {
     lines.push(`- When your turn ends, Dispatch runs the repo's quick check command (${quick.map((c) => `${c.repo.github_name}: \`${c.command}\``).join(', ')}) in your checkout before it tells the owner you are done. If it fails, you get its output as the next message: fix it and end your turn again.`);
+    const mapped = quick.filter((c) => c.repo.quick_test_command && c.repo.quick_test_map?.length);
+    if (mapped.length) lines.push(`- After the quick check, it runs the tests for the paths you changed (${mapped.map((c) => `${c.repo.github_name}: \`${c.repo.quick_test_command} <test files>\``).join(', ')}), mapped by the repo's rules: ${mapped.flatMap((c) => c.repo.quick_test_map!).map((r) => `\`${r}\``).join(', ')}.`);
   }
   // a merge in Dispatch runs the check (github.ts mergeOpen); GitHub's own merge does not
   const localMerge = (r: Repo) => spec.options.auto_merge === 'local' || !!r.local_path || !!r.generate_command || r.kind === 'hosted';
@@ -273,7 +275,7 @@ export function orchestratorPrompt(spec: StartSpec, context: { label: string; te
       '- When it is a choice only the owner can make (taste, money, risk, anything they did not tell you), give it to them with `hand_to_owner` and one line why. Do not guess. A question you leave open goes to the owner by itself.',
       "- Approve a batch's plan when it does what its step asks and no more. Send it back with feedback when it misses the step or reaches beyond it.",
       '- You may answer 10 questions (plan approvals too) per step, over all its sessions. After that its questions go to the owner, and Dispatch tells you so.',
-      '- When a merge stops (a failed check, conflicts), you may tell the batch once how to fix it with `send_to_session`. When a batch ends its turn with no pull request, read its last message: close the step if nothing needs a merge, or tell it what is missing. A message to a batch that still works is queued: it gets it when its turn ends, so do not wait or send it again. If the batch closes or asks a question first, Dispatch tells you it was not delivered. You have 3 messages per step, queued ones too; after that it is the owner\'s.',
+      '- When a merge stops (a failed check, conflicts), you may tell the batch once how to fix it with `send_to_session`. When a batch ends its turn with no pull request, read its last message: close the step if nothing needs a merge, or tell it what is missing. A batch that still works reads your message during its turn, after its current tool step. If that cannot be done, the message is queued and the batch gets it when its turn ends: the answer says which. Do not wait or send it again. If the batch closes or asks a question before a queued message reaches it, Dispatch tells you it was not delivered. You have 3 messages per step, queued ones too; after that it is the owner\'s.',
     ] : []),
     '',
     '## The plan now',
@@ -365,6 +367,7 @@ export function assistantPrompt(readDirs: string[]): string {
     '- Do what the owner asks directly: create or change projects, repos, items and sources without asking for confirmation. Ask only when the request is ambiguous.',
     '- Never start agent work yourself. To start a batch or a planning chat, call `propose_session`; the owner gets a card to start it.',
     '- When the owner asks what a session did or why (e.g. why an orchestration stopped), call `read_session` with its number: the owner approves that one session on a card first. Say which session you read. Keep its transcript to this chat; do not copy it into items or elsewhere unless the owner asks.',
+    '- When the owner asks which notices (pushes) they got or missed, or why, call `list_notices` (with the session or orchestration number when it is about one). Each notice has its source (the code path) and what happened to it. `read_session` gives a session\'s notices too.',
     '- To lock (disable, read-only) or unlock (enable) a project, call `set_project_state`. A locked project refuses every other change, so unlock it first when the owner wants to change it.',
     '- When given a GitHub URL or owner/name, the tools verify it and look up the default branch. Pick a short project key yourself unless the owner gives one.',
     '- To import a backlog or any markdown file with several entries, use `import_markdown`: run it with dry_run first, tell the owner the groups and counts, then import what they want (e.g. only_under ["Open work"]). It keeps every description word for word. Never retype many items by hand.',
